@@ -1,3 +1,5 @@
+You must run "make proto" after applying this patch.
+
 --- orig/cleanup.c	2004-07-20 21:36:07
 +++ cleanup.c	2004-07-23 19:19:47
 @@ -24,6 +24,7 @@
@@ -13,7 +15,7 @@
  	if (cleanup_got_literal && cleanup_fname && keep_partial) {
  		char *fname = cleanup_fname;
 +		if (partial_dir)
-+			do_mkdir(partial_dir, 0700);
++			handle_partial_dir(cleanup_new_fname, 1);
  		cleanup_fname = NULL;
  		if (cleanup_fd_r != -1)
  			close(cleanup_fd_r);
@@ -27,28 +29,26 @@
  extern char *compare_dest;
  extern int link_dest;
  extern int whole_file;
-@@ -413,6 +414,21 @@ static void recv_generator(char *fname, 
+@@ -411,7 +412,18 @@ static void recv_generator(char *fname, 
+ 		return;
+ 	}
  
- 	fnamecmp = fname;
- 
+-	fnamecmp = fname;
 +	if (partial_dir) {
 +		STRUCT_STAT st2;
-+		char *fn = strrchr(fname, '/');
-+		if (fn)
-+			fn++;
-+		else
-+			fn = fname;
-+		pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, partial_dir, fn);
-+		if (link_stat(fnamecmpbuf, &st2, 0) == 0 && S_ISREG(st2.st_mode)) {
++		if (!(fnamecmp = fname_in_partial_dir(fname)))
++			fnamecmp = fname;
++		else if (link_stat(fnamecmp, &st2, 0) == 0
++		    && S_ISREG(st2.st_mode)) {
 +			statret = 0;
 +			st = st2;
-+			fnamecmp = fnamecmpbuf;
-+		}
-+	}
-+
++		} else
++			fnamecmp = fname;
++	} else
++		fnamecmp = fname;
+ 
  	if (statret == -1 && compare_dest != NULL) {
  		/* try the file at compare_dest instead */
- 		int saveerrno = errno;
 --- orig/options.c	2004-07-23 17:16:13
 +++ options.c	2004-07-23 19:19:48
 @@ -118,6 +118,7 @@ unsigned int backup_dir_remainder;
@@ -75,7 +75,16 @@
    {"ignore-errors",    0,  POPT_ARG_NONE,   &ignore_errors, 0, 0, 0 },
    {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
    {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
-@@ -770,6 +773,11 @@ int parse_arguments(int *argc, const cha
+@@ -718,6 +721,8 @@ int parse_arguments(int *argc, const cha
+ 			(*argv)[i] = alloc_sanitize_path((*argv)[i], NULL);
+ 		if (tmpdir)
+ 			tmpdir = alloc_sanitize_path(tmpdir, curr_dir);
++		if (partial_dir)
++			partial_dir = alloc_sanitize_path(partial_dir, curr_dir);
+ 		if (compare_dest)
+ 			compare_dest = alloc_sanitize_path(compare_dest, curr_dir);
+ 		if (backup_dir)
+@@ -770,6 +775,11 @@ int parse_arguments(int *argc, const cha
  
  	if (inplace) {
  #if HAVE_FTRUNCATE
@@ -87,7 +96,7 @@
  		keep_partial = 0;
  #else
  		snprintf(err_buf, sizeof err_buf,
-@@ -777,7 +785,8 @@ int parse_arguments(int *argc, const cha
+@@ -777,7 +787,8 @@ int parse_arguments(int *argc, const cha
  			 am_server ? "server" : "client");
  		return 0;
  #endif
@@ -97,7 +106,7 @@
  
  	if (files_from) {
  		char *colon;
-@@ -969,7 +978,10 @@ void server_options(char **args,int *arg
+@@ -969,7 +980,10 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  
@@ -119,15 +128,15 @@
  extern char *compare_dest;
  extern int make_backups;
  extern int do_progress;
-@@ -339,7 +340,7 @@ int recv_files(int f_in, struct file_lis
+@@ -338,7 +339,7 @@ int recv_files(int f_in, struct file_lis
+ 	char *fname, fbuf[MAXPATHLEN];
  	char template[MAXPATHLEN];
  	char fnametmp[MAXPATHLEN];
- 	char *fnamecmp;
--	char fnamecmpbuf[MAXPATHLEN];
-+	char fnamecmpbuf[MAXPATHLEN], partialbuf[MAXPATHLEN];
+-	char *fnamecmp;
++	char *fnamecmp, *partialptr;
+ 	char fnamecmpbuf[MAXPATHLEN];
  	struct file_struct *file;
  	struct stats initial_stats;
- 	int save_make_backups = make_backups;
 @@ -406,8 +407,6 @@ int recv_files(int f_in, struct file_lis
  		if (verbose > 2)
  			rprintf(FINFO,"recv_files(%s)\n",fname);
@@ -137,25 +146,22 @@
  		if (read_batch) {
  			while (i > next_gen_i) {
  				next_gen_i = read_int(batch_gen_fd);
-@@ -434,9 +433,25 @@ int recv_files(int f_in, struct file_lis
+@@ -434,9 +433,22 @@ int recv_files(int f_in, struct file_lis
  			continue;
  		}
  
 +		if (partial_dir) {
-+			char *fn = strrchr(fname, '/');
-+			if (fn)
-+				fn++;
++			if ((partialptr = fname_in_partial_dir(fname)) != NULL)
++				fnamecmp = partialptr;
 +			else
-+				fn = fname;
-+			pathjoin(partialbuf, sizeof partialbuf, partial_dir, fn);
-+			fnamecmp = partialbuf;
++				fnamecmp = fname;
 +		} else
-+			fnamecmp = fname;
++			fnamecmp = partialptr = fname;
 +
  		/* open the file */
  		fd1 = do_open(fnamecmp, O_RDONLY, 0);
  
-+		if (fd1 == -1 && partial_dir) {
++		if (fd1 == -1 && fnamecmp != fname) {
 +			fnamecmp = fname;
 +			fd1 = do_open(fnamecmp, O_RDONLY, 0);
 +		}
@@ -163,24 +169,29 @@
  		if (fd1 == -1 && compare_dest != NULL) {
  			/* try the file at compare_dest instead */
  			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
-@@ -524,7 +539,8 @@ int recv_files(int f_in, struct file_lis
+@@ -524,7 +536,8 @@ int recv_files(int f_in, struct file_lis
  				continue;
  			}
  
 -			cleanup_set(fnametmp, fname, file, fd1, fd2);
-+			cleanup_set(fnametmp, partial_dir ? partialbuf : fname,
-+				    file, fd1, fd2);
++			if (partialptr)
++				cleanup_set(fnametmp, partialptr, file, fd1, fd2);
  		}
  
  		if (!am_server && verbose)
-@@ -549,6 +565,12 @@ int recv_files(int f_in, struct file_lis
+@@ -544,11 +557,16 @@ int recv_files(int f_in, struct file_lis
+ 			exit_cleanup(RERR_FILEIO);
+ 		}
+ 
+-		if (recv_ok || keep_partial || inplace)
++		if (recv_ok || (keep_partial && partialptr) || inplace)
+ 			finish_transfer(fname, fnametmp, file, recv_ok);
  		else
  			do_unlink(fnametmp);
  
-+		if (fnamecmp == partialbuf) {
-+			do_unlink(partialbuf);
-+			if (*partialbuf != '/')
-+				do_rmdir(partial_dir);
++		if (partialptr != fname && fnamecmp == partialptr) {
++			do_unlink(partialptr);
++			handle_partial_dir(partialptr, 0);
 +		}
 +
  		cleanup_disable();
@@ -218,3 +229,65 @@
  dit(bf(--progress)) This option tells rsync to print information
  showing the progress of the transfer. This gives a bored user
  something to watch.
+--- orig/util.c	2004-06-09 21:54:47
++++ util.c	2004-07-23 21:43:44
+@@ -31,6 +31,7 @@ extern int verbose;
+ extern int dry_run;
+ extern int module_id;
+ extern int modify_window;
++extern char *partial_dir;
+ extern struct exclude_list_struct server_exclude_list;
+ 
+ int sanitize_paths = 0;
+@@ -945,6 +946,51 @@ char *full_fname(const char *fn)
+ 	return result;
+ }
+ 
++static char partialbuf[MAXPATHLEN];
++
++char *fname_in_partial_dir(const char *fname)
++{
++	char *t = partialbuf;
++	int sz = sizeof partialbuf;
++	const char *fn;
++
++	if ((fn = strrchr(fname, '/')) != NULL) {
++		fn++;
++		if (*partial_dir != '/') {
++			int len = fn - fname;
++			strncpy(t, fname, len); /* safe */
++			t += len;
++			sz -= len;
++		}
++	} else
++		fn = fname;
++	if ((int)pathjoin(t, sz, partial_dir, fn) >= sz) {
++		*partialbuf = '\0';
++		return NULL;
++	}
++
++	return partialbuf;
++}
++
++void handle_partial_dir(const char *fname, int create)
++{
++	char *fn;
++
++	if (fname != partialbuf)
++		return;
++	if (!create && *partial_dir == '/')
++		return;
++	if (!(fn = strrchr(partialbuf, '/')))
++		return;
++
++	*fn = '\0';
++	if (create)
++		do_mkdir(partialbuf, 0700);
++	else
++		do_rmdir(partialbuf);
++	*fn = '/';
++}
++
+ /** We need to supply our own strcmp function for file list comparisons
+    to ensure that signed/unsigned usage is consistent between machines. */
+ int u_strcmp(const char *cs1, const char *cs2)
