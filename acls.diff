@@ -1175,7 +1175,7 @@ After applying this patch, run these commands for a successful build:
  
  	if (verbose > 1)
 --- orig/configure.in	2004-08-13 07:18:59
-+++ configure.in	2004-07-03 20:11:58
++++ configure.in	2004-08-19 19:53:27
 @@ -434,6 +434,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
      AC_CHECK_LIB(resolv, strcasecmp)
  fi
@@ -1188,7 +1188,7 @@ After applying this patch, run these commands for a successful build:
  dnl At the moment we don't test for a broken memcmp(), because all we
  dnl need to do is test for equality, not comparison, and it seems that
  dnl every platform has a memcmp that can do at least that.
-@@ -656,6 +661,74 @@ AC_SUBST(OBJ_RESTORE)
+@@ -656,6 +661,77 @@ AC_SUBST(OBJ_RESTORE)
  AC_SUBST(CC_SHOBJ_FLAG)
  AC_SUBST(BUILD_POPT)
  
@@ -1230,6 +1230,7 @@ After applying this patch, run these commands for a successful build:
 +			LIBS="$LIBS -lpacl"
 +			;;
 +		*)
++		    AC_MSG_RESULT(ACLs requested -- running tests)
 +		    AC_CHECK_LIB(acl,acl_get_file)
 +			AC_CACHE_CHECK([for ACL support],samba_cv_HAVE_POSIX_ACLS,[
 +			AC_TRY_LINK([#include <sys/types.h>
@@ -1239,14 +1240,16 @@ After applying this patch, run these commands for a successful build:
 +			if test x"$samba_cv_HAVE_POSIX_ACLS" = x"yes"; then
 +			    AC_MSG_RESULT(Using posix ACLs)
 +			    AC_DEFINE(HAVE_POSIX_ACLS, 1, [true if you have posix ACLs])
-+				AC_CACHE_CHECK([for acl_get_perm_np],samba_cv_HAVE_ACL_GET_PERM_NP,[
++			    AC_CACHE_CHECK([for acl_get_perm_np],samba_cv_HAVE_ACL_GET_PERM_NP,[
 +				AC_TRY_LINK([#include <sys/types.h>
 +#include <sys/acl.h>],
 +[ acl_permset_t permset_d; acl_perm_t perm; return acl_get_perm_np( permset_d, perm);],
 +samba_cv_HAVE_ACL_GET_PERM_NP=yes,samba_cv_HAVE_ACL_GET_PERM_NP=no)])
-+				if test x"$samba_cv_HAVE_ACL_GET_PERM_NP" = x"yes"; then
-+					AC_DEFINE(HAVE_ACL_GET_PERM_NP, 1, [true if you have acl_get_perm_np])
-+				fi
++			    if test x"$samba_cv_HAVE_ACL_GET_PERM_NP" = x"yes"; then
++				AC_DEFINE(HAVE_ACL_GET_PERM_NP, 1, [true if you have acl_get_perm_np])
++			    fi
++			else
++			    AC_MSG_ERROR(Failed to find ACL support)
 +			fi
 +			;;
 +		esac
@@ -1328,7 +1331,7 @@ After applying this patch, run these commands for a successful build:
  }
  
 --- orig/options.c	2004-08-12 18:34:38
-+++ options.c	2004-08-19 17:15:17
++++ options.c	2004-08-19 17:38:57
 @@ -43,6 +43,7 @@ int keep_dirlinks = 0;
  int copy_links = 0;
  int preserve_links = 0;
@@ -1361,7 +1364,7 @@ After applying this patch, run these commands for a successful build:
  	rprintf(f, "<http://rsync.samba.org/>\n");
  	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
 -		"%shard links, %ssymlinks, batchfiles, \n",
-+		"%shard links, %sacls, %ssymlinks, batchfiles, \n",
++		"%shard links, %sACLs, %ssymlinks, batchfiles, \n",
  		(int) (sizeof (OFF_T) * 8),
 -		got_socketpair, hardlinks, links);
 +		got_socketpair, hardlinks, acls, links);
@@ -1780,8 +1783,8 @@ After applying this patch, run these commands for a successful build:
 +
 +#endif /* No ACLs. */
 +#endif /* _SMB_ACLS_H */
---- orig/sysacls.c	2004-06-30 00:04:08
-+++ sysacls.c	2004-06-30 00:04:08
+--- orig/sysacls.c	2004-08-19 17:38:21
++++ sysacls.c	2004-08-19 17:38:21
 @@ -0,0 +1,3117 @@
 +/*
 +   Unix SMB/Netbios implementation.
@@ -1967,7 +1970,7 @@ After applying this patch, run these commands for a successful build:
 +	return acl_free(the_acl);
 +}
 +
-+int sys_acl_free_qualifier(void *qual, SMB_ACL_TAG_T tagtype)
++int sys_acl_free_qualifier(void *qual, UNUSED(SMB_ACL_TAG_T tagtype))
 +{
 +	return acl_free(qual);
 +}
