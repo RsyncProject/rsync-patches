@@ -5,21 +5,24 @@ groups, even if they weren't returned by getgroups().  E.g.:
 
     rsync -avoogg host:/from/ /to/
 
---- orig/compat.c	2005-02-01 10:39:22
-+++ compat.c	2004-09-09 01:59:08
-@@ -28,8 +28,11 @@
+--- orig/compat.c	2005-02-14 02:47:53
++++ compat.c	2005-02-14 02:53:52
+@@ -28,11 +28,14 @@
  int remote_protocol = 0;
  
  extern int verbose;
 +extern int am_root;
  extern int am_server;
  extern int am_sender;
-+extern int preserve_uid;
-+extern int preserve_gid;
+ extern int fuzzy_basis;
  extern int read_batch;
  extern int checksum_seed;
++extern int preserve_uid;
++extern int preserve_gid;
  extern int protocol_version;
-@@ -81,4 +84,11 @@ void setup_protocol(int f_out,int f_in)
+ 
+ void setup_protocol(int f_out,int f_in)
+@@ -89,4 +92,11 @@ void setup_protocol(int f_out,int f_in)
  	} else {
  		checksum_seed = read_int(f_in);
  	}
@@ -31,9 +34,9 @@ groups, even if they weren't returned by getgroups().  E.g.:
 +			preserve_gid = 2;
 +	}
  }
---- orig/options.c	2005-02-01 10:39:22
+--- orig/options.c	2005-02-14 02:45:10
 +++ options.c	2004-09-09 01:59:08
-@@ -384,8 +384,8 @@ static struct poptOption long_options[] 
+@@ -389,8 +389,8 @@ static struct poptOption long_options[] 
    {"no-whole-file",    0,  POPT_ARG_VAL,    &whole_file, 0, 0, 0 },
    {"copy-unsafe-links", 0, POPT_ARG_NONE,   &copy_unsafe_links, 0, 0, 0 },
    {"perms",           'p', POPT_ARG_NONE,   &preserve_perms, 0, 0, 0 },
@@ -44,7 +47,7 @@ groups, even if they weren't returned by getgroups().  E.g.:
    {"devices",         'D', POPT_ARG_NONE,   &preserve_devices, 0, 0, 0 },
    {"times",           't', POPT_ARG_NONE,   &preserve_times, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_NONE,   &omit_dir_times, 0, 0, 0 },
-@@ -690,6 +690,14 @@ int parse_arguments(int *argc, const cha
+@@ -719,6 +719,14 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
@@ -59,7 +62,7 @@ groups, even if they weren't returned by getgroups().  E.g.:
  		case 'v':
  			verbose++;
  			break;
-@@ -901,8 +909,8 @@ int parse_arguments(int *argc, const cha
+@@ -929,8 +937,8 @@ int parse_arguments(int *argc, const cha
  #endif
  		preserve_perms = 1;
  		preserve_times = 1;
@@ -70,7 +73,7 @@ groups, even if they weren't returned by getgroups().  E.g.:
  		preserve_devices = 1;
  	}
  
-@@ -1144,10 +1152,16 @@ void server_options(char **args,int *arg
+@@ -1206,10 +1214,16 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
@@ -89,7 +92,7 @@ groups, even if they weren't returned by getgroups().  E.g.:
  	if (preserve_devices)
  		argstr[x++] = 'D';
  	if (preserve_times)
---- orig/rsync.c	2005-02-01 10:39:22
+--- orig/rsync.c	2005-02-14 02:45:10
 +++ rsync.c	2005-02-01 10:46:04
 @@ -26,7 +26,6 @@ extern int verbose;
  extern int dry_run;
@@ -99,7 +102,7 @@ groups, even if they weren't returned by getgroups().  E.g.:
  extern int am_server;
  extern int am_sender;
  extern int am_generator;
-@@ -181,7 +180,7 @@ int set_perms(char *fname,struct file_st
+@@ -182,7 +181,7 @@ int set_perms(char *fname,struct file_st
  		updated = 1;
  	}
  
@@ -107,8 +110,8 @@ groups, even if they weren't returned by getgroups().  E.g.:
 +	change_uid = preserve_uid > 1 && st->st_uid != file->uid;
  	change_gid = preserve_gid && file->gid != GID_NONE
  		&& st->st_gid != file->gid;
- #if !HAVE_LCHOWN && !CHOWN_MODIFIES_SYMLINK
---- orig/uidlist.c	2005-01-28 19:08:20
+ #if !defined HAVE_LCHOWN && !defined CHOWN_MODIFIES_SYMLINK
+--- orig/uidlist.c	2005-02-14 02:45:11
 +++ uidlist.c	2004-09-09 01:59:08
 @@ -35,7 +35,6 @@ extern int verbose;
  extern int preserve_uid;

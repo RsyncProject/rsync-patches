@@ -1166,7 +1166,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +}
 +
 +#endif /* SUPPORT_ACLS */
---- orig/backup.c	2005-02-07 20:41:56
+--- orig/backup.c	2005-02-14 02:45:09
 +++ backup.c	2004-10-06 00:13:09
 @@ -121,6 +121,7 @@ static int make_bak_dir(char *fullpath)
  			} else {
@@ -1285,18 +1285,18 @@ ACLs to a non-ACL-supporting disk should complain.
  AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
  AC_OUTPUT
  
---- orig/flist.c	2005-02-13 21:17:16
-+++ flist.c	2005-02-13 21:58:44
-@@ -977,6 +977,8 @@ void send_file_name(int f, struct file_l
- 
- 	if (!(file = make_file(fname, flist, ALL_FILTERS)))
+--- orig/flist.c	2005-02-14 02:45:10
++++ flist.c	2005-02-14 02:45:34
+@@ -978,6 +978,8 @@ void send_file_name(int f, struct file_l
+ 	file = make_file(fname, flist, f == -2 ? SERVER_FILTERS : ALL_FILTERS);
+ 	if (!file)
  		return;
 +	if (!MAKE_ACL(file, fname))
 +		return;
  
  	maybe_emit_filelist_progress(flist);
  
-@@ -985,6 +987,10 @@ void send_file_name(int f, struct file_l
+@@ -986,6 +988,10 @@ void send_file_name(int f, struct file_l
  	if (file->basename[0]) {
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f, base_flags);
@@ -1307,7 +1307,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  
  	if (recursive && S_ISDIR(file->mode)
-@@ -1293,6 +1299,8 @@ struct file_list *recv_file_list(int f)
+@@ -1296,6 +1302,8 @@ struct file_list *recv_file_list(int f)
  			flags |= read_byte(f) << 8;
  		file = receive_file_entry(flist, flags, f);
  
@@ -1316,18 +1316,18 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (S_ISREG(file->mode))
  			stats.total_size += file->length;
  
-@@ -1315,6 +1323,8 @@ struct file_list *recv_file_list(int f)
+@@ -1318,6 +1326,8 @@ struct file_list *recv_file_list(int f)
  
  	clean_flist(flist, relative_paths, 1);
  
 +	SORT_FILE_ACL_INDEX_LISTS();
 +
- 	if (f != -1) {
+ 	if (f >= 0) {
  		/* Now send the uid/gid list. This was introduced in
  		 * protocol version 15 */
---- orig/generator.c	2005-02-13 05:50:28
+--- orig/generator.c	2005-02-14 02:45:10
 +++ generator.c	2005-01-30 10:09:44
-@@ -324,6 +324,10 @@ static void recv_generator(char *fname, 
+@@ -406,6 +406,10 @@ static void recv_generator(char *fname, 
  		if (set_perms(fname, file, statret ? NULL : &st, 0)
  		    && verbose && f_out != -1)
  			rprintf(FINFO, "%s/\n", safe_fname(fname));
@@ -4597,8 +4597,8 @@ ACLs to a non-ACL-supporting disk should complain.
    next;
  }
  
---- orig/options.c	2005-02-13 05:50:28
-+++ options.c	2004-08-19 17:38:57
+--- orig/options.c	2005-02-14 02:45:10
++++ options.c	2005-02-14 02:46:05
 @@ -44,6 +44,7 @@ int keep_dirlinks = 0;
  int copy_links = 0;
  int preserve_links = 0;
@@ -4607,7 +4607,7 @@ ACLs to a non-ACL-supporting disk should complain.
  int preserve_perms = 0;
  int preserve_devices = 0;
  int preserve_uid = 0;
-@@ -166,6 +167,7 @@ static void print_rsync_version(enum log
+@@ -167,6 +168,7 @@ static void print_rsync_version(enum log
  	char const *got_socketpair = "no ";
  	char const *have_inplace = "no ";
  	char const *hardlinks = "no ";
@@ -4615,18 +4615,18 @@ ACLs to a non-ACL-supporting disk should complain.
  	char const *links = "no ";
  	char const *ipv6 = "no ";
  	STRUCT_STAT *dumstat;
-@@ -182,6 +184,10 @@ static void print_rsync_version(enum log
+@@ -183,6 +185,10 @@ static void print_rsync_version(enum log
  	hardlinks = "";
  #endif
  
-+#if SUPPORT_ACLS
++#ifdef SUPPORT_ACLS
 +	acls = "";
 +#endif
 +
- #if SUPPORT_LINKS
+ #ifdef SUPPORT_LINKS
  	links = "";
  #endif
-@@ -196,9 +202,9 @@ static void print_rsync_version(enum log
+@@ -197,9 +203,9 @@ static void print_rsync_version(enum log
  		"Copyright (C) 1996-2005 by Andrew Tridgell and others\n");
  	rprintf(f, "<http://rsync.samba.org/>\n");
  	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
@@ -4638,7 +4638,7 @@ ACLs to a non-ACL-supporting disk should complain.
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -268,6 +274,7 @@ void usage(enum logcode F)
+@@ -269,6 +275,7 @@ void usage(enum logcode F)
    rprintf(F," -H, --hard-links            preserve hard links\n");
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
@@ -4646,7 +4646,7 @@ ACLs to a non-ACL-supporting disk should complain.
    rprintf(F," -o, --owner                 preserve owner (root only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F," -D, --devices               preserve devices (root only)\n");
-@@ -387,6 +394,7 @@ static struct poptOption long_options[] 
+@@ -389,6 +396,7 @@ static struct poptOption long_options[] 
    {"no-whole-file",    0,  POPT_ARG_VAL,    &whole_file, 0, 0, 0 },
    {"copy-unsafe-links", 0, POPT_ARG_NONE,   &copy_unsafe_links, 0, 0, 0 },
    {"perms",           'p', POPT_ARG_NONE,   &preserve_perms, 0, 0, 0 },
@@ -4654,7 +4654,7 @@ ACLs to a non-ACL-supporting disk should complain.
    {"owner",           'o', POPT_ARG_NONE,   &preserve_uid, 0, 0, 0 },
    {"group",           'g', POPT_ARG_NONE,   &preserve_gid, 0, 0, 0 },
    {"devices",         'D', POPT_ARG_NONE,   &preserve_devices, 0, 0, 0 },
-@@ -831,6 +839,24 @@ int parse_arguments(int *argc, const cha
+@@ -834,6 +842,24 @@ int parse_arguments(int *argc, const cha
  			basis_dir[basis_dir_cnt++] = (char *)arg;
  			break;
  
@@ -4679,7 +4679,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1203,6 +1229,8 @@ void server_options(char **args,int *arg
+@@ -1206,6 +1232,8 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
@@ -4688,7 +4688,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (preserve_uid)
  		argstr[x++] = 'o';
  	if (preserve_gid)
---- orig/rsync.c	2005-02-07 20:41:57
+--- orig/rsync.c	2005-02-14 02:45:10
 +++ rsync.c	2004-07-03 20:11:58
 @@ -238,6 +238,14 @@ int set_perms(char *fname,struct file_st
  	}
@@ -4705,9 +4705,9 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (verbose > 1 && flags & PERMS_REPORT) {
  		if (updated)
  			rprintf(FINFO, "%s\n", safe_fname(fname));
---- orig/rsync.h	2005-02-12 19:54:27
+--- orig/rsync.h	2005-02-14 02:45:10
 +++ rsync.h	2004-07-03 20:11:58
-@@ -610,6 +610,40 @@ struct stats {
+@@ -612,6 +612,40 @@ struct stats {
  #include "lib/permstring.h"
  #include "lib/addrinfo.h"
  
@@ -4748,7 +4748,7 @@ ACLs to a non-ACL-supporting disk should complain.
  #include "proto.h"
  
  /* We have replacement versions of these if they're missing. */
---- orig/rsync.yo	2005-02-13 21:51:10
+--- orig/rsync.yo	2005-02-14 02:45:11
 +++ rsync.yo	2004-07-03 20:11:58
 @@ -317,6 +317,7 @@ to the detailed description below for a 
   -H, --hard-links            preserve hard links
@@ -4758,7 +4758,7 @@ ACLs to a non-ACL-supporting disk should complain.
   -o, --owner                 preserve owner (root only)
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
-@@ -613,6 +614,11 @@ source file's permissions and the umask 
+@@ -614,6 +615,11 @@ source file's permissions and the umask 
  other files (including updated files) retain their existing permissions
  (which is the same behavior as other file-copy utilities, such as cp).
  
@@ -5050,7 +5050,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +#endif /* No ACLs. */
 +#endif /* _SMB_ACLS_H */
---- orig/uidlist.c	2005-01-28 19:08:20
+--- orig/uidlist.c	2005-02-14 02:45:11
 +++ uidlist.c	2004-07-03 20:11:58
 @@ -34,6 +34,7 @@
  extern int verbose;
