@@ -4,7 +4,7 @@ Lightly tested.
 
 Be sure to run "make proto" before "make".
 
---- orig/generator.c	2005-02-03 02:04:20
+--- orig/generator.c	2005-02-13 05:50:28
 +++ generator.c	2005-02-03 02:11:10
 @@ -47,6 +47,7 @@ extern int size_only;
  extern OFF_T max_size;
@@ -103,7 +103,7 @@ Be sure to run "make proto" before "make".
  
  /* Acts on flist->file's ndx'th item, whose name is fname.  If a directory,
   * make sure it exists, and has the right permissions/timestamp info.  For
-@@ -477,6 +560,15 @@ static void recv_generator(char *fname, 
+@@ -492,6 +575,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -119,7 +119,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -505,6 +597,8 @@ static void recv_generator(char *fname, 
+@@ -520,6 +612,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -128,7 +128,7 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -579,8 +673,24 @@ notify_others:
+@@ -594,8 +688,24 @@ notify_others:
  	write_int(f_out, ndx);
  	if (protocol_version >= 29 && inplace && !read_batch)
  		write_byte(f_out, fnamecmp_type);
@@ -154,9 +154,9 @@ Be sure to run "make proto" before "make".
  
  	if (dry_run || read_batch)
  		return;
---- orig/main.c	2005-01-30 10:07:21
+--- orig/main.c	2005-02-07 20:41:56
 +++ main.c	2005-01-14 18:33:15
-@@ -48,6 +48,7 @@ extern int keep_dirlinks;
+@@ -44,6 +44,7 @@ extern int keep_dirlinks;
  extern int preserve_hard_links;
  extern int protocol_version;
  extern int recurse;
@@ -164,7 +164,7 @@ Be sure to run "make proto" before "make".
  extern int relative_paths;
  extern int rsync_port;
  extern int whole_file;
-@@ -491,7 +492,8 @@ static int do_recv(int f_in,int f_out,st
+@@ -488,7 +489,8 @@ static int do_recv(int f_in,int f_out,st
  	int pid;
  	int status = 0;
  	int error_pipe[2], name_pipe[2];
@@ -174,9 +174,9 @@ Be sure to run "make proto" before "make".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
---- orig/options.c	2005-02-01 10:39:22
-+++ options.c	2005-01-28 19:31:20
-@@ -90,6 +90,7 @@ int copy_unsafe_links = 0;
+--- orig/options.c	2005-02-13 05:50:28
++++ options.c	2005-02-13 06:56:06
+@@ -89,6 +89,7 @@ int copy_unsafe_links = 0;
  int size_only = 0;
  int daemon_bwlimit = 0;
  int bwlimit = 0;
@@ -184,15 +184,15 @@ Be sure to run "make proto" before "make".
  size_t bwlimit_writemax = 0;
  int only_existing = 0;
  int opt_ignore_existing = 0;
-@@ -303,6 +304,7 @@ void usage(enum logcode F)
+@@ -302,6 +303,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --size-only             skip files that match in size\n");
+   rprintf(F,"     --modify-window=NUM     compare mod-times with reduced accuracy\n");
+   rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
++  rprintf(F,"     --fuzzy                 find similar file for basis when no dest file\n");
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
-+  rprintf(F,"     --fuzzy                 find similar file for basis when no dest file\n");
-   rprintf(F," -z, --compress              compress file data\n");
-   rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
-   rprintf(F," -f, --filter=RULE           add a file-filtering RULE\n");
-@@ -408,6 +410,7 @@ static struct poptOption long_options[] 
+@@ -411,6 +413,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -200,7 +200,7 @@ Be sure to run "make proto" before "make".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
-@@ -1321,6 +1324,9 @@ void server_options(char **args,int *arg
+@@ -1382,6 +1385,9 @@ void server_options(char **args,int *arg
  	if (!implied_dirs && !am_sender)
  		args[ac++] = "--no-implied-dirs";
  
@@ -210,9 +210,9 @@ Be sure to run "make proto" before "make".
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2005-02-03 02:04:20
+--- orig/receiver.c	2005-02-11 10:53:14
 +++ receiver.c	2005-01-15 21:21:02
-@@ -256,6 +256,27 @@ static int receive_data(int f_in, char *
+@@ -257,6 +257,27 @@ static int receive_data(int f_in, char *
  }
  
  
@@ -240,7 +240,7 @@ Be sure to run "make proto" before "make".
  static void discard_receive_data(int f_in, OFF_T length)
  {
  	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
-@@ -395,6 +416,10 @@ int recv_files(int f_in, struct file_lis
+@@ -396,6 +417,10 @@ int recv_files(int f_in, struct file_lis
  			case FNAMECMP_BACKUP:
  				fnamecmp = get_backup_name(fname);
  				break;
@@ -251,9 +251,9 @@ Be sure to run "make proto" before "make".
  			default:
  				if (j >= basis_dir_cnt) {
  					rprintf(FERROR,
---- orig/rsync.h	2005-02-03 02:04:20
+--- orig/rsync.h	2005-02-12 19:54:27
 +++ rsync.h	2005-01-19 18:36:47
-@@ -131,6 +131,7 @@
+@@ -127,6 +127,7 @@
  #define FNAMECMP_FNAME		0x80
  #define FNAMECMP_PARTIAL_DIR	0x81
  #define FNAMECMP_BACKUP 	0x82
@@ -261,19 +261,19 @@ Be sure to run "make proto" before "make".
  
  /* For calling delete_file() */
  #define DEL_DIR 		(1<<0)
---- orig/rsync.yo	2005-02-01 10:39:23
-+++ rsync.yo	2005-01-28 19:31:36
-@@ -354,6 +354,7 @@ to the detailed description below for a 
+--- orig/rsync.yo	2005-02-13 05:50:28
++++ rsync.yo	2005-02-13 06:56:46
+@@ -351,6 +351,7 @@ to the detailed description below for a 
+      --size-only             skip files that match in size
+      --modify-window=NUM     compare mod-times with reduced accuracy
+  -T  --temp-dir=DIR          create temporary files in directory DIR
++     --fuzzy                 find similar file for basis when no dest
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
-+     --fuzzy                 find similar file for basis when no dest
-  -z, --compress              compress file data
-  -C, --cvs-exclude           auto-ignore files in the same way CVS does
-  -f, --filter=RULE           add a file-filtering RULE
-@@ -937,6 +938,14 @@ bf(--link-dest) from working properly fo
- (or implied by bf(-a)).  You can work-around this bug by avoiding the bf(-o) option
- when sending to an old rsync.
+@@ -909,6 +910,14 @@ scratch directory when creating temporar
+ transferred on the receiving side.  The default behavior is to create
+ the temporary files in the receiving directory.
  
 +dit(bf(--fuzzy)) This option tells rsync that it should look around for a
 +basis file for any destination file that is missing.  The current algorithm
@@ -283,12 +283,12 @@ Be sure to run "make proto" before "make".
 +files, so either use --delete-after or filename exclusions if you need to
 +prevent this.
 +
- dit(bf(-z, --compress)) With this option, rsync compresses any data from
- the files that it sends to the destination machine.  This
- option is useful on slow connections.  The compression method used is the
---- orig/util.c	2005-01-28 19:08:20
+ dit(bf(--compare-dest=DIR)) This option instructs rsync to use em(DIR) on
+ the destination machine as an additional hierarchy to compare destination
+ files against doing transfers (if the files are missing in the destination
+--- orig/util.c	2005-02-11 10:53:15
 +++ util.c	2005-01-19 17:30:51
-@@ -1213,3 +1213,108 @@ void *_realloc_array(void *ptr, unsigned
+@@ -1224,3 +1224,108 @@ void *_realloc_array(void *ptr, unsigned
  		return malloc(size * num);
  	return realloc(ptr, size * num);
  }
