@@ -72,32 +72,10 @@ invoke, either personally or site-wide, without having to recompile rsync).
  
  		if (olddir[0]) {
  			flist_dir = NULL;
-@@ -1634,3 +1642,109 @@ char *f_name(struct file_struct *f)
+@@ -1634,3 +1642,89 @@ char *f_name(struct file_struct *f)
  
  	return f_name_to(f, names[n]);
  }
-+
-+static void delete_one(char *fn, int is_dir)
-+{
-+	if (!is_dir) {
-+		if (robust_unlink(fn) != 0) {
-+			rsyserr(FERROR, errno, "delete_one: unlink %s failed",
-+				full_fname(fn));
-+		} else if (verbose)
-+			rprintf(FINFO, "deleting %s\n", safe_fname(fn));
-+	} else {
-+		if (do_rmdir(fn) != 0) {
-+			if (errno != ENOTEMPTY && errno != EEXIST) {
-+				rsyserr(FERROR, errno,
-+					"delete_one: rmdir %s failed",
-+					full_fname(fn));
-+			}
-+		} else if (verbose) {
-+			rprintf(FINFO, "deleting directory %s\n",
-+				safe_fname(fn));
-+		}
-+	}
-+}
 +
 +static int is_backup_file(char *fn)
 +{
@@ -156,8 +134,10 @@ invoke, either personally or site-wide, without having to recompile rsync).
 +					rprintf(FINFO, "deleting %s\n",
 +						safe_fname(f));
 +				}
-+			} else
-+				delete_one(f, S_ISDIR(mode) != 0);
++			} else {
++				delete_file(f, S_ISDIR(mode)
++					    ? DEL_DIR | DEL_NO_RECURSE : 0);
++			}
 +			deletion_count++;
 +		}
 +	}
@@ -182,7 +162,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
 +		delete_in_dir(flist, f_name_to(flist->files[j], fbuf), recurse);
 +	}
 +}
---- orig/generator.c	2005-01-17 23:11:45
+--- orig/generator.c	2005-01-19 20:11:10
 +++ generator.c	2005-01-18 23:14:23
 @@ -34,6 +34,8 @@ extern int preserve_hard_links;
  extern int preserve_perms;
@@ -193,15 +173,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  extern int update_only;
  extern int opt_ignore_existing;
  extern int inplace;
-@@ -242,7 +244,6 @@ static void generate_and_send_sums(int f
- }
- 
- 
--
- /*
-  * Acts on file number @p i from @p flist, whose name is @p fname.
-  *
-@@ -251,7 +252,8 @@ static void generate_and_send_sums(int f
+@@ -233,7 +235,8 @@ static void generate_and_send_sums(int f
   * @note This comment was added later by mbp who was trying to work it
   * out.  It might be wrong.
   */
@@ -211,16 +183,16 @@ invoke, either personally or site-wide, without having to recompile rsync).
  			   int f_out, int f_out_name)
  {
  	int fd = -1, f_copy = -1;
-@@ -312,8 +314,6 @@ static void recv_generator(char *fname, 
+@@ -294,8 +297,6 @@ static void recv_generator(char *fname, 
  		 * we need to delete it.  If it doesn't exist, then
  		 * recursively create it. */
  
 -		if (dry_run)
 -			return; /* TODO: causes inaccuracies -- fix */
  		if (statret == 0 && !S_ISDIR(st.st_mode)) {
- 			if (robust_unlink(fname) != 0) {
- 				rsyserr(FERROR, errno,
-@@ -334,6 +334,8 @@ static void recv_generator(char *fname, 
+ 			delete_file(fname, DEL_TERSE);
+ 			statret = -1;
+@@ -311,6 +312,8 @@ static void recv_generator(char *fname, 
  		}
  		/* f_out is set to -1 when doing final directory-permission
  		 * and modification-time repair. */
@@ -229,7 +201,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  		if (set_perms(fname, file, statret ? NULL : &st, 0)
  		    && verbose && f_out != -1)
  			rprintf(FINFO, "%s/\n", safe_fname(fname));
-@@ -642,6 +644,9 @@ void generate_files(int f_out, struct fi
+@@ -621,6 +624,9 @@ void generate_files(int f_out, struct fi
  			: "delta transmission enabled\n");
  	}
  
@@ -239,7 +211,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  	/* we expect to just sit around now, so don't exit on a
  	   timeout. If we really get a timeout then the other process should
  	   exit */
-@@ -665,7 +670,7 @@ void generate_files(int f_out, struct fi
+@@ -644,7 +650,7 @@ void generate_files(int f_out, struct fi
  		}
  
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -248,7 +220,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  	}
  
  	phase++;
-@@ -682,7 +687,7 @@ void generate_files(int f_out, struct fi
+@@ -661,7 +667,7 @@ void generate_files(int f_out, struct fi
  	while ((i = get_redo_num()) != -1) {
  		struct file_struct *file = flist->files[i];
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -257,7 +229,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  	}
  
  	phase++;
-@@ -704,7 +709,7 @@ void generate_files(int f_out, struct fi
+@@ -683,7 +689,7 @@ void generate_files(int f_out, struct fi
  		if (!file->basename || !S_ISDIR(file->mode))
  			continue;
  		recv_generator(local_name ? local_name : f_name(file),
@@ -390,7 +362,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  			args[ac++] = "--delete";
  
  		if (delete_after)
---- orig/receiver.c	2005-01-17 23:11:45
+--- orig/receiver.c	2005-01-19 20:11:10
 +++ receiver.c	2005-01-18 22:47:38
 @@ -23,7 +23,6 @@
  extern int verbose;
@@ -418,33 +390,10 @@ invoke, either personally or site-wide, without having to recompile rsync).
  extern int cleanup_got_literal;
  extern int module_id;
  extern int ignore_errors;
-@@ -57,91 +52,6 @@ extern int inplace;
+@@ -57,70 +52,6 @@ extern int inplace;
  extern struct exclude_list_struct server_exclude_list;
  
  
--static void delete_one(char *fn, int is_dir)
--{
--	if (!is_dir) {
--		if (robust_unlink(fn) != 0) {
--			rsyserr(FERROR, errno, "delete_one: unlink %s failed",
--				full_fname(fn));
--		} else if (verbose)
--			rprintf(FINFO, "deleting %s\n", safe_fname(fn));
--	} else {
--		if (do_rmdir(fn) != 0) {
--			if (errno != ENOTEMPTY && errno != EEXIST) {
--				rsyserr(FERROR, errno,
--					"delete_one: rmdir %s failed",
--					full_fname(fn));
--			}
--		} else if (verbose) {
--			rprintf(FINFO, "deleting directory %s\n",
--				safe_fname(fn));
--		}
--	}
--}
--
--
 -static int is_backup_file(char *fn)
 -{
 -	int k = strlen(fn) - backup_suffix_len;
@@ -497,8 +446,10 @@ invoke, either personally or site-wide, without having to recompile rsync).
 -						rprintf(FINFO, "deleting %s\n",
 -							safe_fname(f));
 -					}
--				} else
--					delete_one(f, S_ISDIR(mode) != 0);
+-				} else {
+-					delete_file(f, S_ISDIR(mode)
+-					    ? DEL_DIR | DEL_NO_RECURSE : 0);
+-				}
 -				deletion_count++;
 -			}
 -		}
