@@ -38,7 +38,7 @@ command before "make":
  		case MSG_INFO:
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
---- orig/main.c	2005-02-04 22:28:09
+--- orig/main.c	2005-02-07 20:41:56
 +++ main.c	2005-02-05 01:24:16
 @@ -32,12 +32,14 @@ extern int am_daemon;
  extern int verbose;
@@ -87,7 +87,7 @@ command before "make":
  	if (argc == 0)
  		list_only |= 1;
  
---- orig/options.c	2005-02-04 22:28:09
+--- orig/options.c	2005-02-11 18:21:45
 +++ options.c	2005-01-23 07:30:51
 @@ -59,6 +59,7 @@ int delete_during = 0;
  int delete_before = 0;
@@ -105,7 +105,7 @@ command before "make":
  int max_delete = 0;
  OFF_T max_size = 0;
  int ignore_errors = 0;
-@@ -286,6 +288,7 @@ void usage(enum logcode F)
+@@ -289,6 +291,7 @@ void usage(enum logcode F)
    rprintf(F,"     --delete-during         receiver deletes during transfer, not before\n");
    rprintf(F,"     --delete-after          receiver deletes after transfer, not before\n");
    rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
@@ -113,7 +113,7 @@ command before "make":
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
    rprintf(F,"     --force                 force deletion of directories even if not empty\n");
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
-@@ -360,6 +363,7 @@ static struct poptOption long_options[] 
+@@ -364,6 +367,7 @@ static struct poptOption long_options[] 
    {"delete-during",    0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
    {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, 0, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
@@ -121,9 +121,9 @@ command before "make":
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"filter",          'f', POPT_ARG_STRING, 0, OPT_FILTER, 0, 0 },
-@@ -922,6 +926,9 @@ int parse_arguments(int *argc, const cha
- 	else if (delete_mode || delete_excluded)
- 		delete_mode = delete_before = 1;
+@@ -955,6 +959,9 @@ int parse_arguments(int *argc, const cha
+ 		return 0;
+ 	}
  
 +	if (delete_sent_files)
 +		need_messages_from_generator = 1;
@@ -131,7 +131,7 @@ command before "make":
  	*argv = poptGetArgs(pc);
  	*argc = count_args(*argv);
  
-@@ -1318,6 +1325,9 @@ void server_options(char **args,int *arg
+@@ -1382,6 +1389,9 @@ void server_options(char **args,int *arg
  	if (!implied_dirs && !am_sender)
  		args[ac++] = "--no-implied-dirs";
  
@@ -141,7 +141,7 @@ command before "make":
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2005-02-03 02:04:20
+--- orig/receiver.c	2005-02-11 10:53:14
 +++ receiver.c	2004-08-13 08:38:51
 @@ -41,6 +41,7 @@ extern int basis_dir_cnt;
  extern int make_backups;
@@ -151,7 +151,7 @@ command before "make":
  extern int module_id;
  extern int ignore_errors;
  extern int orig_umask;
-@@ -275,7 +276,7 @@ int recv_files(int f_in, struct file_lis
+@@ -276,7 +277,7 @@ int recv_files(int f_in, struct file_lis
  	char *fname, fbuf[MAXPATHLEN];
  	char template[MAXPATHLEN];
  	char fnametmp[MAXPATHLEN];
@@ -160,7 +160,7 @@ command before "make":
  	char fnamecmpbuf[MAXPATHLEN];
  	uchar *delayed_bits = NULL;
  	struct file_struct *file;
-@@ -532,7 +533,12 @@ int recv_files(int f_in, struct file_lis
+@@ -533,7 +534,12 @@ int recv_files(int f_in, struct file_lis
  
  		cleanup_disable();
  
@@ -174,7 +174,7 @@ command before "make":
  			int msgtype = csum_length == SUM_LENGTH || read_batch ?
  				FERROR : FINFO;
  			if (msgtype == FERROR || verbose) {
-@@ -556,9 +562,8 @@ int recv_files(int f_in, struct file_lis
+@@ -557,9 +563,8 @@ int recv_files(int f_in, struct file_lis
  					keptstr, redostr);
  			}
  			if (csum_length != SUM_LENGTH) {
@@ -186,7 +186,7 @@ command before "make":
  			}
  		}
  	}
---- orig/rsync.h	2005-02-04 22:28:09
+--- orig/rsync.h	2005-02-07 20:41:57
 +++ rsync.h	2005-02-03 02:04:59
 @@ -61,6 +61,7 @@
  #define FLAG_HLINK_EOL (1<<1)	/* generator only */
@@ -204,7 +204,7 @@ command before "make":
  	MSG_DONE=5,	/* current phase is done */
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
---- orig/rsync.yo	2005-02-05 01:23:49
+--- orig/rsync.yo	2005-02-11 23:14:49
 +++ rsync.yo	2005-02-03 02:05:29
 @@ -338,6 +338,7 @@ to the detailed description below for a 
       --delete-during         receiver deletes during xfer, not before
@@ -214,7 +214,7 @@ command before "make":
       --ignore-errors         delete even if there are I/O errors
       --force                 force deletion of dirs even if not empty
       --max-delete=NUM        don't delete more than NUM files
-@@ -727,6 +728,11 @@ receiving side that are not on the sendi
+@@ -728,6 +729,11 @@ receiving side that are not on the sendi
  delete any files on the receiving side that are excluded (see bf(--exclude)).
  See bf(--delete) (which is implied) for more details on file-deletion.
  
@@ -226,7 +226,7 @@ command before "make":
  dit(bf(--ignore-errors)) Tells bf(--delete) to go ahead and delete files
  even when there are I/O errors.
  
---- orig/sender.c	2005-02-03 02:04:20
+--- orig/sender.c	2005-02-11 22:24:19
 +++ sender.c	2004-07-26 16:49:19
 @@ -26,6 +26,7 @@ extern int io_error;
  extern int dry_run;
