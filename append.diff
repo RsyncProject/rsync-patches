@@ -1,7 +1,7 @@
 This patch adds the --append option, which works like a "resume" mode in
 an ftp client, appending new data onto the end of the files it updates.
 
---- orig/generator.c	2005-03-05 00:25:24
+--- orig/generator.c	2005-03-09 23:46:28
 +++ generator.c	2005-03-03 02:59:17
 @@ -51,6 +51,7 @@ extern int remove_sent_files;
  extern int update_only;
@@ -11,7 +11,7 @@ an ftp client, appending new data onto the end of the files it updates.
  extern int make_backups;
  extern int csum_length;
  extern int ignore_times;
-@@ -459,35 +460,42 @@ static void generate_and_send_sums(int f
+@@ -463,35 +464,42 @@ static void generate_and_send_sums(int f
  	OFF_T offset = 0;
  
  	sum_sizes_sqroot(&sum, len);
@@ -61,7 +61,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	}
  
  	if (mapbuf)
-@@ -950,6 +958,9 @@ static void recv_generator(char *fname, 
+@@ -957,6 +965,9 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -71,7 +71,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
-@@ -1126,7 +1137,7 @@ void generate_files(int f_out, struct fi
+@@ -1129,7 +1140,7 @@ void generate_files(int f_out, struct fi
  	if (delete_before && !local_name && flist->count > 0)
  		do_delete_pass(flist);
  
@@ -80,7 +80,7 @@ an ftp client, appending new data onto the end of the files it updates.
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1173,6 +1184,8 @@ void generate_files(int f_out, struct fi
+@@ -1180,6 +1191,8 @@ void generate_files(int f_out, struct fi
  	only_existing = max_size = opt_ignore_existing = 0;
  	update_only = always_checksum = size_only = 0;
  	ignore_times = 1;
@@ -89,7 +89,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	make_backups = 0; /* avoid a duplicate backup for inplace processing */
  
  	/* We expect to just sit around now, so don't exit on a timeout.
---- orig/match.c	2005-02-15 19:27:04
+--- orig/match.c	2005-03-05 17:51:23
 +++ match.c	2005-02-11 20:26:31
 @@ -23,6 +23,7 @@ extern int verbose;
  extern int am_server;
@@ -99,7 +99,7 @@ an ftp client, appending new data onto the end of the files it updates.
  
  int updating_basis_file;
  
-@@ -334,6 +335,21 @@ void match_sums(int f, struct sum_struct
+@@ -330,6 +331,21 @@ void match_sums(int f, struct sum_struct
  
  	sum_init(checksum_seed);
  
@@ -121,7 +121,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (len > 0 && s->count > 0) {
  		build_hash_table(s);
  
-@@ -347,7 +363,7 @@ void match_sums(int f, struct sum_struct
+@@ -343,7 +359,7 @@ void match_sums(int f, struct sum_struct
  	} else {
  		OFF_T j;
  		/* by doing this in pieces we avoid too many seeks */
@@ -130,8 +130,8 @@ an ftp client, appending new data onto the end of the files it updates.
  			matched(f, s, buf, j, -2);
  		matched(f, s, buf, len, -1);
  	}
---- orig/options.c	2005-03-02 09:52:06
-+++ options.c	2005-02-16 15:36:40
+--- orig/options.c	2005-03-09 18:53:53
++++ options.c	2005-03-11 11:21:34
 @@ -39,6 +39,7 @@ int make_backups = 0;
   **/
  int whole_file = -1;
@@ -140,14 +140,14 @@ an ftp client, appending new data onto the end of the files it updates.
  int archive_mode = 0;
  int keep_dirlinks = 0;
  int copy_links = 0;
-@@ -163,6 +164,7 @@ static int F_option_cnt = 0;
+@@ -164,6 +165,7 @@ static int F_option_cnt = 0;
  static int modify_window_set;
  static int refused_delete, refused_archive_part;
  static int refused_partial, refused_progress, refused_delete_before;
 +static int refused_inplace;
- static char *dest_option = NULL;
  static char *max_size_arg;
  static char partialdir_for_delayupdate[] = ".~tmp~";
+ 
 @@ -272,6 +274,7 @@ void usage(enum logcode F)
    rprintf(F,"     --suffix=SUFFIX         set backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
    rprintf(F," -u, --update                skip files that are newer on the receiver\n");
@@ -199,7 +199,7 @@ an ftp client, appending new data onto the end of the files it updates.
  		args[ac++] = "--inplace";
  
  	if (tmpdir) {
---- orig/receiver.c	2005-03-05 00:25:25
+--- orig/receiver.c	2005-03-10 00:06:01
 +++ receiver.c	2005-02-11 20:26:32
 @@ -44,6 +44,7 @@ extern int remove_sent_files;
  extern int module_id;
@@ -238,7 +238,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	while ((i = recv_token(f_in, &data)) != 0) {
  		if (do_progress)
  			show_progress(offset, total_size);
-@@ -383,6 +406,7 @@ int recv_files(int f_in, struct file_lis
+@@ -364,6 +387,7 @@ int recv_files(int f_in, struct file_lis
  			send_msg(MSG_DONE, "", 0);
  			if (keep_partial && !partial_dir)
  				make_backups = 0; /* prevents double backup */
@@ -246,7 +246,7 @@ an ftp client, appending new data onto the end of the files it updates.
  			continue;
  		}
  
---- orig/rsync.yo	2005-03-04 16:13:54
+--- orig/rsync.yo	2005-03-05 18:58:26
 +++ rsync.yo	2005-02-11 20:36:38
 @@ -308,6 +308,7 @@ to the detailed description below for a 
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
@@ -271,7 +271,7 @@ an ftp client, appending new data onto the end of the files it updates.
  dit(bf(-d, --dirs)) Tell the sending side to include any directories that
  are encountered.  Unlike bf(--recursive), a directory's contents are not copied
  unless the directory was specified on the command-line as either "." or a
---- orig/sender.c	2005-03-05 00:25:25
+--- orig/sender.c	2005-03-10 00:05:58
 +++ sender.c	2005-02-20 00:17:01
 @@ -28,6 +28,7 @@ extern int log_format_has_i;
  extern int daemon_log_format_has_i;
@@ -295,7 +295,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (s->count == 0)
  		return(s);
  
-@@ -211,6 +219,7 @@ void send_files(struct file_list *flist,
+@@ -234,6 +242,7 @@ void send_files(struct file_list *flist,
  				/* For inplace: redo phase turns off the backup
  				 * flag so that we do a regular inplace send. */
  				make_backups = 0;

@@ -2,8 +2,8 @@ This adds the option --copy-dest, which works just like --link-dest
 except that identical files are copied into the destination instead
 of hard-linked.
 
---- orig/generator.c	2005-03-05 00:25:24
-+++ generator.c	2005-03-05 00:27:49
+--- orig/generator.c	2005-03-09 23:46:28
++++ generator.c	2005-03-11 11:24:17
 @@ -66,6 +66,7 @@ extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
@@ -12,7 +12,7 @@ of hard-linked.
  extern int link_dest;
  extern int whole_file;
  extern int local_server;
-@@ -860,6 +861,8 @@ static void recv_generator(char *fname, 
+@@ -873,6 +874,8 @@ static void recv_generator(char *fname, 
  					continue;
  				best_match = i;
  				match_level = 2;
@@ -21,7 +21,7 @@ of hard-linked.
  				/* FALL THROUGH */
  			case 2:
  				if (!unchanged_attrs(file, &st))
-@@ -897,7 +900,20 @@ static void recv_generator(char *fname, 
+@@ -910,7 +913,20 @@ static void recv_generator(char *fname, 
  				match_level = 2;
  			}
  #endif
@@ -43,22 +43,22 @@ of hard-linked.
  				fnamecmp = fnamecmpbuf;
  				fnamecmp_type = i;
  			}
-@@ -964,11 +980,9 @@ static void recv_generator(char *fname, 
+@@ -973,11 +989,9 @@ static void recv_generator(char *fname, 
  			return;
  		}
  		/* Only --compare-dest gets here. */
 -		if (unchanged_attrs(file, &st)) {
--			itemize(file, ndx, statret, &st,
--				ITEM_NO_DEST_AND_NO_UPDATE, NULL);
+-			itemize(file, ndx, real_ret, &real_st,
+-				ITEM_NO_DEST_AND_NO_UPDATE, 0, NULL);
 -			return;
 -		}
-+		itemize(file, ndx, statret, &st,
-+			ITEM_NO_DEST_AND_NO_UPDATE, NULL);
++		itemize(file, ndx, real_ret, &real_st,
++			ITEM_NO_DEST_AND_NO_UPDATE, 0, NULL);
 +		return;
  	}
  
  prepare_to_open:
---- orig/options.c	2005-03-02 09:52:06
+--- orig/options.c	2005-03-09 18:53:53
 +++ options.c	2005-03-02 10:05:21
 @@ -143,6 +143,7 @@ char *backup_dir = NULL;
  char backup_dir_buf[MAXPATHLEN];
@@ -67,7 +67,7 @@ of hard-linked.
 +int copy_dest = 0;
  int link_dest = 0;
  int basis_dir_cnt = 0;
- 
+ char *dest_option = NULL;
 @@ -317,6 +318,7 @@ void usage(enum logcode F)
    rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F," -y, --fuzzy                 find similar file for basis if no dest file\n");
@@ -117,7 +117,7 @@ of hard-linked.
  		return 0;
  	}
  
---- orig/rsync.yo	2005-03-04 16:13:54
+--- orig/rsync.yo	2005-03-05 18:58:26
 +++ rsync.yo	2005-03-03 02:19:19
 @@ -353,6 +353,7 @@ to the detailed description below for a 
   -T, --temp-dir=DIR          create temporary files in directory DIR
@@ -175,7 +175,7 @@ of hard-linked.
  
  Note that rsync versions prior to 2.6.1 had a bug that could prevent
  bf(--link-dest) from working properly for a non-root user when bf(-o) was specified
---- orig/testsuite/compare-dest.test	2005-02-26 19:51:27
+--- orig/testsuite/compare-dest.test	2005-02-26 19:49:59
 +++ testsuite/compare-dest.test	2005-03-01 15:57:27
 @@ -31,9 +31,9 @@ $RSYNC -av --exclude=/text --exclude=etc
  checkit "$RSYNC -avv --no-whole-file \
