@@ -944,20 +944,21 @@ local instead of inherited (see also the 'n' modifier).
 -		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
 +	add_exclude(&exclude_list, getenv("CVSIGNORE"), cvs_flags);
  }
---- orig/flist.c	2005-01-01 21:11:00
+--- orig/flist.c	2005-01-21 00:35:26
 +++ flist.c	2004-08-12 18:59:28
-@@ -40,10 +40,9 @@ extern int module_id;
+@@ -40,11 +40,10 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
  
 -extern int cvs_exclude;
 -
  extern int recurse;
+ extern int keep_dirs;
  extern char curr_dir[MAXPATHLEN];
 +extern unsigned int curr_dir_len;
- extern char *files_from;
  extern int filesfrom_fd;
  
+ extern int one_file_system;
 @@ -67,7 +66,6 @@ extern int list_only;
  
  extern struct exclude_list_struct exclude_list;
@@ -1109,9 +1110,9 @@ local instead of inherited (see also the 'n' modifier).
  FN_LOCAL_STRING(lp_exclude, exclude)
  FN_LOCAL_STRING(lp_exclude_from, exclude_from)
  FN_LOCAL_STRING(lp_include, include)
---- orig/options.c	2005-01-17 23:11:45
+--- orig/options.c	2005-01-20 23:05:34
 +++ options.c	2005-01-16 23:34:15
-@@ -144,6 +144,7 @@ int list_only = 0;
+@@ -145,6 +145,7 @@ int list_only = 0;
  char *batch_name = NULL;
  
  static int daemon_opt;   /* sets am_daemon after option error-reporting */
@@ -1119,7 +1120,7 @@ local instead of inherited (see also the 'n' modifier).
  static int modify_window_set;
  static char *dest_option = NULL;
  static char *max_size_arg;
-@@ -291,6 +292,9 @@ void usage(enum logcode F)
+@@ -292,6 +293,9 @@ void usage(enum logcode F)
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
@@ -1129,7 +1130,7 @@ local instead of inherited (see also the 'n' modifier).
    rprintf(F,"     --exclude=PATTERN       exclude files matching PATTERN\n");
    rprintf(F,"     --exclude-from=FILE     exclude patterns listed in FILE\n");
    rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
-@@ -320,7 +324,7 @@ void usage(enum logcode F)
+@@ -321,7 +325,7 @@ void usage(enum logcode F)
  }
  
  enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
@@ -1138,7 +1139,7 @@ local instead of inherited (see also the 'n' modifier).
        OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
-@@ -343,6 +347,7 @@ static struct poptOption long_options[] 
+@@ -344,6 +348,7 @@ static struct poptOption long_options[] 
    {"delete-excluded",  0,  POPT_ARG_NONE,   0, OPT_DELETE_EXCLUDED, 0, 0 },
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
@@ -1146,7 +1147,7 @@ local instead of inherited (see also the 'n' modifier).
    {"exclude",          0,  POPT_ARG_STRING, 0, OPT_EXCLUDE, 0, 0 },
    {"include",          0,  POPT_ARG_STRING, 0, OPT_INCLUDE, 0, 0 },
    {"exclude-from",     0,  POPT_ARG_STRING, 0, OPT_EXCLUDE_FROM, 0, 0 },
-@@ -393,6 +398,7 @@ static struct poptOption long_options[] 
+@@ -394,6 +399,7 @@ static struct poptOption long_options[] 
    {"ignore-errors",    0,  POPT_ARG_NONE,   &ignore_errors, 0, 0, 0 },
    {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
    {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
@@ -1154,7 +1155,7 @@ local instead of inherited (see also the 'n' modifier).
    {0,                 'P', POPT_ARG_NONE,   0, 'P', 0, 0 },
    {"port",             0,  POPT_ARG_INT,    &rsync_port, 0, 0, 0 },
    {"log-format",       0,  POPT_ARG_STRING, &log_format, 0, 0, 0 },
-@@ -622,10 +628,15 @@ int parse_arguments(int *argc, const cha
+@@ -623,10 +629,15 @@ int parse_arguments(int *argc, const cha
  			delete_mode = 1;
  			break;
  
@@ -1171,7 +1172,7 @@ local instead of inherited (see also the 'n' modifier).
  		case OPT_INCLUDE:
  			add_exclude(&exclude_list, poptGetOptArg(pc),
  				    XFLG_DEF_INCLUDE);
-@@ -643,8 +654,8 @@ int parse_arguments(int *argc, const cha
+@@ -644,8 +655,8 @@ int parse_arguments(int *argc, const cha
  					goto options_rejected;
  			}
  			add_exclude_file(&exclude_list, arg, XFLG_FATAL_ERRORS
@@ -1182,7 +1183,7 @@ local instead of inherited (see also the 'n' modifier).
  			break;
  
  		case 'h':
-@@ -668,6 +679,19 @@ int parse_arguments(int *argc, const cha
+@@ -669,6 +680,19 @@ int parse_arguments(int *argc, const cha
  			am_sender = 1;
  			break;
  
@@ -1202,7 +1203,7 @@ local instead of inherited (see also the 'n' modifier).
  		case 'P':
  			do_progress = 1;
  			keep_partial = 1;
-@@ -966,7 +990,7 @@ int parse_arguments(int *argc, const cha
+@@ -970,7 +994,7 @@ int parse_arguments(int *argc, const cha
  				partial_dir = NULL;
  			else if (*partial_dir != '/') {
  				add_exclude(&exclude_list, partial_dir,
@@ -1211,7 +1212,7 @@ local instead of inherited (see also the 'n' modifier).
  			}
  			keep_partial = 1;
  		}
---- orig/rsync.h	2005-01-17 23:11:45
+--- orig/rsync.h	2005-01-21 00:35:26
 +++ rsync.h	2005-01-17 00:16:04
 @@ -109,9 +109,11 @@
  
@@ -1226,7 +1227,7 @@ local instead of inherited (see also the 'n' modifier).
  
  #define PERMS_REPORT		(1<<0)
  #define PERMS_SKIP_MTIME	(1<<1)
-@@ -513,11 +515,21 @@ struct map_struct {
+@@ -507,11 +509,21 @@ struct map_struct {
  #define MATCHFLG_INCLUDE	(1<<4) /* this is an include, not an exclude */
  #define MATCHFLG_DIRECTORY	(1<<5) /* this matches only directories */
  #define MATCHFLG_CLEAR_LIST 	(1<<6) /* this item is the "!" token */
@@ -1249,7 +1250,7 @@ local instead of inherited (see also the 'n' modifier).
  };
  
  struct exclude_list_struct {
---- orig/rsync.yo	2005-01-17 23:11:46
+--- orig/rsync.yo	2005-01-20 19:47:08
 +++ rsync.yo	2005-01-17 07:02:43
 @@ -361,6 +361,9 @@ verb(
   -P                          equivalent to --partial --progress
@@ -1345,7 +1346,7 @@ local instead of inherited (see also the 'n' modifier).
  rule for this directory exclusion somewhere higher up in the list so that
  it has a high enough priority to be effective (e.g., if your rules specify
  a trailing --exclude=* rule, the auto-added rule will be ineffective).
-@@ -1110,30 +1141,318 @@ page describing the options available fo
+@@ -1110,30 +1141,320 @@ page describing the options available fo
  
  enddit()
  
@@ -1463,7 +1464,9 @@ local instead of inherited (see also the 'n' modifier).
 +
 +Note that, when using the --recursive (-r) option (which is implied by
 +-a), every subcomponent of every path is visited from the top down, so
-+include/exclude patterns get applied recursively to each subcomponent.
++include/exclude patterns get applied recursively to each subcomponent's
++full name (e.g. to include "/foo/bar/baz" the subcomponents "/foo" and
++"/foo/bar" must not be excluded).
 +The exclude patterns actually short-circuit the directory traversal stage
 +when rsync finds the files to send.  If a pattern excludes a particular
 +parent directory, it can render a deeper include pattern ineffectual
@@ -1680,7 +1683,7 @@ local instead of inherited (see also the 'n' modifier).
  
  Let's say that we want to match two source files, one with an absolute
  path of "/home/me/foo/bar", and one with a path of "/home/you/bar/baz".
-@@ -1165,114 +1484,59 @@ verb(
+@@ -1165,115 +1486,59 @@ verb(
     Target file: /dest/you/bar/baz
  )
  
@@ -1692,7 +1695,8 @@ local instead of inherited (see also the 'n' modifier).
 -Note that, when using the --recursive (-r) option (which is implied by -a),
 -every subcomponent of
 -every path is visited from the top down, so include/exclude patterns get
--applied recursively to each subcomponent.
+-applied recursively to each subcomponent's full name (e.g. to include
+-"/foo/bar/baz" the subcomponents "/foo" and "/foo/bar" must not be excluded).
 -The exclude patterns actually short-circuit the directory traversal stage
 -when rsync finds the files to send.  If a pattern excludes a particular
 -parent directory, it can render a deeper include pattern ineffectual
@@ -1833,7 +1837,7 @@ local instead of inherited (see also the 'n' modifier).
  )
  
  manpagesection(BATCH MODE)
-@@ -1441,7 +1705,7 @@ it. The most common cause is incorrectly
+@@ -1442,7 +1707,7 @@ it. The most common cause is incorrectly
  scripts (such as .cshrc or .profile) that contain output statements
  for non-interactive logins.
  
