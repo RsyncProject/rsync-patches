@@ -1,0 +1,297 @@
+This patch adds two modifiers to the filter rule prefixes that allow a
+rule to be marked as sender-side (s), receiver-side (r), or both ("sr"
+or omitted).  Sender-side rules prevent files from being transferred,
+while receiver-side rules prevent files from being deleted.  The default
+for an unmodified include/exclude rule is to affect both sides, but a
+rule that is explicitly marked as affecting both sides will remain
+unaffected by the --delete-excluded option (that option changes any
+unmodified rules into server-side only rules).
+
+See the updated manpage for the details.
+
+--- orig/compat.c	2005-02-01 10:39:22
++++ compat.c	2005-02-05 05:31:06
+@@ -31,6 +31,7 @@ extern int verbose;
+ extern int am_server;
+ extern int am_sender;
+ extern int read_batch;
++extern int delete_excluded;
+ extern int checksum_seed;
+ extern int protocol_version;
+ 
+@@ -74,6 +75,12 @@ void setup_protocol(int f_out,int f_in)
+ 		exit_cleanup(RERR_PROTOCOL);
+ 	}
+ 
++	/* In newer protocols, --delete-excluded does not avoid the exclude-
++	 * list transfer to the receiver, so mark a modern --delete-excluded
++	 * conversation with a 2 instead of a 1. */
++	if (protocol_version >= 29 && delete_excluded)
++		delete_excluded = 2;
++
+ 	if (am_server) {
+ 		if (!checksum_seed)
+ 			checksum_seed = time(NULL);
+--- orig/exclude.c	2005-02-05 06:48:21
++++ exclude.c	2005-02-05 06:56:47
+@@ -53,7 +53,8 @@ struct filter_list_struct server_filter_
+ #define MAX_RULE_PREFIX (16)
+ 
+ #define MODIFIERS_MERGE_FILE "-+Cenw"
+-#define MODIFIERS_INCL_EXCL "/!C"
++#define MODIFIERS_INCL_EXCL "/!Crs"
++#define MODIFIERS_HIDE_PROTECT "/!"
+ 
+ /* The dirbuf is set by push_local_filters() to the current subdirectory
+  * relative to curr_dir that is being processed.  The path always has a
+@@ -667,6 +668,14 @@ static const char *parse_rule_tok(const 
+ 		case '-':
+ 			mods = MODIFIERS_INCL_EXCL;
+ 			break;
++		case 'H':
++			new_mflags |= MATCHFLG_SENDER_SIDE;
++			mods = MODIFIERS_HIDE_PROTECT;
++			break;
++		case 'P':
++			new_mflags |= MATCHFLG_RECEIVER_SIDE;
++			mods = MODIFIERS_HIDE_PROTECT;
++			break;
+ 		case '!':
+ 			new_mflags |= MATCHFLG_CLEAR_LIST;
+ 			mods = NULL;
+@@ -719,6 +728,12 @@ static const char *parse_rule_tok(const 
+ 			case 'n':
+ 				new_mflags |= MATCHFLG_NO_INHERIT;
+ 				break;
++			case 'r':
++				new_mflags |= MATCHFLG_RECEIVER_SIDE;
++				break;
++			case 's':
++				new_mflags |= MATCHFLG_SENDER_SIDE;
++				break;
+ 			case 'w':
+ 				new_mflags |= MATCHFLG_WORD_SPLIT;
+ 				break;
+@@ -973,6 +988,11 @@ char *get_rule_prefix(int match_flags, c
+ 	}
+ 	if (match_flags & MATCHFLG_EXCLUDE_SELF)
+ 		*op++ = 'e';
++	if (match_flags & MATCHFLG_SENDER_SIDE && !for_xfer)
++		*op++ = 's';
++	if (match_flags & MATCHFLG_RECEIVER_SIDE
++	    && (!for_xfer || delete_excluded))
++		*op++ = 'r';
+ 	if (legal_len)
+ 		*op++ = ' ';
+ 	if (op - buf > legal_len)
+@@ -985,19 +1005,37 @@ char *get_rule_prefix(int match_flags, c
+ 
+ static void send_rules(int f_out, struct filter_list_struct *flp)
+ {
+-	struct filter_struct *ent;
++	struct filter_struct *ent, *prev = NULL;
+ 
+ 	for (ent = flp->head; ent; ent = ent->next) {
+ 		unsigned int len, plen, dlen;
++		int elide = 0;
+ 		char *p;
+ 
++		if (ent->match_flags & MATCHFLG_SENDER_SIDE)
++			elide = am_sender ? 1 : -1;
++		if (ent->match_flags & MATCHFLG_RECEIVER_SIDE)
++			elide = elide ? 0 : am_sender ? -1 : 1;
++		else if (delete_excluded)
++			elide = am_sender ? 1 : -1;
++		if (elide < 0) {
++			if (prev)
++				prev->next = ent->next;
++			else
++				flp->head = ent->next;
++		} else
++			prev = ent;
++		if (elide > 0)
++			continue;
+ 		if (ent->match_flags & MATCHFLG_CVS_IGNORE
+ 		    && !(ent->match_flags & MATCHFLG_MERGE_FILE)) {
+-			if (am_sender || protocol_version < 29) {
+-				send_rules(f_out, &cvs_filter_list);
++			int f = am_sender || protocol_version < 29 ? f_out : -1;
++			send_rules(f, &cvs_filter_list);
++			if (f >= 0)
+ 				continue;
+-			}
+ 		}
++		if (f_out < 0)
++			continue;
+ 		p = get_rule_prefix(ent->match_flags, ent->pattern, 1, &plen);
+ 		if (!p) {
+ 			rprintf(FERROR,
+@@ -1015,12 +1053,13 @@ static void send_rules(int f_out, struct
+ 		if (dlen)
+ 			write_byte(f_out, '/');
+ 	}
++	flp->tail = prev;
+ }
+ 
+ /* This is only called by the client. */
+ void send_filter_list(int f_out)
+ {
+-	int receiver_wants_list = delete_mode && !delete_excluded;
++	int receiver_wants_list = delete_mode && delete_excluded != 1;
+ 
+ 	if (local_server || (am_sender && !receiver_wants_list))
+ 		f_out = -1;
+@@ -1035,10 +1074,10 @@ void send_filter_list(int f_out)
+ 	if (list_only == 1 && !recurse)
+ 		parse_rule(&filter_list, "/*/*", MATCHFLG_NO_PREFIXES, 0);
+ 
+-	if (f_out >= 0) {
+-		send_rules(f_out, &filter_list);
++	send_rules(f_out, &filter_list);
++
++	if (f_out >= 0)
+ 		write_int(f_out, 0);
+-	}
+ 
+ 	if (cvs_exclude) {
+ 		if (!am_sender || protocol_version < 29)
+@@ -1054,7 +1093,7 @@ void recv_filter_list(int f_in)
+ 	char line[MAXPATHLEN+MAX_RULE_PREFIX+1]; /* +1 for trailing slash. */
+ 	int xflags = protocol_version >= 29 ? 0 : XFLG_OLD_PREFIXES;
+ 	unsigned int len;
+-	int receiver_wants_list = delete_mode && !delete_excluded;
++	int receiver_wants_list = delete_mode && delete_excluded != 1;
+ 
+ 	if (!local_server && (am_sender || receiver_wants_list)) {
+ 		while ((len = read_int(f_in)) != 0) {
+@@ -1071,4 +1110,7 @@ void recv_filter_list(int f_in)
+ 		if (local_server || am_sender)
+ 			parse_rule(&filter_list, "-C", 0, 0);
+ 	}
++
++	if (local_server) /* filter out any rules that aren't for us. */
++		send_rules(-1, &filter_list);
+ }
+--- orig/flist.c	2005-02-03 19:23:55
++++ flist.c	2005-02-05 05:31:09
+@@ -979,7 +979,7 @@ void send_file_name(int f, struct file_l
+ 
+ 	/* f is set to -1 when calculating deletion file list */
+ 	file = make_file(fname, flist,
+-	    f == -1 && delete_excluded? SERVER_FILTERS : ALL_FILTERS);
++	    f == -1 && delete_excluded == 1 ? SERVER_FILTERS : ALL_FILTERS);
+ 
+ 	if (!file)
+ 		return;
+--- orig/rsync.h	2005-02-04 22:28:09
++++ rsync.h	2005-02-05 05:31:10
+@@ -565,9 +565,12 @@ struct map_struct {
+ #define MATCHFLG_FINISH_SETUP	(1<<13)/* per-dir merge file needs setup */
+ #define MATCHFLG_NEGATE 	(1<<14)/* rule matches when pattern does not */
+ #define MATCHFLG_CVS_IGNORE	(1<<15)/* rule was -C or :C */
++#define MATCHFLG_SENDER_SIDE	(1<<16)/* rule applies to the sender side */
++#define MATCHFLG_RECEIVER_SIDE	(1<<17)/* rule applies to the receiver side */
+ 
+ #define MATCHFLGS_FROM_CONTAINER (MATCHFLG_ABS_PATH | MATCHFLG_INCLUDE \
+-				| MATCHFLG_DIRECTORY | MATCHFLG_NEGATE)
++				| MATCHFLG_DIRECTORY | MATCHFLG_SENDER_SIDE \
++				| MATCHFLG_NEGATE | MATCHFLG_RECEIVER_SIDE)
+ 
+ struct filter_struct {
+ 	struct filter_struct *next;
+--- orig/rsync.yo	2005-02-05 01:23:49
++++ rsync.yo	2005-02-05 05:31:11
+@@ -678,7 +678,9 @@ send the whole directory (e.g. "dir" or 
+ for the directory's contents (e.g. "dir/*") since the wildcard is expanded
+ by the shell and rsync thus gets a request to transfer individual files, not
+ the files' parent directory.  Files that are excluded from transfer are
+-excluded from being deleted unless you use bf(--delete-excluded).
++also excluded from being deleted unless you use the bf(--delete-excluded)
++option or mark the rules as only matching on the sending side (see the
++include/exclude modifiers in the FILTER RULES section).
+ 
+ This option has no effect unless directory recursion is enabled.
+ 
+@@ -725,6 +727,9 @@ See bf(--delete) (which is implied) for 
+ dit(bf(--delete-excluded)) In addition to deleting the files on the
+ receiving side that are not on the sending side, this tells rsync to also
+ delete any files on the receiving side that are excluded (see bf(--exclude)).
++See the FILTER RULES section for a way to make individual exclusions behave
++this way on the receiver, and for a way to protect files from
++bf(--delete-excluded).
+ See bf(--delete) (which is implied) for more details on file-deletion.
+ 
+ dit(bf(--ignore-errors)) Tells bf(--delete) to go ahead and delete files
+@@ -1241,6 +1246,8 @@ bf(-) specifies an exclude pattern. nl()
+ bf(+) specifies an include pattern. nl()
+ bf(.) specifies a merge-file to read for more rules. nl()
+ bf(:) specifies a per-directory merge-file. nl()
++bf(H) specifies a pattern for hiding files from the transfer. nl()
++bf(P) specifies a pattern for protecting files from deletion. nl()
+ bf(!) clears the current include/exclude list (takes no arg) nl()
+ )
+ 
+@@ -1263,10 +1270,17 @@ comment lines that start with a "#".
+ 
+ manpagesection(INCLUDE/EXCLUDE PATTERN RULES)
+ 
+-You can include and exclude files by specifying patterns using the "+" and
+-"-" filter rules (as introduced in the FILTER RULES section above).  These
+-rules specify a pattern that is matched against the names of the files
+-that are going to be transferred.  These patterns can take several forms:
++You can include and exclude files by specifying patterns using the "+",
++"-", "H", and "P" filter rules (as introduced in the FILTER RULES section
++above).
++Note that the "H" (hide) rule is just a more intuitive way to specify a "-"
++rule with an "s" modifier (a sender-only exclusion) and "P" (protect) is
++just a more intuitive way to specify a "-" rule with an "r" modifier (a
++receiver-only exclusion).  See the modifiers below for more information.
++
++The include/exclude rules each specify a pattern that is matched against
++the names of the files that are going to be transferred.  These patterns
++can take several forms:
+ 
+ itemize(
+   it() if the pattern starts with a / then it is anchored to a
+@@ -1398,6 +1412,9 @@ itemize(
+   space that separates the prefix from the rule is treated specially, so
+   "- foo + bar" is parsed as two rules (assuming that bf(-) or bf(+) was not
+   specified to turn off the parsing of prefixes).
++  it() You may also specify any of the modifiers for "+" or "-" to have the
++  rules that are read-in default to having that option set.  For instance,
++  ":s_.excl" would make all the rules in .excl server-side only.
+ )
+ 
+ The following modifiers are accepted after a "+" or "-":
+@@ -1413,6 +1430,16 @@ itemize(
+   it() A bf(C) is used to indicate that all the global CVS-exclude rules
+   should be inserted as excludes in place of the "-C".  No arg should
+   follow.
++  it() An bf(s) is used to indicate that the rule applies to the sending
++  side.  When a rule affects the sending side it, prevents files from
++  being transferred.  The default is for a rule to affect both sides
++  unless bf(--delete-excluded) was specified, in which case default rules
++  become sender-side only.  See also the "H" (hide) rule, which is an
++  alias for the "-" rule with the "s" modifer.
++  it() An bf(r) is used to indicate that the rule applies to the receiving
++  side.  When a rule affects the receiving side it, prevents files from
++  being deleted.  See the bf(s) modifier for more info.  See also the "P"
++  (protect) rule, which is an alias for the "-" rule with the "r" modifier.
+ )
+ 
+ Per-directory rules are inherited in all subdirectories of the directory
+@@ -1706,10 +1733,10 @@ error.
+ When reading a batch file, rsync will force the value of certain options
+ to match the data in the batch file if you didn't set them to the same
+ as the batch-writing command.  Other options can (and should) be changed.
+-For instance
+-bf(--write-batch) changes to bf(--read-batch), bf(--files-from) is dropped, and the
+-bf(--filter)/bf(--include)/bf(--exclude) options are not needed unless one of the
+-bf(--delete) options is specified without bf(--delete-excluded).
++For instance bf(--write-batch) changes to bf(--read-batch),
++bf(--files-from) is dropped, and the
++bf(--filter)/bf(--include)/bf(--exclude) options are not needed unless
++one of the bf(--delete) options is specified.
+ 
+ The code that creates the BATCH.sh file transforms any filter/include/exclude
+ options into a single list that is appended as a "here" document to the
