@@ -7,8 +7,8 @@ support for multiple --compare-dest options).
 
 You must run "make proto" before compiling.
 
---- orig/generator.c	2004-09-07 21:45:30
-+++ generator.c	2004-09-07 21:55:02
+--- orig/generator.c	2004-09-20 19:50:13
++++ generator.c	2004-09-20 19:57:58
 @@ -254,14 +254,15 @@ static void generate_and_send_sums(int f
   * out.  It might be wrong.
   */
@@ -135,7 +135,7 @@ You must run "make proto" before compiling.
  	} else {
  		backupptr = NULL;
  		back_file = NULL;
-@@ -566,20 +567,33 @@ prepare_to_open:
+@@ -566,22 +567,38 @@ prepare_to_open:
  	if (verbose > 2)
  		rprintf(FINFO, "generating and sending sums for %d\n", i);
  
@@ -145,6 +145,8 @@ You must run "make proto" before compiling.
 -	if (f_copy >= 0) {
 -		close(f_copy);
 -		set_perms(backupptr, back_file, NULL, 0);
+-		if (verbose > 1)
+-			rprintf(FINFO, "backed up %s to %s\n", fname, backupptr);
 -		free(back_file);
 +notify_others:
 +	if (f_out_name >= 0) {
@@ -160,13 +162,18 @@ You must run "make proto" before compiling.
 +
 +	if (statret == 0) {
 +		generate_and_send_sums(fd, st.st_size, f_out, f_copy);
-+		close(fd);
 +
 +		if (f_copy >= 0) {
 +			close(f_copy);
 +			set_perms(backupptr, back_file, NULL, 0);
++			if (verbose > 1) {
++				rprintf(FINFO, "backed up %s to %s\n",
++					fname, backupptr);
++			}
 +			free(back_file);
 +		}
++
++		close(fd);
 +	} else
 +		write_sum_head(f_out, NULL);
  }
@@ -178,7 +185,7 @@ You must run "make proto" before compiling.
  {
  	int i;
  	int phase = 0;
-@@ -620,7 +634,7 @@ void generate_files(int f_out, struct fi
+@@ -622,7 +639,7 @@ void generate_files(int f_out, struct fi
  		}
  
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -187,7 +194,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -637,7 +651,7 @@ void generate_files(int f_out, struct fi
+@@ -639,7 +656,7 @@ void generate_files(int f_out, struct fi
  	while ((i = get_redo_num()) != -1) {
  		struct file_struct *file = flist->files[i];
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -196,7 +203,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -656,7 +670,7 @@ void generate_files(int f_out, struct fi
+@@ -658,7 +675,7 @@ void generate_files(int f_out, struct fi
  		if (!file->basename || !S_ISDIR(file->mode))
  			continue;
  		recv_generator(local_name ? local_name : f_name(file),
@@ -205,7 +212,7 @@ You must run "make proto" before compiling.
  	}
  
  	if (verbose > 2)
---- orig/main.c	2004-08-05 18:24:21
+--- orig/main.c	2004-09-18 01:49:33
 +++ main.c	2004-07-22 00:10:43
 @@ -59,6 +59,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
@@ -279,9 +286,9 @@ You must run "make proto" before compiling.
  
  	get_redo_num(); /* Read final MSG_DONE and any prior messages. */
  	report(-1);
---- orig/receiver.c	2004-09-07 21:45:30
+--- orig/receiver.c	2004-09-21 09:40:27
 +++ receiver.c	2004-09-07 21:57:20
-@@ -333,7 +333,8 @@ static void discard_receive_data(int f_i
+@@ -329,7 +329,8 @@ static void discard_receive_data(int f_i
   * main routine for receiver process.
   *
   * Receiver process runs on the same host as the generator process. */
@@ -291,7 +298,7 @@ You must run "make proto" before compiling.
  {
  	int next_gen_i = -1;
  	int fd1,fd2;
-@@ -362,8 +363,13 @@ int recv_files(int f_in, struct file_lis
+@@ -358,8 +359,13 @@ int recv_files(int f_in, struct file_lis
  		i = read_int(f_in);
  		if (i == -1) {
  			if (read_batch) {
@@ -307,7 +314,7 @@ You must run "make proto" before compiling.
  				next_gen_i = -1;
  			}
  
-@@ -411,6 +417,8 @@ int recv_files(int f_in, struct file_lis
+@@ -407,6 +413,8 @@ int recv_files(int f_in, struct file_lis
  
  		if (read_batch) {
  			while (i > next_gen_i) {
@@ -316,7 +323,7 @@ You must run "make proto" before compiling.
  				next_gen_i = read_int(batch_gen_fd);
  				if (next_gen_i == -1)
  					next_gen_i = flist->count;
-@@ -421,6 +429,7 @@ int recv_files(int f_in, struct file_lis
+@@ -417,6 +425,7 @@ int recv_files(int f_in, struct file_lis
  				discard_receive_data(f_in, file->length);
  				continue;
  			}
@@ -324,7 +331,7 @@ You must run "make proto" before compiling.
  		}
  
  		if (server_exclude_list.head
-@@ -430,35 +439,31 @@ int recv_files(int f_in, struct file_lis
+@@ -426,35 +435,31 @@ int recv_files(int f_in, struct file_lis
  			exit_cleanup(RERR_PROTOCOL);
  		}
  
