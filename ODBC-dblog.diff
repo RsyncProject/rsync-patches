@@ -99,45 +99,45 @@ This patch adds the following options:
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
  	fileio.o batch.o clientname.o
  OBJS3=progress.o pipe.o
---- orig/cleanup.c	2005-01-10 09:46:11
+--- orig/cleanup.c	2005-01-28 23:01:07
 +++ cleanup.c	2004-07-03 20:22:18
-@@ -143,8 +143,12 @@ void _exit_cleanup(int code, const char 
+@@ -142,8 +142,12 @@ void _exit_cleanup(int code, const char 
  			code = RERR_VANISHED;
  	}
  
 -	if (code)
 +	if (code) {
  		log_exit(code, file, line);
-+#ifdef HAVE_LIBODBC
++#if HAVE_LIBODBC
 +		db_log_exit(code,file,line);
 +#endif
 +	}
  
  	if (verbose > 2) {
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): about to call exit(%d)\n",
---- orig/clientserver.c	2005-01-25 12:14:14
+--- orig/clientserver.c	2005-02-01 10:39:22
 +++ clientserver.c	2004-07-03 20:22:18
-@@ -341,6 +341,9 @@ static int rsync_module(int f_in, int f_
- 		   XFLG_WORD_SPLIT | XFLG_ABS_PATH | XFLG_DEF_EXCLUDE);
+@@ -344,6 +344,9 @@ static int rsync_module(int f_in, int f_
+ 	    XFLG_WORD_SPLIT | XFLG_ANCHORED2ABS | XFLG_DEF_EXCLUDE);
  
  	log_init();
-+#ifdef HAVE_LIBODBC
++#if HAVE_LIBODBC
 +	db_log_open();
 +#endif
  
  	if (use_chroot) {
  		/*
-@@ -459,6 +462,9 @@ static int rsync_module(int f_in, int f_
+@@ -463,6 +466,9 @@ static int rsync_module(int f_in, int f_
  			rprintf(FLOG, "rsync %s %s from %s@%s (%s)\n",
  				am_sender ? "on" : "to",
  				request, auth_user, host, addr);
-+#ifdef HAVE_LIBODBC
++#if HAVE_LIBODBC
 +			db_log_session();
 +#endif
  		} else {
  			rprintf(FLOG, "rsync %s %s from %s (%s)\n",
  				am_sender ? "on" : "to",
---- orig/configure.in	2005-01-10 00:21:12
+--- orig/configure.in	2005-01-28 23:01:08
 +++ configure.in	2004-07-03 20:22:18
 @@ -94,6 +94,8 @@ AC_ARG_WITH(rsync-path,
  	[  --with-rsync-path=PATH  set default --rsync-path to PATH (default: rsync)],
@@ -148,7 +148,7 @@ This patch adds the following options:
  
  AC_DEFINE_UNQUOTED(RSYNC_PATH, "$RSYNC_PATH", [location of rsync on remote machine])
  
-@@ -500,6 +502,14 @@ then
+@@ -524,6 +526,14 @@ then
      AC_CHECK_LIB(popt, poptGetContext, , [with_included_popt=yes])
  fi
  
@@ -269,26 +269,26 @@ This patch adds the following options:
 +
 +#include "rsync.h"
 +
-+#ifdef HAVE_SQL_H
++#if HAVE_SQL_H
 +#include <sql.h>
 +#else
-+#ifdef HAVE_ODBC_SQL_H
++#if HAVE_ODBC_SQL_H
 +#include <odbc/sql.h>
 +#endif
 +#endif
 +
-+#ifdef HAVE_SQLEXT_H
++#if HAVE_SQLEXT_H
 +#include <sqlext.h>
 +#else
-+#ifdef HAVE_ODBC_SQLEXT_H
++#if HAVE_ODBC_SQLEXT_H
 +#include <odbc/sqlext.h>
 +#endif
 +#endif
 +
-+#ifdef HAVE_SQLTYPES_H
++#if HAVE_SQLTYPES_H
 +#include <sqltypes.h>
 +#else
-+#ifdef HAVE_ODBC_SQLTYPES_H
++#if HAVE_ODBC_SQLTYPES_H
 +#include <odbc/sqltypes.h>
 +#endif
 +#endif
@@ -686,7 +686,7 @@ This patch adds the following options:
  FN_LOCAL_BOOL(lp_ignore_errors, ignore_errors)
  FN_LOCAL_BOOL(lp_ignore_nonreadable, ignore_nonreadable)
  FN_LOCAL_STRING(lp_uid, uid)
---- orig/log.c	2004-09-07 19:54:51
+--- orig/log.c	2005-02-01 10:39:22
 +++ log.c	2004-07-03 20:22:18
 @@ -75,7 +75,7 @@ struct {
  /*
@@ -697,37 +697,37 @@ This patch adds the following options:
  {
  	int i;
  	for (i = 0; rerr_names[i].name; i++) {
---- orig/main.c	2005-01-25 12:14:14
+--- orig/main.c	2005-01-30 10:07:21
 +++ main.c	2004-07-03 20:22:18
-@@ -139,6 +139,9 @@ static void report(int f)
+@@ -137,6 +137,9 @@ static void report(int f)
  
  	if (am_daemon) {
  		log_exit(0, __FILE__, __LINE__);
-+#ifdef HAVE_LIBODBC
++#if HAVE_LIBODBC
 +		db_log_exit(0,__FILE__,__LINE__);
 +#endif
  		if (f == -1 || !am_sender)
  			return;
  	}
---- orig/receiver.c	2005-01-25 12:14:14
+--- orig/receiver.c	2005-02-03 02:04:20
 +++ receiver.c	2004-07-20 21:47:47
-@@ -490,6 +490,9 @@ int recv_files(int f_in, struct file_lis
+@@ -504,6 +504,9 @@ int recv_files(int f_in, struct file_lis
  				       fname, fd2, file->length);
  
  		log_recv(file, &initial_stats);
-+#ifdef HAVE_LIBODBC
++#if HAVE_LIBODBC
 +		db_log_transfer(file, &initial_stats, "receive");
 +#endif
  
  		if (fd1 != -1)
  			close(fd1);
---- orig/sender.c	2005-01-25 00:00:31
+--- orig/sender.c	2005-02-03 02:04:20
 +++ sender.c	2004-07-15 02:37:48
-@@ -231,6 +231,9 @@ void send_files(struct file_list *flist,
+@@ -236,6 +236,9 @@ void send_files(struct file_list *flist,
  
  		match_sums(f_out, s, mbuf, st.st_size);
  		log_send(file, &initial_stats);
-+#ifdef HAVE_LIBODBC
++#if HAVE_LIBODBC
 +		db_log_transfer(file, &initial_stats,"send");
 +#endif
  

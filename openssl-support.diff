@@ -48,23 +48,23 @@ can't say if I've left any cleanup/compatibility errors in the code.
  
  TLS_OBJ = tls.o syscall.o lib/compat.o lib/snprintf.o lib/permstring.o
  
---- orig/cleanup.c	2005-01-10 09:46:11
+--- orig/cleanup.c	2005-01-28 23:01:07
 +++ cleanup.c	2005-01-10 10:43:22
 @@ -22,6 +22,9 @@
  #include "rsync.h"
  
  extern int io_error;
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +extern int use_ssl;
 +#endif
  extern int keep_partial;
  extern int log_got_error;
  extern char *partial_dir;
-@@ -98,6 +101,11 @@ void _exit_cleanup(int code, const char 
+@@ -97,6 +100,11 @@ void _exit_cleanup(int code, const char 
  	signal(SIGUSR1, SIG_IGN);
  	signal(SIGUSR2, SIG_IGN);
  
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +	if (use_ssl)
 +		end_tls();
 +#endif
@@ -72,13 +72,13 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (verbose > 3) {
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): entered\n",
  			code, file, line);
---- orig/clientserver.c	2005-01-25 00:53:58
+--- orig/clientserver.c	2005-02-01 10:39:22
 +++ clientserver.c	2004-10-08 20:44:59
-@@ -47,6 +47,9 @@ extern int select_timeout;
+@@ -45,6 +45,9 @@ extern int select_timeout;
  extern int orig_umask;
  extern int no_detach;
  extern int default_af_hint;
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +extern int use_ssl;
 +#endif
  extern char *bind_address;
@@ -91,7 +91,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
 +	if (ret < 0)
 +		return ret;
 +
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +	if (use_ssl) {
 +		int f_in = get_tls_rfd();
 +		int f_out = get_tls_wfd();
@@ -108,7 +108,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (verbose > 1)
  		print_child_argv(sargs);
  
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +	if (use_ssl) {
 +		io_printf(f_out, "#starttls\n");
 +		while (1) {
@@ -142,7 +142,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			 * server to terminate the listing of modules.
  			 * We don't want to go on and transfer
  			 * anything; just exit. */
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +			if (use_ssl)
 +				end_tls();
 +#endif
@@ -153,14 +153,14 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			rprintf(FERROR, "%s\n", line);
  			/* This is always fatal; the server will now
  			 * close the socket. */
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +			if (use_ssl)
 +				end_tls();
 +#endif
  			return RERR_STARTCLIENT;
  		} else {
  			rprintf(FINFO,"%s\n", line);
-@@ -519,6 +567,7 @@ static void send_listing(int fd)
+@@ -523,6 +571,7 @@ static void send_listing(int fd)
  		io_printf(fd,"@RSYNCD: EXIT\n");
  }
  
@@ -168,7 +168,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  /* this is called when a connection is established to a client
     and we want to start talking. The setup of the system is done from
     here */
-@@ -568,6 +617,9 @@ int start_daemon(int f_in, int f_out)
+@@ -572,6 +621,9 @@ int start_daemon(int f_in, int f_out)
  	if (protocol_version > remote_protocol)
  		protocol_version = remote_protocol;
  
@@ -178,7 +178,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	line[0] = 0;
  	if (!read_line(f_in, line, sizeof line - 1))
  		return -1;
-@@ -577,6 +629,20 @@ int start_daemon(int f_in, int f_out)
+@@ -581,6 +633,20 @@ int start_daemon(int f_in, int f_out)
  		return -1;
  	}
  
@@ -199,7 +199,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (*line == '#') {
  		/* it's some sort of command that I don't understand */
  		io_printf(f_out, "@ERROR: Unknown command '%s'\n", line);
---- orig/configure.in	2005-01-10 00:21:12
+--- orig/configure.in	2005-01-28 23:01:08
 +++ configure.in	2004-07-03 20:22:28
 @@ -271,6 +271,21 @@ yes
  	AC_SEARCH_LIBS(getaddrinfo, inet6)
@@ -223,19 +223,19 @@ can't say if I've left any cleanup/compatibility errors in the code.
  AC_MSG_CHECKING([whether to call shutdown on all sockets])
  case $host_os in
  	*cygwin* ) AC_MSG_RESULT(yes)
---- orig/main.c	2005-01-24 01:43:10
+--- orig/main.c	2005-01-30 10:07:21
 +++ main.c	2004-10-08 20:15:28
-@@ -57,6 +57,9 @@ extern int write_batch;
+@@ -56,6 +56,9 @@ extern int write_batch;
  extern int batch_fd;
  extern int batch_gen_fd;
  extern int filesfrom_fd;
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +extern int use_ssl;
 +#endif
  extern pid_t cleanup_child_pid;
  extern char *files_from;
  extern char *remote_filesfrom_file;
-@@ -808,33 +811,48 @@ static int start_client(int argc, char *
+@@ -835,33 +838,48 @@ static int start_client(int argc, char *
  	if ((rc = copy_argv(argv)))
  		return rc;
  
@@ -265,7 +265,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
 -			*p = '\0';
 +		/* rsync:// always uses rsync server over direct socket connection */
 +		if (strncasecmp(URL_PREFIX, argv[0], url_prefix_len) != 0) {
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +			url_prefix_len = sizeof SSL_URL_PREFIX - 1;
 +			if (strncasecmp(SSL_URL_PREFIX, argv[0], url_prefix_len) != 0)
 +				url_prefix_len = 0;
@@ -308,7 +308,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		p = find_colon(argv[0]);
  		if (p) { /* source is remote */
  			if (remote_filesfrom_file
-@@ -866,12 +884,26 @@ static int start_client(int argc, char *
+@@ -893,12 +911,26 @@ static int start_client(int argc, char *
  			argv++;
  		} else { /* source is local */
  			am_sender = 1;
@@ -317,7 +317,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			/* rsync:// destination uses rsync server over direct socket */
 -			if (strncasecmp(URL_PREFIX, argv[argc-1], strlen(URL_PREFIX)) == 0) {
 +			if (strncasecmp(URL_PREFIX, argv[argc-1], url_prefix_len) != 0) {
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +				url_prefix_len = sizeof SSL_URL_PREFIX - 1;
 +				if (strncasecmp(SSL_URL_PREFIX, argv[argc-1], url_prefix_len) != 0)
 +					url_prefix_len = 0;
@@ -338,13 +338,13 @@ can't say if I've left any cleanup/compatibility errors in the code.
  				p = strchr(host,'/');
  				if (p) {
  					*p = '\0';
---- orig/options.c	2005-01-25 03:26:51
+--- orig/options.c	2005-02-01 10:39:22
 +++ options.c	2004-11-27 18:31:46
 @@ -144,6 +144,14 @@ int quiet = 0;
  int always_checksum = 0;
  int list_only = 0;
  
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +int use_ssl = 0;
 +char *ssl_cert_path = NULL;
 +char *ssl_key_path = NULL;
@@ -362,12 +362,12 @@ can't say if I've left any cleanup/compatibility errors in the code.
 +	char const *ssl = "no ";
  	STRUCT_STAT *dumstat;
  
- #ifdef HAVE_SOCKETPAIR
+ #if HAVE_SOCKETPAIR
 @@ -188,6 +197,10 @@ static void print_rsync_version(enum log
  	ipv6 = "";
  #endif
  
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +	ssl = "";
 +#endif
 +
@@ -387,11 +387,11 @@ can't say if I've left any cleanup/compatibility errors in the code.
  #ifdef MAINTAINER_MODE
  	rprintf(f, "              panic action: \"%s\"\n",
  		get_panic_action());
-@@ -325,6 +338,13 @@ void usage(enum logcode F)
+@@ -331,6 +344,13 @@ void usage(enum logcode F)
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
  #endif
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +  rprintf(F,"     --ssl                   allow socket connections to use SSL\n");
 +  rprintf(F,"     --ssl-cert=FILE         path to server's SSL certificate\n");
 +  rprintf(F,"     --ssl-key=FILE          path to server's SSL private key\n");
@@ -401,7 +401,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    rprintf(F," -h, --help                  show this help screen\n");
  
    rprintf(F,"\nUse \"rsync --daemon --help\" to see the daemon-mode command-line options.\n");
-@@ -335,7 +355,7 @@ void usage(enum logcode F)
+@@ -341,7 +361,7 @@ void usage(enum logcode F)
  enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
@@ -410,11 +410,11 @@ can't say if I've left any cleanup/compatibility errors in the code.
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -428,6 +448,13 @@ static struct poptOption long_options[] 
+@@ -436,6 +456,13 @@ static struct poptOption long_options[] 
    {"ipv4",            '4', POPT_ARG_VAL,    &default_af_hint, AF_INET, 0, 0 },
    {"ipv6",            '6', POPT_ARG_VAL,    &default_af_hint, AF_INET6, 0, 0 },
  #endif
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +  {"ssl",              0,  POPT_ARG_NONE,   0, OPT_USE_SSL, 0, 0},
 +  {"ssl-cert",         0,  POPT_ARG_STRING, &ssl_cert_path, OPT_USE_SSL, 0, 0},
 +  {"ssl-key",          0,  POPT_ARG_STRING, &ssl_key_path, OPT_USE_SSL, 0, 0},
@@ -424,12 +424,12 @@ can't say if I've left any cleanup/compatibility errors in the code.
    /* All these options switch us into daemon-mode option-parsing. */
    {"address",          0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"config",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
-@@ -788,6 +815,12 @@ int parse_arguments(int *argc, const cha
+@@ -802,6 +829,12 @@ int parse_arguments(int *argc, const cha
  			basis_dir[basis_dir_cnt++] = (char *)arg;
  			break;
  
 +		case OPT_USE_SSL:
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +			use_ssl = 1;
 +#endif
 +			break;
@@ -437,11 +437,11 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -995,6 +1028,17 @@ int parse_arguments(int *argc, const cha
- 			bwlimit_writemax = 512;
- 	}
+@@ -1018,6 +1051,17 @@ int parse_arguments(int *argc, const cha
+ 	if (delay_updates && !partial_dir)
+ 		partial_dir = ".~tmp~";
  
-+#ifdef HAVE_OPENSSL
++#if HAVE_OPENSSL
 +	if (use_ssl) {
 +		if (init_tls()) {
 +			snprintf(err_buf, sizeof(err_buf),
@@ -455,7 +455,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (inplace) {
  #if HAVE_FTRUNCATE
  		if (partial_dir) {
---- orig/rsync.h	2005-01-25 00:53:58
+--- orig/rsync.h	2005-02-03 02:04:20
 +++ rsync.h	2004-10-08 21:01:33
 @@ -32,6 +32,7 @@
  
@@ -465,8 +465,8 @@ can't say if I've left any cleanup/compatibility errors in the code.
  
  #define BACKUP_SUFFIX "~"
  
-@@ -339,6 +340,11 @@ enum msgcode {
- #define INT64_IS_OFF_T
+@@ -386,6 +387,11 @@ enum msgcode {
+ # define SIZEOF_INT64 SIZEOF_OFF_T
  #endif
  
 +#if HAVE_OPENSSL
@@ -502,7 +502,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
 +
 +#include "rsync.h"
 +
-+#ifdef HAVE_SYS_SELECT_H
++#if HAVE_SYS_SELECT_H
 +#include <sys/select.h>
 +#else
 +#include <sys/time.h>
