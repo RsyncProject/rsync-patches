@@ -3,7 +3,7 @@ to be simpler and more efficient by Wayne Davison.
 
 Do we need configure support for mktime()?
 
---- orig/io.c	2004-11-25 16:32:40
+--- orig/io.c	2005-01-01 21:11:00
 +++ io.c	2004-07-17 15:28:36
 @@ -50,6 +50,7 @@ extern int am_generator;
  extern int eol_nulls;
@@ -41,17 +41,17 @@ Do we need configure support for mktime()?
  		if (!am_server && !am_daemon) {
  			rprintf(FERROR, "io timeout after %d seconds - exiting\n",
  				(int)(t-last_io));
---- orig/options.c	2004-11-27 18:27:35
-+++ options.c	2004-11-11 22:22:25
+--- orig/options.c	2005-01-01 21:11:00
++++ options.c	2005-01-01 21:19:56
 @@ -98,6 +98,7 @@ int blocking_io = -1;
  int checksum_seed = 0;
  int inplace = 0;
- unsigned int block_size = 0;
+ long block_size = 0; /* "long" because popt can't set an int32. */
 +time_t stop_at_utime = 0;
  
  
  /** Network address family. **/
-@@ -305,6 +306,8 @@ void usage(enum logcode F)
+@@ -306,6 +307,8 @@ void usage(enum logcode F)
    rprintf(F,"     --log-format=FORMAT     log file transfers using specified format\n");
    rprintf(F,"     --password-file=FILE    get password from FILE\n");
    rprintf(F,"     --bwlimit=KBPS          limit I/O bandwidth, KBytes per second\n");
@@ -60,7 +60,7 @@ Do we need configure support for mktime()?
    rprintf(F,"     --write-batch=FILE      write a batch to FILE\n");
    rprintf(F,"     --read-batch=FILE       read a batch from FILE\n");
  #ifdef INET6
-@@ -323,6 +326,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -324,6 +327,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
@@ -68,8 +68,8 @@ Do we need configure support for mktime()?
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -395,6 +399,8 @@ static struct poptOption long_options[] 
-   {0,                 'P', POPT_ARG_NONE,   0, 'P', 0, 0 },
+@@ -397,6 +401,8 @@ static struct poptOption long_options[] 
+   {"port",             0,  POPT_ARG_INT,    &rsync_port, 0, 0, 0 },
    {"log-format",       0,  POPT_ARG_STRING, &log_format, 0, 0, 0 },
    {"bwlimit",          0,  POPT_ARG_INT,    &bwlimit, 0, 0, 0 },
 +  {"stop-at",          0,  POPT_ARG_STRING, 0, OPT_STOP_AT, 0, 0 },
@@ -77,7 +77,7 @@ Do we need configure support for mktime()?
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
    {"hard-links",      'H', POPT_ARG_NONE,   &preserve_hard_links, 0, 0, 0 },
    {"read-batch",       0,  POPT_ARG_STRING, &batch_name, OPT_READ_BATCH, 0, 0 },
-@@ -749,6 +755,36 @@ int parse_arguments(int *argc, const cha
+@@ -750,6 +756,36 @@ int parse_arguments(int *argc, const cha
  			basis_dir[basis_dir_cnt++] = (char *)arg;
  			break;
  
@@ -114,7 +114,7 @@ Do we need configure support for mktime()?
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -1140,6 +1176,15 @@ void server_options(char **args,int *arg
+@@ -1141,6 +1177,15 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  
@@ -130,9 +130,9 @@ Do we need configure support for mktime()?
  	if (backup_dir) {
  		args[ac++] = "--backup-dir";
  		args[ac++] = backup_dir;
---- orig/rsync.yo	2004-11-27 17:53:24
+--- orig/rsync.yo	2005-01-01 21:11:01
 +++ rsync.yo	2004-07-15 02:44:40
-@@ -375,6 +375,8 @@ verb(
+@@ -376,6 +376,8 @@ verb(
       --log-format=FORMAT     log file transfers using specified format
       --password-file=FILE    get password from FILE
       --bwlimit=KBPS          limit I/O bandwidth, KBytes per second
@@ -141,7 +141,7 @@ Do we need configure support for mktime()?
       --write-batch=FILE      write a batch to FILE 
       --read-batch=FILE       read a batch from FILE
       --checksum-seed=NUM     set block/file checksum seed
-@@ -987,6 +989,19 @@ transfer was too fast, it will wait befo
+@@ -1014,6 +1016,19 @@ transfer was too fast, it will wait befo
  result is an average transfer rate equaling the specified limit. A value
  of zero specifies no limit.
  
