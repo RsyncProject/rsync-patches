@@ -1,0 +1,300 @@
+--- batch.c	15 May 2004 19:31:10 -0000	1.32
++++ batch.c	18 Jun 2004 17:16:35 -0000
+@@ -172,6 +172,7 @@ void close_batch_csums_file(void)
+ 
+ /**
+  * Write csum info to batch file
++ * If flist_entry < 0, just open the file
+  *
+  * @todo This will break if s->count is ever larger than maxint.  The
+  * batch code should probably be changed to consistently use the
+@@ -198,6 +199,9 @@ void write_batch_csum_info(int *flist_en
+ 		}
+ 	}
+ 
++	if (*flist_entry < 0)
++		return;
++
+ 	write_batch_csums_file(flist_entry, sizeof (int));
+ 	int_count = s ? (int) s->count : 0;
+ 	write_batch_csums_file(&int_count, sizeof int_count);
+@@ -285,6 +289,9 @@ void write_batch_delta_file(char *buff, 
+ 		}
+ 	}
+ 
++	if (!buff)
++		return;
++
+ 	if (write(f_delta, buff, bytes_to_write) < 0) {
+ 		rsyserr(FERROR, errno, "Batch file %s write error", filename);
+ 		close(f_delta);
+--- flist.c	18 Jun 2004 16:29:21 -0000	1.231
++++ flist.c	18 Jun 2004 17:16:35 -0000
+@@ -950,7 +950,7 @@ void send_file_name(int f, struct file_l
+ 
+ 	flist_expand(flist);
+ 
+-	if (write_batch)
++	if (write_batch)  /* TODO: why? remove and test. */
+ 		file->flags |= FLAG_TOP_DIR;
+ 
+ 	if (file->basename[0]) {
+@@ -1308,6 +1308,18 @@ struct file_list *recv_file_list(int f)
+ 			else
+ 				io_error |= read_int(f);
+ 		}
++		if (write_batch) {
++			/* TODO: remove this FLAG_TOP_DIR stuff and test
++			 * CAS: I'm not sure what the FLAG_TOP_DIR does,
++			 * but we set it here, just so it matches what
++			 * happens for write_batch on the sender paths.
++			 */
++		    int i;
++		    for (i = 0; i < flist->count; i++)
++			    flist->files[i]->flags |= FLAG_TOP_DIR;
++
++		    write_batch_flist_info(flist->count, flist->files);
++		}
+ 	}
+ 
+ 	if (verbose > 3)
+--- generator.c	18 Jun 2004 16:30:24 -0000	1.88
++++ generator.c	18 Jun 2004 17:16:35 -0000
+@@ -48,6 +48,7 @@ extern int whole_file;
+ extern int local_server;
+ extern int read_batch;
+ extern int write_batch;
++extern int read_batch;
+ extern int list_only;
+ extern int only_existing;
+ extern int orig_umask;
+@@ -227,16 +228,27 @@ static BOOL disable_deltas_p(void)
+  * Generate and send a stream of signatures/checksums that describe a buffer
+  *
+  * Generate approximately one checksum every block_len bytes.
++ *
++ * The flist_idx arg is only for the purpose of being able to call
++ * write_batch_csum_info().  Another (better?) way would be to instead
++ * return a pointer to a sum_struct, and then call write_batch_csum_info()
++ * outside.
+  */
+-static void generate_and_send_sums(struct map_struct *buf, size_t len, int f_out)
++static void generate_and_send_sums(struct map_struct *buf, size_t len, int f_out,
++				   int flist_idx)
+ {
+-	size_t i;
++	size_t i, j;
+ 	struct sum_struct sum;
+ 	OFF_T offset = 0;
+ 
+ 	sum_sizes_sqroot(&sum, len);
+ 
+ 	write_sum_head(f_out, &sum);
++	if (write_batch) { /* save all the sums to write out */
++		sum.sums = new_array(struct sum_buf, sum.count);
++		if (!sum.sums)
++			out_of_memory("generate_and_send_sums");
++	}
+ 
+ 	for (i = 0; i < sum.count; i++) {
+ 		unsigned int n1 = MIN(len, sum.blength);
+@@ -256,10 +268,30 @@ static void generate_and_send_sums(struc
+ 		write_buf(f_out, sum2, sum.s2length);
+ 		len -= n1;
+ 		offset += n1;
++		
++		if (write_batch) {  /* we're receiver */
++			/* we only have to save the sums
++			 * if we want to write them out */
++			sum.sums[i].sum1 = sum1;
++			for (j = 0; j < SUM_LENGTH ; j++)
++				sum.sums[i].sum2[j] = sum2[j];
++		}
++	}
++	if (write_batch) {
++		write_batch_csum_info(&flist_idx, &sum);
++		free(sum.sums);
+ 	}
+ }
+ 
+ 
++void write_null_sum(int f_out, int i)
++{
++	write_int(f_out, i);
++	if (!dry_run)
++		write_sum_head(f_out, NULL);
++	if (write_batch)
++		write_batch_csum_info(&i, NULL);
++}
+ 
+ /**
+  * Acts on file number @p i from @p flist, whose name is @p fname.
+@@ -454,9 +486,7 @@ void recv_generator(char *fname, struct 
+ 		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
+ 			return;
+ 		if (errno == ENOENT) {
+-			write_int(f_out,i);
+-			if (!dry_run)
+-				write_sum_head(f_out, NULL);
++			write_null_sum(f_out, i);
+ 		} else if (verbose > 1) {
+ 			rsyserr(FERROR, errno,
+ 				"recv_generator: failed to open %s",
+@@ -473,9 +503,7 @@ void recv_generator(char *fname, struct 
+ 		/* now pretend the file didn't exist */
+ 		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
+ 			return;
+-		write_int(f_out,i);
+-		if (!dry_run)
+-			write_sum_head(f_out, NULL);
++		write_null_sum(f_out, i);
+ 		return;
+ 	}
+ 
+@@ -503,8 +531,7 @@ void recv_generator(char *fname, struct 
+ 	}
+ 
+ 	if (disable_deltas_p()) {
+-		write_int(f_out,i);
+-		write_sum_head(f_out, NULL);
++		write_null_sum(f_out, i);
+ 		return;
+ 	}
+ 
+@@ -517,8 +544,7 @@ void recv_generator(char *fname, struct 
+ 		/* pretend the file didn't exist */
+ 		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
+ 			return;
+-		write_int(f_out,i);
+-		write_sum_head(f_out, NULL);
++		write_null_sum(f_out, i);
+ 		return;
+ 	}
+ 
+@@ -536,7 +562,7 @@ void recv_generator(char *fname, struct 
+ 		rprintf(FINFO, "generating and sending sums for %d\n", i);
+ 
+ 	write_int(f_out,i);
+-	generate_and_send_sums(mapbuf, st.st_size, f_out);
++	generate_and_send_sums(mapbuf, st.st_size, f_out, i);
+ 
+ 	close(fd);
+ 	if (mapbuf)
+--- main.c	18 Jun 2004 16:50:20 -0000	1.198
++++ main.c	18 Jun 2004 17:16:36 -0000
+@@ -1029,6 +1029,10 @@ int main(int argc,char *argv[])
+ 
+ 	if (write_batch && !am_server) {
+ 		write_batch_argvs_file(orig_argc, orig_argv);
++		/* initialize static fds */
++		ret = -1;
++		write_batch_csum_info(&ret, NULL);
++		write_batch_delta_file(NULL, 0);
+ 	}
+ 
+ 	if (am_daemon && !am_server)
+--- options.c	7 Jun 2004 22:05:22 -0000	1.156
++++ options.c	18 Jun 2004 17:16:36 -0000
+@@ -643,6 +643,15 @@ int parse_arguments(int *argc, const cha
+ 			"write-batch and read-batch can not be used together\n");
+ 		exit_cleanup(RERR_SYNTAX);
+ 	}
++	if ((write_batch || read_batch) && am_server) {
++		rprintf(FERROR,
++			"batch-mode is incompatible with server mode\n");
++		write_batch = 0;
++		read_batch = 0;
++		/* We don't actually exit_cleanup(), so that we can still
++		 * service older version clients that send batch args to
++		 * the server. */
++	}
+ 	if (batch_prefix && strlen(batch_prefix) > MAX_BATCH_PREFIX_LEN) {
+ 		rprintf(FERROR,
+ 			"the batch-file prefix must be %d characters or less.\n",
+@@ -884,13 +893,6 @@ void server_options(char **args,int *arg
+ 		args[ac++] = arg;
+ 	}
+ 
+-	if (batch_prefix) {
+-		char *r_or_w = write_batch ? "write" : "read";
+-		if (asprintf(&arg, "--%s-batch=%s", r_or_w, batch_prefix) < 0)
+-			goto oom;
+-		args[ac++] = arg;
+-	}
+-
+ 	if (io_timeout) {
+ 		if (asprintf(&arg, "--timeout=%d", io_timeout) < 0)
+ 			goto oom;
+--- pipe.c	18 Jun 2004 16:00:33 -0000	1.8
++++ pipe.c	18 Jun 2004 17:16:36 -0000
+@@ -26,6 +26,7 @@ extern int am_server;
+ extern int blocking_io;
+ extern int orig_umask;
+ extern int read_batch;
++extern int write_batch;
+ extern int filesfrom_fd;
+ 
+ /**
+@@ -117,6 +118,13 @@ pid_t local_child(int argc, char **argv,
+ 		am_sender = read_batch ? 0 : !am_sender;
+ 		am_server = 1;
+ 
++		/* There is write_batch code on both the receiver and
++		 * sender sides.  In local_child, both are local processes,
++		 * so we must make sure that only one actually writes.  It
++		 * shouldn't matter which one -- here we prevent the server
++		 * from writing. */
++		write_batch = 0;
++
+ 		if (!am_sender)
+ 			filesfrom_fd = -1;
+ 
+--- receiver.c	14 Jun 2004 15:09:36 -0000	1.82
++++ receiver.c	18 Jun 2004 17:16:36 -0000
+@@ -46,6 +46,7 @@ extern int cleanup_got_literal;
+ extern int module_id;
+ extern int ignore_errors;
+ extern int orig_umask;
++extern int write_batch;
+ extern int keep_partial;
+ extern int checksum_seed;
+ 
+@@ -279,6 +280,8 @@ static int receive_data(int f_in,struct 
+ 	sum_end(file_sum1);
+ 
+ 	read_buf(f_in,file_sum2,MD4_SUM_LENGTH);
++	if (write_batch)
++		write_batch_delta_file(file_sum2, MD4_SUM_LENGTH);
+ 	if (verbose > 2) {
+ 		rprintf(FINFO,"got file_sum\n");
+ 	}
+@@ -334,6 +337,9 @@ int recv_files(int f_in,struct file_list
+ 			continue;
+ 		}
+ 
++		if (write_batch)
++			write_batch_delta_file((char *) &i, sizeof i);
++
+ 		if (i < 0 || i >= flist->count) {
+ 			rprintf(FERROR,"Invalid file index %d in recv_files (count=%d)\n",
+ 				i, flist->count);
+--- token.c	18 Jun 2004 16:22:14 -0000	1.31
++++ token.c	18 Jun 2004 17:16:36 -0000
+@@ -80,6 +80,8 @@ static int simple_recv_token(int f,char 
+ 
+ 	if (residue == 0) {
+ 		int i = read_int(f);
++		if (write_batch)
++		        write_batch_delta_file((char *) &i, sizeof(int));
+ 		if (i <= 0)
+ 			return i;
+ 		residue = i;
+@@ -89,6 +91,8 @@ static int simple_recv_token(int f,char 
+ 	n = MIN(CHUNK_SIZE,residue);
+ 	residue -= n;
+ 	read_buf(f,buf,n);
++	if (write_batch)
++	        write_batch_delta_file(buf, n);
+ 	return n;
+ }
+ 
