@@ -9,8 +9,8 @@ they are suppled).
 
 Before compiling, be sure to run "make proto".
 
---- orig/generator.c	2004-07-29 16:46:28
-+++ generator.c	2004-07-29 16:42:25
+--- orig/generator.c	2004-07-30 07:18:03
++++ generator.c	2004-07-30 07:28:13
 @@ -43,7 +43,7 @@ extern int io_timeout;
  extern int protocol_version;
  extern int always_checksum;
@@ -20,9 +20,9 @@ Before compiling, be sure to run "make proto".
  extern int link_dest;
  extern int whole_file;
  extern int local_server;
-@@ -413,11 +413,19 @@ static void recv_generator(char *fname, 
- 
+@@ -414,11 +414,19 @@ static void recv_generator(char *fname, 
  	fnamecmp = fname;
+ 	fnamecmp_type = G2R_FNAME;
  
 -	if (statret == -1 && compare_dest != NULL) {
 +	if (statret == -1 && compare_dest[0] != NULL) {
@@ -44,16 +44,26 @@ Before compiling, be sure to run "make proto".
  #if HAVE_LINK
  			if (link_dest && !dry_run) {
  				if (do_link(fnamecmpbuf, fname) < 0) {
-@@ -433,7 +441,6 @@ static void recv_generator(char *fname, 
+@@ -429,15 +437,14 @@ static void recv_generator(char *fname, 
+ 							safe_fname(fname));
+ 					}
+ 					fnamecmp = fnamecmpbuf;
+-					fnamecmp_type = 0;
++					fnamecmp_type = i;
+ 				}
  			} else
  #endif
+ 			{
  				fnamecmp = fnamecmpbuf;
+-				fnamecmp_type = 0;
++				fnamecmp_type = i;
+ 			}
 -			statret = 0;
- 		} else
- 			*fnamecmpbuf = '\0';
- 	} else
+ 		}
+ 	}
+ 
 --- orig/main.c	2004-07-22 00:10:43
-+++ main.c	2004-07-22 00:30:38
++++ main.c	2004-07-30 07:23:54
 @@ -58,7 +58,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
  extern char *files_from;
@@ -73,7 +83,7 @@ Before compiling, be sure to run "make proto".
  	if (preserve_hard_links)
  		init_hard_links(flist);
 --- orig/options.c	2004-07-29 16:08:03
-+++ options.c	2004-07-29 16:31:11
++++ options.c	2004-07-30 07:23:54
 @@ -114,12 +114,13 @@ int write_batch = 0;
  int read_batch = 0;
  int backup_dir_len = 0;
@@ -197,18 +207,38 @@ Before compiling, be sure to run "make proto".
  	}
  
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
---- orig/receiver.c	2004-07-23 21:59:07
-+++ receiver.c	2004-07-23 22:05:04
-@@ -39,7 +39,6 @@ extern int cvs_exclude;
+--- orig/receiver.c	2004-07-30 07:17:48
++++ receiver.c	2004-07-30 07:31:12
+@@ -39,7 +39,7 @@ extern int cvs_exclude;
  extern int io_error;
  extern char *tmpdir;
  extern char *partial_dir;
 -extern char *compare_dest;
++extern char *compare_dest[];
  extern int make_backups;
  extern int do_progress;
  extern char *backup_dir;
---- orig/rsync.h	2004-07-29 16:08:03
-+++ rsync.h	2004-07-03 17:33:30
+@@ -442,7 +442,8 @@ int recv_files(int f_in, struct file_lis
+ 		partialptr = partial_dir ? partial_dir_fname(fname) : fname;
+ 
+ 		if (f_in_name >= 0) {
+-			switch (read_byte(f_in_name)) {
++			uchar j;
++			switch (j = read_byte(f_in_name)) {
+ 			case G2R_FNAME:
+ 				fnamecmp = fname;
+ 				break;
+@@ -451,7 +452,7 @@ int recv_files(int f_in, struct file_lis
+ 				break;
+ 			default:
+ 				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
+-					 compare_dest, fname);
++					 compare_dest[j], fname);
+ 				fnamecmp = fnamecmpbuf;
+ 				break;
+ 			}
+--- orig/rsync.h	2004-07-30 07:16:38
++++ rsync.h	2004-07-30 07:23:54
 @@ -98,6 +98,8 @@
  
  #define MAX_ARGS 1000
