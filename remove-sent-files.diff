@@ -38,25 +38,24 @@ command before "make":
  		case MSG_INFO:
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
---- orig/main.c	2005-01-30 10:07:21
-+++ main.c	2005-01-28 17:13:25
-@@ -35,6 +35,7 @@ extern int cvs_exclude;
- extern int delete_mode;
+--- orig/main.c	2005-02-04 22:28:09
++++ main.c	2005-02-05 01:24:16
+@@ -32,12 +32,14 @@ extern int am_daemon;
+ extern int verbose;
+ extern int blocking_io;
  extern int delete_before;
- extern int delete_excluded;
 +extern int delete_sent_files;
  extern int daemon_over_rsh;
  extern int do_stats;
  extern int dry_run;
-@@ -42,6 +43,7 @@ extern int list_only;
- extern int local_server;
+ extern int list_only;
  extern int log_got_error;
  extern int module_id;
 +extern int need_messages_from_generator;
  extern int orig_umask;
  extern int copy_links;
  extern int keep_dirlinks;
-@@ -443,6 +445,12 @@ static void do_server_sender(int f_in, i
+@@ -440,6 +442,12 @@ static void do_server_sender(int f_in, i
  		exit_cleanup(RERR_SYNTAX);
  		return;
  	}
@@ -69,7 +68,7 @@ command before "make":
  
  	if (!relative_paths && !push_dir(dir)) {
  		rsyserr(FERROR, errno, "push_dir#3 %s failed",
-@@ -676,6 +684,8 @@ void start_server(int f_in, int f_out, i
+@@ -670,6 +678,8 @@ void start_server(int f_in, int f_out, i
  
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
@@ -77,8 +76,8 @@ command before "make":
 +			io_start_multiplex_in();
  
  		recv_filter_list(f_in);
- 		if (cvs_exclude)
-@@ -758,6 +768,9 @@ int client_run(int f_in, int f_out, pid_
+ 		do_server_sender(f_in, f_out, argc, argv);
+@@ -747,6 +757,9 @@ int client_run(int f_in, int f_out, pid_
  		exit_cleanup(status);
  	}
  
@@ -88,9 +87,9 @@ command before "make":
  	if (argc == 0)
  		list_only |= 1;
  
---- orig/options.c	2005-02-01 10:39:22
+--- orig/options.c	2005-02-04 22:28:09
 +++ options.c	2005-01-23 07:30:51
-@@ -60,6 +60,7 @@ int delete_during = 0;
+@@ -59,6 +59,7 @@ int delete_during = 0;
  int delete_before = 0;
  int delete_after = 0;
  int delete_excluded = 0;
@@ -98,7 +97,7 @@ command before "make":
  int one_file_system = 0;
  int protocol_version = PROTOCOL_VERSION;
  int sparse_files = 0;
-@@ -93,6 +94,7 @@ int bwlimit = 0;
+@@ -92,6 +93,7 @@ int bwlimit = 0;
  size_t bwlimit_writemax = 0;
  int only_existing = 0;
  int opt_ignore_existing = 0;
@@ -106,7 +105,7 @@ command before "make":
  int max_delete = 0;
  OFF_T max_size = 0;
  int ignore_errors = 0;
-@@ -287,6 +289,7 @@ void usage(enum logcode F)
+@@ -286,6 +288,7 @@ void usage(enum logcode F)
    rprintf(F,"     --delete-during         receiver deletes during transfer, not before\n");
    rprintf(F,"     --delete-after          receiver deletes after transfer, not before\n");
    rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
@@ -114,7 +113,7 @@ command before "make":
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
    rprintf(F,"     --force                 force deletion of directories even if not empty\n");
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
-@@ -361,6 +364,7 @@ static struct poptOption long_options[] 
+@@ -360,6 +363,7 @@ static struct poptOption long_options[] 
    {"delete-during",    0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
    {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, 0, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
@@ -122,7 +121,7 @@ command before "make":
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"filter",          'f', POPT_ARG_STRING, 0, OPT_FILTER, 0, 0 },
-@@ -925,6 +929,9 @@ int parse_arguments(int *argc, const cha
+@@ -922,6 +926,9 @@ int parse_arguments(int *argc, const cha
  	else if (delete_mode || delete_excluded)
  		delete_mode = delete_before = 1;
  
@@ -132,7 +131,7 @@ command before "make":
  	*argv = poptGetArgs(pc);
  	*argc = count_args(*argv);
  
-@@ -1321,6 +1328,9 @@ void server_options(char **args,int *arg
+@@ -1318,6 +1325,9 @@ void server_options(char **args,int *arg
  	if (!implied_dirs && !am_sender)
  		args[ac++] = "--no-implied-dirs";
  
@@ -187,7 +186,7 @@ command before "make":
  			}
  		}
  	}
---- orig/rsync.h	2005-02-03 02:04:20
+--- orig/rsync.h	2005-02-04 22:28:09
 +++ rsync.h	2005-02-03 02:04:59
 @@ -61,6 +61,7 @@
  #define FLAG_HLINK_EOL (1<<1)	/* generator only */
@@ -197,7 +196,7 @@ command before "make":
  
  /* update this if you make incompatible changes */
  #define PROTOCOL_VERSION 29
-@@ -146,6 +147,7 @@ enum logcode { FERROR=1, FINFO=2, FLOG=3
+@@ -142,6 +143,7 @@ enum logcode { FERROR=1, FINFO=2, FLOG=3
  /* Messages types that are sent over the message channel.  The logcode
   * values must all be present here with identical numbers. */
  enum msgcode {
@@ -205,7 +204,7 @@ command before "make":
  	MSG_DONE=5,	/* current phase is done */
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
---- orig/rsync.yo	2005-02-01 10:39:23
+--- orig/rsync.yo	2005-02-05 01:23:49
 +++ rsync.yo	2005-02-03 02:05:29
 @@ -338,6 +338,7 @@ to the detailed description below for a 
       --delete-during         receiver deletes during xfer, not before
