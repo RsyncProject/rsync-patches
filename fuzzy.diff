@@ -5,7 +5,7 @@ Lightly tested.
 Be sure to run "make proto" before "make".
 
 --- orig/generator.c	2005-01-17 23:11:45
-+++ generator.c	2005-01-17 23:38:46
++++ generator.c	2005-01-18 10:55:29
 @@ -44,6 +44,7 @@ extern int size_only;
  extern OFF_T max_size;
  extern int io_timeout;
@@ -14,35 +14,18 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -242,6 +243,85 @@ static void generate_and_send_sums(int f
+@@ -242,6 +243,81 @@ static void generate_and_send_sums(int f
  }
  
  
-+static unsigned int measure_name(const char *name, const char *basename,
-+				 const char *ext)
-+{
-+	int namelen = strlen(name);
-+	int extlen = strlen(ext);
-+	unsigned int score = 0;
-+
-+	/* Extensions must match */
-+	if (namelen <= extlen || strcmp(name + namelen - extlen, ext) != 0)
-+		return 0;
-+
-+	/* Now score depends on similarity of prefix */
-+	for (; *name == *basename && *name; name++, basename++)
-+		score++;
-+	return score;
-+}
-+
-+
 +static int find_fuzzy(const char *fname, char *buf, STRUCT_STAT *st_ptr)
 +{
 +	DIR *d;
 +	struct dirent *di;
 +	char *basename, *dirname, *slash;
 +	char bestname[MAXPATHLEN];
-+	unsigned int bestscore = 0;
++	int extlen, basename_len;
++	uint32 lowest_dist = 0x7FFFFFFF;
 +	const char *ext;
 +
 +	strlcpy(buf, fname, MAXPATHLEN);
@@ -54,6 +37,7 @@ Be sure to run "make proto" before "make".
 +		basename = buf;
 +		dirname = ".";
 +	}
++	basename_len = strlen(basename);
 +
 +	if (!(d = opendir(dirname))) {
 +		rsyserr(FERROR, errno, "recv_generator opendir(%s)", dirname);
@@ -65,33 +49,45 @@ Be sure to run "make proto" before "make".
 +	/* Get final extension, eg. .gz; never full basename though. */
 +	for (ext = basename; *ext == '.'; ext++) {}
 +	if (!(ext = strrchr(ext, '.')))
-+		ext = basename + strlen(basename); /* ext = "" */
++		ext = basename + basename_len; /* ext = "" */
++	extlen = strlen(ext);
 +
++	bestname[0] = '\0';
 +	while ((di = readdir(d)) != NULL) {
 +		const char *dname = d_name(di);
-+		unsigned int score;
++		uint32 dist;
++		int dname_len;
 +
 +		if (dname[0] == '.' && (dname[1] == '\0'
 +		    || (dname[1] == '.' && dname[2] == '\0')))
 +			continue;
 +
-+		score = measure_name(dname, basename, ext);
-+		if (verbose > 4) {
-+			rprintf(FINFO, "fuzzy score for %s = %u\n",
-+				dname, score);
++		dname_len = strlen(dname);
++
++		/* Extensions must match */
++		if (dname_len <= extlen
++		    || strcmp(dname + dname_len - extlen, ext) != 0)
++			continue;
++
++		dist = fuzzy_distance(dname, dname_len, basename, basename_len);
++		if (verbose > 1) {
++			rprintf(FINFO, "fuzzy distance for %s = %lx\n",
++				dname, (unsigned long)dist);
 +		}
-+		if (score > bestscore) {
++		if (dist < lowest_dist) {
 +			strlcpy(bestname, dname, sizeof bestname);
-+			bestscore = score;
++			lowest_dist = dist;
 +		}
 +	}
 +	closedir(d);
 +
 +	/* Found a candidate. */
-+	if (bestscore != 0) {
++	if (bestname[0] != '\0') {
 +		strlcpy(basename, bestname, MAXPATHLEN - (basename - buf));
-+		if (verbose > 2)
-+			rprintf(FINFO, "fuzzy match %s->%s\n", fname, buf);
++		if (verbose > 2) {
++			rprintf(FINFO, "fuzzy match %s->%s\n",
++				safe_fname(fname), buf);
++		}
 +		return link_stat(buf, st_ptr, 0);
 +	}
 +	return -1;
@@ -100,7 +96,7 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -496,6 +576,15 @@ static void recv_generator(char *fname, 
+@@ -496,6 +572,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -116,7 +112,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -524,6 +613,8 @@ static void recv_generator(char *fname, 
+@@ -524,6 +609,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -125,7 +121,7 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -598,8 +689,24 @@ notify_others:
+@@ -598,8 +685,24 @@ notify_others:
  	write_int(f_out, i);
  	if (protocol_version >= 29 && inplace && !read_batch)
  		write_byte(f_out, fnamecmp_type);
@@ -280,3 +276,56 @@ Be sure to run "make proto" before "make".
  dit(bf(-z, --compress)) With this option, rsync compresses any data from
  the files that it sends to the destination machine.  This
  option is useful on slow connections.  The compression method used is the
+--- orig/util.c	2004-09-07 21:45:30
++++ util.c	2005-01-18 11:18:46
+@@ -1217,3 +1217,50 @@ void *_realloc_array(void *ptr, unsigned
+ 		return malloc(size * num);
+ 	return realloc(ptr, size * num);
+ }
++
++/* This is an implementation of the Levenshtein distance algorithm.  It
++ * was implemented to avoid needing a two-dimensional matrix (to save
++ * memory).  It was also tweaked to try to factor in the ASCII distance
++ * between changed characters as a minor distance quantity.  The normal
++ * Levenshtein units of distance (each signifying a single change between
++ * the two strings) are defined as a "UNIT". */
++
++#define UNIT (1 << 16)
++
++uint32 fuzzy_distance(const char *s1, int len1, const char *s2, int len2)
++{
++	uint32 a[MAXPATHLEN], diag, above, left, diag_inc, above_inc, left_inc;
++	int32 cost;
++	int i1, i2;
++
++	if (!len1)
++		return (int32)len2 * UNIT;
++	if (!len2)
++		return (int32)len1 * UNIT;
++
++	for (i2 = 0; i2 < len2; i2++)
++		a[i2] = (i2+1) * UNIT;
++
++	for (i1 = 0; i1 < len1; i1++) {
++		diag = i1 * UNIT;
++		above = (i1+1) * UNIT;
++		for (i2 = 0; i2 < len2; i2++) {
++			left = a[i2];
++			if ((cost = *((uchar*)s1+i1) - *((uchar*)s2+i2)) != 0) {
++				if (cost < 0)
++					cost = UNIT - cost;
++				else
++					cost = UNIT + cost;
++			}
++			diag_inc = diag + cost;
++			left_inc = left + UNIT + *((uchar*)s1+i1);
++			above_inc = above + UNIT + *((uchar*)s2+i2);
++			a[i2] = above = left < above
++			      ? (left_inc < diag_inc ? left_inc : diag_inc)
++			      : (above_inc < diag_inc ? above_inc : diag_inc);
++			diag = left;
++		}
++	}
++
++	return a[len2-1];
++}
