@@ -1,0 +1,326 @@
+--- options.c	6 May 2004 21:08:01 -0000	1.148
++++ options.c	13 May 2004 07:11:12 -0000
+@@ -46,6 +46,7 @@ int preserve_devices = 0;
+ int preserve_uid = 0;
+ int preserve_gid = 0;
+ int preserve_times = 0;
++int preserve_dir_times = 0;
+ int update_only = 0;
+ int cvs_exclude = 0;
+ int dry_run = 0;
+@@ -240,7 +241,8 @@ void usage(enum logcode F)
+   rprintf(F," -o, --owner                 preserve owner (root only)\n");
+   rprintf(F," -g, --group                 preserve group\n");
+   rprintf(F," -D, --devices               preserve devices (root only)\n");
+-  rprintf(F," -t, --times                 preserve times\n");
++  rprintf(F," -t, --times                 preserve times on non-directories\n");
++  rprintf(F," -d, --dir-times             preserve times on directories\n");
+   rprintf(F," -S, --sparse                handle sparse files efficiently\n");
+   rprintf(F," -n, --dry-run               show what would have been transferred\n");
+   rprintf(F," -W, --whole-file            copy whole files, no incremental checks\n");
+@@ -346,6 +348,7 @@ static struct poptOption long_options[] 
+   {"group",           'g', POPT_ARG_NONE,   &preserve_gid, 0, 0, 0 },
+   {"devices",         'D', POPT_ARG_NONE,   &preserve_devices, 0, 0, 0 },
+   {"times",           't', POPT_ARG_NONE,   &preserve_times, 0, 0, 0 },
++  {"dir-times",       'd', POPT_ARG_NONE,   &preserve_dir_times, 0, 0, 0 },
+   {"checksum",        'c', POPT_ARG_NONE,   &always_checksum, 0, 0, 0 },
+   {"verbose",         'v', POPT_ARG_NONE,   0,               'v', 0, 0 },
+   {"quiet",           'q', POPT_ARG_NONE,   0,               'q', 0, 0 },
+@@ -823,6 +826,8 @@ void server_options(char **args,int *arg
+ 		argstr[x++] = 'D';
+ 	if (preserve_times)
+ 		argstr[x++] = 't';
++	if (preserve_dir_times && am_sender)
++		argstr[x++] = 'd';
+ 	if (preserve_perms)
+ 		argstr[x++] = 'p';
+ 	if (recurse)
+--- rsync.c	13 May 2004 07:08:25 -0000	1.136
++++ rsync.c	13 May 2004 07:11:13 -0000
+@@ -141,14 +141,16 @@ int set_perms(char *fname,struct file_st
+ 		st = &st2;
+ 	}
+ 
+-	if (!preserve_times || S_ISLNK(st->st_mode))
+-		flags |= PERMS_SKIP_TIME;
++	if (S_ISDIR(st->st_mode)) {
++		if (!preserve_dir_times)
++			flags |= PERMS_SKIP_TIME;
++	} else {
++		if (!preserve_times || S_ISLNK(st->st_mode))
++			flags |= PERMS_SKIP_TIME;
++	}
+ 	if (!(flags & PERMS_SKIP_TIME)
+ 	    && cmp_modtime(st->st_mtime, file->modtime) != 0) {
+-		/* don't complain about not setting times on directories
+-		 * because some filesystems can't do it */
+-		if (set_modtime(fname,file->modtime) != 0 &&
+-		    !S_ISDIR(st->st_mode)) {
++		if (set_modtime(fname,file->modtime) != 0) {
+ 			rprintf(FERROR, "failed to set times on %s: %s\n",
+ 				full_fname(fname), strerror(errno));
+ 			return 0;
+--- rsync.yo	7 May 2004 00:18:37 -0000	1.169
++++ rsync.yo	13 May 2004 07:11:14 -0000
+@@ -298,7 +298,8 @@ verb(
+  -o, --owner                 preserve owner (root only)
+  -g, --group                 preserve group
+  -D, --devices               preserve devices (root only)
+- -t, --times                 preserve times
++ -t, --times                 preserve times on non-directories
++ -d, --dir-times             preserve times on directories
+  -S, --sparse                handle sparse files efficiently
+  -n, --dry-run               show what would have been transferred
+  -W, --whole-file            copy whole files, no incremental checks
+@@ -538,13 +539,22 @@ dit(bf(-D, --devices)) This option cause
+ block device information to the remote system to recreate these
+ devices. This option is only available to the super-user.
+ 
+-dit(bf(-t, --times)) This tells rsync to transfer modification times along
+-with the files and update them on the remote system.  Note that if this
++dit(bf(-t, --times)) This tells rsync to preserve modification times of
++non-directories transferred to the remote system.  Note that if this
+ option is not used, the optimization that excludes files that have not been
+ modified cannot be effective; in other words, a missing -t or -a will
+ cause the next transfer to behave as if it used -I, and all files will have
+ their checksums compared and show up in log messages even if they haven't
+ changed.
++
++dit(bf(-d, --dir-times)) This tells rsync to preserve the modification
++times of directories transferred to the remote system.  On a modern
++rsync, these are left unpreserved by default to avoid causing problems
++for NFS.
++
++Note: when sending files to an older rsync, the --times option will
++imply --dir-times (if the option causes an error on the receiving
++system, omit it and use --times to preserve all file/directory times).
+ 
+ dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
+ instead it will just report the actions it would have taken.
+--- testsuite/chgrp.test	5 Feb 2004 01:37:08 -0000	1.10
++++ testsuite/chgrp.test	13 May 2004 07:11:15 -0000
+@@ -29,7 +29,7 @@ do
+ done
+ sleep 2
+ 
+-checkit "$RSYNC -rtgvvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
++checkit "$RSYNC -rtdgvvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/chown.test	4 Feb 2004 18:24:41 -0000	1.4
++++ testsuite/chown.test	13 May 2004 07:11:15 -0000
+@@ -31,7 +31,7 @@ chown 5001 "$name2" || test_skipped "Can
+ chgrp 5002 "$name1" || test_skipped "Can't chgrp (probably need root)"
+ chgrp 5003 "$name2" || test_skipped "Can't chgrp (probably need root)"
+ 
+-checkit "$RSYNC -aHvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
++checkit "$RSYNC -adHvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/daemon-gzip-download.test	4 Feb 2004 18:24:41 -0000	1.6
++++ testsuite/daemon-gzip-download.test	13 May 2004 07:11:15 -0000
+@@ -27,7 +27,7 @@ RSYNC_CONNECT_PROG="$RSYNC --config=$con
+ export RSYNC_CONNECT_PROG
+ 
+ hands_setup
+-checkit "$RSYNC -avvvvz localhost::test-from/ \"$TO/\"" "$FROM" "$TO"
++checkit "$RSYNC -advvvvz localhost::test-from/ \"$TO/\"" "$FROM" "$TO"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/daemon-gzip-upload.test	4 Feb 2004 18:24:41 -0000	1.6
++++ testsuite/daemon-gzip-upload.test	13 May 2004 07:11:15 -0000
+@@ -21,7 +21,7 @@ RSYNC_CONNECT_PROG="$RSYNC --config=$con
+ export RSYNC_CONNECT_PROG
+ 
+ hands_setup
+-checkit "$RSYNC -avvvvz \"$FROM/\" localhost::test-to/" "$FROM" "$TO"
++checkit "$RSYNC -advvvvz \"$FROM/\" localhost::test-to/" "$FROM" "$TO"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/devices.test	9 Apr 2004 00:36:45 -0000	1.7
++++ testsuite/devices.test	13 May 2004 07:11:15 -0000
+@@ -32,7 +32,7 @@ mknod "$fromdir/block" b 42 69 || test_s
+ mknod "$fromdir/block2" b 42 73 || test_skipped "Can't create block device node unless root"
+ mknod "$fromdir/block3" b 105 73 || test_skipped "Can't create block device node unless root"
+ 
+-checkit "$RSYNC -aHvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
++checkit "$RSYNC -adHvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/duplicates.test	4 Feb 2004 18:24:41 -0000	1.9
++++ testsuite/duplicates.test	13 May 2004 07:11:15 -0000
+@@ -36,7 +36,7 @@ ln -s "$name1" "$name2" || fail "can't c
+ 
+ outfile="$scratchdir/rsync.out"
+ 
+-checkit "$RSYNC -avv \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir" \
++checkit "$RSYNC -advv \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir" \
+     | tee "$outfile"
+ 
+ # Make sure each file was only copied once...
+--- testsuite/exclude.test	14 Apr 2004 20:50:32 -0000	1.5
++++ testsuite/exclude.test	13 May 2004 07:11:15 -0000
+@@ -67,7 +67,7 @@ EOF
+ 
+ # Create the chk dir with what we expect to be excluded
+ 
+-checkit "$RSYNC -avv \"$fromdir/\" \"$chkdir/\"" "$fromdir" "$chkdir"
++checkit "$RSYNC -advv \"$fromdir/\" \"$chkdir/\"" "$fromdir" "$chkdir"
+ 
+ sleep 1 # Ensures that the rm commands will tweak the directory times.
+ 
+@@ -79,11 +79,11 @@ rm "$chkdir"/mid/for/foo/extra
+ 
+ # Un-tweak the directory times in our first (weak) exclude test (though
+ # it's a good test of the --existing option).
+-$RSYNC -av --existing --include='*/' --exclude='*' "$fromdir/" "$chkdir/"
++$RSYNC -adv --existing --include='*/' --exclude='*' "$fromdir/" "$chkdir/"
+ 
+ # Now, test if rsync excludes the same files.
+ 
+-checkit "$RSYNC -avv --exclude-from=$excl \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
++checkit "$RSYNC -advv --exclude-from=$excl \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
+ 
+ # Modify the chk dir by removing cvs-ignored files and then tweaking the dir times.
+ 
+@@ -93,12 +93,12 @@ rm "$chkdir"/bar/down/to/foo/*.junk
+ rm "$chkdir"/bar/down/to/home-cvs-exclude
+ rm "$chkdir"/mid/one-in-one-out
+ 
+-$RSYNC -av --existing --include='*/' --exclude='*' "$fromdir/" "$chkdir/"
++$RSYNC -adv --existing --include='*/' --exclude='*' "$fromdir/" "$chkdir/"
+ 
+ # Now, test if rsync excludes the same files, this time with --cvs-exclude
+ # and --delete-excluded.
+ 
+-checkit "$RSYNC -avvC --delete-excluded --exclude-from=$excl \
++checkit "$RSYNC -advvC --delete-excluded --exclude-from=$excl \
+     \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+--- testsuite/hands.test	4 Feb 2004 18:24:41 -0000	1.12
++++ testsuite/hands.test	13 May 2004 07:11:15 -0000
+@@ -11,19 +11,19 @@ hands_setup
+ 
+ # Main script starts here
+ 
+-runtest "basic operation" 'checkit "$RSYNC -av ${FROM}/ ${TO}" ${FROM}/ ${TO}'
++runtest "basic operation" 'checkit "$RSYNC -adv ${FROM}/ ${TO}" ${FROM}/ ${TO}'
+ 
+ ln ${FROM}/filelist ${FROM}/dir
+-runtest "hard links" 'checkit "$RSYNC -avH ${FROM}/ ${TO}" ${FROM}/ ${TO}'
++runtest "hard links" 'checkit "$RSYNC -advH ${FROM}/ ${TO}" ${FROM}/ ${TO}'
+ 
+ rm ${TO}/text
+-runtest "one file" 'checkit "$RSYNC -avH ${FROM}/ ${TO}" ${FROM}/ ${TO}'
++runtest "one file" 'checkit "$RSYNC -advH ${FROM}/ ${TO}" ${FROM}/ ${TO}'
+ 
+ echo "extra line" >> ${TO}/text
+-runtest "extra data" 'checkit "$RSYNC -avH ${FROM}/ ${TO}" ${FROM}/ ${TO}'
++runtest "extra data" 'checkit "$RSYNC -advH ${FROM}/ ${TO}" ${FROM}/ ${TO}'
+ 
+ cp ${FROM}/text ${TO}/ThisShouldGo
+-runtest " --delete" 'checkit "$RSYNC --delete -avH ${FROM}/ ${TO}" ${FROM}/ ${TO}'
++runtest " --delete" 'checkit "$RSYNC --delete -advH ${FROM}/ ${TO}" ${FROM}/ ${TO}'
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/hardlinks.test	4 Feb 2004 18:24:41 -0000	1.4
++++ testsuite/hardlinks.test	13 May 2004 07:11:15 -0000
+@@ -31,7 +31,7 @@ ln "$name1" "$name2" || fail "Can't crea
+ ln "$name2" "$name3" || fail "Can't create hardlink"
+ cp "$name2" "$name4" || fail "Can't copy file"
+ 
+-checkit "$RSYNC -aHvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
++checkit "$RSYNC -adHvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/longdir.test	4 Feb 2004 18:24:41 -0000	1.9
++++ testsuite/longdir.test	13 May 2004 07:11:15 -0000
+@@ -18,7 +18,7 @@ makepath $LONGDIR || test_skipped "unabl
+ touch $LONGDIR/1 || test_skipped "unable to create files in long directory"
+ date > ${LONGDIR}/1
+ ls -la / > ${LONGDIR}/2
+-checkit "$RSYNC --delete -avH ${FROM}/ ${TO}" ${FROM}/ ${TO}
++checkit "$RSYNC --delete -advH ${FROM}/ ${TO}" ${FROM}/ ${TO}
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/merge.test	30 Apr 2004 17:24:49 -0000	1.5
++++ testsuite/merge.test	13 May 2004 07:11:15 -0000
+@@ -43,9 +43,9 @@ cp -p "$from2dir"/sub1/uno "$from3dir"/s
+ cp -p "$from3dir"/sub2/subby "$chkdir"/sub2
+ 
+ # Get rid of any directory-time differences
+-$RSYNC -av --existing --include='*/' --exclude='*' "$from1dir/" "$from2dir/" "$from3dir/" "$chkdir/"
++$RSYNC -adv --existing --include='*/' --exclude='*' "$from1dir/" "$from2dir/" "$from3dir/" "$chkdir/"
+ 
+-checkit "$RSYNC -aHvv \"$from1dir/\" \"$from2dir/\" \"$from3dir/\" \"$todir/\"" "$chkdir" "$todir"
++checkit "$RSYNC -adHvv \"$from1dir/\" \"$from2dir/\" \"$from3dir/\" \"$todir/\"" "$chkdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- testsuite/ssh-basic.test	19 Feb 2003 16:22:50 -0000	1.6
++++ testsuite/ssh-basic.test	13 May 2004 07:11:15 -0000
+@@ -28,7 +28,7 @@ fi
+ # nothing to do.
+ hands_setup
+ 
+-runtest "ssh: basic test" 'checkit "$RSYNC -avH -e ssh --rsync-path=$RSYNC ${FROM}/ localhost:${TO}" ${FROM}/ ${TO}'
++runtest "ssh: basic test" 'checkit "$RSYNC -advH -e ssh --rsync-path=$RSYNC ${FROM}/ localhost:${TO}" ${FROM}/ ${TO}'
+ 
+ # Added by Steve Bonds Feb 2 2003
+ # I assumed that "F1" was intended to hold a single file for testing if
+@@ -40,4 +40,4 @@ F1=`ls ${TO} | head -5 | tail -1`
+ 
+ mv ${TO}/${F1} ${TO}/ThisShouldGo
+ 
+-runtest "ssh: renamed file" 'checkit "$RSYNC --delete -avH -e ssh --rsync-path=$RSYNC ${FROM}/ localhost:${TO}" ${FROM}/ ${TO}'
++runtest "ssh: renamed file" 'checkit "$RSYNC --delete -advH -e ssh --rsync-path=$RSYNC ${FROM}/ localhost:${TO}" ${FROM}/ ${TO}'
+--- testsuite/unsafe-links.test	15 Jan 2003 16:14:07 -0000	1.6
++++ testsuite/unsafe-links.test	13 May 2004 07:11:15 -0000
+@@ -35,33 +35,33 @@ ln -s ../../unsafe/unsafefile "from/safe
+ set -x
+ 
+ echo "rsync with relative path and just -a";
+-$RSYNC -avv from/safe/ to
++$RSYNC -advv from/safe/ to
+ test_symlink to/links/file1
+ test_symlink to/links/file2
+ test_symlink to/links/unsafefile
+ 
+ echo "rsync with relative path and -a --copy-links"
+-$RSYNC -avv --copy-links from/safe/ to
++$RSYNC -advv --copy-links from/safe/ to
+ test_regular to/links/file1
+ test_regular to/links/file2
+ test_regular to/links/unsafefile
+ 
+ echo "rsync with relative path and --copy-unsafe-links";
+-$RSYNC -avv --copy-unsafe-links from/safe/ to
++$RSYNC -advv --copy-unsafe-links from/safe/ to
+ test_symlink to/links/file1
+ test_symlink to/links/file2
+ test_regular to/links/unsafefile
+ 
+ rm -rf to
+ echo "rsync with relative2 path";
+-(cd from; $RSYNC -avv --copy-unsafe-links safe/ ../to)
++(cd from; $RSYNC -advv --copy-unsafe-links safe/ ../to)
+ test_symlink to/links/file1
+ test_symlink to/links/file2
+ test_regular to/links/unsafefile
+ 
+ rm -rf to
+ echo "rsync with absolute path";
+-$RSYNC -avv --copy-unsafe-links `pwd`/from/safe/ to
++$RSYNC -advv --copy-unsafe-links `pwd`/from/safe/ to
+ test_symlink to/links/file1
+ test_symlink to/links/file2
+ test_regular to/links/unsafefile
