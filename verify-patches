@@ -71,7 +71,7 @@ foreach my $diff (@ARGV) {
     close IN;
 
     my $default = apply_patch($diff);
-    if ($default =~ /[NE]/) {
+    if ($default =~ s/^D,// || $default eq 'N') {
 	generate_new_patch($diff);
     }
 
@@ -166,6 +166,7 @@ sub apply_patch
     my $def = 'N';
     system "rsync -a --delete --exclude='*~' cvsdir/ workdir/";
     print "\nApplying patch $diff...\n";
+    undef @rejects;
     open(IN, "patch -d workdir -p0 --no-backup-if-mismatch -Zf <../$diff |") or die $!;
     while (<IN>) {
 	print $_;
@@ -177,7 +178,7 @@ sub apply_patch
 	} elsif (/^Hunk #\d+ FAILED/) {
 	    $def = 'F,D,E';
 	} elsif (/^Hunk #\d+ succeeded/) {
-	    $def = 'E' unless $def =~ /F/;
+	    $def = 'D,E' unless $def =~ /F/;
 	}
     }
     close IN;
