@@ -12,7 +12,7 @@ the file's name.
 
 
 --- Makefile.in	15 May 2004 00:48:11 -0000	1.101
-+++ Makefile.in	21 May 2004 09:07:58 -0000
++++ Makefile.in	6 Jun 2004 21:24:41 -0000
 @@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
@@ -23,7 +23,7 @@ the file's name.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ hashlink.c	21 May 2004 09:07:59 -0000
++++ hashlink.c	6 Jun 2004 21:24:41 -0000
 @@ -0,0 +1,342 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
@@ -367,9 +367,9 @@ the file's name.
 +}
 +
 +#endif
---- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	21 May 2004 09:07:59 -0000
-@@ -121,6 +121,7 @@ char *log_format = NULL;
+--- options.c	6 Jun 2004 19:02:40 -0000	1.155
++++ options.c	6 Jun 2004 21:24:41 -0000
+@@ -124,6 +124,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
@@ -377,7 +377,7 @@ the file's name.
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = RSYNC_PORT;
  int link_dest = 0;
-@@ -266,6 +267,7 @@ void usage(enum logcode F)
+@@ -270,6 +271,7 @@ void usage(enum logcode F)
    rprintf(F," -T  --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --link-dest=DIR         create hardlinks to DIR for unchanged files\n");
@@ -385,16 +385,16 @@ the file's name.
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
-@@ -305,7 +307,7 @@ void usage(enum logcode F)
+@@ -310,7 +312,7 @@ void usage(enum logcode F)
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
--      OPT_READ_BATCH, OPT_WRITE_BATCH,
-+      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_LINK_BY_HASH,
+-      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
++      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_LINK_BY_HASH,
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -362,6 +364,7 @@ static struct poptOption long_options[] 
+@@ -368,6 +370,7 @@ static struct poptOption long_options[] 
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, &compare_dest, 0, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, &compare_dest,  OPT_LINK_DEST, 0, 0 },
@@ -402,7 +402,7 @@ the file's name.
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -584,6 +587,19 @@ int parse_arguments(int *argc, const cha
+@@ -601,6 +604,19 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -422,7 +422,7 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -953,6 +969,11 @@ void server_options(char **args,int *arg
+@@ -982,6 +998,11 @@ void server_options(char **args,int *arg
  		args[ac++] = compare_dest;
  	}
  
@@ -435,7 +435,7 @@ the file's name.
  		if (remote_filesfrom_file) {
  			args[ac++] = "--files-from";
 --- receiver.c	21 May 2004 08:27:04 -0000	1.79
-+++ receiver.c	21 May 2004 09:07:59 -0000
++++ receiver.c	6 Jun 2004 21:24:41 -0000
 @@ -47,6 +47,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
@@ -535,7 +535,7 @@ the file's name.
  		log_recv(file, &initial_stats);
  
 --- rsync.c	21 May 2004 08:43:03 -0000	1.140
-+++ rsync.c	21 May 2004 09:07:59 -0000
++++ rsync.c	6 Jun 2004 21:24:41 -0000
 @@ -34,6 +34,7 @@ extern int force_delete;
  extern int recurse;
  extern int make_backups;
@@ -560,7 +560,7 @@ the file's name.
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
  		    ret == -2 ? "copy" : "rename",
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	21 May 2004 09:07:59 -0000
++++ rsync.h	6 Jun 2004 21:24:41 -0000
 @@ -522,6 +522,14 @@ struct stats {
  	int current_file_index;
  };

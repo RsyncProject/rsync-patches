@@ -7,8 +7,8 @@ After applying this patch, run these commands for a successful build:
     make
 
 
---- Makefile.in	2 May 2004 17:04:14 -0000	1.100
-+++ Makefile.in	13 May 2004 17:58:41 -0000
+--- Makefile.in	15 May 2004 00:48:11 -0000	1.101
++++ Makefile.in	6 Jun 2004 21:11:46 -0000
 @@ -25,7 +25,7 @@ VERSION=@VERSION@
  .SUFFIXES:
  .SUFFIXES: .c .o
@@ -28,7 +28,7 @@ After applying this patch, run these commands for a successful build:
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ acls.c	13 May 2004 17:58:42 -0000
++++ acls.c	6 Jun 2004 21:11:46 -0000
 @@ -0,0 +1,1119 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
@@ -1149,9 +1149,9 @@ After applying this patch, run these commands for a successful build:
 +
 +
 +#endif /* SUPPORT_ACLS */
---- backup.c	13 May 2004 06:34:03 -0000	1.30
-+++ backup.c	13 May 2004 17:58:42 -0000
-@@ -104,6 +104,7 @@ static int make_bak_dir(char *fullpath)
+--- backup.c	15 May 2004 19:31:10 -0000	1.31
++++ backup.c	6 Jun 2004 21:11:46 -0000
+@@ -105,6 +105,7 @@ static int make_bak_dir(char *fullpath)
  			} else {
  				do_lchown(fullpath, st.st_uid, st.st_gid);
  				do_chmod(fullpath, st.st_mode);
@@ -1177,7 +1177,7 @@ After applying this patch, run these commands for a successful build:
  
  	if (verbose > 1)
 --- configure.in	30 Apr 2004 18:03:33 -0000	1.196
-+++ configure.in	13 May 2004 17:58:44 -0000
++++ configure.in	6 Jun 2004 21:11:46 -0000
 @@ -434,6 +434,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
      AC_CHECK_LIB(resolv, strcasecmp)
  fi
@@ -1190,11 +1190,10 @@ After applying this patch, run these commands for a successful build:
  dnl At the moment we don't test for a broken memcmp(), because all we
  dnl need to do is test for equality, not comparison, and it seems that
  dnl every platform has a memcmp that can do at least that.
-@@ -654,6 +659,74 @@ AC_SUBST(OBJ_SAVE)
- AC_SUBST(OBJ_RESTORE)
+@@ -655,6 +660,74 @@ AC_SUBST(OBJ_RESTORE)
  AC_SUBST(CC_SHOBJ_FLAG)
  AC_SUBST(BUILD_POPT)
-+
+ 
 +AC_CHECK_HEADERS(sys/acl.h)
 +AC_CHECK_FUNCS(_acl __acl _facl __facl)
 +#################################################
@@ -1262,12 +1261,13 @@ After applying this patch, run these commands for a successful build:
 +  AC_DEFINE(HAVE_NO_ACLS, 1, [true if you don't have ACLs])
 +  AC_MSG_RESULT(no)
 +)
- 
++
  AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
  AC_OUTPUT
---- flist.c	11 May 2004 17:25:16 -0000	1.221
-+++ flist.c	13 May 2004 17:58:44 -0000
-@@ -931,6 +931,8 @@ void send_file_name(int f, struct file_l
+ 
+--- flist.c	29 May 2004 21:21:17 -0000	1.226
++++ flist.c	6 Jun 2004 21:11:47 -0000
+@@ -927,6 +927,8 @@ void send_file_name(int f, struct file_l
  
  	if (!file)
  		return;
@@ -1276,7 +1276,7 @@ After applying this patch, run these commands for a successful build:
  
  	maybe_emit_filelist_progress(flist);
  
-@@ -942,6 +944,10 @@ void send_file_name(int f, struct file_l
+@@ -938,6 +940,10 @@ void send_file_name(int f, struct file_l
  	if (file->basename[0]) {
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f, base_flags);
@@ -1287,7 +1287,7 @@ After applying this patch, run these commands for a successful build:
  	}
  
  	if (recursive && S_ISDIR(file->mode)
-@@ -1257,6 +1263,8 @@ struct file_list *recv_file_list(int f)
+@@ -1255,6 +1261,8 @@ struct file_list *recv_file_list(int f)
  			flags |= read_byte(f) << 8;
  		receive_file_entry(&flist->files[i], flags, flist, f);
  
@@ -1296,20 +1296,20 @@ After applying this patch, run these commands for a successful build:
  		if (S_ISREG(flist->files[i]->mode))
  			stats.total_size += flist->files[i]->length;
  
-@@ -1278,6 +1286,8 @@ struct file_list *recv_file_list(int f)
- 		finish_filelist_progress(flist);
+@@ -1277,6 +1285,8 @@ struct file_list *recv_file_list(int f)
  
  	clean_flist(flist, relative_paths, 1);
-+
-+	SORT_FILE_ACL_INDEX_LISTS();
  
++	SORT_FILE_ACL_INDEX_LISTS();
++
  	if (f != -1) {
  		/* Now send the uid/gid list. This was introduced in
---- generator.c	13 May 2004 06:55:01 -0000	1.82
-+++ generator.c	13 May 2004 17:58:45 -0000
-@@ -328,6 +328,10 @@ void recv_generator(char *fname, struct 
- 		   permission and modification time repair */
- 		if (set_perms(fname,file,NULL,0) && verbose && (f_out != -1))
+ 		 * protocol version 15 */
+--- generator.c	5 Jun 2004 16:16:30 -0000	1.86
++++ generator.c	6 Jun 2004 21:11:47 -0000
+@@ -353,6 +353,10 @@ void recv_generator(char *fname, struct 
+ 		if (set_perms(fname, file, statret ? NULL : &st, 0)
+ 		    && verbose && f_out != -1)
  			rprintf(FINFO,"%s/\n",fname);
 +#if SUPPORT_ACLS
 +		if (f_out == -1)
@@ -1319,7 +1319,7 @@ After applying this patch, run these commands for a successful build:
  	}
  
 --- mkproto.awk	1 Jan 2004 21:10:50 -0000	1.6
-+++ mkproto.awk	13 May 2004 17:58:45 -0000
++++ mkproto.awk	6 Jun 2004 21:11:47 -0000
 @@ -58,7 +58,7 @@ BEGIN {
    next;
  }
@@ -1329,9 +1329,9 @@ After applying this patch, run these commands for a successful build:
    next;
  }
  
---- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	13 May 2004 17:58:45 -0000
-@@ -41,6 +41,7 @@ int archive_mode = 0;
+--- options.c	6 Jun 2004 19:02:40 -0000	1.155
++++ options.c	6 Jun 2004 21:11:47 -0000
+@@ -43,6 +43,7 @@ int keep_dirlinks = 0;
  int copy_links = 0;
  int preserve_links = 0;
  int preserve_hard_links = 0;
@@ -1339,7 +1339,7 @@ After applying this patch, run these commands for a successful build:
  int preserve_perms = 0;
  int preserve_devices = 0;
  int preserve_uid = 0;
-@@ -147,6 +148,7 @@ static void print_rsync_version(enum log
+@@ -150,6 +151,7 @@ static void print_rsync_version(enum log
  {
  	char const *got_socketpair = "no ";
  	char const *hardlinks = "no ";
@@ -1347,7 +1347,7 @@ After applying this patch, run these commands for a successful build:
  	char const *links = "no ";
  	char const *ipv6 = "no ";
  	STRUCT_STAT *dumstat;
-@@ -159,6 +161,10 @@ static void print_rsync_version(enum log
+@@ -162,6 +164,10 @@ static void print_rsync_version(enum log
  	hardlinks = "";
  #endif
  
@@ -1358,7 +1358,7 @@ After applying this patch, run these commands for a successful build:
  #if SUPPORT_LINKS
  	links = "";
  #endif
-@@ -173,9 +179,9 @@ static void print_rsync_version(enum log
+@@ -176,9 +182,9 @@ static void print_rsync_version(enum log
  		"Copyright (C) 1996-2004 by Andrew Tridgell and others\n");
  	rprintf(f, "<http://rsync.samba.org/>\n");
  	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
@@ -1370,7 +1370,7 @@ After applying this patch, run these commands for a successful build:
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -237,6 +243,7 @@ void usage(enum logcode F)
+@@ -241,6 +247,7 @@ void usage(enum logcode F)
    rprintf(F,"     --safe-links            ignore \"unsafe\" symlinks\n");
    rprintf(F," -H, --hard-links            preserve hard links\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
@@ -1378,7 +1378,7 @@ After applying this patch, run these commands for a successful build:
    rprintf(F," -o, --owner                 preserve owner (root only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F," -D, --devices               preserve devices (root only)\n");
-@@ -380,6 +387,7 @@ static struct poptOption long_options[] 
+@@ -386,6 +393,7 @@ static struct poptOption long_options[] 
    {"address",          0,  POPT_ARG_STRING, &bind_address, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
    {"hard-links",      'H', POPT_ARG_NONE,   &preserve_hard_links, 0, 0, 0 },
@@ -1386,7 +1386,7 @@ After applying this patch, run these commands for a successful build:
    {"read-batch",       0,  POPT_ARG_STRING, &batch_prefix,  OPT_READ_BATCH, 0, 0 },
    {"write-batch",      0,  POPT_ARG_STRING, &batch_prefix,  OPT_WRITE_BATCH, 0, 0 },
    {"files-from",       0,  POPT_ARG_STRING, &files_from, 0, 0, 0 },
-@@ -584,6 +592,31 @@ int parse_arguments(int *argc, const cha
+@@ -601,6 +609,31 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -1418,7 +1418,7 @@ After applying this patch, run these commands for a successful build:
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -815,6 +848,8 @@ void server_options(char **args,int *arg
+@@ -838,6 +871,8 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
@@ -1427,8 +1427,8 @@ After applying this patch, run these commands for a successful build:
  	if (preserve_uid)
  		argstr[x++] = 'o';
  	if (preserve_gid)
---- rsync.c	13 May 2004 07:08:25 -0000	1.136
-+++ rsync.c	13 May 2004 17:58:45 -0000
+--- rsync.c	21 May 2004 08:43:03 -0000	1.140
++++ rsync.c	6 Jun 2004 21:11:47 -0000
 @@ -204,6 +204,14 @@ int set_perms(char *fname,struct file_st
  	}
  #endif
@@ -1444,9 +1444,9 @@ After applying this patch, run these commands for a successful build:
  	if (verbose > 1 && flags & PERMS_REPORT) {
  		if (updated)
  			rprintf(FINFO,"%s\n",fname);
---- rsync.h	13 May 2004 06:53:23 -0000	1.202
-+++ rsync.h	13 May 2004 17:58:45 -0000
-@@ -537,6 +537,40 @@ static inline int flist_up(struct file_l
+--- rsync.h	16 May 2004 07:28:24 -0000	1.204
++++ rsync.h	6 Jun 2004 21:11:47 -0000
+@@ -538,6 +538,40 @@ static inline int flist_up(struct file_l
  #include "lib/permstring.h"
  #include "lib/addrinfo.h"
  
@@ -1487,9 +1487,9 @@ After applying this patch, run these commands for a successful build:
  #include "proto.h"
  
  /* We have replacement versions of these if they're missing. */
---- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	13 May 2004 17:58:46 -0000
-@@ -295,6 +295,7 @@ verb(
+--- rsync.yo	5 Jun 2004 16:16:30 -0000	1.171
++++ rsync.yo	6 Jun 2004 21:11:48 -0000
+@@ -296,6 +296,7 @@ verb(
       --safe-links            ignore "unsafe" symlinks
   -H, --hard-links            preserve hard links
   -p, --perms                 preserve permissions
@@ -1497,20 +1497,20 @@ After applying this patch, run these commands for a successful build:
   -o, --owner                 preserve owner (root only)
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
-@@ -520,6 +521,11 @@ Without this option, each new file gets 
- source file's permissions and the umask at the receiving end, while all
+@@ -527,6 +528,11 @@ source file's permissions and the umask 
  other files (including updated files) retain their existing permissions
  (which is the same behavior as other file-copy utilities, such as cp).
-+
+ 
 +dit(bf(-A, --acls)) This option causes rsync to update the remote
 +ACLs to be the same as the local ACLs.  This will work only if the
 +remote machine's rsync supports this option also. This is a non-standard
 +option.
- 
++
  dit(bf(-o, --owner)) This option causes rsync to set the owner of the
  destination file to be the same as the source file.  On most systems,
+ only the super-user can set file ownership.  By default, the preservation
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ smb_acls.h	13 May 2004 17:58:46 -0000
++++ smb_acls.h	6 Jun 2004 21:11:48 -0000
 @@ -0,0 +1,277 @@
 +/* 
 +   Unix SMB/Netbios implementation.
@@ -1790,7 +1790,7 @@ After applying this patch, run these commands for a successful build:
 +#endif /* No ACLs. */
 +#endif /* _SMB_ACLS_H */
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ sysacls.c	13 May 2004 17:58:47 -0000
++++ sysacls.c	6 Jun 2004 21:11:49 -0000
 @@ -0,0 +1,3117 @@
 +/*
 +   Unix SMB/Netbios implementation.
@@ -4910,7 +4910,7 @@ After applying this patch, run these commands for a successful build:
 +
 +#endif /* No ACLs. */
 --- uidlist.c	28 Apr 2004 17:31:31 -0000	1.24
-+++ uidlist.c	13 May 2004 17:58:47 -0000
++++ uidlist.c	6 Jun 2004 21:11:49 -0000
 @@ -34,6 +34,7 @@
  extern int verbose;
  extern int preserve_uid;
@@ -4955,11 +4955,10 @@ After applying this patch, run these commands for a successful build:
  		/* read the gid list */
  		while ((id = read_int(f)) != 0) {
  			int len = read_byte(f);
-@@ -336,6 +337,18 @@ void recv_uid_list(int f, struct file_li
- 			recv_add_gid(id, name); /* node keeps name's memory */
+@@ -337,6 +338,18 @@ void recv_uid_list(int f, struct file_li
  		}
  	}
-+
+ 
 +#if SUPPORT_ACLS
 +	if (preserve_acls && !numeric_ids) {
 +		id_t id;
@@ -4971,6 +4970,7 @@ After applying this patch, run these commands for a successful build:
 +			acl_gid_map(match_gid(id));
 +	}
 +#endif /* SUPPORT_ACLS */
- 
++
  	/* now convert the uid/gid of all files in the list to the mapped
  	 * uid/gid */
+ 	if (am_root && preserve_uid && !numeric_ids) {
