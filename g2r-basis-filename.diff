@@ -7,8 +7,8 @@ support for multiple --compare-dest options).
 
 You must run "make proto" before compiling.
 
---- orig/generator.c	2004-09-20 19:50:13
-+++ generator.c	2004-09-20 19:57:58
+--- orig/generator.c	2004-10-06 00:12:16
++++ generator.c	2004-10-09 04:06:49
 @@ -254,14 +254,15 @@ static void generate_and_send_sums(int f
   * out.  It might be wrong.
   */
@@ -17,17 +17,19 @@ You must run "make proto" before compiling.
 +			   int f_out, int f_out_name)
  {
 -	int fd, f_copy;
-+	int fd = -1, f_copy;
++	int fd = -1, f_copy = -1;
  	STRUCT_STAT st, partial_st;
- 	struct file_struct *back_file;
+-	struct file_struct *back_file;
++	struct file_struct *back_file = NULL;
  	int statret, stat_errno;
- 	char *fnamecmp, *partialptr, *backupptr;
+-	char *fnamecmp, *partialptr, *backupptr;
++	char *fnamecmp, *partialptr, *backupptr = NULL;
  	char fnamecmpbuf[MAXPATHLEN];
 +	uchar fnamecmp_type;
  
  	if (list_only)
  		return;
-@@ -423,6 +424,7 @@ static void recv_generator(char *fname, 
+@@ -421,6 +422,7 @@ static void recv_generator(char *fname, 
  	}
  
  	fnamecmp = fname;
@@ -35,7 +37,7 @@ You must run "make proto" before compiling.
  
  	if (statret == -1 && compare_dest != NULL) {
  		/* try the file at compare_dest instead */
-@@ -439,10 +441,14 @@ static void recv_generator(char *fname, 
+@@ -437,10 +439,14 @@ static void recv_generator(char *fname, 
  							safe_fname(fname));
  					}
  					fnamecmp = fnamecmpbuf;
@@ -50,7 +52,7 @@ You must run "make proto" before compiling.
  			statret = 0;
  		}
  	}
-@@ -465,11 +471,9 @@ static void recv_generator(char *fname, 
+@@ -463,11 +469,9 @@ static void recv_generator(char *fname, 
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
@@ -65,7 +67,7 @@ You must run "make proto" before compiling.
  			rsyserr(FERROR, stat_errno,
  				"recv_generator: failed to stat %s",
  				full_fname(fname));
-@@ -477,13 +481,13 @@ static void recv_generator(char *fname, 
+@@ -475,13 +479,13 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -81,7 +83,7 @@ You must run "make proto" before compiling.
  	    && cmp_modtime(st.st_mtime, file->modtime) > 0) {
  		if (verbose > 1)
  			rprintf(FINFO, "%s is newer\n", safe_fname(fname));
-@@ -491,26 +495,23 @@ static void recv_generator(char *fname, 
+@@ -489,26 +493,23 @@ static void recv_generator(char *fname, 
  	}
  
  	if (skip_file(fnamecmp, file, &st)) {
@@ -115,7 +117,7 @@ You must run "make proto" before compiling.
  	}
  
  	/* open the file */
-@@ -523,9 +524,8 @@ prepare_to_open:
+@@ -521,9 +522,8 @@ prepare_to_open:
  		/* pretend the file didn't exist */
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
@@ -127,15 +129,19 @@ You must run "make proto" before compiling.
  	}
  
  	if (inplace && make_backups) {
-@@ -552,6 +552,7 @@ prepare_to_open:
+@@ -550,10 +550,7 @@ prepare_to_open:
  			close(fd);
  			return;
  		}
+-	} else {
+-		backupptr = NULL;
+-		back_file = NULL;
+-		f_copy = -1;
 +		fnamecmp_type = G2R_BACKUP;
- 	} else {
- 		backupptr = NULL;
- 		back_file = NULL;
-@@ -566,22 +567,38 @@ prepare_to_open:
+ 	}
+ 
+ 	if (verbose > 3) {
+@@ -564,22 +561,38 @@ prepare_to_open:
  	if (verbose > 2)
  		rprintf(FINFO, "generating and sending sums for %d\n", i);
  
@@ -185,7 +191,7 @@ You must run "make proto" before compiling.
  {
  	int i;
  	int phase = 0;
-@@ -622,7 +639,7 @@ void generate_files(int f_out, struct fi
+@@ -620,7 +633,7 @@ void generate_files(int f_out, struct fi
  		}
  
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -194,7 +200,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -639,7 +656,7 @@ void generate_files(int f_out, struct fi
+@@ -637,7 +650,7 @@ void generate_files(int f_out, struct fi
  	while ((i = get_redo_num()) != -1) {
  		struct file_struct *file = flist->files[i];
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -203,7 +209,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -658,7 +675,7 @@ void generate_files(int f_out, struct fi
+@@ -656,7 +669,7 @@ void generate_files(int f_out, struct fi
  		if (!file->basename || !S_ISDIR(file->mode))
  			continue;
  		recv_generator(local_name ? local_name : f_name(file),
@@ -212,8 +218,8 @@ You must run "make proto" before compiling.
  	}
  
  	if (verbose > 2)
---- orig/main.c	2004-09-29 17:58:26
-+++ main.c	2004-07-22 00:10:43
+--- orig/main.c	2004-10-08 20:16:26
++++ main.c	2004-10-09 03:25:43
 @@ -59,6 +59,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
  extern char *files_from;
@@ -232,18 +238,16 @@ You must run "make proto" before compiling.
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
-@@ -476,8 +478,9 @@ static int do_recv(int f_in,int f_out,st
+@@ -476,7 +478,8 @@ static int do_recv(int f_in,int f_out,st
  			delete_files(flist);
  	}
  
 -	if (fd_pair(error_pipe) < 0) {
--		rprintf(FERROR,"error pipe failed in do_recv\n");
 +	if (fd_pair(error_pipe) < 0
 +	    || (need_name_pipe && fd_pair(name_pipe) < 0)) {
-+		rprintf(FERROR, "fd_pair() failed in do_recv\n");
+ 		rsyserr(FERROR, errno, "pipe failed in do_recv");
  		exit_cleanup(RERR_SOCKETIO);
  	}
- 
 @@ -485,6 +488,11 @@ static int do_recv(int f_in,int f_out,st
  
  	if ((pid = do_fork()) == 0) {
@@ -386,7 +390,7 @@ You must run "make proto" before compiling.
  		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR, errno, "fstat %s failed",
  				full_fname(fnamecmp));
---- orig/rsync.h	2004-09-22 08:47:31
+--- orig/rsync.h	2004-10-09 03:21:56
 +++ rsync.h	2004-09-07 21:52:22
 @@ -119,6 +119,10 @@
  #define PDIR_CREATE	1
