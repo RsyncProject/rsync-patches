@@ -365,9 +365,9 @@ the file's name.
 +}
 +
 +#endif
---- orig/options.c	2005-01-15 21:23:15
+--- orig/options.c	2005-01-25 03:26:51
 +++ options.c	2004-11-27 18:19:42
-@@ -128,6 +128,7 @@ char *log_format = NULL;
+@@ -132,6 +132,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
@@ -375,7 +375,7 @@ the file's name.
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = 0;
  int compare_dest = 0;
-@@ -288,6 +289,7 @@ void usage(enum logcode F)
+@@ -297,6 +298,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -383,16 +383,16 @@ the file's name.
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
-@@ -323,7 +325,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
-       OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED,
-       OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
+@@ -335,7 +337,7 @@ void usage(enum logcode F)
+ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+       OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
 -      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
 +      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE, OPT_LINK_BY_HASH,
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -384,6 +386,7 @@ static struct poptOption long_options[] 
+@@ -401,6 +403,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -400,7 +400,7 @@ the file's name.
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
-@@ -750,6 +753,21 @@ int parse_arguments(int *argc, const cha
+@@ -788,6 +791,21 @@ int parse_arguments(int *argc, const cha
  			basis_dir[basis_dir_cnt++] = (char *)arg;
  			break;
  
@@ -422,7 +422,7 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -1226,6 +1244,11 @@ void server_options(char **args,int *arg
+@@ -1277,6 +1295,11 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -434,17 +434,17 @@ the file's name.
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
  		if (remote_filesfrom_file) {
  			args[ac++] = "--files-from";
---- orig/receiver.c	2005-01-15 21:18:09
+--- orig/receiver.c	2005-01-24 01:43:10
 +++ receiver.c	2005-01-15 21:29:13
-@@ -38,6 +38,7 @@ extern int preserve_perms;
- extern int cvs_exclude;
+@@ -36,6 +36,7 @@ extern int preserve_hard_links;
+ extern int preserve_perms;
  extern int io_error;
  extern char *tmpdir;
 +extern char *link_by_hash_dir;
  extern char *partial_dir;
  extern char *basis_dir[];
  extern int basis_dir_cnt;
-@@ -204,12 +205,13 @@ static int get_tmpname(char *fnametmp, c
+@@ -131,12 +132,13 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -459,7 +459,7 @@ the file's name.
  	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -229,6 +231,9 @@ static int receive_data(int f_in, char *
+@@ -156,6 +158,9 @@ static int receive_data(int f_in, char *
  	} else
  		mapbuf = NULL;
  
@@ -469,7 +469,7 @@ the file's name.
  	sum_init(checksum_seed);
  
  	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -245,6 +250,8 @@ static int receive_data(int f_in, char *
+@@ -172,6 +177,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -478,7 +478,7 @@ the file's name.
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -271,6 +278,8 @@ static int receive_data(int f_in, char *
+@@ -198,6 +205,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -487,7 +487,7 @@ the file's name.
  		}
  
  		if (inplace) {
-@@ -311,6 +320,8 @@ static int receive_data(int f_in, char *
+@@ -238,6 +247,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_end(file_sum1);
@@ -496,7 +496,7 @@ the file's name.
  
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -326,7 +337,7 @@ static int receive_data(int f_in, char *
+@@ -253,7 +264,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -505,7 +505,7 @@ the file's name.
  }
  
  
-@@ -559,8 +570,12 @@ int recv_files(int f_in, struct file_lis
+@@ -486,8 +497,12 @@ int recv_files(int f_in, struct file_lis
  			rprintf(FINFO, "%s\n", safe_fname(fname));
  
  		/* recv file data */
@@ -519,9 +519,9 @@ the file's name.
  
  		log_recv(file, &initial_stats);
  
---- orig/rsync.c	2005-01-10 09:50:46
+--- orig/rsync.c	2005-01-24 00:57:24
 +++ rsync.c	2004-08-13 18:14:34
-@@ -34,6 +34,7 @@ extern int force_delete;
+@@ -35,6 +35,7 @@ extern int force_delete;
  extern int recurse;
  extern int keep_dirlinks;
  extern int make_backups;
@@ -529,7 +529,7 @@ the file's name.
  extern char *backup_dir;
  extern int inplace;
  
-@@ -259,7 +260,12 @@ void finish_transfer(char *fname, char *
+@@ -280,7 +281,12 @@ void finish_transfer(char *fname, char *
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
@@ -543,9 +543,9 @@ the file's name.
  	if (ret < 0) {
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
  		    ret == -2 ? "copy" : "rename",
---- orig/rsync.h	2005-01-15 21:18:09
+--- orig/rsync.h	2005-01-25 00:53:58
 +++ rsync.h	2004-07-03 20:20:15
-@@ -538,6 +538,14 @@ struct stats {
+@@ -545,6 +545,14 @@ struct stats {
  	int current_file_index;
  };
  
