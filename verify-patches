@@ -9,38 +9,40 @@ if [ ! -f verify-patches ]; then
 fi
 
 root=`cat ../CVS/Root`
-cvsdir=,cvsdir-for-patch-tests
-tmpdir=,tmpdir-for-patch-tests
+tmpdir=,tmp-for-patch-tests
 
 [ -d $tmpdir ] || mkdir $tmpdir
-cvs -d "$root" co -d $cvsdir rsync
-
 cd $tmpdir || exit 1
 
+[ -d ,workdir ] || mkdir ,workdir
+echo "Using CVS to update the $tmpdir/,cvsdir copy of the source."
+cvs -d "$root" co -d ,cvsdir rsync
+
+cd ,workdir || exit 1
+
 if [ -z "$1" ]; then
-    set -- ../*.diff
+    set -- ../../*.diff
 fi
 
 for xx in "${@}"; do
     case "$xx" in
     *gzip-rsyncable.diff) continue ;;
-    patches/*) xx=`echo $xx | sed 's:patches:..:'` ;;
+    patches/*) xx=`echo $xx | sed 's:patches:../..:'` ;;
     */*.diff) ;;
-    *.diff) xx=../$xx ;;
+    *.diff) xx=../../$xx ;;
     *) continue ;;
     esac
-    rsync -a --delete ../$cvsdir/ .
+    rsync -a --delete ../,cvsdir/ .
     echo -e "\n----------- $xx ------------"
     patch -p0 <$xx | tee ,patch.output
     new=''
     for nn in `sed -n 's/^patching file //p' ,patch.output`; do
-	[ -f ../$cvsdir/$nn ] || new="$new $nn"
+	[ -f ../,cvsdir/$nn ] || new="$new $nn"
     done
     while : ; do
-	echo -ne "\nFix rejections, Make proto.h, Edit diffs, Update, Next: [n] "
+	echo -ne "\nFix rejections, Make proto.h, Edit diffs, Update, Next, Quit: [n] "
 	read ans
 	case "$ans" in
-	'') break ;;
 	[Ee]*)
 	    [ ! -z "$new" ] && cvs add $new
 	    new=''
@@ -66,6 +68,12 @@ for xx in "${@}"; do
 	    else
 		echo -e "\n*** Edit the diffs first. ***"
 	    fi
+	    ;;
+	[Nn]*|'')
+	    break
+	    ;;
+	[Qq]*)
+	    exit 0
 	    ;;
 	esac
     done
