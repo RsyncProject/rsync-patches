@@ -49,15 +49,15 @@ Before compiling, be sure to run "make proto".
 -		pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest, fname);
 -		if (link_stat(fnamecmpbuf, &st, 0) == 0
 -		    && S_ISREG(st.st_mode)) {
-+		int i;
-+		for (i = 0; compare_dest[i] != NULL; i++) {
++		int i = 0;
++		do {
 +			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest[i], fname);
 +			if (link_stat(fnamecmpbuf, &st, 0) == 0
 +			    && S_ISREG(st.st_mode)) {
 +				statret = 0;
 +				break;
 +			}
-+		}
++		} while (compare_dest[++i] != NULL);
 +		if (statret == 0) {
  #if HAVE_LINK
  			if (link_dest && !dry_run) {
@@ -90,8 +90,8 @@ Before compiling, be sure to run "make proto".
  
  	if (preserve_hard_links)
  		init_hard_links(flist);
---- orig/options.c	2004-07-26 16:43:48
-+++ options.c	2004-07-23 22:04:42
+--- orig/options.c	2004-07-29 16:08:03
++++ options.c	2004-07-29 16:31:11
 @@ -114,12 +114,13 @@ int write_batch = 0;
  int read_batch = 0;
  int backup_dir_len = 0;
@@ -135,12 +135,11 @@ Before compiling, be sure to run "make proto".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -594,8 +596,36 @@ int parse_arguments(int *argc, const cha
+@@ -594,8 +596,28 @@ int parse_arguments(int *argc, const cha
  				select_timeout = io_timeout;
  			break;
  
 +		case OPT_COMPARE_DEST:
-+#if HAVE_LINK
 +			if (num_comp_dest >= MAX_COMP_DEST-1) {
 +				rprintf(FERROR, "ERROR: %s\n", "too many --compare-dest args given");
 +				return 0;
@@ -151,13 +150,6 @@ Before compiling, be sure to run "make proto".
 +			compare_dest[num_comp_dest++] = (char *)arg;
 +			saw_compare_dest = 1;
 +			break;
-+#else
-+			snprintf(err_buf, sizeof err_buf,
-+				 "hard links are not supported on this %s\n",
-+				 am_server ? "server" : "client");
-+			rprintf(FERROR, "ERROR: %s", err_buf);
-+			return 0;
-+#endif
 +
  		case OPT_LINK_DEST:
  #if HAVE_LINK
@@ -172,7 +164,7 @@ Before compiling, be sure to run "make proto".
  			link_dest = 1;
  			break;
  #else
-@@ -693,6 +723,11 @@ int parse_arguments(int *argc, const cha
+@@ -693,6 +715,11 @@ int parse_arguments(int *argc, const cha
  		exit_cleanup(RERR_SYNTAX);
  	}
  
@@ -184,7 +176,7 @@ Before compiling, be sure to run "make proto".
  	if (archive_mode) {
  		if (!files_from)
  			recurse = 1;
-@@ -723,8 +758,6 @@ int parse_arguments(int *argc, const cha
+@@ -723,8 +750,6 @@ int parse_arguments(int *argc, const cha
  			tmpdir = alloc_sanitize_path(tmpdir, curr_dir);
  		if (partial_dir)
  			partial_dir = alloc_sanitize_path(partial_dir, curr_dir);
@@ -193,7 +185,7 @@ Before compiling, be sure to run "make proto".
  		if (backup_dir)
  			backup_dir = alloc_sanitize_path(backup_dir, curr_dir);
  		if (files_from)
-@@ -836,8 +869,8 @@ int parse_arguments(int *argc, const cha
+@@ -839,8 +864,8 @@ int parse_arguments(int *argc, const cha
   **/
  void server_options(char **args,int *argc)
  {
@@ -203,7 +195,7 @@ Before compiling, be sure to run "make proto".
  	char *arg;
  
  	int i, x;
-@@ -1018,13 +1051,16 @@ void server_options(char **args,int *arg
+@@ -1021,13 +1046,16 @@ void server_options(char **args,int *arg
  		args[ac++] = tmpdir;
  	}
  
@@ -233,7 +225,7 @@ Before compiling, be sure to run "make proto".
  extern int make_backups;
  extern int do_progress;
  extern char *backup_dir;
---- orig/rsync.h	2004-07-27 23:23:54
+--- orig/rsync.h	2004-07-29 16:08:03
 +++ rsync.h	2004-07-03 17:33:30
 @@ -98,6 +98,8 @@
  
