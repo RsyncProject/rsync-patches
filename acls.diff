@@ -1151,9 +1151,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +}
 +
 +#endif /* SUPPORT_ACLS */
---- orig/backup.c	2004-07-26 06:19:04
-+++ backup.c	2004-07-03 20:11:58
-@@ -105,6 +105,7 @@ static int make_bak_dir(char *fullpath)
+--- orig/backup.c	2004-09-07 21:45:30
++++ backup.c	2004-09-07 21:45:57
+@@ -121,6 +121,7 @@ static int make_bak_dir(char *fullpath)
  			} else {
  				do_lchown(fullpath, st.st_uid, st.st_gid);
  				do_chmod(fullpath, st.st_mode);
@@ -1161,19 +1161,19 @@ ACLs to a non-ACL-supporting disk should complain.
  			}
  		}
  		*p = '/';
-@@ -168,6 +169,8 @@ static int keep_backup(char *fname)
+@@ -178,6 +179,8 @@ static int keep_backup(char *fname)
+ 	if (!(buf = get_backup_name(fname)))
  		return 0;
- 	}
  
-+	PUSH_KEEP_BACKUP_ACL(file, fname, backup_dir_buf);
++	PUSH_KEEP_BACKUP_ACL(file, fname, buf);
 +
  #ifdef HAVE_MKNOD
  	/* Check to see if this is a device file, or link */
  	if (IS_DEVICE(file->mode)) {
-@@ -242,6 +245,7 @@ static int keep_backup(char *fname)
+@@ -253,6 +256,7 @@ static int keep_backup(char *fname)
  		}
  	}
- 	set_perms(backup_dir_buf, file, NULL, 0);
+ 	set_perms(buf, file, NULL, 0);
 +	CLEANUP_KEEP_BACKUP_ACL();
  	free(file);
  
@@ -1310,9 +1310,9 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (f != -1) {
  		/* Now send the uid/gid list. This was introduced in
  		 * protocol version 15 */
---- orig/generator.c	2004-08-05 18:24:21
+--- orig/generator.c	2004-09-07 21:45:30
 +++ generator.c	2004-07-03 20:11:58
-@@ -332,6 +332,10 @@ static void recv_generator(char *fname, 
+@@ -338,6 +338,10 @@ static void recv_generator(char *fname, 
  		if (set_perms(fname, file, statret ? NULL : &st, 0)
  		    && verbose && f_out != -1)
  			rprintf(FINFO, "%s/\n", safe_fname(fname));
@@ -1334,7 +1334,7 @@ ACLs to a non-ACL-supporting disk should complain.
    next;
  }
  
---- orig/options.c	2004-08-12 18:34:38
+--- orig/options.c	2004-09-07 21:45:30
 +++ options.c	2004-08-19 17:38:57
 @@ -43,6 +43,7 @@ int keep_dirlinks = 0;
  int copy_links = 0;
@@ -1391,7 +1391,7 @@ ACLs to a non-ACL-supporting disk should complain.
    {"owner",           'o', POPT_ARG_NONE,   &preserve_uid, 0, 0, 0 },
    {"group",           'g', POPT_ARG_NONE,   &preserve_gid, 0, 0, 0 },
    {"devices",         'D', POPT_ARG_NONE,   &preserve_devices, 0, 0, 0 },
-@@ -620,6 +628,24 @@ int parse_arguments(int *argc, const cha
+@@ -616,6 +624,24 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -1416,7 +1416,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -932,6 +958,8 @@ void server_options(char **args,int *arg
+@@ -934,6 +960,8 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
@@ -1425,7 +1425,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (preserve_uid)
  		argstr[x++] = 'o';
  	if (preserve_gid)
---- orig/rsync.c	2004-08-09 21:07:10
+--- orig/rsync.c	2004-09-07 21:45:30
 +++ rsync.c	2004-07-03 20:11:58
 @@ -207,6 +207,14 @@ int set_perms(char *fname,struct file_st
  	}
@@ -1485,7 +1485,7 @@ ACLs to a non-ACL-supporting disk should complain.
  #include "proto.h"
  
  /* We have replacement versions of these if they're missing. */
---- orig/rsync.yo	2004-08-19 16:30:47
+--- orig/rsync.yo	2004-09-07 19:54:51
 +++ rsync.yo	2004-07-03 20:11:58
 @@ -326,6 +326,7 @@ verb(
       --safe-links            ignore "unsafe" symlinks
