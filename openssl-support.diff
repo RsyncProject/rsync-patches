@@ -48,7 +48,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  
  TLS_OBJ = tls.o syscall.o lib/permstring.o
  
---- orig/cleanup.c	2004-07-20 21:36:07
+--- orig/cleanup.c	2004-07-29 16:08:03
 +++ cleanup.c	2004-07-03 20:22:28
 @@ -24,6 +24,9 @@
  extern int io_error;
@@ -72,7 +72,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (verbose > 3) {
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): entered\n",
  			code, file, line);
---- orig/clientserver.c	2004-07-17 15:20:05
+--- orig/clientserver.c	2004-08-02 02:29:16
 +++ clientserver.c	2004-07-03 20:22:28
 @@ -46,6 +46,9 @@ extern int io_timeout;
  extern int orig_umask;
@@ -84,7 +84,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  extern char *bind_address;
  extern struct exclude_list_struct server_exclude_list;
  extern char *exclude_path_prefix;
-@@ -93,8 +96,18 @@ int start_socket_client(char *host, char
+@@ -94,8 +97,18 @@ int start_socket_client(char *host, char
  		exit_cleanup(RERR_SOCKETIO);
  
  	ret = start_inband_exchange(user, path, fd, fd, argc);
@@ -104,7 +104,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  }
  
  int start_inband_exchange(char *user, char *path, int f_in, int f_out, 
-@@ -149,6 +162,33 @@ int start_inband_exchange(char *user, ch
+@@ -150,6 +163,33 @@ int start_inband_exchange(char *user, ch
  	if (protocol_version > remote_protocol)
  		protocol_version = remote_protocol;
  
@@ -138,7 +138,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	p = strchr(path,'/');
  	if (p) *p = 0;
  	io_printf(f_out, "%s\n", path);
-@@ -177,6 +217,10 @@ int start_inband_exchange(char *user, ch
+@@ -178,6 +218,10 @@ int start_inband_exchange(char *user, ch
  			 * server to terminate the listing of modules.
  			 * We don't want to go on and transfer
  			 * anything; just exit. */
@@ -149,7 +149,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			exit(0);
  		}
  
-@@ -184,6 +228,10 @@ int start_inband_exchange(char *user, ch
+@@ -185,6 +229,10 @@ int start_inband_exchange(char *user, ch
  			rprintf(FERROR, "%s\n", line);
  			/* This is always fatal; the server will now
  			 * close the socket. */
@@ -160,7 +160,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			return RERR_STARTCLIENT;
  		} else {
  			rprintf(FINFO,"%s\n", line);
-@@ -488,6 +536,7 @@ static void send_listing(int fd)
+@@ -497,6 +545,7 @@ static void send_listing(int fd)
  		io_printf(fd,"@RSYNCD: EXIT\n");
  }
  
@@ -168,28 +168,28 @@ can't say if I've left any cleanup/compatibility errors in the code.
  /* this is called when a connection is established to a client
     and we want to start talking. The setup of the system is done from
     here */
-@@ -547,6 +596,20 @@ int start_daemon(int f_in, int f_out)
- 			return -1;
- 		}
+@@ -555,6 +604,20 @@ int start_daemon(int f_in, int f_out)
+ 		return -1;
+ 	}
  
 +#if HAVE_OPENSSL
-+		if (use_ssl && strcmp(line, "#starttls") == 0) {
-+			io_printf(f_out, "@RSYNCD: starttls\n");
-+			if (start_tls(f_in, f_out)) {
-+				rprintf(FLOG, "SSL connection failed: %s\n",
-+					get_ssl_error());
-+				return -1;
-+			}
-+			f_in = get_tls_rfd();
-+			f_out = get_tls_wfd();
-+			continue;
++	if (use_ssl && strcmp(line, "#starttls") == 0) {
++		io_printf(f_out, "@RSYNCD: starttls\n");
++		if (start_tls(f_in, f_out)) {
++			rprintf(FLOG, "SSL connection failed: %s\n",
++				get_ssl_error());
++			return -1;
 +		}
++		f_in = get_tls_rfd();
++		f_out = get_tls_wfd();
++		continue;
++	}
 +#endif
 +
- 		if (*line == '#') {
- 			/* it's some sort of command that I don't understand */
- 			io_printf(f_out, "@ERROR: Unknown command '%s'\n", line);
---- orig/configure.in	2004-07-16 20:07:22
+ 	if (*line == '#') {
+ 		/* it's some sort of command that I don't understand */
+ 		io_printf(f_out, "@ERROR: Unknown command '%s'\n", line);
+--- orig/configure.in	2004-08-02 21:56:58
 +++ configure.in	2004-07-03 20:22:28
 @@ -271,6 +271,21 @@ yes
  	AC_SEARCH_LIBS(getaddrinfo, inet6)
@@ -213,9 +213,9 @@ can't say if I've left any cleanup/compatibility errors in the code.
  AC_MSG_CHECKING([whether to call shutdown on all sockets])
  case $host_os in
  	*cygwin* ) AC_MSG_RESULT(yes)
---- orig/main.c	2004-07-21 23:59:35
+--- orig/main.c	2004-07-31 16:41:04
 +++ main.c	2004-07-15 02:40:51
-@@ -55,6 +55,9 @@ extern int write_batch;
+@@ -56,6 +56,9 @@ extern int write_batch;
  extern int batch_fd;
  extern int batch_gen_fd;
  extern int filesfrom_fd;
@@ -225,7 +225,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  extern pid_t cleanup_child_pid;
  extern char *files_from;
  extern char *remote_filesfrom_file;
-@@ -750,18 +753,32 @@ static int start_client(int argc, char *
+@@ -757,18 +760,32 @@ static int start_client(int argc, char *
  	pid_t pid;
  	int f_in,f_out;
  	int rc;
@@ -261,7 +261,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		p = strchr(host,'/');
  		if (p) {
  			*p = 0;
-@@ -809,12 +826,27 @@ static int start_client(int argc, char *
+@@ -816,12 +833,27 @@ static int start_client(int argc, char *
  			argv++;
  		} else { /* source is local */
  			am_sender = 1;
@@ -291,9 +291,9 @@ can't say if I've left any cleanup/compatibility errors in the code.
  				p = strchr(host,'/');
  				if (p) {
  					*p = 0;
---- orig/options.c	2004-07-21 23:59:35
+--- orig/options.c	2004-08-03 15:41:32
 +++ options.c	2004-07-16 20:19:50
-@@ -134,6 +134,14 @@ int quiet = 0;
+@@ -136,6 +136,14 @@ int quiet = 0;
  int always_checksum = 0;
  int list_only = 0;
  
@@ -308,7 +308,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  #define MAX_BATCH_NAME_LEN 256	/* Must be less than MAXPATHLEN-13 */
  char *batch_name = NULL;
  
-@@ -153,6 +161,7 @@ static void print_rsync_version(enum log
+@@ -155,6 +163,7 @@ static void print_rsync_version(enum log
  	char const *hardlinks = "no ";
  	char const *links = "no ";
  	char const *ipv6 = "no ";
@@ -316,7 +316,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	STRUCT_STAT *dumstat;
  
  #ifdef HAVE_SOCKETPAIR
-@@ -175,6 +184,10 @@ static void print_rsync_version(enum log
+@@ -177,6 +186,10 @@ static void print_rsync_version(enum log
  	ipv6 = "";
  #endif
  
@@ -327,7 +327,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	rprintf(f, "%s  version %s  protocol version %d\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
  	rprintf(f,
-@@ -188,10 +201,10 @@ static void print_rsync_version(enum log
+@@ -190,10 +203,10 @@ static void print_rsync_version(enum log
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
  	 * macros. */
@@ -340,7 +340,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  #ifdef MAINTAINER_MODE
  	rprintf(f, "              panic action: \"%s\"\n",
  		get_panic_action());
-@@ -305,6 +318,13 @@ void usage(enum logcode F)
+@@ -309,6 +322,13 @@ void usage(enum logcode F)
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
  #endif
@@ -354,7 +354,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    rprintf(F," -h, --help                  show this help screen\n");
  
    rprintf(F,"\n");
-@@ -316,7 +336,7 @@ void usage(enum logcode F)
+@@ -320,7 +340,7 @@ void usage(enum logcode F)
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
@@ -363,7 +363,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -404,6 +424,13 @@ static struct poptOption long_options[] 
+@@ -409,6 +429,13 @@ static struct poptOption long_options[] 
    {"ipv4",            '4', POPT_ARG_VAL,    &default_af_hint, AF_INET, 0, 0 },
    {"ipv6",            '6', POPT_ARG_VAL,    &default_af_hint, AF_INET6, 0, 0 },
  #endif
@@ -377,7 +377,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -601,6 +628,12 @@ int parse_arguments(int *argc, const cha
+@@ -618,6 +645,12 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -390,7 +390,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -761,6 +794,17 @@ int parse_arguments(int *argc, const cha
+@@ -809,6 +842,17 @@ int parse_arguments(int *argc, const cha
  	if (do_progress && !verbose)
  		verbose = 1;
  
@@ -408,7 +408,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (bwlimit) {
  		bwlimit_writemax = (size_t)bwlimit * 128;
  		if (bwlimit_writemax < 512)
---- orig/rsync.h	2004-07-20 21:36:08
+--- orig/rsync.h	2004-08-03 15:41:32
 +++ rsync.h	2004-07-03 20:22:28
 @@ -32,6 +32,7 @@
  
@@ -418,7 +418,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  
  #define BACKUP_SUFFIX "~"
  
-@@ -326,6 +327,11 @@ enum msgcode {
+@@ -329,6 +330,11 @@ enum msgcode {
  #define uint64 unsigned off_t
  #endif
  
