@@ -20,7 +20,7 @@ Before compiling, be sure to run "make proto".
  extern int link_dest;
  extern int whole_file;
  extern int local_server;
-@@ -414,11 +414,19 @@ static void recv_generator(char *fname, 
+@@ -413,11 +413,19 @@ static void recv_generator(char *fname, 
  	fnamecmp = fname;
  	fnamecmp_type = G2R_FNAME;
  
@@ -44,7 +44,7 @@ Before compiling, be sure to run "make proto".
  #if HAVE_LINK
  			if (link_dest && !dry_run) {
  				if (do_link(fnamecmpbuf, fname) < 0) {
-@@ -429,15 +437,14 @@ static void recv_generator(char *fname, 
+@@ -428,15 +436,14 @@ static void recv_generator(char *fname, 
  							safe_fname(fname));
  					}
  					fnamecmp = fnamecmpbuf;
@@ -64,7 +64,7 @@ Before compiling, be sure to run "make proto".
  
 --- orig/main.c	2004-07-22 00:10:43
 +++ main.c	2004-07-30 07:23:54
-@@ -58,7 +58,7 @@ extern int filesfrom_fd;
+@@ -59,7 +59,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
  extern char *files_from;
  extern char *remote_filesfrom_file;
@@ -73,18 +73,18 @@ Before compiling, be sure to run "make proto".
  extern char *rsync_path;
  extern char *shell_cmd;
  extern char *batch_name;
-@@ -458,7 +458,7 @@ static int do_recv(int f_in,int f_out,st
+@@ -459,7 +459,7 @@ static int do_recv(int f_in,int f_out,st
  	int pid;
  	int status = 0;
  	int error_pipe[2], name_pipe[2];
 -	BOOL need_name_pipe = compare_dest && !dry_run;
 +	BOOL need_name_pipe = compare_dest[0] && !dry_run;
  
- 	if (preserve_hard_links)
- 		init_hard_links(flist);
---- orig/options.c	2004-07-29 16:08:03
+ 	/* The receiving side mustn't obey this, or an existing symlink that
+ 	 * points to an identical file won't be replaced by the referent. */
+--- orig/options.c	2004-08-03 15:41:32
 +++ options.c	2004-07-30 07:23:54
-@@ -114,12 +114,13 @@ int write_batch = 0;
+@@ -115,12 +115,13 @@ int write_batch = 0;
  int read_batch = 0;
  int backup_dir_len = 0;
  int backup_suffix_len;
@@ -99,7 +99,7 @@ Before compiling, be sure to run "make proto".
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *log_format = NULL;
-@@ -140,6 +141,7 @@ char *batch_name = NULL;
+@@ -141,6 +142,7 @@ char *batch_name = NULL;
  
  static int daemon_opt;   /* sets am_daemon after option error-reporting */
  static int modify_window_set;
@@ -107,7 +107,7 @@ Before compiling, be sure to run "make proto".
  
  /** Local address to bind.  As a character string because it's
   * interpreted by the IPv6 layer: should be a numeric IP4 or IP6
-@@ -317,7 +319,7 @@ void usage(enum logcode F)
+@@ -318,7 +320,7 @@ void usage(enum logcode F)
  }
  
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
@@ -116,7 +116,7 @@ Before compiling, be sure to run "make proto".
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
        OPT_REFUSED_BASE = 9000};
-@@ -376,8 +378,8 @@ static struct poptOption long_options[] 
+@@ -377,8 +379,8 @@ static struct poptOption long_options[] 
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, OPT_TIMEOUT, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
@@ -127,7 +127,7 @@ Before compiling, be sure to run "make proto".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -594,8 +596,28 @@ int parse_arguments(int *argc, const cha
+@@ -607,8 +609,28 @@ int parse_arguments(int *argc, const cha
  				select_timeout = io_timeout;
  			break;
  
@@ -156,8 +156,8 @@ Before compiling, be sure to run "make proto".
  			link_dest = 1;
  			break;
  #else
-@@ -693,6 +715,11 @@ int parse_arguments(int *argc, const cha
- 		exit_cleanup(RERR_SYNTAX);
+@@ -701,6 +723,11 @@ int parse_arguments(int *argc, const cha
+ 		return 0;
  	}
  
 +	if (saw_compare_dest && link_dest) {
@@ -168,7 +168,7 @@ Before compiling, be sure to run "make proto".
  	if (archive_mode) {
  		if (!files_from)
  			recurse = 1;
-@@ -723,8 +750,6 @@ int parse_arguments(int *argc, const cha
+@@ -731,8 +758,6 @@ int parse_arguments(int *argc, const cha
  			tmpdir = alloc_sanitize_path(tmpdir, curr_dir);
  		if (partial_dir)
  			partial_dir = alloc_sanitize_path(partial_dir, curr_dir);
@@ -177,7 +177,7 @@ Before compiling, be sure to run "make proto".
  		if (backup_dir)
  			backup_dir = alloc_sanitize_path(backup_dir, curr_dir);
  		if (files_from)
-@@ -839,8 +864,8 @@ int parse_arguments(int *argc, const cha
+@@ -882,8 +907,8 @@ int parse_arguments(int *argc, const cha
   **/
  void server_options(char **args,int *argc)
  {
@@ -187,7 +187,7 @@ Before compiling, be sure to run "make proto".
  	char *arg;
  
  	int i, x;
-@@ -1021,13 +1046,16 @@ void server_options(char **args,int *arg
+@@ -1067,13 +1092,16 @@ void server_options(char **args,int *arg
  		args[ac++] = tmpdir;
  	}
  
@@ -209,7 +209,7 @@ Before compiling, be sure to run "make proto".
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
 --- orig/receiver.c	2004-07-30 07:17:48
 +++ receiver.c	2004-07-30 07:31:12
-@@ -39,7 +39,7 @@ extern int cvs_exclude;
+@@ -38,7 +38,7 @@ extern int cvs_exclude;
  extern int io_error;
  extern char *tmpdir;
  extern char *partial_dir;
