@@ -31,9 +31,9 @@ ACLs to a non-ACL-supporting disk should complain.
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
---- orig/acls.c	2004-08-19 17:09:41
-+++ acls.c	2004-08-19 17:09:41
-@@ -0,0 +1,1117 @@
+--- orig/acls.c	2004-09-08 06:09:30
++++ acls.c	2004-09-08 06:09:30
+@@ -0,0 +1,1144 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -642,8 +642,8 @@ ACLs to a non-ACL-supporting disk should complain.
 +{
 +#if ACLS_NEED_MASK
 +	uchar required_mask_perm = 0;
-+	BOOL saw_mask = False;
 +#endif
++	BOOL saw_mask = False;
 +	BOOL saw_user_obj = False, saw_group_obj = False,
 +		saw_other = False;
 +	size_t count = read_int(f);
@@ -675,9 +675,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +			break;
 +		case 'm':
 +			race->tag_type = SMB_ACL_MASK;
-+#if ACLS_NEED_MASK
 +			saw_mask = True;
-+#endif
 +			break;
 +		default:
 +			rprintf(FERROR, "receive_rsync_acl: unknown tag %c\n",
@@ -727,6 +725,35 @@ ACLs to a non-ACL-supporting disk should complain.
 +		race = &racl->races[racl->count++];
 +		race->tag_type = SMB_ACL_MASK;
 +		race->access = required_mask_perm;
++	}
++#else
++	/* If we, a system without ACLS_NEED_MASK, received data from a
++	 * system that has masks, throw away the extraneous CLASS_OBJs. */
++	if (saw_mask && racl->count == 4) {
++		rsync_ace *group_obj_race = NULL, *mask_race = NULL;
++		rsync_ace *p;
++		size_t i;
++		for (i = 0, p = racl->races; i < racl->count; i++, p++) {
++			if (p->tag_type == SMB_ACL_MASK)
++				mask_race = p;
++			else if (p->tag_type == SMB_ACL_GROUP_OBJ)
++				group_obj_race = p;
++		}
++		if (mask_race == NULL || group_obj_race == NULL) {
++			rprintf(FERROR, "receive_rsync_acl: have four ACES "
++					"and one's ACL_MASK but missing "
++					"either it or ACL_GROUP_OBJ, "
++					"when pruning ACL\n");
++		} else {
++			/* mask off group perms with it first */
++			group_obj_race->access &= mask_race->access;
++			/* dump mask_race; re-slot any followers-on */
++			racl->count--;
++			if (mask_race != &racl->races[racl->count]) {
++				*mask_race = racl->races[racl->count];
++				saw_user_obj = False; /* force re-sort */
++			}
++		}
 +	}
 +#endif
 +#if ACLS_NEED_MASK
