@@ -1,0 +1,580 @@
+This patch creates a --delete-during functionality that deletes files on
+the receiving side incrementally as we traverse the directories.  It also
+defines a --delete-before option, for the traditional way that --delete
+has worked before.
+
+This patch chooses to make --delete into a synonym for --delete-during, and
+hide --delete-during, but that can be easily changed if we want to preserve
+the old functionality (and indeed, the support for popt aliases that is now
+in CVS will let the user easily choose which method they'd like --delete to
+invoke, either personally or site-wide, without having to recompile rsync).
+
+--- orig/flist.c	2005-01-19 00:24:57
++++ flist.c	2005-01-19 00:39:09
+@@ -45,6 +45,8 @@ extern int cvs_exclude;
+ extern int recurse;
+ extern int keep_dirs;
+ extern char curr_dir[MAXPATHLEN];
++extern char *backup_dir;
++extern char *backup_suffix;
+ extern int filesfrom_fd;
+ 
+ extern int one_file_system;
+@@ -57,11 +59,14 @@ extern int preserve_uid;
+ extern int preserve_gid;
+ extern int relative_paths;
+ extern int implied_dirs;
++extern int make_backups;
++extern int backup_suffix_len;
+ extern int copy_links;
+ extern int copy_unsafe_links;
+ extern int protocol_version;
+ extern int sanitize_paths;
+ extern int delete_excluded;
++extern int max_delete;
+ extern int orig_umask;
+ extern int list_only;
+ 
+@@ -1044,7 +1049,8 @@ static void send_directory(int f, struct
+ 		    || (dname[1] == '.' && dname[2] == '\0')))
+ 			continue;
+ 		if (strlcpy(p, dname, MAXPATHLEN - offset) < MAXPATHLEN - offset) {
+-			send_file_name(f, flist, fname, recurse, 0);
++			int do_subdirs = recurse >= 1 ? recurse-- : recurse;
++			send_file_name(f, flist, fname, do_subdirs, 0);
+ 		} else {
+ 			io_error |= IOERR_GENERAL;
+ 			rprintf(FINFO,
+@@ -1102,6 +1108,7 @@ struct file_list *send_file_list(int f, 
+ 	while (1) {
+ 		char fname2[MAXPATHLEN];
+ 		char *fname = fname2;
++		int do_subdirs;
+ 
+ 		if (use_ff_fd) {
+ 			if (read_filesfrom_line(filesfrom_fd, fname) == 0)
+@@ -1143,7 +1150,7 @@ struct file_list *send_file_list(int f, 
+ 		dir = NULL;
+ 		olddir[0] = '\0';
+ 
+-		if (!relative_paths) {
++		if (!relative_paths && recurse <= 0) {
+ 			p = strrchr(fname, '/');
+ 			if (p) {
+ 				*p = 0;
+@@ -1212,7 +1219,8 @@ struct file_list *send_file_list(int f, 
+ 		if (one_file_system)
+ 			set_filesystem(fname);
+ 
+-		send_file_name(f, flist, fname, recurse, XMIT_TOP_DIR);
++		do_subdirs = recurse >= 1 ? recurse-- : recurse;
++		send_file_name(f, flist, fname, do_subdirs, XMIT_TOP_DIR);
+ 
+ 		if (olddir[0]) {
+ 			flist_dir = NULL;
+@@ -1634,3 +1642,109 @@ char *f_name(struct file_struct *f)
+ 
+ 	return f_name_to(f, names[n]);
+ }
++
++static void delete_one(char *fn, int is_dir)
++{
++	if (!is_dir) {
++		if (robust_unlink(fn) != 0) {
++			rsyserr(FERROR, errno, "delete_one: unlink %s failed",
++				full_fname(fn));
++		} else if (verbose)
++			rprintf(FINFO, "deleting %s\n", safe_fname(fn));
++	} else {
++		if (do_rmdir(fn) != 0) {
++			if (errno != ENOTEMPTY && errno != EEXIST) {
++				rsyserr(FERROR, errno,
++					"delete_one: rmdir %s failed",
++					full_fname(fn));
++			}
++		} else if (verbose) {
++			rprintf(FINFO, "deleting directory %s\n",
++				safe_fname(fn));
++		}
++	}
++}
++
++static int is_backup_file(char *fn)
++{
++	int k = strlen(fn) - backup_suffix_len;
++	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
++}
++
++void delete_in_dir(struct file_list *flist, char *fname, int do_subdirs)
++{
++	static int deletion_count = 0;
++	struct file_list *del_flist;
++	int save_recurse = recurse;
++	int save_keep_dirs = keep_dirs;
++	int save_implied_dirs = implied_dirs;
++	char *argv[1];
++	int i;
++
++	if (max_delete && deletion_count >= max_delete)
++		return;
++
++	if (io_error && !(lp_ignore_errors(module_id) || ignore_errors)) {
++		rprintf(FINFO, "IO error encountered - skipping file deletion\n");
++		max_delete = -1; /* avoid duplicating the above warning */
++		return;
++	}
++
++	recurse = do_subdirs ? -1 : 1;
++	keep_dirs = 1;
++	implied_dirs = 0;
++
++	argv[0] = fname;
++	del_flist = send_file_list(-1, 1, argv);
++
++	implied_dirs = save_implied_dirs;
++	keep_dirs = save_keep_dirs;
++	recurse = save_recurse;
++
++	if (!del_flist)
++		return;
++
++	if (verbose > 1)
++		rprintf(FINFO, "deleting in %s\n", safe_fname(fname));
++
++	for (i = del_flist->count-1; i >= 0; i--) {
++		if (max_delete && deletion_count >= max_delete)
++			break;
++		if (!del_flist->files[i]->basename)
++			continue;
++		if (flist_find(flist, del_flist->files[i]) < 0) {
++			char *f = f_name(del_flist->files[i]);
++			int mode = del_flist->files[i]->mode;
++			if (make_backups && (backup_dir || !is_backup_file(f))
++			  && !S_ISDIR(mode)) {
++				make_backup(f);
++				if (verbose) {
++					rprintf(FINFO, "deleting %s\n",
++						safe_fname(f));
++				}
++			} else
++				delete_one(f, S_ISDIR(mode) != 0);
++			deletion_count++;
++		}
++	}
++	flist_free(del_flist);
++}
++
++/* This deletes any files on the receiving side that are not present on the
++ * sending side.  This is used by --delete-before and --delete-after. */
++void delete_files(struct file_list *flist)
++{
++	char fbuf[MAXPATHLEN];
++	int j;
++
++	if (cvs_exclude)
++		add_cvs_excludes();
++
++	for (j = 0; j < flist->count; j++) {
++		if (!(flist->files[j]->flags & FLAG_TOP_DIR)
++		    || !S_ISDIR(flist->files[j]->mode))
++			continue;
++
++		delete_in_dir(flist, f_name_to(flist->files[j], fbuf), recurse);
++	}
++}
+--- orig/generator.c	2005-01-17 23:11:45
++++ generator.c	2005-01-18 23:14:23
+@@ -34,6 +34,8 @@ extern int preserve_hard_links;
+ extern int preserve_perms;
+ extern int preserve_uid;
+ extern int preserve_gid;
++extern int delete_during;
++extern int cvs_exclude;
+ extern int update_only;
+ extern int opt_ignore_existing;
+ extern int inplace;
+@@ -242,7 +244,6 @@ static void generate_and_send_sums(int f
+ }
+ 
+ 
+-
+ /*
+  * Acts on file number @p i from @p flist, whose name is @p fname.
+  *
+@@ -251,7 +252,8 @@ static void generate_and_send_sums(int f
+  * @note This comment was added later by mbp who was trying to work it
+  * out.  It might be wrong.
+  */
+-static void recv_generator(char *fname, struct file_struct *file, int i,
++static void recv_generator(char *fname, struct file_list *flist,
++			   struct file_struct *file, int i,
+ 			   int f_out, int f_out_name)
+ {
+ 	int fd = -1, f_copy = -1;
+@@ -312,8 +314,6 @@ static void recv_generator(char *fname, 
+ 		 * we need to delete it.  If it doesn't exist, then
+ 		 * recursively create it. */
+ 
+-		if (dry_run)
+-			return; /* TODO: causes inaccuracies -- fix */
+ 		if (statret == 0 && !S_ISDIR(st.st_mode)) {
+ 			if (robust_unlink(fname) != 0) {
+ 				rsyserr(FERROR, errno,
+@@ -334,6 +334,8 @@ static void recv_generator(char *fname, 
+ 		}
+ 		/* f_out is set to -1 when doing final directory-permission
+ 		 * and modification-time repair. */
++		if (delete_during && f_out != -1)
++			delete_in_dir(flist, fname, 0);
+ 		if (set_perms(fname, file, statret ? NULL : &st, 0)
+ 		    && verbose && f_out != -1)
+ 			rprintf(FINFO, "%s/\n", safe_fname(fname));
+@@ -642,6 +644,9 @@ void generate_files(int f_out, struct fi
+ 			: "delta transmission enabled\n");
+ 	}
+ 
++	if (delete_during && cvs_exclude)
++		add_cvs_excludes();
++
+ 	/* we expect to just sit around now, so don't exit on a
+ 	   timeout. If we really get a timeout then the other process should
+ 	   exit */
+@@ -665,7 +670,7 @@ void generate_files(int f_out, struct fi
+ 		}
+ 
+ 		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
+-			       file, i, f_out, f_out_name);
++			       flist, file, i, f_out, f_out_name);
+ 	}
+ 
+ 	phase++;
+@@ -682,7 +687,7 @@ void generate_files(int f_out, struct fi
+ 	while ((i = get_redo_num()) != -1) {
+ 		struct file_struct *file = flist->files[i];
+ 		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
+-			       file, i, f_out, f_out_name);
++			       flist, file, i, f_out, f_out_name);
+ 	}
+ 
+ 	phase++;
+@@ -704,7 +709,7 @@ void generate_files(int f_out, struct fi
+ 		if (!file->basename || !S_ISDIR(file->mode))
+ 			continue;
+ 		recv_generator(local_name ? local_name : f_name(file),
+-			       file, i, -1, -1);
++			       flist, file, i, -1, -1);
+ 	}
+ 
+ 	if (verbose > 2)
+--- orig/main.c	2005-01-17 23:11:45
++++ main.c	2005-01-18 21:56:05
+@@ -33,6 +33,7 @@ extern int verbose;
+ extern int blocking_io;
+ extern int cvs_exclude;
+ extern int delete_mode;
++extern int delete_before;
+ extern int delete_excluded;
+ extern int delete_after;
+ extern int daemon_over_rsh;
+@@ -473,9 +474,9 @@ static int do_recv(int f_in,int f_out,st
+ 	if (preserve_hard_links)
+ 		init_hard_links(flist);
+ 
+-	if (!delete_after) {
++	if (delete_before) {
+ 		/* I moved this here from recv_files() to prevent a race condition */
+-		if (recurse && delete_mode && !local_name && flist->count > 0)
++		if (recurse && !local_name && flist->count > 0)
+ 			delete_files(flist);
+ 	}
+ 
+--- orig/options.c	2005-01-19 00:34:19
++++ options.c	2005-01-19 01:07:34
+@@ -54,6 +54,8 @@ int dry_run = 0;
+ int local_server = 0;
+ int ignore_times = 0;
+ int delete_mode = 0;
++int delete_during = 0;
++int delete_before = 0;
+ int delete_excluded = 0;
+ int one_file_system = 0;
+ int protocol_version = PROTOCOL_VERSION;
+@@ -272,14 +274,15 @@ void usage(enum logcode F)
+   rprintf(F,"     --existing              only update files that already exist\n");
+   rprintf(F,"     --ignore-existing       ignore files that already exist on receiving side\n");
+   rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
++  rprintf(F,"     --delete-before         receiver deletes before transferring, not during\n");
++  rprintf(F,"     --delete-after          receiver deletes after transferring, not during\n");
+   rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
+-  rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
+   rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
++  rprintf(F,"     --force                 force deletion of directories even if not empty\n");
+   rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
+   rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
+   rprintf(F,"     --partial               keep partially transferred files\n");
+   rprintf(F,"     --partial-dir=DIR       put a partially transferred file into DIR\n");
+-  rprintf(F,"     --force                 force deletion of directories even if not empty\n");
+   rprintf(F,"     --numeric-ids           don't map uid/gid values by user/group name\n");
+   rprintf(F,"     --timeout=TIME          set I/O timeout in seconds\n");
+   rprintf(F," -I, --ignore-times          turn off mod time & file size quick check\n");
+@@ -320,8 +323,8 @@ void usage(enum logcode F)
+   rprintf(F,"See http://rsync.samba.org/ for updates, bug reports, and answers\n");
+ }
+ 
+-enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+-      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED,
++enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE,
++      OPT_EXCLUDE_FROM, OPT_DELETE_MODE,
+       OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
+       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
+       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
+@@ -337,11 +340,13 @@ static struct poptOption long_options[] 
+   {"size-only",        0,  POPT_ARG_NONE,   &size_only, 0, 0, 0 },
+   {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
+   {"one-file-system", 'x', POPT_ARG_NONE,   &one_file_system, 0, 0, 0 },
+-  {"delete",           0,  POPT_ARG_NONE,   &delete_mode, 0, 0, 0 },
++  {"delete",           0,  POPT_ARG_NONE,   0, OPT_DELETE_MODE, 0, 0 },
++  {"delete-during",    0,  POPT_ARG_NONE,   &delete_during, OPT_DELETE_MODE, 0, 0 },
++  {"delete-before",    0,  POPT_ARG_NONE,   &delete_before, OPT_DELETE_MODE, 0, 0 },
+   {"existing",         0,  POPT_ARG_NONE,   &only_existing, 0, 0, 0 },
+   {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
+-  {"delete-after",     0,  POPT_ARG_NONE,   0, OPT_DELETE_AFTER, 0, 0 },
+-  {"delete-excluded",  0,  POPT_ARG_NONE,   0, OPT_DELETE_EXCLUDED, 0, 0 },
++  {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, OPT_DELETE_MODE, 0, 0 },
++  {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, OPT_DELETE_MODE, 0, 0 },
+   {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
+   {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
+   {"exclude",          0,  POPT_ARG_STRING, 0, OPT_EXCLUDE, 0, 0 },
+@@ -613,13 +618,7 @@ int parse_arguments(int *argc, const cha
+ 			modify_window_set = 1;
+ 			break;
+ 
+-		case OPT_DELETE_AFTER:
+-			delete_after = 1;
+-			delete_mode = 1;
+-			break;
+-
+-		case OPT_DELETE_EXCLUDED:
+-			delete_excluded = 1;
++		case OPT_DELETE_MODE:
+ 			delete_mode = 1;
+ 			break;
+ 
+@@ -851,13 +850,18 @@ int parse_arguments(int *argc, const cha
+ 		preserve_uid = 1;
+ 		preserve_devices = 1;
+ 	}
++
+ 	if (recurse) {
++		recurse = -1; /* unlimited recursion */
+ 		keep_dirs = 1;
+ 	}
+ 
+ 	if (relative_paths < 0)
+ 		relative_paths = files_from? 1 : 0;
+ 
++	if (delete_mode && !(delete_during || delete_before || delete_after))
++		delete_during = 1; /* Use "delete_before" for old default. */
++
+ 	*argv = poptGetArgs(pc);
+ 	*argc = count_args(*argv);
+ 
+@@ -1156,7 +1160,9 @@ void server_options(char **args,int *arg
+ 	if (am_sender) {
+ 		if (delete_excluded)
+ 			args[ac++] = "--delete-excluded";
+-		else if (delete_mode)
++		else if (delete_before)
++			args[ac++] = "--delete-before";
++		else if (delete_during || delete_after)
+ 			args[ac++] = "--delete";
+ 
+ 		if (delete_after)
+--- orig/receiver.c	2005-01-17 23:11:45
++++ receiver.c	2005-01-18 22:47:38
+@@ -23,7 +23,6 @@
+ extern int verbose;
+ extern int recurse;
+ extern int delete_after;
+-extern int max_delete;
+ extern int csum_length;
+ extern struct stats stats;
+ extern int dry_run;
+@@ -35,7 +34,6 @@ extern int relative_paths;
+ extern int keep_dirlinks;
+ extern int preserve_hard_links;
+ extern int preserve_perms;
+-extern int cvs_exclude;
+ extern int io_error;
+ extern char *tmpdir;
+ extern char *partial_dir;
+@@ -43,9 +41,6 @@ extern char *basis_dir[];
+ extern int basis_dir_cnt;
+ extern int make_backups;
+ extern int do_progress;
+-extern char *backup_dir;
+-extern char *backup_suffix;
+-extern int backup_suffix_len;
+ extern int cleanup_got_literal;
+ extern int module_id;
+ extern int ignore_errors;
+@@ -57,91 +52,6 @@ extern int inplace;
+ extern struct exclude_list_struct server_exclude_list;
+ 
+ 
+-static void delete_one(char *fn, int is_dir)
+-{
+-	if (!is_dir) {
+-		if (robust_unlink(fn) != 0) {
+-			rsyserr(FERROR, errno, "delete_one: unlink %s failed",
+-				full_fname(fn));
+-		} else if (verbose)
+-			rprintf(FINFO, "deleting %s\n", safe_fname(fn));
+-	} else {
+-		if (do_rmdir(fn) != 0) {
+-			if (errno != ENOTEMPTY && errno != EEXIST) {
+-				rsyserr(FERROR, errno,
+-					"delete_one: rmdir %s failed",
+-					full_fname(fn));
+-			}
+-		} else if (verbose) {
+-			rprintf(FINFO, "deleting directory %s\n",
+-				safe_fname(fn));
+-		}
+-	}
+-}
+-
+-
+-static int is_backup_file(char *fn)
+-{
+-	int k = strlen(fn) - backup_suffix_len;
+-	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
+-}
+-
+-
+-/* This deletes any files on the receiving side that are not present
+- * on the sending side. */
+-void delete_files(struct file_list *flist)
+-{
+-	struct file_list *local_file_list;
+-	int i, j;
+-	char *argv[1], fbuf[MAXPATHLEN];
+-	static int deletion_count;
+-
+-	if (cvs_exclude)
+-		add_cvs_excludes();
+-
+-	if (io_error && !(lp_ignore_errors(module_id) || ignore_errors)) {
+-		rprintf(FINFO,"IO error encountered - skipping file deletion\n");
+-		return;
+-	}
+-
+-	for (j = 0; j < flist->count; j++) {
+-		if (!(flist->files[j]->flags & FLAG_TOP_DIR)
+-		    || !S_ISDIR(flist->files[j]->mode))
+-			continue;
+-
+-		argv[0] = f_name_to(flist->files[j], fbuf);
+-
+-		if (!(local_file_list = send_file_list(-1, 1, argv)))
+-			continue;
+-
+-		if (verbose > 1)
+-			rprintf(FINFO, "deleting in %s\n", safe_fname(fbuf));
+-
+-		for (i = local_file_list->count-1; i >= 0; i--) {
+-			if (max_delete && deletion_count >= max_delete)
+-				break;
+-			if (!local_file_list->files[i]->basename)
+-				continue;
+-			if (flist_find(flist,local_file_list->files[i]) < 0) {
+-				char *f = f_name(local_file_list->files[i]);
+-				int mode = local_file_list->files[i]->mode;
+-				if (make_backups && (backup_dir || !is_backup_file(f))
+-				  && !S_ISDIR(mode)) {
+-					make_backup(f);
+-					if (verbose) {
+-						rprintf(FINFO, "deleting %s\n",
+-							safe_fname(f));
+-					}
+-				} else
+-					delete_one(f, S_ISDIR(mode) != 0);
+-				deletion_count++;
+-			}
+-		}
+-		flist_free(local_file_list);
+-	}
+-}
+-
+-
+ /*
+  * get_tmpname() - create a tmp filename for a given filename
+  *
+--- orig/rsync.yo	2005-01-17 23:11:46
++++ rsync.yo	2005-01-19 01:05:05
+@@ -341,14 +341,15 @@ verb(
+      --existing              only update files that already exist
+      --ignore-existing       ignore files that already exist on receiver
+      --delete                delete files that don't exist on sender
++     --delete-before         receiver deletes before xfer, not during
++     --delete-after          receiver deletes after transfer, not during
+      --delete-excluded       also delete excluded files on receiver
+-     --delete-after          receiver deletes after transfer, not before
+      --ignore-errors         delete even if there are I/O errors
++     --force                 force deletion of dirs even if not empty
+      --max-delete=NUM        don't delete more than NUM files
+      --max-size=SIZE         don't transfer any file larger than SIZE
+      --partial               keep partially transferred files
+      --partial-dir=DIR       put a partially transferred file into DIR
+-     --force                 force deletion of dirs even if not empty
+      --numeric-ids           don't map uid/gid values by user/group name
+      --timeout=TIME          set I/O timeout in seconds
+  -I, --ignore-times          turn off mod time & file size quick check
+@@ -669,7 +670,7 @@ by the shell and rsync thus gets a reque
+ the files' parent directory.  Files that are excluded from transfer are
+ excluded from being deleted unless you use --delete-excluded.
+ 
+-This option has no effect if directory recursion is not selected.
++This option has no effect unless directory recursion is selected.
+ 
+ This option can be dangerous if used incorrectly!  It is a very good idea
+ to run first using the --dry-run option (-n) to see what files would be
+@@ -681,20 +682,29 @@ prevent temporary filesystem failures (s
+ sending side causing a massive deletion of files on the
+ destination.  You can override this with the --ignore-errors option.
+ 
++By default rsync does file deletions on the receiving side during the
++transfer of files to try make it as efficient as possible.  For other
++options, see --delete-before and --delte-after.
++
++dit(bf(--delete-before)) Request that the file-deletions on the receving
++side be done prior to starting the transfer, not incrementally as the
++transfer happens.  Implies --delete.
++
++One reason to use --delete-before is if the filesystem is tight for space
++and removing extraneous files would help to make the transfer possible.
++However, it does introduce a delay before the start of the transfer (while
++the receiving side is being scanned for deletions) and this delay might
++cause the transfer to timeout.  
++
++dit(bf(--delete-after)) Request that the file-deletions on the receving
++side be done after the transfer has completed, not incrementally as the
++transfer happens.  Implies --delete.
++
+ dit(bf(--delete-excluded)) In addition to deleting the files on the
+ receiving side that are not on the sending side, this tells rsync to also
+ delete any files on the receiving side that are excluded (see --exclude).
+ Implies --delete.
+ 
+-dit(bf(--delete-after)) By default rsync does file deletions on the
+-receiving side before transferring files to try to ensure that there is
+-sufficient space on the receiving filesystem. If you want to delete
+-after transferring, use the --delete-after switch. Implies --delete.
+-
+-One reason to use --delete-after is to avoid a delay before the start of
+-the transfer (while the receiving side is scanned for deletions) as this
+-delay might cause the transfer to timeout.  
+-
+ dit(bf(--ignore-errors)) Tells --delete to go ahead and delete files
+ even when there are I/O errors.
+ 
