@@ -28,8 +28,8 @@ for the current dir because its name contained a slash.
 
 ..wayne..
 
---- exclude.c	14 May 2004 21:23:41 -0000	1.76
-+++ exclude.c	15 May 2004 07:01:28 -0000
+--- exclude.c	15 May 2004 19:31:13 -0000	1.77
++++ exclude.c	15 May 2004 20:03:30 -0000
 @@ -30,32 +30,89 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
@@ -81,16 +81,16 @@ for the current dir because its name contained a slash.
 + * NULL.  To add new local content, we insert the item after the tail item
 + * and update the tail (obviously, if "tail" was NULL, we insert it at the
 + * head).  To clear the local list, WE MUST NOT FREE THE INHERITED CONTENT
-+ * because it is shared between the current list and all our parent list(s).
-+ * The easiest way to avoid this is to simply truncate the list after the
-+ * tail item and free the local list from the head.  When inheriting the
-+ * list for a new local dir, we just save off the exclude_list_struct values
-+ * and set the tail to NULL.
++ * because it is shared between the current list and our parent list(s).
++ * The easiest way to handle this is to simply truncate the list after the
++ * tail item and then free the local list from the head.  When inheriting
++ * the list for a new local dir, we just save off the exclude_list_struct
++ * values (so we can pop back to them) and set the tail to NULL.
 + */
 +
 +/** Build an exclude structure given an exclude pattern. */
 +static void make_exclude(struct exclude_list_struct *listp, const char *pat,
-+			 unsigned int pat_len, int mflags)
++			 unsigned int pat_len, unsigned int mflags)
  {
  	struct exclude_struct *ret;
  	const char *cp;
@@ -158,7 +158,8 @@ for the current dir because its name contained a slash.
  	}
  
  	for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
- 		ret->slash_cnt++;
+-		ret->slash_cnt++;
++		ret->u.slash_cnt++;
  
 -	if (!listp->tail)
 +	if (!listp->tail) {
@@ -180,10 +181,10 @@ for the current dir because its name contained a slash.
 +			out_of_memory("make_exclude");
 +		lp = &local_lists.array[ndx];
 +		lp->head = lp->tail = NULL;
++		lp->parent = ret;
 +		if (asprintf(&lp->debug_type, "per-dir %s ", ret->pattern) < 0)
 +			out_of_memory("make_exclude");
-+		lp->parent = ret;
-+		ret->slash_cnt = ndx;
++		ret->u.array_index = ndx; /* Overwrites u.slash_cnt. */
 +	}
 +
 +	ret->match_flags = mflags;
@@ -204,7 +205,7 @@ for the current dir because its name contained a slash.
 -		free_exclude(ent);
 +	if (listp->tail) {
 +		struct exclude_struct *ent, *next;
-+		/* Truncate any extra parent items from local list. */
++		/* Truncate any inherited items from the local list. */
 +		listp->tail->next = NULL;
 +		for (ent = listp->head; ent; ent = next) {
 +			next = ent->next;
@@ -246,13 +247,13 @@ for the current dir because its name contained a slash.
 +				who_am_i(), listp->debug_type);
 +		}
 +		if (listp->parent->match_flags & MATCHFLG_CVSIGNORE) {
++			listp->head = NULL; /* Subdirs don't inherit rules. */
 +			flags = XFLG_WORD_SPLIT | XFLG_WORDS_ONLY;
-+			listp->head = NULL; /* Subdirs don't get our rules. */
 +		} else {
 +			flags = listp->parent->match_flags & MATCHFLG_INCLUDE
 +			    ? XFLG_DEF_INCLUDE : 0;
 +		}
-+		listp->tail = NULL;
++		listp->tail = NULL; /* Signals no local content. */
 +		if (strlcpy(fname +  offset, file, MAXPATHLEN - offset)
 +		    < MAXPATHLEN - offset)
 +			add_exclude_file(listp, fname, flags);
@@ -287,6 +288,15 @@ for the current dir because its name contained a slash.
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
+@@ -121,7 +269,7 @@ static int check_one_exclude(char *name,
+ 	/* If the pattern does not have any slashes AND it does not have
+ 	 * a "**" (which could match a slash), then we just match the
+ 	 * name portion of the path. */
+-	if (!ex->slash_cnt && !(ex->match_flags & MATCHFLG_WILD2)) {
++	if (!ex->u.slash_cnt && !(ex->match_flags & MATCHFLG_WILD2)) {
+ 		if ((p = strrchr(name,'/')) != NULL)
+ 			name = p+1;
+ 	}
 @@ -134,7 +282,8 @@ static int check_one_exclude(char *name,
  
  	if (!name[0]) return 0;
@@ -297,6 +307,18 @@ for the current dir because its name contained a slash.
  
  	if (*pattern == '/') {
  		match_start = 1;
+@@ -146,9 +295,9 @@ static int check_one_exclude(char *name,
+ 	if (ex->match_flags & MATCHFLG_WILD) {
+ 		/* A non-anchored match with an infix slash and no "**"
+ 		 * needs to match the last slash_cnt+1 name elements. */
+-		if (!match_start && ex->slash_cnt &&
++		if (!match_start && ex->u.slash_cnt &&
+ 		    !(ex->match_flags & MATCHFLG_WILD2)) {
+-			int cnt = ex->slash_cnt + 1;
++			int cnt = ex->u.slash_cnt + 1;
+ 			for (p = name + strlen(name) - 1; p >= name; p--) {
+ 				if (*p == '/' && !--cnt)
+ 					break;
 @@ -201,9 +350,11 @@ static void report_exclude_result(char c
  
  	if (verbose >= 2) {
@@ -317,7 +339,7 @@ for the current dir because its name contained a slash.
  	for (ent = listp->head; ent; ent = ent->next) {
 +		if (ent->match_flags & MATCHFLG_MERGE_FILE) {
 +			struct exclude_list_struct *lp
-+			    = &local_lists.array[ent->slash_cnt];
++			    = &local_lists.array[ent->u.array_index];
 +			int rc = check_exclude(lp, name, name_is_dir);
 +			if (rc)
 +				return rc;
@@ -336,12 +358,13 @@ for the current dir because its name contained a slash.
   * the list-clearing "!" token.
   */
 -static const char *get_exclude_tok(const char *p, int *len_ptr, int *incl_ptr,
-+static const char *get_exclude_tok(const char *p, int *len_ptr, int *flag_ptr,
- 				   int xflags)
+-				   int xflags)
++static const char *get_exclude_tok(const char *p, unsigned int *len_ptr,
++				   unsigned int *flag_ptr, int xflags)
  {
  	const unsigned char *s = (const unsigned char *)p;
 -	int len;
-+	int len, mflags = 0;
++	unsigned int len, mflags = 0;
  
  	if (xflags & XFLG_WORD_SPLIT) {
  		/* Skip over any initial whitespace. */
@@ -387,11 +410,11 @@ for the current dir because its name contained a slash.
  		 int xflags)
  {
 -	int pat_len, incl;
-+	int pat_len, mflags;
++	unsigned int pat_len, mflags;
  	const char *cp;
  
  	if (!pattern)
-@@ -287,27 +453,49 @@ void add_exclude(struct exclude_list_str
+@@ -287,27 +453,56 @@ void add_exclude(struct exclude_list_str
  	cp = pattern;
  	pat_len = 0;
  	while (1) {
@@ -420,8 +443,11 @@ for the current dir because its name contained a slash.
 +		}
 +		if (mflags & MATCHFLG_MERGE_FILE) {
 +			char name[MAXPATHLEN];
-+			if ((unsigned) pat_len >= sizeof name)
-+				continue; /* XXX complain? */
++			if (pat_len >= sizeof name) {
++				rprintf(FERROR,
++					"merge filename too long: %s\n", cp);
++				continue;
++			}
 +			strlcpy(name, cp, pat_len+1);
 +			if (strchr(name, '/') != NULL) {
 +				if (sanitize_paths)
@@ -431,8 +457,12 @@ for the current dir because its name contained a slash.
 +				else {
 +					if (strlcpy(dirbuf + dirbuf_offset,
 +					    name, MAXPATHLEN - dirbuf_offset)
-+					    >= MAXPATHLEN - dirbuf_offset)
-+						continue; /* XXX complain? */
++					    >= MAXPATHLEN - dirbuf_offset) {
++						rprintf(FERROR,
++						    "merge filename too long: %s...\n",
++						    dirbuf);
++						continue;
++					}
 +					cp = dirbuf;
 +				}
 +				add_exclude_file(listp, cp,
@@ -452,7 +482,7 @@ for the current dir because its name contained a slash.
  	}
  }
  
-@@ -383,15 +571,19 @@ void send_exclude_list(int f)
+@@ -389,15 +584,19 @@ void send_exclude_list(int f)
  		l = strlcpy(p, ent->pattern, sizeof p);
  		if (l == 0 || l >= MAXPATHLEN)
  			continue;
@@ -475,7 +505,7 @@ for the current dir because its name contained a slash.
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -432,6 +624,7 @@ void add_cvs_excludes(void)
+@@ -438,6 +637,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -483,8 +513,8 @@ for the current dir because its name contained a slash.
  	add_exclude(&exclude_list, default_cvsignore,
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
---- flist.c	14 May 2004 21:23:41 -0000	1.222
-+++ flist.c	15 May 2004 07:01:28 -0000
+--- flist.c	15 May 2004 19:31:10 -0000	1.223
++++ flist.c	15 May 2004 20:03:31 -0000
 @@ -39,8 +39,6 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -547,7 +577,7 @@ for the current dir because its name contained a slash.
  	char *p;
  
  	d = opendir(dir);
-@@ -989,18 +974,7 @@ static void send_directory(int f, struct
+@@ -988,18 +973,7 @@ static void send_directory(int f, struct
  		offset++;
  	}
  
@@ -567,9 +597,9 @@ for the current dir because its name contained a slash.
  
  	for (errno = 0, di = readdir(d); di; errno = 0, di = readdir(d)) {
  		char *dname = d_name(di);
-@@ -1021,6 +995,8 @@ static void send_directory(int f, struct
- 		rprintf(FERROR, "readdir(%s): (%d) %s\n",
- 			dir, errno, strerror(errno));
+@@ -1019,6 +993,8 @@ static void send_directory(int f, struct
+ 		io_error |= IOERR_GENERAL;
+ 		rsyserr(FERROR, errno, "readdir(%s)", dir);
  	}
 +
 +	pop_local_excludes(save_excludes);
@@ -577,8 +607,8 @@ for the current dir because its name contained a slash.
  	closedir(d);
  }
 --- rsync.h	13 May 2004 18:51:22 -0000	1.203
-+++ rsync.h	15 May 2004 07:01:29 -0000
-@@ -493,18 +493,21 @@ struct map_struct {
++++ rsync.h	15 May 2004 20:03:31 -0000
+@@ -493,18 +493,24 @@ struct map_struct {
  #define MATCHFLG_WILD2		(1<<1) /* pattern has '**' */
  #define MATCHFLG_WILD2_PREFIX	(1<<2) /* pattern starts with '**' */
  #define MATCHFLG_ABS_PATH	(1<<3) /* path-match on absolute path */
@@ -590,10 +620,15 @@ for the current dir because its name contained a slash.
  struct exclude_struct {
  	struct exclude_struct *next;
  	char *pattern;
- 	int match_flags;
+-	int match_flags;
 -	int include;
 -	int directory;
- 	int slash_cnt;
+-	int slash_cnt;
++	unsigned int match_flags;
++	union {
++		int slash_cnt;
++		int array_index;
++	} u;
  };
  
  struct exclude_list_struct {
@@ -605,7 +640,7 @@ for the current dir because its name contained a slash.
  };
  
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	15 May 2004 07:01:29 -0000
++++ rsync.yo	15 May 2004 20:03:32 -0000
 @@ -1075,6 +1075,72 @@ itemize(
    it would be excluded by the "*")
  )
@@ -619,11 +654,11 @@ for the current dir because its name contained a slash.
 +
 +itemize(
 +  it() If the filename has no slashes in it, it is a per-directory merge;
-+  rsync scans every directory that is traversed and merges the named file's
-+  contents (when it exists), putting the contents of each subdirectory's
-+  file at the start of this per-directory sub-list (so subdirectories
-+  inherit the contents of their parent directories by default, but each
-+  subdirectory's rules have precedence over the parent's rules).
++  rsync scans every directory that it traverses for the named file, merging
++  its contents (when it exists) file at the start of this per-directory
++  sub-list (subdirectories inherit the contents of their parent directories
++  by default, and each subdirectory's rules have precedence over the parent
++  directory's rules).
 +
 +  it() If a filename has a slash in it, it is a single-instance merge; the
 +  named file's contents will be merged into the current exclude file,
@@ -634,12 +669,12 @@ for the current dir because its name contained a slash.
 +
 +Note also that you can eliminate all the inherited rules for the current
 +per-directory ruleset by putting the list-clearing token (!) in the file.
-+This clears only the rules of the current per-directory sub-list (up
-+through the token) and only for the current directory and its
++This only clears the rules for the current per-directory sub-list (up
++through the ! token) and only for the current directory and its
 +subdirectories.
 +
-+Here's an example. Specify the file that holds this set of rules via a
-+normal --exclude-from option:
++Here's an example exclude file (which you'd specify via the normal
++--exclude-from option):
 +
 +verb(
 +    . /home/user/.global_excludes
@@ -656,7 +691,7 @@ for the current dir because its name contained a slash.
 +
 +Additionally, you can affect where the --cvs-exclude (-C) option's
 +inclusion of a per-directory .cvsignore file gets placed into your rules by
-+adding an explicit a merge rule for ".cvsignore".  For instance, specifying
++adding an explicit merge rule for ".cvsignore".  For instance, specifying
 +this:
 +
 +verb(
