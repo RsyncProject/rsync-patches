@@ -1259,7 +1259,7 @@ local instead of inherited (see also the 'n' modifier).
  
  struct exclude_list_struct {
 --- orig/rsync.yo	2005-01-15 04:36:32
-+++ rsync.yo	2005-01-16 22:49:57
++++ rsync.yo	2005-01-17 07:02:43
 @@ -361,6 +361,9 @@ verb(
   -P                          equivalent to --partial --progress
   -z, --compress              compress file data
@@ -1354,16 +1354,16 @@ local instead of inherited (see also the 'n' modifier).
  rule for this directory exclusion somewhere higher up in the list so that
  it has a high enough priority to be effective (e.g., if your rules specify
  a trailing --exclude=* rule, the auto-added rule will be ineffective).
-@@ -1108,30 +1139,310 @@ page describing the options available fo
+@@ -1108,30 +1139,318 @@ page describing the options available fo
  
  enddit()
  
 -manpagesection(EXCLUDE PATTERNS)
--
--The exclude and include patterns specified to rsync allow for flexible
--selection of which files to transfer and which files to skip.
 +manpagesection(FILTER RULES)
  
+-The exclude and include patterns specified to rsync allow for flexible
+-selection of which files to transfer and which files to skip.
+-
 -Rsync builds an ordered list of include/exclude options as specified on
 -the command line. Rsync checks each file and directory 
 -name against each exclude/include pattern in turn. The first matching
@@ -1399,8 +1399,9 @@ local instead of inherited (see also the 'n' modifier).
 +)
 +
 +The 'x' is a single-letter that specifies the kind of rule to create.  It
-+can have trailing options, and is separated from the RULE by either a
-+single space or an equal-sign.  Here are the available rule prefixes:
++can have trailing options, and is separated from the RULE by one of the
++following characters: a single space, an equal-sign (=), or an underscore
++(_).  Here are the available rule prefixes:
 +
 +verb(
 +  -  specifies an exclude pattern.
@@ -1488,8 +1489,8 @@ local instead of inherited (see also the 'n' modifier).
 +This fails because the parent directory "some" is excluded by the '*'
 +rule, so rsync never visits any of the files in the "some" or "some/path"
 +directories.  One solution is to ask for all directories in the hierarchy
-+to be included by using a single rule: "+ */" (put it somewhere before the
-+"- *" rule).  Another solution is to add specific include rules for all
++to be included by using a single rule: "+_*/" (put it somewhere before the
++"-_*" rule).  Another solution is to add specific include rules for all
 +the parent dirs that need to be visited.  For instance, this set of rules
 +works fine:
 +
@@ -1547,21 +1548,28 @@ local instead of inherited (see also the 'n' modifier).
 +The following modifiers are accepted after the "." or ":":
 +
 +itemize(
-+  it() A "-" or "+" specifies that the file should consist of only
-+  exclude (-) or include (+) patterns, with no other rule-parsing except
-+  for the list-clearing token ("!").
++  it() A "-" specifies that the file should consist of only exclude
++  patterns, with no other rule-parsing except for the list-clearing
++  token ("!").
++
++  it() A "+" specifies that the file should consist of only include
++  patterns, with no other rule-parsing except for the list-clearing
++  token ("!").
 +
 +  it() A "C" is a shorthand for the modifiers "sn-", which makes the
 +  parsing compatible with the way CVS parses their exclude files.  If no
 +  filename is specified, ".cvsignore" is assumed.
 +
 +  it() A "e" will exclude the merge-file from the transfer; e.g.
-+  ":e\ .rules" is like ":\ .rules" and "-\ .rules".
++  ":e_.rules" is like ":_.rules" and "-_.rules".
 +
 +  it() An "n" specifies that the rules are not inherited by subdirectories.
 +
 +  it() An "s" specifies that the rules are split on all whitespace instead
-+  of the normal line-splitting.  It also turns off comments.
++  of the normal line-splitting.  This also turns off comments.  Note: the
++  space that separates the prefix from the rule is treated specially, so
++  "- foo + bar" is parsed as two rules (assuming that "-" or "+" was not
++  specified to turn off the parsing of prefixes).
 +)
 +
 +Per-directory rules are inherited in all subdirectories of the directory
@@ -1627,7 +1635,7 @@ local instead of inherited (see also the 'n' modifier).
 +
 +If you want to include the contents of a ".cvsignore" in your patterns,
 +you should use the rule ":C" -- this is a short-hand for the rule
-+":sn-\ .cvsignore", and ensures that the .cvsignore file's contents are
++":sn-_.cvsignore", and ensures that the .cvsignore file's contents are
 +interpreted according to the same parsing rules that CVS uses.  You can
 +use this to affect where the --cvs-exclude (-C) option's inclusion of the
 +per-directory .cvsignore file gets placed into your rules by putting a
@@ -1681,7 +1689,7 @@ local instead of inherited (see also the 'n' modifier).
  
  Let's say that we want to match two source files, one with an absolute
  path of "/home/me/foo/bar", and one with a path of "/home/you/bar/baz".
-@@ -1163,114 +1474,59 @@ verb(
+@@ -1163,114 +1482,59 @@ verb(
     Target file: /dest/you/bar/baz
  )
  
@@ -1703,9 +1711,14 @@ local instead of inherited (see also the 'n' modifier).
 -Note also that the --include and --exclude options take one pattern
 -each. To add multiple patterns use the --include-from and
 ---exclude-from options or multiple --include and --exclude options. 
--
++manpagesection(PER-DIRECTORY RULES AND DELETE)
+ 
 -The patterns can take several forms. The rules are:
--
++Without a delete option, per-directory rules are only relevant on the
++sending side, so you can feel free to exclude the merge files themselves
++without affecting the transfer.  To make this easy, the 'e' modifier adds
++this exclude for you, as seen in these two equivalent commands:
+ 
 -itemize(
 -
 -  it() if the pattern starts with a / then it is matched against the
@@ -1725,15 +1738,10 @@ local instead of inherited (see also the 'n' modifier).
 -  it() if the pattern contains a wildcard character from the set
 -  *?[ then expression matching is applied using the shell filename
 -  matching rules. Otherwise a simple string match is used.
-+manpagesection(PER-DIRECTORY RULES AND DELETE)
- 
+-
 -  it() the double asterisk pattern "**" will match slashes while a
 -  single asterisk pattern "*" will stop at slashes.
-+Without a delete option, per-directory rules are only relevant on the
-+sending side, so you can feel free to exclude the merge files themselves
-+without affecting the transfer.  To make this easy, the 'e' modifier adds
-+this exclude for you, as seen in these two equivalent commands:
- 
+-
 -  it() if the pattern contains a / (not counting a trailing /) or a "**"
 -  then it is matched against the full filename, including any leading
 -  directory. If the pattern doesn't contain a / or a "**", then it is
@@ -1834,7 +1842,7 @@ local instead of inherited (see also the 'n' modifier).
  )
  
  manpagesection(BATCH MODE)
-@@ -1439,7 +1695,7 @@ it. The most common cause is incorrectly
+@@ -1439,7 +1703,7 @@ it. The most common cause is incorrectly
  scripts (such as .cshrc or .profile) that contain output statements
  for non-interactive logins.
  
@@ -1843,6 +1851,25 @@ local instead of inherited (see also the 'n' modifier).
  try specifying the -vv option.  At this level of verbosity rsync will
  show why each individual file is included or excluded.
  
+--- orig/rsyncd.conf.yo	2005-01-01 21:11:01
++++ rsyncd.conf.yo	2005-01-17 06:49:39
+@@ -208,6 +208,16 @@ file transfers to and from that module s
+ was run as root. This complements the "uid" option. The default is gid -2,
+ which is normally the group "nobody".
+ 
++dit(bf(filter)) The "filter" option allows you to specify a space-separated
++list of filter rules that the server will not allow to be read or written.
++This is only superficially equivalent to the client specifying these
++patterns with the --filter option.  Only one "filter" option may be
++specified, but it may contain as many rules as you like, including
++merge-file rules.  Note that per-directory merge-file rules do not provide
++as much protection as global rules, but they can be used to make --delete
++work better when a client downloads the server's files (if the per-dir
++merge files are included in the transfer).
++
+ dit(bf(exclude)) The "exclude" option allows you to specify a
+ space-separated list of patterns that the server will not allow to be read
+ or written.  This is only superficially equivalent to the client
 --- orig/testsuite/exclude.test	2004-05-29 21:25:45
 +++ testsuite/exclude.test	2005-01-17 06:19:10
 @@ -23,19 +23,50 @@ export HOME CVSIGNORE
