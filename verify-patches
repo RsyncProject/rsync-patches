@@ -11,12 +11,14 @@ from inside the patches subdir.
 EOT
 }
 
-$ENV{'TZ'} = 'GMT';
+$ENV{'TZ'} = 'UTC';
+my $CONF_OPTS = '-C';
 
-my($has_dependencies, @new);
+my($has_dependencies, @new, @rejects);
 
 END {
     &restore_cvsdir;
+    system "rsync -a --delete cvsdir/ workdir/" if -d 'cvsdir';
 };
 
 my $root;
@@ -24,14 +26,13 @@ open(IN, '../CVS/Root') or die $!;
 chomp($root = <IN>);
 close IN;
 
-my $tmpdir = ',tmp-for-patch-tests';
-
-mkdir($tmpdir, 0777) unless -d $tmpdir;
-chdir($tmpdir) or die "Unable to chdir to $tmpdir";
+mkdir('tmp', 0777) unless -d 'tmp';
+chdir('tmp') or die "Unable to chdir to 'tmp'";
 
 mkdir('workdir') unless -d 'workdir';
 open(OUT, '>exclude') or die $!;
 print OUT <<EOT;
+CVS
 proto.h
 configure
 config.h.in
@@ -40,7 +41,7 @@ rsyncd.conf.5
 EOT
 close OUT;
 
-print "Using CVS to update the $tmpdir/cvsdir copy of the source.\n";
+print "Using CVS to update the tmp/cvsdir copy of the source.\n";
 system qq|cvs -d "$root" co -d cvsdir rsync|;
 
 @ARGV = glob('../*.diff') unless @ARGV;
@@ -58,7 +59,7 @@ foreach my $diff (@ARGV) {
 	    my $dep = $1;
 	    $has_dependencies = 1;
 	    print "\nApplying dependency patch $dep\n";
-	    if (system("patch -d cvsdir -p0 -b -Vt -Z <../$dep") != 0) {
+	    if (system("patch -d cvsdir -p0 -b -Vt -Zf <../$dep") != 0) {
 		print "Unable to cleanly apply depenency patch -- skipping $diff\n";
 		&restore_cvsdir;
 		next DIFF;
@@ -67,63 +68,72 @@ foreach my $diff (@ARGV) {
     }
     close IN;
 
-    my $apply = 1;
-    my(@rejects, $default);
+    my $default = apply_patch($diff);
+
     while (1) {
-	print "\n----------- $diff ------------\n";
-	if ($apply) {
-	    undef @new;
-	    $default = 'N';
-	    system "rsync -a --delete cvsdir/ workdir";
-	    open(IN, "patch -d workdir -p0 --no-backup-if-mismatch -Z <../$diff |") or die $!;
-	    while (<IN>) {
-		print $_;
-		chomp;
-		if (s/^patching file //) {
-		    push(@new, $_) unless -f "cvsdir/$_";
-		} elsif (s/.* saving rejects to file //) {
-		    push(@rejects, $_);
-		} elsif (/^Hunk #\d+ FAILED/) {
-		    $default = 'F';
-		} elsif (/^Hunk #\d+ succeeded/) {
-		    $default = 'E' unless $default eq 'F';
-		}
-	    }
-	    close IN;
-	    if ($default eq 'N') {
-		generate_new_patch($diff);
-		if (system("diff ../$diff new.patch >/dev/null") == 0) {
-		    print "\n(New patch is identical to old.)\n";
-		}
-	    }
-	    $apply = 0;
-	}
-	print "\nFix rejects, Edit both diffs, Update patch,\n",
-	    "Apply patch again, Next, Quit: [$default] ";
+	print "\n----------- $diff ------------\n",
+	    "\nFix rejects, Diff create, Edit both diffs, Update patch,\n",
+	    "Apply patch again, !(CMD), Build rsync, Next, Quit: [$default] ";
 	my $ans = <STDIN>;
 	chomp $ans;
-	$ans = $default unless $ans =~ s/^(\w)/$1/;
-	if ($ans =~ /E/i) {
-	    generate_new_patch($diff);
+	$ans = $default if $ans eq '';
+	if ($ans =~ /^!(.*)/) {
+	    my $cmd = $1 || $ENV{'SHELL'};
 	    chdir('workdir') or die $!;
-	    system "vim -d ../../$diff ../new.patch";
+	    system $cmd;
 	    chdir('..') or die $!;
-	    $default = 'U';
-	} elsif ($ans =~ /F/i) {
+	    $default = 'D,E';
+	    next;
+	}
+	if ($ans =~ /^\S*F/i) {
 	    chdir('workdir') or die $!;
 	    system "vim @rejects";
 	    chdir('..') or die $!;
-	    $default = 'E';
-	} elsif ($ans =~ /U/i) {
+	    $default = 'D,E';
+	}
+	if ($ans =~ /^\S*D/i) {
+	    $default = generate_new_patch($diff);
+	}
+	if ($ans =~ /^\S*E/i) {
+	    chdir('workdir') or die $!;
+	    system "vim -d ../../$diff ../new.patch";
+	    chdir('..') or die $!;
+	    $default = 'U,A';
+	}
+	if ($ans =~ /^\S*U/i) {
 	    system "cp -p new.patch ../$diff";
 	    print "\nUpdated $diff from new.patch\n";
 	    $default = 'A';
-	} elsif ($ans =~ /A/i) {
-	    $apply = 1;
-	} elsif ($ans =~ /N/i) {
-	    last;
-	} elsif ($ans =~ /Q/i) {
+	}
+	if ($ans =~ /^\S*A/i) {
+	    $default = apply_patch($diff);
+	}
+	if ($ans =~ /^\S*B/i) {
+	    if (!-f 'workdir/Makefile') {
+		open(IN, '../../Makefile') or die $!;
+		open(OUT, '>workdir/Makefile') or die $!;
+		print OUT "srcdir=.\n\n";
+		while (<IN>) {
+		    last if /^gen:/;
+		}
+		print OUT $_;
+		while (<IN>) {
+		    last if /^clean:/;
+		    print OUT $_;
+		}
+		close IN;
+		close OUT;
+	    }
+	    chdir('workdir') or die $!;
+	    system "make gen; ./configure $CONF_OPTS; make";
+	    chdir('..') or die $!;
+	    $default = '!make test';
+	}
+	if ($ans =~ /^\S*Q/i) {
 	    exit;
+	}
+	if ($ans =~ /^\S*N/i) {
+	    last;
 	}
     }
 
@@ -132,6 +142,35 @@ foreach my $diff (@ARGV) {
 
 exit;
 
+
+sub apply_patch
+{
+    my($diff) = @_;
+
+    undef @new;
+    my $def = 'N';
+    system "rsync -a --delete cvsdir/ workdir/";
+    print "\n";
+    open(IN, "patch -d workdir -p0 --no-backup-if-mismatch -Zf <../$diff |") or die $!;
+    while (<IN>) {
+	print $_;
+	chomp;
+	if (s/^patching file //) {
+	    push(@new, $_) unless -f "cvsdir/$_";
+	} elsif (s/.* saving rejects to file //) {
+	    push(@rejects, $_);
+	} elsif (/^Hunk #\d+ FAILED/) {
+	    $def = 'F';
+	} elsif (/^Hunk #\d+ succeeded/) {
+	    $def = 'E' unless $def eq 'F,D,E';
+	}
+    }
+    close IN;
+    if ($def eq 'N') {
+	generate_new_patch($diff);
+    }
+    $def;
+}
 
 sub generate_new_patch
 {
@@ -160,6 +199,11 @@ sub generate_new_patch
     foreach (@new) {
 	unlink("cvsdir/$_");
     }
+    if (system("diff ../$diff new.patch >/dev/null") == 0) {
+	print "\n(New patch is identical to old.)\n";
+	return 'N';
+    }
+    'E';
 }
 
 sub restore_cvsdir
