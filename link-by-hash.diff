@@ -365,7 +365,7 @@ the file's name.
 +}
 +
 +#endif
---- orig/options.c	2005-01-01 21:11:00
+--- orig/options.c	2005-01-15 21:23:15
 +++ options.c	2004-11-27 18:19:42
 @@ -128,6 +128,7 @@ char *log_format = NULL;
  char *password_file = NULL;
@@ -374,7 +374,7 @@ the file's name.
 +char *link_by_hash_dir = NULL;
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = 0;
- int copy_dest = 0;
+ int compare_dest = 0;
 @@ -288,6 +289,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
@@ -434,17 +434,17 @@ the file's name.
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
  		if (remote_filesfrom_file) {
  			args[ac++] = "--files-from";
---- orig/receiver.c	2005-01-01 21:11:00
-+++ receiver.c	2005-01-01 21:17:34
-@@ -40,6 +40,7 @@ extern int io_error;
+--- orig/receiver.c	2005-01-15 21:18:09
++++ receiver.c	2005-01-15 21:29:13
+@@ -38,6 +38,7 @@ extern int preserve_perms;
+ extern int cvs_exclude;
+ extern int io_error;
  extern char *tmpdir;
++extern char *link_by_hash_dir;
  extern char *partial_dir;
  extern char *basis_dir[];
-+extern char *link_by_hash_dir;
- extern int make_backups;
- extern int do_progress;
- extern char *backup_dir;
-@@ -203,12 +204,13 @@ static int get_tmpname(char *fnametmp, c
+ extern int basis_dir_cnt;
+@@ -204,12 +205,13 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -459,7 +459,7 @@ the file's name.
  	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -228,6 +230,9 @@ static int receive_data(int f_in, char *
+@@ -229,6 +231,9 @@ static int receive_data(int f_in, char *
  	} else
  		mapbuf = NULL;
  
@@ -469,7 +469,7 @@ the file's name.
  	sum_init(checksum_seed);
  
  	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -244,6 +249,8 @@ static int receive_data(int f_in, char *
+@@ -245,6 +250,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -478,7 +478,7 @@ the file's name.
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -270,6 +277,8 @@ static int receive_data(int f_in, char *
+@@ -271,6 +278,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -487,7 +487,7 @@ the file's name.
  		}
  
  		if (inplace) {
-@@ -310,6 +319,8 @@ static int receive_data(int f_in, char *
+@@ -311,6 +320,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_end(file_sum1);
@@ -496,7 +496,7 @@ the file's name.
  
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -325,7 +336,7 @@ static int receive_data(int f_in, char *
+@@ -326,7 +337,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -505,7 +505,7 @@ the file's name.
  }
  
  
-@@ -553,8 +564,12 @@ int recv_files(int f_in, struct file_lis
+@@ -559,8 +570,12 @@ int recv_files(int f_in, struct file_lis
  			rprintf(FINFO, "%s\n", safe_fname(fname));
  
  		/* recv file data */
@@ -519,7 +519,7 @@ the file's name.
  
  		log_recv(file, &initial_stats);
  
---- orig/rsync.c	2004-09-07 21:45:30
+--- orig/rsync.c	2005-01-10 09:50:46
 +++ rsync.c	2004-08-13 18:14:34
 @@ -34,6 +34,7 @@ extern int force_delete;
  extern int recurse;
@@ -529,7 +529,7 @@ the file's name.
  extern char *backup_dir;
  extern int inplace;
  
-@@ -254,7 +255,12 @@ void finish_transfer(char *fname, char *
+@@ -259,7 +260,12 @@ void finish_transfer(char *fname, char *
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
@@ -543,9 +543,9 @@ the file's name.
  	if (ret < 0) {
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
  		    ret == -2 ? "copy" : "rename",
---- orig/rsync.h	2005-01-01 21:11:01
+--- orig/rsync.h	2005-01-15 21:18:09
 +++ rsync.h	2004-07-03 20:20:15
-@@ -536,6 +536,14 @@ struct stats {
+@@ -538,6 +538,14 @@ struct stats {
  	int current_file_index;
  };
  
