@@ -1338,12 +1338,11 @@ ACLs to a non-ACL-supporting disk should complain.
  		return;
  	}
  
---- orig/lib/sysacls.c	2004-10-20 08:06:39
-+++ lib/sysacls.c	2004-10-20 08:06:39
-@@ -0,0 +1,3218 @@
+--- orig/lib/sysacls.c	2004-10-20 15:35:58
++++ lib/sysacls.c	2004-10-20 15:35:58
+@@ -0,0 +1,3217 @@
 +/* 
-+   Unix SMB/Netbios implementation.
-+   Version 2.2.
++   Unix SMB/CIFS implementation.
 +   Samba system utilities for ACL support.
 +   Copyright (C) Jeremy Allison 2000.
 +   
@@ -1369,6 +1368,18 @@ ACLs to a non-ACL-supporting disk should complain.
 +{
 +	if (mem)
 +		free(mem);
++}
++
++char *uidtoname(uid_t uid)
++{
++	static char idbuf[12];
++	struct passwd *pw;
++
++	if ((pw = getpwuid(uid)) == NULL) {
++		slprintf(idbuf, sizeof(idbuf)-1, "%ld", (long)uid);
++		return idbuf;
++	}
++	return pw->pw_name;
 +}
 +
 +/*
@@ -1995,13 +2006,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +				break;
 +
 +			case SMB_ACL_USER:
-+				if ((pw = getpwuid(ap->a_id)) == NULL) {
-+					snprintf(idbuf, sizeof(idbuf)-1, "%ld",
-+						(long)ap->a_id);
-+					id = idbuf;
-+				} else {
-+					id = pw->pw_name;
-+				}
++				id = uidtoname(ap->a_id);
 +			case SMB_ACL_USER_OBJ:
 +				tag = "user";
 +				break;
@@ -2554,7 +2559,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	 * can use the relative path.
 +	 */
 +
-+	return sys_acl_get_file(dos_to_unix_static(fsp->fsp_name), SMB_ACL_TYPE_ACCESS);
++	return sys_acl_get_file(fsp->fsp_name, SMB_ACL_TYPE_ACCESS);
 +}
 +
 +int sys_acl_clear_perms(SMB_ACL_PERMSET_T permset_d)
@@ -2632,13 +2637,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +				break;
 +
 +			case SMB_ACL_USER:
-+				if ((pw = getpwuid(ap->a_id)) == NULL) {
-+					snprintf(idbuf, sizeof(idbuf)-1, "%ld",
-+						(long)ap->a_id);
-+					id = idbuf;
-+				} else {
-+					id = pw->pw_name;
-+				}
++				id = uidtoname(ap->a_id);
 +			case SMB_ACL_USER_OBJ:
 +				tag = "user";
 +				break;
@@ -3244,7 +3243,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	 * can use the relative path.
 +	 */
 +
-+	return sys_acl_set_file(dos_to_unix_static(fsp->fsp_name), SMB_ACL_TYPE_ACCESS, acl_d);
++	return sys_acl_set_file(fsp->fsp_name, SMB_ACL_TYPE_ACCESS, acl_d);
 +}
 +
 +int sys_acl_delete_def_file(const char *path)
@@ -4453,13 +4452,13 @@ ACLs to a non-ACL-supporting disk should complain.
 +SMB_ACL_T sys_acl_get_file( const char *path_p, SMB_ACL_TYPE_T type)
 +{
 +	errno = ENOSYS;
-+	return 0;
++	return (SMB_ACL_T)NULL;
 +}
 +
 +SMB_ACL_T sys_acl_get_fd(int fd)
 +{
 +	errno = ENOSYS;
-+	return 0;
++	return (SMB_ACL_T)NULL;
 +}
 +
 +int sys_acl_clear_perms(SMB_ACL_PERMSET_T permset)
@@ -4559,10 +4558,11 @@ ACLs to a non-ACL-supporting disk should complain.
 +}
 +
 +#endif /* No ACLs. */
---- orig/lib/sysacls.h	2004-10-20 08:06:45
-+++ lib/sysacls.h	2004-10-20 08:06:45
-@@ -0,0 +1,24 @@
+--- orig/lib/sysacls.h	2004-10-20 15:31:22
++++ lib/sysacls.h	2004-10-20 15:31:22
+@@ -0,0 +1,25 @@
 +#define Realloc(mem, cnt)	realloc_array((mem), char, (cnt))
++#define slprintf snprintf
 +
 +int sys_acl_get_entry(SMB_ACL_T the_acl, int entry_id, SMB_ACL_ENTRY_T *entry_p);
 +int sys_acl_get_tag_type(SMB_ACL_ENTRY_T entry_d, SMB_ACL_TAG_T *tag_type_p);
