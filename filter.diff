@@ -89,8 +89,8 @@ that's how you can make rules local instead of inherited).
  	log_init();
  
 --- orig/exclude.c	2004-08-10 18:17:01
-+++ exclude.c	2004-08-11 17:26:00
-@@ -30,13 +30,68 @@ extern int verbose;
++++ exclude.c	2004-08-11 23:50:12
+@@ -30,13 +30,69 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
  extern int recurse;
@@ -117,6 +117,7 @@ that's how you can make rules local instead of inherited).
 + * of this path prefix.  The path is always absolute. */
 +static char dirbuf[MAXPATHLEN+1];
 +static unsigned int dirbuf_len = 0;
++static int dirbuf_depth;
 +
 +/* This is True when we're scanning parent dirs for per-dir merge-files. */
 +static BOOL parent_dirscan = False;
@@ -161,7 +162,7 @@ that's how you can make rules local instead of inherited).
  
  /** Build an exclude structure given an exclude pattern. */
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
-@@ -46,23 +101,50 @@ static void make_exclude(struct exclude_
+@@ -46,23 +102,50 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
@@ -218,7 +219,7 @@ that's how you can make rules local instead of inherited).
  	strlcpy(ret->pattern + ex_len, pat, pat_len + 1);
  	pat_len += ex_len;
  
-@@ -81,14 +163,40 @@ static void make_exclude(struct exclude_
+@@ -81,14 +164,40 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -263,7 +264,7 @@ that's how you can make rules local instead of inherited).
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +204,265 @@ static void make_exclude(struct exclude_
+@@ -96,22 +205,267 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -333,7 +334,7 @@ that's how you can make rules local instead of inherited).
 +			strlcpy(to, merge_file, *len_ptr + 1);
 +			merge_file = to;
 +		}
-+		if (!sanitize_path(fn, merge_file, r, dirbuf + module_dirlen)) {
++		if (!sanitize_path(fn, merge_file, r, dirbuf_depth)) {
 +			rprintf(FERROR, "merge-file name overflows: %s\n",
 +				merge_file);
 +			return NULL;
@@ -381,6 +382,8 @@ that's how you can make rules local instead of inherited).
 +		dirbuf_len -= 2;
 +	dirbuf[dirbuf_len++] = '/';
 +	dirbuf[dirbuf_len] = '\0';
++	if (sanitize_paths)
++		dirbuf_depth = count_dir_elements(dirbuf + module_dirlen);
 +}
 +
 +/* This routine takes a per-dir merge-file entry and finishes its setup.
@@ -535,7 +538,7 @@ that's how you can make rules local instead of inherited).
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -125,13 +476,14 @@ static int check_one_exclude(char *name,
+@@ -125,13 +479,14 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -553,7 +556,7 @@ that's how you can make rules local instead of inherited).
  		name = full_name;
  	}
  
-@@ -148,9 +500,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +503,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -565,7 +568,7 @@ that's how you can make rules local instead of inherited).
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +573,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +576,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -579,7 +582,7 @@ that's how you can make rules local instead of inherited).
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -253,11 +612,36 @@ static const char *get_exclude_tok(const
+@@ -253,11 +615,36 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -618,7 +621,7 @@ that's how you can make rules local instead of inherited).
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -273,6 +657,8 @@ static const char *get_exclude_tok(const
+@@ -273,6 +660,8 @@ static const char *get_exclude_tok(const
  
  	if (*p == '!' && len == 1 && !(xflags & XFLG_WORDS_ONLY))
  		mflags |= MATCHFLG_CLEAR_LIST;
@@ -627,7 +630,7 @@ that's how you can make rules local instead of inherited).
  
  	*len_ptr = len;
  	*flag_ptr = mflags;
-@@ -284,7 +670,7 @@ void add_exclude(struct exclude_list_str
+@@ -284,7 +673,7 @@ void add_exclude(struct exclude_list_str
  		 int xflags)
  {
  	unsigned int pat_len, mflags;
@@ -636,7 +639,7 @@ that's how you can make rules local instead of inherited).
  
  	if (!pattern)
  		return;
-@@ -292,9 +678,15 @@ void add_exclude(struct exclude_list_str
+@@ -292,9 +681,15 @@ void add_exclude(struct exclude_list_str
  	cp = pattern;
  	pat_len = 0;
  	while (1) {
@@ -652,7 +655,7 @@ that's how you can make rules local instead of inherited).
  
  		if (mflags & MATCHFLG_CLEAR_LIST) {
  			if (verbose > 2) {
-@@ -306,13 +698,24 @@ void add_exclude(struct exclude_list_str
+@@ -306,13 +701,24 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -683,7 +686,7 @@ that's how you can make rules local instead of inherited).
  	}
  }
  
-@@ -321,7 +724,7 @@ void add_exclude_file(struct exclude_lis
+@@ -321,7 +727,7 @@ void add_exclude_file(struct exclude_lis
  		      int xflags)
  {
  	FILE *fp;
@@ -692,7 +695,7 @@ that's how you can make rules local instead of inherited).
  	char *eob = line + sizeof line - 1;
  	int word_split = xflags & XFLG_WORD_SPLIT;
  
-@@ -342,6 +745,12 @@ void add_exclude_file(struct exclude_lis
+@@ -342,6 +748,12 @@ void add_exclude_file(struct exclude_lis
  		}
  		return;
  	}
@@ -705,7 +708,7 @@ that's how you can make rules local instead of inherited).
  
  	while (1) {
  		char *s = line;
-@@ -402,7 +811,21 @@ void send_exclude_list(int f)
+@@ -402,7 +814,21 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -728,7 +731,7 @@ that's how you can make rules local instead of inherited).
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +866,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +869,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -736,8 +739,8 @@ that's how you can make rules local instead of inherited).
  	add_exclude(&exclude_list, default_cvsignore,
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
---- orig/flist.c	2004-08-05 21:57:29
-+++ flist.c	2004-08-10 17:20:11
+--- orig/flist.c	2004-08-11 23:42:23
++++ flist.c	2004-08-11 23:41:35
 @@ -39,10 +39,9 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -779,34 +782,7 @@ that's how you can make rules local instead of inherited).
  		return 1;
  	return 0;
  }
-@@ -573,7 +566,7 @@ void receive_file_entry(struct file_stru
- 	clean_fname(thisname);
- 
- 	if (sanitize_paths)
--		sanitize_path(thisname, thisname, NULL);
-+		sanitize_path(thisname, thisname, "", NULL);
- 
- 	if ((basename = strrchr(thisname, '/')) != NULL) {
- 		dirname_len = ++basename - thisname; /* counts future '\0' */
-@@ -671,7 +664,7 @@ void receive_file_entry(struct file_stru
- 		file->u.link = bp;
- 		read_sbuf(f, bp, linkname_len - 1);
- 		if (sanitize_paths)
--			sanitize_path(bp, bp, lastdir);
-+			sanitize_path(bp, bp, "", lastdir);
- 		bp += linkname_len;
- 	}
- #endif
-@@ -761,7 +754,7 @@ struct file_struct *make_file(char *fnam
- 	}
- 	clean_fname(thisname);
- 	if (sanitize_paths)
--		sanitize_path(thisname, thisname, NULL);
-+		sanitize_path(thisname, thisname, "", NULL);
- 
- 	memset(sum, 0, SUM_LENGTH);
- 
-@@ -954,15 +947,7 @@ void send_file_name(int f, struct file_l
+@@ -956,15 +949,7 @@ void send_file_name(int f, struct file_l
  
  	if (recursive && S_ISDIR(file->mode)
  	    && !(file->flags & FLAG_MOUNT_POINT)) {
@@ -822,7 +798,7 @@ that's how you can make rules local instead of inherited).
  	}
  }
  
-@@ -973,6 +958,7 @@ static void send_directory(int f, struct
+@@ -975,6 +960,7 @@ static void send_directory(int f, struct
  	struct dirent *di;
  	char fname[MAXPATHLEN];
  	unsigned int offset;
@@ -830,7 +806,7 @@ that's how you can make rules local instead of inherited).
  	char *p;
  
  	d = opendir(dir);
-@@ -996,18 +982,7 @@ static void send_directory(int f, struct
+@@ -998,18 +984,7 @@ static void send_directory(int f, struct
  		offset++;
  	}
  
@@ -850,7 +826,7 @@ that's how you can make rules local instead of inherited).
  
  	for (errno = 0, di = readdir(d); di; errno = 0, di = readdir(d)) {
  		char *dname = d_name(di);
-@@ -1028,6 +1003,8 @@ static void send_directory(int f, struct
+@@ -1030,6 +1005,8 @@ static void send_directory(int f, struct
  		rsyserr(FERROR, errno, "readdir(%s)", dir);
  	}
  
@@ -859,7 +835,7 @@ that's how you can make rules local instead of inherited).
  	closedir(d);
  }
  
-@@ -1047,6 +1024,7 @@ struct file_list *send_file_list(int f, 
+@@ -1049,6 +1026,7 @@ struct file_list *send_file_list(int f, 
  	char *p, *dir, olddir[sizeof curr_dir];
  	char lastpath[MAXPATHLEN] = "";
  	struct file_list *flist;
@@ -867,7 +843,7 @@ that's how you can make rules local instead of inherited).
  	int64 start_write;
  	int use_ff_fd = 0;
  
-@@ -1067,6 +1045,10 @@ struct file_list *send_file_list(int f, 
+@@ -1069,6 +1047,10 @@ struct file_list *send_file_list(int f, 
  				exit_cleanup(RERR_FILESELECT);
  			}
  			use_ff_fd = 1;
@@ -878,23 +854,7 @@ that's how you can make rules local instead of inherited).
  		}
  	}
  
-@@ -1077,13 +1059,13 @@ struct file_list *send_file_list(int f, 
- 		if (use_ff_fd) {
- 			if (read_filesfrom_line(filesfrom_fd, fname) == 0)
- 				break;
--			sanitize_path(fname, fname, NULL);
-+			sanitize_path(fname, fname, "", NULL);
- 		} else {
- 			if (argc-- == 0)
- 				break;
- 			strlcpy(fname, *argv++, MAXPATHLEN);
- 			if (sanitize_paths)
--				sanitize_path(fname, fname, NULL);
-+				sanitize_path(fname, fname, "", NULL);
- 		}
- 
- 		l = strlen(fname);
-@@ -1097,6 +1079,15 @@ struct file_list *send_file_list(int f, 
+@@ -1099,6 +1081,15 @@ struct file_list *send_file_list(int f, 
  			}
  		}
  
@@ -910,8 +870,8 @@ that's how you can make rules local instead of inherited).
  		if (link_stat(fname, &st, keep_dirlinks) != 0) {
  			if (f != -1) {
  				io_error |= IOERR_GENERAL;
---- orig/options.c	2004-08-05 21:57:29
-+++ options.c	2004-08-09 18:22:26
+--- orig/options.c	2004-08-11 23:42:23
++++ options.c	2004-08-11 23:40:34
 @@ -287,6 +287,7 @@ void usage(enum logcode F)
    rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
    rprintf(F,"     --include-from=FILE     don't exclude patterns listed in FILE\n");
@@ -940,30 +900,6 @@ that's how you can make rules local instead of inherited).
  		case 'P':
  			do_progress = 1;
  			keep_partial = 1;
-@@ -728,17 +735,17 @@ int parse_arguments(int *argc, const cha
- 	if (sanitize_paths) {
- 		int i;
- 		for (i = *argc; i-- > 0; )
--			(*argv)[i] = sanitize_path(NULL, (*argv)[i], NULL);
-+			(*argv)[i] = sanitize_path(NULL, (*argv)[i], "", NULL);
- 		if (tmpdir)
--			tmpdir = sanitize_path(NULL, tmpdir, "");
-+			tmpdir = sanitize_path(NULL, tmpdir, NULL, NULL);
- 		if (partial_dir)
--			partial_dir = sanitize_path(NULL, partial_dir, "");
-+			partial_dir = sanitize_path(NULL, partial_dir, NULL, NULL);
- 		if (compare_dest)
--			compare_dest = sanitize_path(NULL, compare_dest, "");
-+			compare_dest = sanitize_path(NULL, compare_dest, NULL, NULL);
- 		if (backup_dir)
--			backup_dir = sanitize_path(NULL, backup_dir, "");
-+			backup_dir = sanitize_path(NULL, backup_dir, NULL, NULL);
- 		if (files_from)
--			files_from = sanitize_path(NULL, files_from, "");
-+			files_from = sanitize_path(NULL, files_from, NULL, NULL);
- 	}
- 	if (server_exclude_list.head && !am_sender) {
- 		struct exclude_list_struct *elp = &server_exclude_list;
 --- orig/rsync.h	2004-08-03 15:41:32
 +++ rsync.h	2004-08-08 06:07:01
 @@ -108,6 +108,7 @@
@@ -994,8 +930,8 @@ that's how you can make rules local instead of inherited).
  };
  
  struct exclude_list_struct {
---- orig/rsync.yo	2004-08-03 15:34:32
-+++ rsync.yo	2004-08-10 17:17:33
+--- orig/rsync.yo	2004-08-11 17:26:27
++++ rsync.yo	2004-08-11 17:32:03
 @@ -335,6 +335,7 @@ verb(
       --include=PATTERN       don't exclude files matching PATTERN
       --include-from=FILE     don't exclude patterns listed in FILE
@@ -1358,72 +1294,3 @@ that's how you can make rules local instead of inherited).
 +
  # The script would have aborted on error, so getting here means we've won.
  exit 0
---- orig/util.c	2004-08-09 21:07:10
-+++ util.c	2004-08-09 21:07:25
-@@ -524,7 +524,7 @@ static void glob_expand_one(char *s, cha
- 		s = ".";
- 
- 	if (sanitize_paths)
--		s = sanitize_path(NULL, s, NULL);
-+		s = sanitize_path(NULL, s, "", NULL);
- 	else
- 		s = strdup(s);
- 
-@@ -706,18 +706,16 @@ unsigned int clean_fname(char *name)
-  * "/" (either removing it or expanding it) and any leading or embedded
-  * ".." components that attempt to escape past the module's top dir.
-  *
-- * If dest is NULL, a buffer is allocated to hold the result.  If dest is
-- * the same buffer as p (the path) OR if reldir is NULL, a leading slash
-- * is dropped instead of being expanded to be the module's top dir.
-+ * If dest is NULL, a buffer is allocated to hold the result.  It is legal
-+ * to call with the dest and the path (p) pointing to the same buffer, but
-+ * rootdir is ignored to avoid expansion of the string.
-+ *
-+ * The rootdir string contains a value to use in place of a leading slash.
-+ * Specify NULL to get the default of lp_path(module_id).
-  *
-  * If reldir is non-NULL (and non-empty), it is a sanitized directory that
-  * the path will be relative to, so allow as many '..'s at the beginning of
-- * the path as there are components in reldir.  This is used for symbolic
-- * link targets.  If reldir is non-null and the path began with "/", to be
-- * completely like a chroot we should add in depth levels of ".." at the
-- * beginning of the path, but that would blow the assumption that the path
-- * doesn't grow and it is not likely to end up being a valid symlink
-- * anyway, so just do the normal removal of the leading "/" instead.
-+ * the path as there are components in reldir.
-  *
-  * While we're at it, remove double slashes and "." components like
-  * clean_fname() does, but DON'T remove a trailing slash because that is
-@@ -725,7 +723,8 @@ unsigned int clean_fname(char *name)
-  *
-  * If the resulting path would be empty, change it into ".".
-  */
--char *sanitize_path(char *dest, const char *p, const char *reldir)
-+char *sanitize_path(char *dest, const char *p, const char *rootdir,
-+		    const char *reldir)
- {
- 	char *start, *sanp;
- 	int depth = 0;
-@@ -734,8 +733,10 @@ char *sanitize_path(char *dest, const ch
- 
- 	if (dest != p) {
- 		int plen = strlen(p);
--		if (*p == '/' && reldir) {
--			rlen = strlen(lp_path(module_id));
-+		if (*p == '/') {
-+			if (!rootdir)
-+				rootdir = lp_path(module_id);
-+			rlen = strlen(rootdir);
- 			reldir = NULL;
- 			p++;
- 		}
-@@ -745,7 +746,7 @@ char *sanitize_path(char *dest, const ch
- 		} else if (!(dest = new_array(char, rlen + plen + 1)))
- 			out_of_memory("sanitize_path");
- 		if (rlen) {
--			memcpy(dest, lp_path(module_id), rlen);
-+			memcpy(dest, rootdir, rlen);
- 			if (rlen > 1)
- 				dest[rlen++] = '/';
- 		}
