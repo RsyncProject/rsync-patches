@@ -30,7 +30,7 @@ for the current dir because its name contained a slash.
 ..wayne..
 
 --- exclude.c	22 May 2004 05:32:20 -0000	1.82
-+++ exclude.c	22 May 2004 19:32:12 -0000
++++ exclude.c	24 May 2004 00:44:00 -0000
 @@ -30,13 +30,56 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
@@ -332,7 +332,7 @@ for the current dir because its name contained a slash.
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -306,11 +495,42 @@ void add_exclude(struct exclude_list_str
+@@ -306,11 +495,52 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -345,11 +345,19 @@ for the current dir because its name contained a slash.
 +			}
 +			strlcpy(name, cp, pat_len+1);
 +			if (strchr(name, '/') != NULL) {
-+				if (sanitize_paths)
-+					sanitize_path(name, curr_dir);
-+				if (*name == '/')
-+					cp = name;
-+				else {
++				char *mem = NULL;
++				if (*name == '/') {
++					if (sanitize_paths) {
++						mem = alloc_sanitize_path(name,
++								curr_dir);
++						cp = mem;
++					} else
++						cp = name;
++				} else {
++					if (sanitize_paths) {
++						dirbuf[dirbuf_offset] = '\0';
++						sanitize_path(name, dirbuf);
++					}
 +					if (strlcpy(dirbuf + dirbuf_offset,
 +					    name, MAXPATHLEN - dirbuf_offset)
 +					    >= MAXPATHLEN - dirbuf_offset) {
@@ -361,7 +369,9 @@ for the current dir because its name contained a slash.
 +					cp = dirbuf;
 +				}
 +				add_exclude_file(listp, cp,
-+				    xflags | XFLG_FATAL_ERRORS);
++						 xflags | XFLG_FATAL_ERRORS);
++				if (mem)
++					free(mem);
 +				continue;
 +			}
 +		}
@@ -376,7 +386,19 @@ for the current dir because its name contained a slash.
  				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
  		}
  	}
-@@ -402,7 +622,11 @@ void send_exclude_list(int f)
+@@ -343,6 +573,11 @@ void add_exclude_file(struct exclude_lis
+ 		return;
+ 	}
+ 
++	if (verbose > 2) {
++		rprintf(FINFO, "[%s] add_exclude_file(%s)\n",
++			who_am_i(), fname);
++	}
++
+ 	while (1) {
+ 		char *s = line;
+ 		int ch, overflow = 0;
+@@ -402,7 +637,11 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -389,7 +411,7 @@ for the current dir because its name contained a slash.
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +667,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +682,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -398,7 +420,7 @@ for the current dir because its name contained a slash.
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
 --- flist.c	21 May 2004 23:22:14 -0000	1.225
-+++ flist.c	22 May 2004 19:32:12 -0000
++++ flist.c	24 May 2004 00:44:00 -0000
 @@ -39,8 +39,6 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -491,7 +513,7 @@ for the current dir because its name contained a slash.
  }
  
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	22 May 2004 19:32:13 -0000
++++ rsync.h	24 May 2004 00:44:02 -0000
 @@ -496,11 +496,16 @@ struct map_struct {
  #define MATCHFLG_INCLUDE	(1<<4) /* this is an include, not an exclude */
  #define MATCHFLG_DIRECTORY	(1<<5) /* this matches only directories */
@@ -511,7 +533,7 @@ for the current dir because its name contained a slash.
  
  struct exclude_list_struct {
 --- rsync.yo	21 May 2004 09:44:32 -0000	1.170
-+++ rsync.yo	22 May 2004 19:32:13 -0000
++++ rsync.yo	24 May 2004 00:44:02 -0000
 @@ -1090,6 +1090,74 @@ itemize(
    it would be excluded by the "*")
  )
@@ -587,59 +609,59 @@ for the current dir because its name contained a slash.
  manpagesection(BATCH MODE)
  
  bf(Note:) Batch mode should be considered experimental in this version
---- testsuite/exclude.test	22 May 2004 19:29:53 -0000	1.7
-+++ testsuite/exclude.test	22 May 2004 19:32:13 -0000
-@@ -24,19 +24,47 @@ echo home-cvs-exclude >"$scratchdir"/.cv
+--- testsuite/exclude.test	24 May 2004 00:16:07 -0000	1.8
++++ testsuite/exclude.test	24 May 2004 00:44:02 -0000
+@@ -23,19 +23,47 @@ export HOME CVSIGNORE
  makepath "$fromdir/foo/down/to/you"
  makepath "$fromdir/bar/down/to/foo/too"
  makepath "$fromdir/mid/for/foo/and/that/is/who"
-+cat <<EOT >"$fromdir/.excl"
++cat >"$fromdir/.excl" <<EOF
 +.excl
 +*.bak
 +*.old
 +*.junk
-+EOT
++EOF
  echo kept >"$fromdir/foo/file1"
  echo removed >"$fromdir/foo/file2"
  echo cvsout >"$fromdir/foo/file2.old"
-+cat <<EOT >"$fromdir/foo/.excl"
++cat >"$fromdir/foo/.excl" <<EOF
 ++ .excl
 +- file1
-+EOT
-+cat <<EOT >"$fromdir/bar/.excl"
++EOF
++cat >"$fromdir/bar/.excl" <<EOF
 +home-cvs-exclude
 +. .excl2
 ++ to
-+EOT
++EOF
  echo cvsout >"$fromdir/bar/down/to/home-cvs-exclude"
-+cat <<EOT >"$fromdir/bar/down/to/.excl2"
++cat >"$fromdir/bar/down/to/.excl2" <<EOF
 +.excl2
-+EOT
++EOF
  echo keeper >"$fromdir/bar/down/to/foo/file1"
  echo cvsout >"$fromdir/bar/down/to/foo/file1.bak"
  echo gone >"$fromdir/bar/down/to/foo/file3"
  echo lost >"$fromdir/bar/down/to/foo/file4"
  echo cvsout >"$fromdir/bar/down/to/foo/file4.junk"
  echo smashed >"$fromdir/bar/down/to/foo/to"
-+cat <<EOT >"$fromdir/bar/down/to/foo/.excl2"
++cat >"$fromdir/bar/down/to/foo/.excl2" <<EOF
 ++ *.junk
-+EOT
++EOF
 +# This one should be ineffectual
-+cat <<EOT >"$fromdir/mid/.excl2"
++cat >"$fromdir/mid/.excl2" <<EOF
 +extra
-+EOT
++EOF
  echo cvsout >"$fromdir/mid/one-in-one-out"
  echo one-in-one-out >"$fromdir/mid/.cvsignore"
  echo cvsin >"$fromdir/mid/one-for-all"
-+cat <<EOT >"$fromdir/mid/.excl"
++cat >"$fromdir/mid/.excl" <<EOF
 +. .cvsignore
-+EOT
++EOF
  echo cvsin >"$fromdir/mid/for/one-in-one-out"
  echo expunged >"$fromdir/mid/for/foo/extra"
  echo retained >"$fromdir/mid/for/foo/keep"
-@@ -97,5 +125,24 @@ $RSYNC -av --existing --include='*/' --e
- checkit "$RSYNC -avvC --delete-excluded --exclude-from=$excl \
-     \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
+@@ -100,5 +128,24 @@ $RSYNC -av --existing --include='*/' --e
+ checkit "$RSYNC -avvC --exclude-from=\"$excl\" \
+     --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
  
 +# Modify the chk dir for our merge-exclude test and then tweak the dir times.
 +
@@ -657,8 +679,8 @@ for the current dir because its name contained a slash.
 +# Now, test if rsync excludes the same files, this time with a merge-exclude
 +# file.
 +
-+checkit "$RSYNC -avv --exclude='. .excl' --delete-excluded --exclude-from=$excl \
-+    \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
++checkit "$RSYNC -avv --exclude='. .excl' --exclude-from=\"$excl\" \
++    --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
 +
  # The script would have aborted on error, so getting here means we've won.
  exit 0
