@@ -5,7 +5,7 @@ command before "make":
 
 
 --- io.c	15 May 2004 19:31:10 -0000	1.121
-+++ io.c	15 May 2004 20:15:14 -0000
++++ io.c	21 May 2004 08:50:06 -0000
 @@ -222,6 +222,14 @@ static void read_msg_fd(void)
  		read_loop(fd, buf, 4);
  		redo_list_add(IVAL(buf,0));
@@ -21,11 +21,10 @@ command before "make":
  	case MSG_INFO:
  	case MSG_ERROR:
  	case MSG_LOG:
-@@ -635,6 +643,16 @@ static int read_unbuffered(int fd, char 
- 			}
+@@ -636,6 +644,16 @@ static int read_unbuffered(int fd, char 
  			read_loop(fd, buffer, remaining);
  			bufferIdx = 0;
-+			break;
+ 			break;
 +		case MSG_SUCCESS:
 +			if (remaining != 4) {
 +				rprintf(FERROR, "invalid multi-message %d:%ld\n",
@@ -35,11 +34,12 @@ command before "make":
 +			read_loop(fd, line, remaining);
 +			successful_send(IVAL(line, 0));
 +			remaining = 0;
- 			break;
++			break;
  		case MSG_INFO:
  		case MSG_ERROR:
---- main.c	15 May 2004 19:31:10 -0000	1.194
-+++ main.c	15 May 2004 20:15:15 -0000
+ 			if (remaining >= sizeof line) {
+--- main.c	19 May 2004 22:19:19 -0000	1.195
++++ main.c	21 May 2004 08:50:07 -0000
 @@ -42,6 +42,7 @@ extern int list_only;
  extern int local_server;
  extern int log_got_error;
@@ -48,7 +48,7 @@ command before "make":
  extern int orig_umask;
  extern int preserve_hard_links;
  extern int protocol_version;
-@@ -566,6 +567,8 @@ void start_server(int f_in, int f_out, i
+@@ -572,6 +573,8 @@ void start_server(int f_in, int f_out, i
  		io_start_multiplex_out(f_out);
  
  	if (am_sender) {
@@ -57,18 +57,18 @@ command before "make":
  		if (!read_batch) {
  			recv_exclude_list(f_in);
  			if (cvs_exclude)
-@@ -631,6 +634,9 @@ int client_run(int f_in, int f_out, pid_
- 		io_flush(FULL_FLUSH);
+@@ -638,6 +641,9 @@ int client_run(int f_in, int f_out, pid_
  		exit_cleanup(status);
  	}
-+
+ 
 +	if (need_messages_from_generator)
 +		io_start_multiplex_out(f_out);
- 
++
  	if (argc == 0)
  		list_only = 1;
+ 
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	15 May 2004 20:15:15 -0000
++++ options.c	21 May 2004 08:50:07 -0000
 @@ -84,6 +84,7 @@ int copy_unsafe_links = 0;
  int size_only = 0;
  int bwlimit = 0;
@@ -124,27 +124,27 @@ command before "make":
  		case OPT_EXCLUDE:
  			add_exclude(&exclude_list, poptGetOptArg(pc), 0);
  			break;
-@@ -964,6 +973,9 @@ void server_options(char **args,int *arg
- 			args[ac++] = "--from0";
+@@ -965,6 +974,9 @@ void server_options(char **args,int *arg
  		}
  	}
-+
+ 
 +	if (delete_sent_files)
 +		args[ac++] = "--delete-sent-files";
- 
++
  	*argc = ac;
  	return;
---- receiver.c	15 May 2004 19:31:10 -0000	1.78
-+++ receiver.c	15 May 2004 20:15:15 -0000
-@@ -46,6 +46,7 @@ extern int module_id;
- extern int ignore_errors;
+ 
+--- receiver.c	21 May 2004 08:27:04 -0000	1.79
++++ receiver.c	21 May 2004 08:50:07 -0000
+@@ -47,6 +47,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
+ extern int checksum_seed;
 +extern int delete_sent_files;
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -294,7 +295,7 @@ int recv_files(int f_in,struct file_list
+@@ -295,7 +296,7 @@ int recv_files(int f_in,struct file_list
  	char *fname, fbuf[MAXPATHLEN];
  	char template[MAXPATHLEN];
  	char fnametmp[MAXPATHLEN];
@@ -153,7 +153,7 @@ command before "make":
  	char fnamecmpbuf[MAXPATHLEN];
  	struct map_struct *mapbuf;
  	int i;
-@@ -476,16 +477,20 @@ int recv_files(int f_in,struct file_list
+@@ -477,16 +478,20 @@ int recv_files(int f_in,struct file_list
  
  		cleanup_disable();
  
@@ -178,8 +178,8 @@ command before "make":
  			}
  		}
  	}
---- rsync.h	13 May 2004 18:51:22 -0000	1.203
-+++ rsync.h	15 May 2004 20:15:15 -0000
+--- rsync.h	16 May 2004 07:28:24 -0000	1.204
++++ rsync.h	21 May 2004 08:50:07 -0000
 @@ -60,6 +60,7 @@
  #define FLAG_TOP_DIR (1<<0)
  #define FLAG_HLINK_EOL (1<<1)	/* generator only */
@@ -197,7 +197,7 @@ command before "make":
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	15 May 2004 20:15:16 -0000
++++ rsync.yo	21 May 2004 08:50:08 -0000
 @@ -312,6 +312,7 @@ verb(
       --delete                delete files that don't exist on sender
       --delete-excluded       also delete excluded files on receiver
@@ -206,20 +206,20 @@ command before "make":
       --ignore-errors         delete even if there are I/O errors
       --max-delete=NUM        don't delete more than NUM files
       --partial               keep partially transferred files
-@@ -596,6 +597,11 @@ dit(bf(--delete-after)) By default rsync
- receiving side before transferring files to try to ensure that there is
+@@ -597,6 +598,11 @@ receiving side before transferring files
  sufficient space on the receiving filesystem. If you want to delete
  after transferring, use the --delete-after switch. Implies --delete.
-+
+ 
 +dit(bf(--delete-sent-files)) This tells rsync to remove the source files
 +on the sending side that are successfully transferred to the receiving
 +side.  Directories are not removed, nor are files that are identical on
 +both systems.
- 
++
  dit(bf(--ignore-errors)) Tells --delete to go ahead and delete files
  even when there are I/O errors.
+ 
 --- sender.c	15 May 2004 19:31:10 -0000	1.40
-+++ sender.c	15 May 2004 20:15:16 -0000
++++ sender.c	21 May 2004 08:50:08 -0000
 @@ -27,6 +27,7 @@ extern int dry_run;
  extern int am_server;
  extern int am_daemon;

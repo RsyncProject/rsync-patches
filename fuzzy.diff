@@ -13,7 +13,7 @@ test suite, but otherwise UNTESTED.]
   Anyone who quotes me in their sig is an idiot. -- Rusty Russell.
 
 --- Makefile.in	15 May 2004 00:48:11 -0000	1.101
-+++ Makefile.in	15 May 2004 20:47:12 -0000
++++ Makefile.in	21 May 2004 09:10:37 -0000
 @@ -32,7 +32,7 @@ ZLIBOBJ=zlib/deflate.o zlib/infblock.o z
  	zlib/inflate.o zlib/inftrees.o zlib/infutil.o zlib/trees.o \
  	zlib/zutil.o zlib/adler32.o
@@ -23,17 +23,17 @@ test suite, but otherwise UNTESTED.]
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
  	fileio.o batch.o clientname.o
  OBJS3=progress.o pipe.o
---- generator.c	15 May 2004 19:31:10 -0000	1.83
-+++ generator.c	15 May 2004 20:47:12 -0000
+--- generator.c	18 May 2004 08:50:17 -0000	1.85
++++ generator.c	21 May 2004 09:10:37 -0000
 @@ -51,6 +51,7 @@ extern int list_only;
  extern int only_existing;
  extern int orig_umask;
  extern int safe_symlinks;
 +extern int fuzzy;
  
+ extern struct exclude_list_struct server_exclude_list;
  
- /* choose whether to skip a particular file */
-@@ -256,7 +257,61 @@ static void generate_and_send_sums(struc
+@@ -258,7 +259,61 @@ static void generate_and_send_sums(struc
  	}
  }
  
@@ -79,7 +79,7 @@ test suite, but otherwise UNTESTED.]
 +
 +	if (fd == -1 && compare_dest != NULL)
 +		fd = open_alternate_base_comparedir(fname);
- 
++
 +	if (fd == -1 && fuzzy)
 +		fd = open_alternate_base_fuzzy(fname);
 +
@@ -89,13 +89,13 @@ test suite, but otherwise UNTESTED.]
 +			rsyserr(FERROR, errno, "fstat %s", full_fname(fname));
 +		}
 +	}
-+
+ 
 +	return fd;
 +}
  
  /**
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -272,8 +327,6 @@ void recv_generator(char *fname, struct 
+@@ -274,8 +329,6 @@ void recv_generator(char *fname, struct 
  	STRUCT_STAT st;
  	struct map_struct *mapbuf;
  	int statret;
@@ -104,7 +104,7 @@ test suite, but otherwise UNTESTED.]
  
  	if (list_only)
  		return;
-@@ -400,107 +453,39 @@ void recv_generator(char *fname, struct 
+@@ -413,107 +466,39 @@ void recv_generator(char *fname, struct 
  	}
  #endif
  
@@ -176,19 +176,15 @@ test suite, but otherwise UNTESTED.]
 -	if (opt_ignore_existing && fnamecmp == fname) {
 -		if (verbose > 1)
 -			rprintf(FINFO,"%s exists\n",fname);
-+	if ((fd = open_base_file(file, fname, statret, &st)) == -2)
- 		return;
+-		return;
 -	}
- 
+-
 -	if (update_only && cmp_modtime(st.st_mtime,file->modtime)>0 && fnamecmp == fname) {
 -		if (verbose > 1)
 -			rprintf(FINFO,"%s is newer\n",fname);
 -		return;
-+	if ((disable_deltas_p() || dry_run) && fd != -1) {
-+		close(fd);
-+		fd = -1;
- 	}
- 
+-	}
+-
 -	if (skip_file(fname, file, &st)) {
 -		if (fnamecmp == fname)
 -			set_perms(fname, file, &st, PERMS_REPORT);
@@ -197,15 +193,19 @@ test suite, but otherwise UNTESTED.]
 -
 -	if (dry_run) {
 -		write_int(f_out,i);
--		return;
++	if ((fd = open_base_file(file, fname, statret, &st)) == -2)
+ 		return;
 -	}
--
+ 
 -	if (disable_deltas_p()) {
 -		write_int(f_out,i);
 -		write_sum_head(f_out, NULL);
 -		return;
--	}
--
++	if ((disable_deltas_p() || dry_run) && fd != -1) {
++		close(fd);
++		fd = -1;
+ 	}
+ 
 -	/* open the file */
 -	fd = do_open(fnamecmp, O_RDONLY, 0);
 -
@@ -232,7 +232,7 @@ test suite, but otherwise UNTESTED.]
  		return;
  	}
  
-@@ -510,7 +495,7 @@ void recv_generator(char *fname, struct 
+@@ -523,7 +508,7 @@ void recv_generator(char *fname, struct 
  		mapbuf = NULL;
  
  	if (verbose > 3) {
@@ -242,7 +242,7 @@ test suite, but otherwise UNTESTED.]
  	}
  
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	15 May 2004 20:47:13 -0000
++++ options.c	21 May 2004 09:10:37 -0000
 @@ -91,6 +91,7 @@ int ignore_errors = 0;
  int modify_window = 0;
  int blocking_io = -1;
@@ -267,27 +267,27 @@ test suite, but otherwise UNTESTED.]
    {"protocol",         0,  POPT_ARG_INT,    &protocol_version, 0, 0, 0 },
  #ifdef INET6
    {"ipv4",            '4', POPT_ARG_VAL,    &default_af_hint, AF_INET, 0, 0 },
-@@ -964,6 +967,9 @@ void server_options(char **args,int *arg
- 			args[ac++] = "--from0";
+@@ -965,6 +968,9 @@ void server_options(char **args,int *arg
  		}
  	}
-+
+ 
 +	if (fuzzy && am_sender)
 +		args[ac++] = "--fuzzy";
- 
++
  	*argc = ac;
  	return;
---- receiver.c	15 May 2004 19:31:10 -0000	1.78
-+++ receiver.c	15 May 2004 20:47:13 -0000
-@@ -46,6 +46,7 @@ extern int module_id;
- extern int ignore_errors;
+ 
+--- receiver.c	21 May 2004 08:27:04 -0000	1.79
++++ receiver.c	21 May 2004 09:10:37 -0000
+@@ -47,6 +47,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
+ extern int checksum_seed;
 +extern int fuzzy;
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -294,8 +295,6 @@ int recv_files(int f_in,struct file_list
+@@ -295,8 +296,6 @@ int recv_files(int f_in,struct file_list
  	char *fname, fbuf[MAXPATHLEN];
  	char template[MAXPATHLEN];
  	char fnametmp[MAXPATHLEN];
@@ -296,7 +296,7 @@ test suite, but otherwise UNTESTED.]
  	struct map_struct *mapbuf;
  	int i;
  	struct file_struct *file;
-@@ -358,35 +357,31 @@ int recv_files(int f_in,struct file_list
+@@ -359,35 +358,31 @@ int recv_files(int f_in,struct file_list
  		if (verbose > 2)
  			rprintf(FINFO,"recv_files(%s)\n",fname);
  
@@ -341,7 +341,7 @@ test suite, but otherwise UNTESTED.]
  			receive_data(f_in, NULL, -1, NULL, file->length);
  			close(fd1);
  			continue;
-@@ -407,8 +402,10 @@ int recv_files(int f_in,struct file_list
+@@ -408,8 +403,10 @@ int recv_files(int f_in,struct file_list
  
  		if (fd1 != -1 && st.st_size > 0) {
  			mapbuf = map_file(fd1,st.st_size);

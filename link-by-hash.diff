@@ -12,7 +12,7 @@ the file's name.
 
 
 --- Makefile.in	15 May 2004 00:48:11 -0000	1.101
-+++ Makefile.in	15 May 2004 20:29:17 -0000
++++ Makefile.in	21 May 2004 09:07:58 -0000
 @@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
@@ -23,7 +23,7 @@ the file's name.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ hashlink.c	15 May 2004 20:29:17 -0000
++++ hashlink.c	21 May 2004 09:07:59 -0000
 @@ -0,0 +1,342 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
@@ -368,7 +368,7 @@ the file's name.
 +
 +#endif
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	15 May 2004 20:29:17 -0000
++++ options.c	21 May 2004 09:07:59 -0000
 @@ -121,6 +121,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
@@ -422,29 +422,29 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -951,6 +967,11 @@ void server_options(char **args,int *arg
- 		 */
- 		args[ac++] = link_dest ? "--link-dest" : "--compare-dest";
+@@ -953,6 +969,11 @@ void server_options(char **args,int *arg
  		args[ac++] = compare_dest;
-+	}
-+
+ 	}
+ 
 +	if (link_by_hash_dir && am_sender) {
 +		args[ac++] = "--link-by-hash";
 +		args[ac++] = link_by_hash_dir;
- 	}
- 
++	}
++
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
---- receiver.c	15 May 2004 19:31:10 -0000	1.78
-+++ receiver.c	15 May 2004 20:29:17 -0000
-@@ -46,6 +46,7 @@ extern int module_id;
- extern int ignore_errors;
+ 		if (remote_filesfrom_file) {
+ 			args[ac++] = "--files-from";
+--- receiver.c	21 May 2004 08:27:04 -0000	1.79
++++ receiver.c	21 May 2004 09:07:59 -0000
+@@ -47,6 +47,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
+ extern int checksum_seed;
 +extern char *link_by_hash_dir;
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -192,10 +193,11 @@ static int get_tmpname(char *fnametmp, c
+@@ -193,10 +194,11 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in,struct map_struct *mapbuf,int fd,char *fname,
@@ -457,18 +457,17 @@ the file's name.
  	unsigned int len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -205,7 +207,9 @@ static int receive_data(int f_in,struct 
- 	char *map=NULL;
+@@ -207,6 +209,9 @@ static int receive_data(int f_in,struct 
  
  	read_sum_head(f_in, &sum);
--
+ 
 +	if (md4)
 +		mdfour_begin(&mdfour_data);
-+	
- 	sum_init();
++
+ 	sum_init(checksum_seed);
  
  	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -222,6 +226,8 @@ static int receive_data(int f_in,struct 
+@@ -223,6 +228,8 @@ static int receive_data(int f_in,struct 
  			cleanup_got_literal = 1;
  
  			sum_update(data,i);
@@ -477,7 +476,7 @@ the file's name.
  
  			if (fd != -1 && write_file(fd,data,i) != i) {
  				rsyserr(FERROR, errno, "write failed on %s",
-@@ -249,6 +255,8 @@ static int receive_data(int f_in,struct 
+@@ -250,6 +257,8 @@ static int receive_data(int f_in,struct 
  
  			see_token(map, len);
  			sum_update(map,len);
@@ -486,7 +485,7 @@ the file's name.
  		}
  
  		if (fd != -1 && write_file(fd,map,len) != (int) len) {
-@@ -271,6 +279,8 @@ static int receive_data(int f_in,struct 
+@@ -272,6 +281,8 @@ static int receive_data(int f_in,struct 
  	}
  
  	sum_end(file_sum1);
@@ -495,7 +494,7 @@ the file's name.
  
  	read_buf(f_in,file_sum2,MD4_SUM_LENGTH);
  	if (verbose > 2) {
-@@ -374,7 +384,7 @@ int recv_files(int f_in,struct file_list
+@@ -375,7 +386,7 @@ int recv_files(int f_in,struct file_list
  		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR, errno, "fstat %s failed",
  				full_fname(fnamecmp));
@@ -504,7 +503,7 @@ the file's name.
  			close(fd1);
  			continue;
  		}
-@@ -387,7 +397,7 @@ int recv_files(int f_in,struct file_list
+@@ -388,7 +399,7 @@ int recv_files(int f_in,struct file_list
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -513,7 +512,7 @@ the file's name.
  			close(fd1);
  			continue;
  		}
-@@ -439,7 +449,7 @@ int recv_files(int f_in,struct file_list
+@@ -440,7 +451,7 @@ int recv_files(int f_in,struct file_list
  		if (fd2 == -1) {
  			rsyserr(FERROR, errno, "mkstemp %s failed",
  				full_fname(fnametmp));
@@ -522,31 +521,30 @@ the file's name.
  			if (mapbuf) unmap_file(mapbuf);
  			if (fd1 != -1) close(fd1);
  			continue;
-@@ -452,7 +462,12 @@ int recv_files(int f_in,struct file_list
+@@ -453,7 +464,11 @@ int recv_files(int f_in,struct file_list
  		}
  
  		/* recv file data */
 -		recv_ok = receive_data(f_in,mapbuf,fd2,fname,file->length);
 +#ifdef HAVE_LINK
-+		if (link_by_hash_dir) {
-+			file->u.sum = (char*)malloc (MD4_SUM_LENGTH);
-+		}
++		if (link_by_hash_dir)
++			file->u.sum = (char*)malloc(MD4_SUM_LENGTH);
 +#endif
 +		recv_ok = receive_data(f_in,mapbuf,fd2,fname,file->length,file->u.sum);
  
  		log_recv(file, &initial_stats);
  
---- rsync.c	15 May 2004 19:31:10 -0000	1.139
-+++ rsync.c	15 May 2004 20:29:17 -0000
-@@ -31,6 +31,7 @@ extern int am_generator;
- extern int preserve_uid;
- extern int preserve_gid;
+--- rsync.c	21 May 2004 08:43:03 -0000	1.140
++++ rsync.c	21 May 2004 09:07:59 -0000
+@@ -34,6 +34,7 @@ extern int force_delete;
+ extern int recurse;
  extern int make_backups;
+ extern char *backup_dir;
 +extern char *link_by_hash_dir;
  
  
  /*
-@@ -236,8 +237,12 @@ void finish_transfer(char *fname, char *
+@@ -239,8 +240,12 @@ void finish_transfer(char *fname, char *
  	if (make_backups && !make_backup(fname))
  		return;
  
@@ -554,16 +552,16 @@ the file's name.
 -	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
 +#ifdef HAVE_LINK
 +	if (link_by_hash_dir)
-+		ret = link_by_hash(fnametmp,fname,file);
++		ret = link_by_hash(fnametmp, fname, file);
 +	else
 +#endif
 +		ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
  	if (ret < 0) {
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
  		    ret == -2 ? "copy" : "rename",
---- rsync.h	13 May 2004 18:51:22 -0000	1.203
-+++ rsync.h	15 May 2004 20:29:18 -0000
-@@ -521,6 +521,14 @@ struct stats {
+--- rsync.h	16 May 2004 07:28:24 -0000	1.204
++++ rsync.h	21 May 2004 09:07:59 -0000
+@@ -522,6 +522,14 @@ struct stats {
  	int current_file_index;
  };
  

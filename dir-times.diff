@@ -1,5 +1,5 @@
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	18 May 2004 09:48:58 -0000
++++ options.c	21 May 2004 08:54:54 -0000
 @@ -46,6 +46,7 @@ int preserve_devices = 0;
  int preserve_uid = 0;
  int preserve_gid = 0;
@@ -35,8 +35,8 @@
  	if (preserve_perms)
  		argstr[x++] = 'p';
  	if (recurse)
---- rsync.c	15 May 2004 19:31:10 -0000	1.139
-+++ rsync.c	18 May 2004 09:48:58 -0000
+--- rsync.c	21 May 2004 08:43:03 -0000	1.140
++++ rsync.c	21 May 2004 08:54:54 -0000
 @@ -25,6 +25,7 @@
  extern int verbose;
  extern int dry_run;
@@ -45,14 +45,15 @@
  extern int am_root;
  extern int am_sender;
  extern int am_generator;
-@@ -138,14 +139,16 @@ int set_perms(char *fname,struct file_st
+@@ -140,15 +141,16 @@ int set_perms(char *fname,struct file_st
  		st = &st2;
  	}
  
--	if (!preserve_times || S_ISLNK(st->st_mode))
+-	if (!preserve_times || S_ISLNK(st->st_mode)
+-	    || (make_backups && !backup_dir && S_ISDIR(st->st_mode)))
 -		flags |= PERMS_SKIP_MTIME;
 +	if (S_ISDIR(st->st_mode)) {
-+		if (!preserve_dir_times)
++		if (!preserve_dir_times || (make_backups && !backup_dir))
 +			flags |= PERMS_SKIP_MTIME;
 +	} else {
 +		if (!preserve_times || S_ISLNK(st->st_mode))
@@ -69,7 +70,7 @@
  				full_fname(fname));
  			return 0;
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	18 May 2004 09:48:58 -0000
++++ rsync.yo	21 May 2004 08:54:54 -0000
 @@ -298,7 +298,8 @@ verb(
   -o, --owner                 preserve owner (root only)
   -g, --group                 preserve group
@@ -80,7 +81,7 @@
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy whole files, no incremental checks
-@@ -538,13 +539,22 @@ dit(bf(-D, --devices)) This option cause
+@@ -538,14 +539,23 @@ dit(bf(-D, --devices)) This option cause
  block device information to the remote system to recreate these
  devices. This option is only available to the super-user.
  
@@ -93,7 +94,7 @@
  cause the next transfer to behave as if it used -I, and all files will have
  their checksums compared and show up in log messages even if they haven't
  changed.
-+
+ 
 +dit(bf(-d, --dir-times)) This tells rsync to preserve the modification
 +times of directories transferred to the remote system.  On a modern
 +rsync, these are left unpreserved by default to avoid causing problems
@@ -102,11 +103,12 @@
 +Note: when sending files to an older rsync, the --times option will
 +imply --dir-times (if the option causes an error on the receiving
 +system, omit it and use --times to preserve all file/directory times).
- 
++
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
+ 
 --- testsuite/chgrp.test	18 May 2004 00:41:35 -0000	1.11
-+++ testsuite/chgrp.test	18 May 2004 09:48:58 -0000
++++ testsuite/chgrp.test	21 May 2004 08:54:54 -0000
 @@ -26,7 +26,7 @@ do
  done
  sleep 2
@@ -117,7 +119,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/chown.test	18 May 2004 00:41:35 -0000	1.5
-+++ testsuite/chown.test	18 May 2004 09:48:58 -0000
++++ testsuite/chown.test	21 May 2004 08:54:55 -0000
 @@ -28,7 +28,7 @@ chown 5001 "$name2" || test_skipped "Can
  chgrp 5002 "$name1" || test_skipped "Can't chgrp (probably need root)"
  chgrp 5003 "$name2" || test_skipped "Can't chgrp (probably need root)"
@@ -128,7 +130,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/daemon-gzip-download.test	18 May 2004 00:41:51 -0000	1.7
-+++ testsuite/daemon-gzip-download.test	18 May 2004 09:48:58 -0000
++++ testsuite/daemon-gzip-download.test	21 May 2004 08:54:55 -0000
 @@ -29,9 +29,9 @@ export RSYNC_CONNECT_PROG
  hands_setup
  
@@ -142,7 +144,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/daemon-gzip-upload.test	18 May 2004 00:41:51 -0000	1.7
-+++ testsuite/daemon-gzip-upload.test	18 May 2004 09:48:58 -0000
++++ testsuite/daemon-gzip-upload.test	21 May 2004 08:54:55 -0000
 @@ -23,9 +23,9 @@ export RSYNC_CONNECT_PROG
  hands_setup
  
@@ -156,7 +158,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/devices.test	18 May 2004 00:41:35 -0000	1.8
-+++ testsuite/devices.test	18 May 2004 09:48:58 -0000
++++ testsuite/devices.test	21 May 2004 08:54:55 -0000
 @@ -29,7 +29,7 @@ mknod "$fromdir/block" b 42 69 || test_s
  mknod "$fromdir/block2" b 42 73 || test_skipped "Can't create block device node unless root"
  mknod "$fromdir/block3" b 105 73 || test_skipped "Can't create block device node unless root"
@@ -167,7 +169,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/duplicates.test	18 May 2004 00:41:35 -0000	1.10
-+++ testsuite/duplicates.test	18 May 2004 09:48:59 -0000
++++ testsuite/duplicates.test	21 May 2004 08:54:55 -0000
 @@ -33,7 +33,7 @@ ln -s "$name1" "$name2" || fail "can't c
  
  outfile="$scratchdir/rsync.out"
@@ -178,7 +180,7 @@
  
  # Make sure each file was only copied once...
 --- testsuite/exclude.test	18 May 2004 00:41:38 -0000	1.6
-+++ testsuite/exclude.test	18 May 2004 09:48:59 -0000
++++ testsuite/exclude.test	21 May 2004 08:54:55 -0000
 @@ -63,7 +63,7 @@ EOF
  
  # Create the chk dir with what we expect to be excluded
@@ -218,7 +220,7 @@
  
  # The script would have aborted on error, so getting here means we've won.
 --- testsuite/hands.test	18 May 2004 00:41:46 -0000	1.13
-+++ testsuite/hands.test	18 May 2004 09:48:59 -0000
++++ testsuite/hands.test	21 May 2004 08:54:55 -0000
 @@ -11,19 +11,19 @@ hands_setup
  
  # Main script starts here
@@ -245,7 +247,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/hardlinks.test	18 May 2004 00:41:40 -0000	1.5
-+++ testsuite/hardlinks.test	18 May 2004 09:48:59 -0000
++++ testsuite/hardlinks.test	21 May 2004 08:54:55 -0000
 @@ -31,7 +31,7 @@ ln "$name1" "$name2" || fail "Can't crea
  ln "$name2" "$name3" || fail "Can't create hardlink"
  cp "$name2" "$name4" || fail "Can't copy file"
@@ -256,7 +258,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/longdir.test	18 May 2004 09:47:42 -0000	1.11
-+++ testsuite/longdir.test	18 May 2004 09:48:59 -0000
++++ testsuite/longdir.test	21 May 2004 08:54:55 -0000
 @@ -18,7 +18,7 @@ makepath "$longdir" || test_skipped "una
  touch "$longdir/1" || test_skipped "unable to create files in long directory"
  date > "$longdir/1"
@@ -267,7 +269,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/merge.test	18 May 2004 00:41:38 -0000	1.6
-+++ testsuite/merge.test	18 May 2004 09:48:59 -0000
++++ testsuite/merge.test	21 May 2004 08:54:55 -0000
 @@ -40,9 +40,9 @@ cp -p "$from2dir"/sub1/uno "$from3dir"/s
  cp -p "$from3dir"/sub2/subby "$chkdir"/sub2
  
@@ -281,7 +283,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/ssh-basic.test	18 May 2004 00:41:46 -0000	1.7
-+++ testsuite/ssh-basic.test	18 May 2004 09:48:59 -0000
++++ testsuite/ssh-basic.test	21 May 2004 08:54:55 -0000
 @@ -28,7 +28,7 @@ fi
  # nothing to do.
  hands_setup
@@ -298,7 +300,7 @@
 -runtest "ssh: renamed file" 'checkit "$RSYNC --delete -avH -e ssh --rsync-path=$RSYNC \"$fromdir/\" \"localhost:$todir\"" "$fromdir/" "$todir"'
 +runtest "ssh: renamed file" 'checkit "$RSYNC --delete -advH -e ssh --rsync-path=$RSYNC \"$fromdir/\" \"localhost:$todir\"" "$fromdir/" "$todir"'
 --- testsuite/unsafe-links.test	18 May 2004 00:41:43 -0000	1.7
-+++ testsuite/unsafe-links.test	18 May 2004 09:48:59 -0000
++++ testsuite/unsafe-links.test	21 May 2004 08:54:55 -0000
 @@ -35,33 +35,33 @@ ln -s ../../unsafe/unsafefile "from/safe
  set -x
  

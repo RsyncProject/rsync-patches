@@ -1,28 +1,28 @@
 Patch from Mark Curtis to implement the --inplace option.
 
---- match.c	13 May 2004 06:46:20 -0000	1.61
-+++ match.c	15 May 2004 20:23:18 -0000
-@@ -22,6 +22,7 @@
- extern int verbose;
+--- match.c	21 May 2004 08:27:04 -0000	1.62
++++ match.c	21 May 2004 09:03:09 -0000
+@@ -23,6 +23,7 @@ extern int verbose;
  extern int am_server;
  extern int do_progress;
+ extern int checksum_seed;
 +extern int inplace;
  
  typedef unsigned short tag;
  
-@@ -197,6 +198,10 @@ static void hash_search(int f,struct sum
- 			/* also make sure the two blocks are the same length */
- 			l = MIN((OFF_T)s->blength, len-offset);
+@@ -200,6 +201,10 @@ static void hash_search(int f,struct sum
  			if (l != s->sums[i].len)
-+				continue;
-+
-+			/* if inplace, make sure the offset is greater than where we are */
-+			if (inplace && offset > s->sums[i].offset)
  				continue;
  
++			/* if inplace, make sure the offset is greater than where we are */
++			if (inplace && offset > s->sums[i].offset)
++				continue;
++
  			if (verbose > 3)
+ 				rprintf(FINFO,"potential match at %.0f target=%.0f %.0f sum=%08x\n",
+ 					(double)offset,(double)j,(double)i,sum);
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	15 May 2004 20:23:19 -0000
++++ options.c	21 May 2004 09:03:09 -0000
 @@ -91,6 +91,7 @@ int ignore_errors = 0;
  int modify_window = 0;
  int blocking_io = -1;
@@ -57,27 +57,27 @@ Patch from Mark Curtis to implement the --inplace option.
  	if (files_from) {
  		char *colon;
  		if (*argc != 2 && !(am_server && am_sender && *argc == 1)) {
-@@ -938,6 +944,9 @@ void server_options(char **args,int *arg
- 
+@@ -939,6 +945,9 @@ void server_options(char **args,int *arg
  	if (opt_ignore_existing && am_sender)
  		args[ac++] = "--ignore-existing";
-+
+ 
 +	if (inplace)
 +		args[ac++] = "--inplace";
- 
++
  	if (tmpdir) {
  		args[ac++] = "--temp-dir";
---- receiver.c	15 May 2004 19:31:10 -0000	1.78
-+++ receiver.c	15 May 2004 20:23:19 -0000
-@@ -46,6 +46,7 @@ extern int module_id;
- extern int ignore_errors;
+ 		args[ac++] = tmpdir;
+--- receiver.c	21 May 2004 08:27:04 -0000	1.79
++++ receiver.c	21 May 2004 09:03:09 -0000
+@@ -47,6 +47,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
+ extern int checksum_seed;
 +extern int inplace;
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -251,16 +252,28 @@ static int receive_data(int f_in,struct 
+@@ -252,16 +253,28 @@ static int receive_data(int f_in,struct 
  			sum_update(map,len);
  		}
  
@@ -110,7 +110,7 @@ Patch from Mark Curtis to implement the --inplace option.
  	if (do_progress)
  		end_progress(total_size);
  
-@@ -412,37 +425,50 @@ int recv_files(int f_in,struct file_list
+@@ -413,37 +426,50 @@ int recv_files(int f_in,struct file_list
  		} else
  			mapbuf = NULL;
  
@@ -189,30 +189,30 @@ Patch from Mark Curtis to implement the --inplace option.
  		}
  
  		cleanup_set(fnametmp, fname, file, mapbuf, fd1, fd2);
---- rsync.c	15 May 2004 19:31:10 -0000	1.139
-+++ rsync.c	15 May 2004 20:23:19 -0000
-@@ -31,6 +31,7 @@ extern int am_generator;
- extern int preserve_uid;
- extern int preserve_gid;
+--- rsync.c	21 May 2004 08:43:03 -0000	1.140
++++ rsync.c	21 May 2004 09:03:09 -0000
+@@ -34,6 +34,7 @@ extern int force_delete;
+ extern int recurse;
  extern int make_backups;
+ extern char *backup_dir;
 +extern int inplace;
  
  
  /*
-@@ -235,6 +236,11 @@ void finish_transfer(char *fname, char *
- 
+@@ -239,6 +240,11 @@ void finish_transfer(char *fname, char *
  	if (make_backups && !make_backup(fname))
  		return;
-+
+ 
 +	if (inplace) {
 +		set_perms(fname,file,NULL,0);
 +		return;
 +	}
- 
++
  	/* move tmp file over real file */
  	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
+ 	if (ret < 0) {
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	15 May 2004 20:23:20 -0000
++++ rsync.yo	21 May 2004 09:03:10 -0000
 @@ -289,6 +289,7 @@ verb(
       --backup-dir            make backups into this directory
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
@@ -221,11 +221,10 @@ Patch from Mark Curtis to implement the --inplace option.
   -l, --links                 copy symlinks as symlinks
   -L, --copy-links            copy the referent of all symlinks
       --copy-unsafe-links     copy the referent of "unsafe" symlinks
-@@ -477,6 +478,17 @@ is on the objects.  In other words, if t
- symlink where the destination has a file, the transfer would occur
+@@ -478,6 +479,17 @@ symlink where the destination has a file
  regardless of the timestamps.  This might change in the future (feel
  free to comment on this on the mailing list if you have an opinion).
-+
+ 
 +dit(bf(--inplace)) This causes rsync not to create a new copy of the file
 +and then move it into place.  Instead rsync will overwrite the existing
 +file, meaning that the rsync algorithm can't extract the full ammount of
@@ -236,6 +235,7 @@ Patch from Mark Curtis to implement the --inplace option.
 +
 +WARNING: If the transfer is interrupted, you will have an inconsistent file
 +and the transfer should be run again.
- 
++
  dit(bf(-l, --links)) When symlinks are encountered, recreate the
  symlink on the destination.
+ 

@@ -2,7 +2,7 @@ This patch from Sami Farin lets you specify --fsync if you want fsync()
 to be called on every file we write.
 
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	15 May 2004 20:20:27 -0000
++++ options.c	21 May 2004 08:59:11 -0000
 @@ -37,6 +37,7 @@ int make_backups = 0;
   **/
  int whole_file = -1;
@@ -27,59 +27,59 @@ to be called on every file we write.
    {"dry-run",         'n', POPT_ARG_NONE,   &dry_run, 0, 0, 0 },
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
    {"cvs-exclude",     'C', POPT_ARG_NONE,   &cvs_exclude, 0, 0, 0 },
-@@ -943,6 +946,9 @@ void server_options(char **args,int *arg
- 		args[ac++] = "--temp-dir";
+@@ -944,6 +947,9 @@ void server_options(char **args,int *arg
  		args[ac++] = tmpdir;
  	}
-+
+ 
 +	if (do_fsync && am_sender)
 +		args[ac++] = "--fsync";
- 
++
  	if (compare_dest && am_sender) {
  		/* the server only needs this option if it is not the sender,
---- receiver.c	15 May 2004 19:31:10 -0000	1.78
-+++ receiver.c	15 May 2004 20:20:27 -0000
-@@ -46,6 +46,7 @@ extern int module_id;
- extern int ignore_errors;
+ 		 *   and it may be an older version that doesn't know this
+--- receiver.c	21 May 2004 08:27:04 -0000	1.79
++++ receiver.c	21 May 2004 08:59:11 -0000
+@@ -47,6 +47,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
+ extern int checksum_seed;
 +extern int do_fsync;
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -266,6 +267,12 @@ static int receive_data(int f_in,struct 
+@@ -271,6 +272,12 @@ static int receive_data(int f_in,struct 
+ 		exit_cleanup(RERR_FILEIO);
+ 	}
  
- 	if (fd != -1 && offset > 0 && sparse_end(fd) != 0) {
- 		rsyserr(FERROR, errno, "write failed on %s",
++	if (do_fsync && (fd != -1) && (fsync(fd) != 0)) {
++		rsyserr(FERROR, errno, "fsync failed on %s",
 +			full_fname(fname));
 +		exit_cleanup(RERR_FILEIO);
 +	}
 +
-+	if (do_fsync && (fd != -1) && (fsync(fd) != 0)) {
-+		rsyserr(FERROR, errno, "fsync failed on %s",
- 			full_fname(fname));
- 		exit_cleanup(RERR_FILEIO);
- 	}
---- util.c	15 May 2004 19:31:10 -0000	1.143
-+++ util.c	15 May 2004 20:20:28 -0000
-@@ -29,6 +29,7 @@
+ 	sum_end(file_sum1);
  
- extern int verbose;
+ 	read_buf(f_in,file_sum2,MD4_SUM_LENGTH);
+--- util.c	21 May 2004 08:40:25 -0000	1.144
++++ util.c	21 May 2004 08:59:11 -0000
+@@ -32,6 +32,7 @@ extern int dry_run;
+ extern int module_id;
+ extern int modify_window;
  extern struct exclude_list_struct server_exclude_list;
 +extern int do_fsync;
  
  int sanitize_paths = 0;
  
-@@ -291,6 +292,12 @@ int copy_file(char *source, char *dest, 
+@@ -297,6 +298,12 @@ int copy_file(char *source, char *dest, 
+ 		return -1;
+ 	}
  
- 	if (close(ofd) < 0) {
- 		rsyserr(FERROR, errno, "close failed on %s",
++	if (do_fsync && fsync(ofd) < 0) {
++		rsyserr(FERROR, errno, "fsync failed on %s",
 +			full_fname(dest));
 +		return -1;
 +	}
 +
-+	if (do_fsync && fsync(ofd) < 0) {
-+		rsyserr(FERROR, errno, "fsync failed on %s",
- 			full_fname(dest));
- 		return -1;
- 	}
+ 	return 0;
+ }
+ 
