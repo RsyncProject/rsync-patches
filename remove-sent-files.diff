@@ -1,0 +1,306 @@
+--- io.c	16 Jan 2004 16:31:47 -0000	1.119
++++ io.c	23 Feb 2004 18:16:25 -0000
+@@ -222,6 +222,14 @@ static void read_msg_fd(void)
+ 		read_loop(fd, buf, 4);
+ 		redo_list_add(IVAL(buf,0));
+ 		break;
++	case MSG_SUCCESS:
++		if (len != 4) {
++			rprintf(FERROR, "invalid message %d:%d\n", tag, len);
++			exit_cleanup(RERR_STREAMIO);
++		}
++		read_loop(fd, buf, len);
++		io_multiplex_write(MSG_SUCCESS, buf, len);
++		break;
+ 	case MSG_INFO:
+ 	case MSG_ERROR:
+ 	case MSG_LOG:
+@@ -637,6 +645,16 @@ static int read_unbuffered(int fd, char 
+ 			}
+ 			read_loop(fd, buffer, remaining);
+ 			bufferIdx = 0;
++			break;
++		case MSG_SUCCESS:
++			if (remaining != 4) {
++				rprintf(FERROR, "invalid multi-message %d:%ld\n",
++					tag, (long)remaining);
++				exit_cleanup(RERR_STREAMIO);
++			}
++			read_loop(fd, line, remaining);
++			successful_send(IVAL(line, 0));
++			remaining = 0;
+ 			break;
+ 		case MSG_INFO:
+ 		case MSG_ERROR:
+--- main.c	10 Feb 2004 03:54:47 -0000	1.192
++++ main.c	23 Feb 2004 18:16:25 -0000
+@@ -42,6 +42,7 @@ extern int list_only;
+ extern int local_server;
+ extern int log_got_error;
+ extern int module_id;
++extern int need_messages_from_generator;
+ extern int orig_umask;
+ extern int preserve_hard_links;
+ extern int protocol_version;
+@@ -567,6 +568,8 @@ void start_server(int f_in, int f_out, i
+ 		io_start_multiplex_out(f_out);
+ 
+ 	if (am_sender) {
++		if (need_messages_from_generator)
++			io_start_multiplex_in(f_in);
+ 		if (!read_batch) {
+ 			recv_exclude_list(f_in);
+ 			if (cvs_exclude)
+@@ -632,6 +635,9 @@ int client_run(int f_in, int f_out, pid_
+ 		io_flush(FULL_FLUSH);
+ 		exit_cleanup(status);
+ 	}
++
++	if (need_messages_from_generator)
++		io_start_multiplex_out(f_out);
+ 
+ 	if (argc == 0) {
+ 		list_only = 1;
+--- options.c	22 Feb 2004 08:56:43 -0000	1.139
++++ options.c	23 Feb 2004 18:16:25 -0000
+@@ -82,6 +82,7 @@ int copy_unsafe_links = 0;
+ int size_only = 0;
+ int bwlimit = 0;
+ int delete_after = 0;
++int delete_sent_files = 0;
+ int only_existing = 0;
+ int opt_ignore_existing = 0;
+ int max_delete = 0;
+@@ -89,6 +90,7 @@ int ignore_errors = 0;
+ int modify_window = 0;
+ int blocking_io = -1;
+ int checksum_seed = 0;
++int need_messages_from_generator = 0;
+ unsigned int block_size = 0;
+ 
+ 
+@@ -252,6 +254,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
+   rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
+   rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
++  rprintf(F,"     --delete-sent-files     updated/sent files are removed from sending side\n");
+   rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
+   rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
+   rprintf(F,"     --partial               keep partially transferred files\n");
+@@ -301,8 +304,8 @@ void usage(enum logcode F)
+ }
+ 
+ enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+-      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
+-      OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
++      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_DELETE_SENT_FILES,
++      OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_LINK_DEST, OPT_MODIFY_WINDOW,
+       OPT_READ_BATCH, OPT_WRITE_BATCH,
+       OPT_REFUSED_BASE = 9000};
+ 
+@@ -321,6 +324,7 @@ static struct poptOption long_options[] 
+   {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
+   {"delete-after",     0,  POPT_ARG_NONE,   0,              OPT_DELETE_AFTER, 0, 0 },
+   {"delete-excluded",  0,  POPT_ARG_NONE,   0,              OPT_DELETE_EXCLUDED, 0, 0 },
++  {"delete-sent-files",0,  POPT_ARG_NONE,   0,              OPT_DELETE_SENT_FILES, 0, 0 },
+   {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
+   {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
+   {"exclude",          0,  POPT_ARG_STRING, 0,              OPT_EXCLUDE, 0, 0 },
+@@ -506,6 +510,11 @@ int parse_arguments(int *argc, const cha
+ 			delete_mode = 1;
+ 			break;
+ 
++		case OPT_DELETE_SENT_FILES:
++			delete_sent_files = 1;
++			need_messages_from_generator = 1;
++			break;
++
+ 		case OPT_EXCLUDE:
+ 			add_exclude(&exclude_list, poptGetOptArg(pc),
+ 				    ADD_EXCLUDE);
+@@ -945,6 +954,9 @@ void server_options(char **args,int *arg
+ 			args[ac++] = "--from0";
+ 		}
+ 	}
++
++	if (delete_sent_files)
++		args[ac++] = "--delete-sent-files";
+ 
+ 	*argc = ac;
+ 	return;
+--- proto.h	17 Feb 2004 23:13:06 -0000	1.184
++++ proto.h	23 Feb 2004 18:16:25 -0000
+@@ -199,6 +199,7 @@ void sig_int(void);
+ void finish_transfer(char *fname, char *fnametmp, struct file_struct *file);
+ const char *who_am_i(void);
+ void read_sum_head(int f, struct sum_struct *sum);
++void successful_send(int i);
+ void send_files(struct file_list *flist, int f_out, int f_in);
+ int try_bind_local(int s, int ai_family, int ai_socktype,
+ 		   const char *bind_address);
+--- receiver.c	10 Feb 2004 17:28:59 -0000	1.72
++++ receiver.c	23 Feb 2004 18:16:26 -0000
+@@ -39,6 +39,7 @@ extern char *backup_dir;
+ extern char *backup_suffix;
+ extern int backup_suffix_len;
+ extern int cleanup_got_literal;
++extern int delete_sent_files;
+ 
+ static void delete_one(char *fn, int is_dir)
+ {
+@@ -288,7 +289,7 @@ int recv_files(int f_in,struct file_list
+ 	char *fname, fbuf[MAXPATHLEN];
+ 	char template[MAXPATHLEN];
+ 	char fnametmp[MAXPATHLEN];
+-	char *fnamecmp;
++	char *fnamecmp, numbuf[4];
+ 	char fnamecmpbuf[MAXPATHLEN];
+ 	struct map_struct *mapbuf;
+ 	int i;
+@@ -467,16 +468,20 @@ int recv_files(int f_in,struct file_list
+ 
+ 		cleanup_disable();
+ 
+-		if (!recv_ok) {
++		if (recv_ok) {
++			if (delete_sent_files) {
++				SIVAL(numbuf, 0, i);
++				send_msg(MSG_SUCCESS, numbuf, 4);
++			}
++		} else {
+ 			if (csum_length == SUM_LENGTH) {
+ 				rprintf(FERROR,"ERROR: file corruption in %s. File changed during transfer?\n",
+ 					full_fname(fname));
+ 			} else {
+-				char buf[4];
+ 				if (verbose > 1)
+ 					rprintf(FINFO,"redoing %s(%d)\n",fname,i);
+-				SIVAL(buf, 0, i);
+-				send_msg(MSG_REDO, buf, 4);
++				SIVAL(numbuf, 0, i);
++				send_msg(MSG_REDO, numbuf, 4);
+ 			}
+ 		}
+ 	}
+--- rsync.1	2 Feb 2004 18:23:09 -0000	1.163
++++ rsync.1	23 Feb 2004 18:16:26 -0000
+@@ -349,6 +349,7 @@ to the detailed description below for a 
+      --delete                delete files that don\&'t exist on sender
+      --delete-excluded       also delete excluded files on receiver
+      --delete-after          receiver deletes after transfer, not before
++     --delete-sent-files     updated/sent files are removed from sender
+      --ignore-errors         delete even if there are I/O errors
+      --max-delete=NUM        don\&'t delete more than NUM files
+      --partial               keep partially transferred files
+@@ -673,6 +674,12 @@ By default rsync does file deletions on 
+ receiving side before transferring files to try to ensure that there is
+ sufficient space on the receiving filesystem\&. If you want to delete
+ after transferring, use the --delete-after switch\&. Implies --delete\&.
++.IP 
++.IP "\fB--delete-sent-files\fP" 
++This tells rsync to remove the source files
++on the sending side that are successfully transferred to the receiving
++side\&.  Directories are not removed, nor are files that are identical on
++both systems\&.
+ .IP 
+ .IP "\fB--ignore-errors\fP" 
+ Tells --delete to go ahead and delete files
+--- rsync.h	11 Feb 2004 08:01:21 -0000	1.186
++++ rsync.h	23 Feb 2004 18:16:26 -0000
+@@ -59,6 +59,7 @@
+ #define FLAG_TOP_DIR (1<<0)
+ #define FLAG_HLINK_EOL (1<<1)	/* generator only */
+ #define FLAG_MOUNT_POINT (1<<2)	/* sender only */
++#define FLAG_SENT (1<<7)	/* sender only */
+ 
+ /* update this if you make incompatible changes */
+ #define PROTOCOL_VERSION 28
+@@ -124,6 +125,7 @@ enum msgcode {
+ 	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
+ 	MSG_REDO=4,	/* reprocess indicated flist index */
+ 	MSG_DONE=5,	/* current phase is done */
++	MSG_SUCCESS=6,	/* successfully updated indicated flist index */
+ };
+ 
+ #include "errcode.h"
+--- rsync.yo	2 Feb 2004 18:23:09 -0000	1.147
++++ rsync.yo	23 Feb 2004 18:16:27 -0000
+@@ -312,6 +312,7 @@ verb(
+      --delete                delete files that don't exist on sender
+      --delete-excluded       also delete excluded files on receiver
+      --delete-after          receiver deletes after transfer, not before
++     --delete-sent-files     updated/sent files are removed from sender
+      --ignore-errors         delete even if there are I/O errors
+      --max-delete=NUM        don't delete more than NUM files
+      --partial               keep partially transferred files
+@@ -585,6 +586,11 @@ dit(bf(--delete-after)) By default rsync
+ receiving side before transferring files to try to ensure that there is
+ sufficient space on the receiving filesystem. If you want to delete
+ after transferring, use the --delete-after switch. Implies --delete.
++
++dit(bf(--delete-sent-files)) This tells rsync to remove the source files
++on the sending side that are successfully transferred to the receiving
++side.  Directories are not removed, nor are files that are identical on
++both systems.
+ 
+ dit(bf(--ignore-errors)) Tells --delete to go ahead and delete files
+ even when there are I/O errors.
+--- sender.c	17 Feb 2004 21:57:44 -0000	1.38
++++ sender.c	23 Feb 2004 18:16:27 -0000
+@@ -27,6 +27,7 @@ extern int dry_run;
+ extern int am_server;
+ extern int am_daemon;
+ extern int protocol_version;
++extern int delete_sent_files;
+ 
+ 
+ /**
+@@ -104,7 +105,29 @@ static struct sum_struct *receive_sums(i
+ 	return s;
+ }
+ 
++static struct file_list *the_flist;
+ 
++void successful_send(int i)
++{
++	char fname[MAXPATHLEN];
++	struct file_struct *file;
++	unsigned int offset;
++
++	if (!the_flist)
++		return;
++
++	file = the_flist->files[i];
++	if (!(file->flags & FLAG_SENT))
++		return; /* We didn't send it -- impossible! */
++	if (file->basedir) {
++		offset = stringjoin(fname, sizeof fname,
++				    file->basedir, "/", NULL);
++	} else
++		offset = 0;
++	f_name_to(file, fname + offset);
++	if (delete_sent_files && do_unlink(fname) == 0 && verbose > 0)
++		rprintf(FINFO, "sender removed %s\n", fname + offset);
++}
+ 
+ void send_files(struct file_list *flist, int f_out, int f_in)
+ {
+@@ -129,6 +152,8 @@ void send_files(struct file_list *flist,
+ 	if (verbose > 2)
+ 		rprintf(FINFO, "send_files starting\n");
+ 
++	the_flist = flist;
++
+ 	while (1) {
+ 		unsigned int offset;
+ 
+@@ -302,6 +327,9 @@ void send_files(struct file_list *flist,
+ 
+ 		if (verbose > 2)
+ 			rprintf(FINFO, "sender finished %s\n", fname);
++
++		/* Flag that we actually sent this entry. */
++		file->flags |= FLAG_SENT;
+ 	}
+ 
+ 	if (verbose > 2)
