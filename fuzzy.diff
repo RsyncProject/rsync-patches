@@ -7,7 +7,7 @@ Lightly tested.
 Be sure to run "make proto" before "make".
 
 --- orig/generator.c	2005-01-18 23:14:23
-+++ generator.c	2005-01-18 19:25:55
++++ generator.c	2005-01-19 18:39:15
 @@ -46,6 +46,7 @@ extern int size_only;
  extern OFF_T max_size;
  extern int io_timeout;
@@ -16,7 +16,7 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -243,6 +244,89 @@ static void generate_and_send_sums(int f
+@@ -226,6 +227,88 @@ static void generate_and_send_sums(int f
  		unmap_file(mapbuf);
  }
  
@@ -61,8 +61,7 @@ Be sure to run "make proto" before "make".
 +	if (slash)
 +		*slash = '/';
 +
-+	suf_len = basename_len;
-+	suf = find_filename_suffix(basename, &suf_len);
++	suf = find_filename_suffix(basename, basename_len, &suf_len);
 +
 +	bestname[0] = '\0';
 +	while ((di = readdir(d)) != NULL) {
@@ -74,8 +73,8 @@ Be sure to run "make proto" before "make".
 +		    || (dname[1] == '.' && dname[2] == '\0')))
 +			continue;
 +
-+		dname_len = dname_suf_len = strlen(dname);
-+		dname_suf = find_filename_suffix(dname, &dname_suf_len);
++		dname_len = strlen(dname);
++		dname_suf = find_filename_suffix(dname, dname_len, &dname_suf_len);
 +
 +		dist = fuzzy_distance(dname, dname_len, basename, basename_len);
 +		/* Add some extra weight to how well the suffixes match. */
@@ -106,7 +105,7 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -498,6 +582,15 @@ static void recv_generator(char *fname, 
+@@ -478,6 +561,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -122,7 +121,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -526,6 +619,8 @@ static void recv_generator(char *fname, 
+@@ -506,6 +598,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -131,7 +130,7 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -600,8 +695,24 @@ notify_others:
+@@ -580,8 +674,24 @@ notify_others:
  	write_int(f_out, i);
  	if (protocol_version >= 29 && inplace && !read_batch)
  		write_byte(f_out, fnamecmp_type);
@@ -254,16 +253,16 @@ Be sure to run "make proto" before "make".
  			default:
  				if (j >= basis_dir_cnt) {
  					rprintf(FERROR,
---- orig/rsync.h	2005-01-17 23:11:45
-+++ rsync.h	2005-01-15 21:24:09
+--- orig/rsync.h	2005-01-19 20:11:10
++++ rsync.h	2005-01-19 18:36:47
 @@ -128,6 +128,7 @@
  #define FNAMECMP_FNAME		0x80
  #define FNAMECMP_PARTIAL_DIR	0x81
  #define FNAMECMP_BACKUP 	0x82
 +#define FNAMECMP_FUZZY		0x83
  
- 
- /* Log-message categories.  FLOG is only used on the daemon side to
+ /* For calling delete_file() */
+ #define DEL_DIR			(1<<0)
 --- orig/rsync.yo	2005-01-19 01:05:05
 +++ rsync.yo	2005-01-15 21:48:52
 @@ -359,6 +359,7 @@ verb(
@@ -289,9 +288,9 @@ Be sure to run "make proto" before "make".
  dit(bf(-z, --compress)) With this option, rsync compresses any data from
  the files that it sends to the destination machine.  This
  option is useful on slow connections.  The compression method used is the
---- orig/util.c	2004-09-07 21:45:30
-+++ util.c	2005-01-18 19:25:47
-@@ -1217,3 +1217,108 @@ void *_realloc_array(void *ptr, unsigned
+--- orig/util.c	2005-01-19 20:11:10
++++ util.c	2005-01-19 17:30:51
+@@ -1213,3 +1213,108 @@ void *_realloc_array(void *ptr, unsigned
  		return malloc(size * num);
  	return realloc(ptr, size * num);
  }
@@ -299,11 +298,11 @@ Be sure to run "make proto" before "make".
 +/* Take a filename and filename length and return the most significant
 + * filename suffix we can find.  This ignores suffixes such as "~",
 + * ".bak", ".orig", ".~1~", etc. */
-+const char *find_filename_suffix(const char *fn, int *len_ptr)
++const char *find_filename_suffix(const char *fn, int fn_len, int *len_ptr)
 +{
 +	const char *suf, *s;
-+	int s_len, fn_len = *len_ptr;
 +	BOOL had_tilde;
++	int s_len;
 +
 +	/* One or more dots at the start aren't a suffix. */
 +	while (fn_len && *fn == '.') fn++, fn_len--;
