@@ -1,4 +1,4 @@
---- orig/options.c	2004-11-27 18:27:35
+--- orig/options.c	2005-01-24 00:18:21
 +++ options.c	2004-12-03 23:24:19
 @@ -48,6 +48,7 @@ int preserve_devices = 0;
  int preserve_uid = 0;
@@ -8,32 +8,32 @@
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -260,6 +261,7 @@ void usage(enum logcode F)
+@@ -263,6 +264,7 @@ void usage(enum logcode F)
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F," -D, --devices               preserve devices (root only)\n");
    rprintf(F," -t, --times                 preserve times\n");
-+  rprintf(F," -d, --omit-dir-times        omit directories when preserving times\n");
++  rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy whole files, no incremental checks\n");
-@@ -365,6 +367,7 @@ static struct poptOption long_options[] 
+@@ -370,6 +372,7 @@ static struct poptOption long_options[] 
    {"group",           'g', POPT_ARG_NONE,   &preserve_gid, 0, 0, 0 },
    {"devices",         'D', POPT_ARG_NONE,   &preserve_devices, 0, 0, 0 },
    {"times",           't', POPT_ARG_NONE,   &preserve_times, 0, 0, 0 },
-+  {"omit-dir-times",  'd', POPT_ARG_NONE,   &omit_dir_times, 0, 0, 0 },
++  {"omit-dir-times",  'O', POPT_ARG_NONE,   &omit_dir_times, 0, 0, 0 },
    {"checksum",        'c', POPT_ARG_NONE,   &always_checksum, 0, 0, 0 },
    {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
    {"quiet",           'q', POPT_ARG_NONE,   0, 'q', 0, 0 },
-@@ -1080,6 +1083,8 @@ void server_options(char **args,int *arg
+@@ -1082,6 +1085,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
 +	if (omit_dir_times && am_sender)
-+		argstr[x++] = 'd';
++		argstr[x++] = 'O';
  	if (preserve_perms)
  		argstr[x++] = 'p';
- 	if (recurse)
---- orig/rsync.c	2004-09-07 21:45:30
+ 	if (recurse < 0)
+--- orig/rsync.c	2005-01-20 23:52:09
 +++ rsync.c	2004-12-03 23:32:45
 @@ -25,6 +25,7 @@
  extern int verbose;
@@ -43,7 +43,7 @@
  extern int am_root;
  extern int am_sender;
  extern int am_generator;
-@@ -143,14 +144,12 @@ int set_perms(char *fname,struct file_st
+@@ -165,14 +166,12 @@ int set_perms(char *fname,struct file_st
  	}
  
  	if (!preserve_times || S_ISLNK(st->st_mode)
@@ -61,23 +61,23 @@
  			rsyserr(FERROR, errno, "failed to set times on %s",
  				full_fname(fname));
  			return 0;
---- orig/rsync.yo	2004-12-03 23:06:59
+--- orig/rsync.yo	2005-01-24 00:18:21
 +++ rsync.yo	2004-12-03 23:28:07
-@@ -330,6 +330,7 @@ verb(
+@@ -331,6 +331,7 @@ verb(
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
   -t, --times                 preserve times
-+ -d, --omit-dir-times        omit directories when preserving times
++ -O, --omit-dir-times        omit directories when preserving times
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy whole files, no incremental checks
-@@ -627,6 +628,10 @@ cause the next transfer to behave as if 
+@@ -638,6 +639,10 @@ cause the next transfer to behave as if 
  updated (though the rsync algorithm will make the update fairly efficient
  if the files haven't actually changed, you're much better off using -t).
  
-+dit(bf(-d, --omit-dir-times)) This tells rsync to omit directories when
++dit(bf(-O, --omit-dir-times)) This tells rsync to omit directories when
 +the preserving of modification times is enabled (see --times).  If NFS
-+is sharing the files on the receiving end, it is a good idea to use -d.
++is sharing the files on the receiving end, it is a good idea to use -O.
 +
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
