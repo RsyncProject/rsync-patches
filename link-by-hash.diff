@@ -367,9 +367,9 @@ the file's name.
 +}
 +
 +#endif
---- orig/options.c	2004-07-15 16:51:50
+--- orig/options.c	2004-07-16 20:07:22
 +++ options.c	2004-07-03 20:20:15
-@@ -124,6 +124,7 @@ char *log_format = NULL;
+@@ -125,6 +125,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
@@ -377,7 +377,7 @@ the file's name.
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = RSYNC_PORT;
  int link_dest = 0;
-@@ -269,6 +270,7 @@ void usage(enum logcode F)
+@@ -276,6 +277,7 @@ void usage(enum logcode F)
    rprintf(F," -T  --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --link-dest=DIR         create hardlinks to DIR for unchanged files\n");
@@ -385,7 +385,7 @@ the file's name.
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
-@@ -309,7 +311,7 @@ void usage(enum logcode F)
+@@ -316,7 +318,7 @@ void usage(enum logcode F)
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
@@ -394,7 +394,7 @@ the file's name.
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -367,6 +369,7 @@ static struct poptOption long_options[] 
+@@ -375,6 +377,7 @@ static struct poptOption long_options[] 
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, &compare_dest, 0, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, &compare_dest,  OPT_LINK_DEST, 0, 0 },
@@ -402,7 +402,7 @@ the file's name.
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -593,6 +596,19 @@ int parse_arguments(int *argc, const cha
+@@ -601,6 +604,19 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -422,7 +422,7 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -969,6 +985,11 @@ void server_options(char **args,int *arg
+@@ -1007,6 +1023,11 @@ void server_options(char **args,int *arg
  		args[ac++] = compare_dest;
  	}
  
@@ -434,17 +434,17 @@ the file's name.
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
  		if (remote_filesfrom_file) {
  			args[ac++] = "--files-from";
---- orig/receiver.c	2004-07-14 17:12:06
-+++ receiver.c	2004-07-03 20:20:15
-@@ -48,6 +48,7 @@ extern int ignore_errors;
- extern int orig_umask;
- extern int keep_partial;
- extern int checksum_seed;
+--- orig/receiver.c	2004-07-16 20:07:22
++++ receiver.c	2004-07-16 20:16:37
+@@ -37,6 +37,7 @@ extern int cvs_exclude;
+ extern int io_error;
+ extern char *tmpdir;
+ extern char *compare_dest;
 +extern char *link_by_hash_dir;
- 
- static void delete_one(char *fn, int is_dir)
- {
-@@ -196,10 +197,11 @@ static int get_tmpname(char *fnametmp, c
+ extern int make_backups;
+ extern int do_progress;
+ extern char *backup_dir;
+@@ -197,10 +198,11 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in,struct map_struct *mapbuf,int fd,char *fname,
@@ -457,7 +457,7 @@ the file's name.
  	unsigned int len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -210,6 +212,9 @@ static int receive_data(int f_in,struct 
+@@ -211,6 +213,9 @@ static int receive_data(int f_in,struct 
  
  	read_sum_head(f_in, &sum);
  
@@ -467,7 +467,7 @@ the file's name.
  	sum_init(checksum_seed);
  
  	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -226,6 +231,8 @@ static int receive_data(int f_in,struct 
+@@ -227,6 +232,8 @@ static int receive_data(int f_in,struct 
  			cleanup_got_literal = 1;
  
  			sum_update(data,i);
@@ -476,7 +476,7 @@ the file's name.
  
  			if (fd != -1 && write_file(fd,data,i) != i) {
  				rsyserr(FERROR, errno, "write failed on %s",
-@@ -253,6 +260,8 @@ static int receive_data(int f_in,struct 
+@@ -254,6 +261,8 @@ static int receive_data(int f_in,struct 
  
  			see_token(map, len);
  			sum_update(map,len);
@@ -484,8 +484,8 @@ the file's name.
 +				mdfour_update(&mdfour_data,map,len);
  		}
  
- 		if (fd != -1 && write_file(fd, map, len) != (int)len) {
-@@ -275,6 +284,8 @@ static int receive_data(int f_in,struct 
+ 		if (!inplace || offset != offset2) {
+@@ -290,6 +299,8 @@ static int receive_data(int f_in,struct 
  	}
  
  	sum_end(file_sum1);
@@ -494,7 +494,7 @@ the file's name.
  
  	read_buf(f_in,file_sum2,MD4_SUM_LENGTH);
  	if (verbose > 2)
-@@ -374,7 +385,7 @@ int recv_files(int f_in, struct file_lis
+@@ -389,7 +400,7 @@ int recv_files(int f_in, struct file_lis
  		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR, errno, "fstat %s failed",
  				full_fname(fnamecmp));
@@ -503,7 +503,7 @@ the file's name.
  			close(fd1);
  			continue;
  		}
-@@ -387,7 +398,7 @@ int recv_files(int f_in, struct file_lis
+@@ -402,7 +413,7 @@ int recv_files(int f_in, struct file_lis
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -512,16 +512,25 @@ the file's name.
  			close(fd1);
  			continue;
  		}
-@@ -443,7 +454,7 @@ int recv_files(int f_in, struct file_lis
- 		if (fd2 == -1) {
- 			rsyserr(FERROR, errno, "mkstemp %s failed",
- 				full_fname(fnametmp));
--			receive_data(f_in,mapbuf,-1,NULL,file->length);
-+			receive_data(f_in,mapbuf,-1,NULL,file->length,NULL);
- 			if (mapbuf)
- 				unmap_file(mapbuf);
- 			if (fd1 != -1)
-@@ -457,7 +468,11 @@ int recv_files(int f_in, struct file_lis
+@@ -435,7 +446,7 @@ int recv_files(int f_in, struct file_lis
+ 			if (fd2 == -1) {
+ 				rsyserr(FERROR, errno, "open %s failed",
+ 					full_fname(fnamecmp));
+-				receive_data(f_in,mapbuf,-1,NULL,file->length);
++				receive_data(f_in,mapbuf,-1,NULL,file->length,NULL);
+ 				if (mapbuf)
+ 					unmap_file(mapbuf);
+ 				if (fd1 != -1)
+@@ -472,7 +483,7 @@ int recv_files(int f_in, struct file_lis
+ 			if (fd2 == -1) {
+ 				rsyserr(FERROR, errno, "mkstemp %s failed",
+ 					full_fname(fnametmp));
+-				receive_data(f_in,mapbuf,-1,NULL,file->length);
++				receive_data(f_in,mapbuf,-1,NULL,file->length,NULL);
+ 				if (mapbuf)
+ 					unmap_file(mapbuf);
+ 				if (fd1 != -1)
+@@ -487,7 +498,11 @@ int recv_files(int f_in, struct file_lis
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
@@ -534,17 +543,17 @@ the file's name.
  
  		log_recv(file, &initial_stats);
  
---- orig/rsync.c	2004-07-02 18:06:32
-+++ rsync.c	2004-07-03 20:20:15
-@@ -34,6 +34,7 @@ extern int force_delete;
+--- orig/rsync.c	2004-07-16 20:07:23
++++ rsync.c	2004-07-16 20:16:53
+@@ -33,6 +33,7 @@ extern int preserve_gid;
+ extern int force_delete;
  extern int recurse;
  extern int make_backups;
- extern char *backup_dir;
 +extern char *link_by_hash_dir;
+ extern char *backup_dir;
+ extern int inplace;
  
- 
- /*
-@@ -242,6 +243,12 @@ void finish_transfer(char *fname, char *
+@@ -250,6 +251,12 @@ void finish_transfer(char *fname, char *
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
@@ -557,9 +566,9 @@ the file's name.
  	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
  	if (ret < 0) {
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
---- orig/rsync.h	2004-07-07 08:27:00
+--- orig/rsync.h	2004-07-16 20:07:23
 +++ rsync.h	2004-07-03 20:20:15
-@@ -522,6 +522,14 @@ struct stats {
+@@ -524,6 +524,14 @@ struct stats {
  	int current_file_index;
  };
  

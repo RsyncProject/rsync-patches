@@ -67,25 +67,20 @@ command before "make":
  	if (argc == 0)
  		list_only = 1;
  
---- orig/options.c	2004-07-15 16:51:50
-+++ options.c	2004-07-03 20:17:10
-@@ -87,6 +87,7 @@ int size_only = 0;
+--- orig/options.c	2004-07-16 20:07:22
++++ options.c	2004-07-16 20:09:54
+@@ -87,8 +87,10 @@ int size_only = 0;
  int bwlimit = 0;
  size_t bwlimit_writemax = 0;
  int delete_after = 0;
 +int delete_sent_files = 0;
  int only_existing = 0;
  int opt_ignore_existing = 0;
- int max_delete = 0;
-@@ -94,6 +95,7 @@ int ignore_errors = 0;
- int modify_window = 0;
- int blocking_io = -1;
- int checksum_seed = 0;
 +int need_messages_from_generator = 0;
- unsigned int block_size = 0;
- 
- 
-@@ -257,6 +259,7 @@ void usage(enum logcode F)
+ int max_delete = 0;
+ int ignore_errors = 0;
+ int modify_window = 0;
+@@ -264,6 +266,7 @@ void usage(enum logcode F)
    rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
    rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
    rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
@@ -93,7 +88,7 @@ command before "make":
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
    rprintf(F,"     --partial               keep partially transferred files\n");
-@@ -307,8 +310,8 @@ void usage(enum logcode F)
+@@ -314,8 +317,8 @@ void usage(enum logcode F)
  }
  
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
@@ -104,7 +99,7 @@ command before "make":
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
        OPT_REFUSED_BASE = 9000};
  
-@@ -327,6 +330,7 @@ static struct poptOption long_options[] 
+@@ -334,6 +337,7 @@ static struct poptOption long_options[] 
    {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
    {"delete-after",     0,  POPT_ARG_NONE,   0,              OPT_DELETE_AFTER, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   0,              OPT_DELETE_EXCLUDED, 0, 0 },
@@ -112,7 +107,7 @@ command before "make":
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"exclude",          0,  POPT_ARG_STRING, 0,              OPT_EXCLUDE, 0, 0 },
-@@ -512,6 +516,11 @@ int parse_arguments(int *argc, const cha
+@@ -520,6 +524,11 @@ int parse_arguments(int *argc, const cha
  			delete_mode = 1;
  			break;
  
@@ -124,7 +119,7 @@ command before "make":
  		case OPT_EXCLUDE:
  			if (am_server || sanitize_paths)
  				return 0; /* Impossible... */
-@@ -981,6 +990,9 @@ void server_options(char **args,int *arg
+@@ -1019,6 +1028,9 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -134,17 +129,17 @@ command before "make":
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2004-07-14 17:12:06
-+++ receiver.c	2004-07-03 20:17:10
-@@ -48,6 +48,7 @@ extern int ignore_errors;
- extern int orig_umask;
- extern int keep_partial;
- extern int checksum_seed;
+--- orig/receiver.c	2004-07-16 20:07:22
++++ receiver.c	2004-07-16 20:09:48
+@@ -43,6 +43,7 @@ extern char *backup_dir;
+ extern char *backup_suffix;
+ extern int backup_suffix_len;
+ extern int cleanup_got_literal;
 +extern int delete_sent_files;
- 
- static void delete_one(char *fn, int is_dir)
- {
-@@ -296,7 +297,7 @@ int recv_files(int f_in, struct file_lis
+ extern int module_id;
+ extern int ignore_errors;
+ extern int orig_umask;
+@@ -311,7 +312,7 @@ int recv_files(int f_in, struct file_lis
  	char *fname, fbuf[MAXPATHLEN];
  	char template[MAXPATHLEN];
  	char fnametmp[MAXPATHLEN];
@@ -153,7 +148,7 @@ command before "make":
  	char fnamecmpbuf[MAXPATHLEN];
  	struct map_struct *mapbuf;
  	struct file_struct *file;
-@@ -478,16 +479,20 @@ int recv_files(int f_in, struct file_lis
+@@ -508,16 +509,20 @@ int recv_files(int f_in, struct file_lis
  
  		cleanup_disable();
  
@@ -178,7 +173,7 @@ command before "make":
  			}
  		}
  	}
---- orig/rsync.h	2004-07-07 08:27:00
+--- orig/rsync.h	2004-07-16 20:07:23
 +++ rsync.h	2004-07-03 20:17:10
 @@ -60,6 +60,7 @@
  #define FLAG_TOP_DIR (1<<0)
@@ -196,9 +191,9 @@ command before "make":
  	MSG_DONE=5,	/* current phase is done */
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
---- orig/rsync.yo	2004-07-15 02:21:11
+--- orig/rsync.yo	2004-07-16 20:07:23
 +++ rsync.yo	2004-07-03 20:17:10
-@@ -313,6 +313,7 @@ verb(
+@@ -314,6 +314,7 @@ verb(
       --delete                delete files that don't exist on sender
       --delete-excluded       also delete excluded files on receiver
       --delete-after          receiver deletes after transfer, not before
@@ -206,7 +201,7 @@ command before "make":
       --ignore-errors         delete even if there are I/O errors
       --max-delete=NUM        don't delete more than NUM files
       --partial               keep partially transferred files
-@@ -603,6 +604,11 @@ receiving side before transferring files
+@@ -615,6 +616,11 @@ receiving side before transferring files
  sufficient space on the receiving filesystem. If you want to delete
  after transferring, use the --delete-after switch. Implies --delete.
  
@@ -218,17 +213,17 @@ command before "make":
  dit(bf(--ignore-errors)) Tells --delete to go ahead and delete files
  even when there are I/O errors.
  
---- orig/sender.c	2004-07-15 02:21:11
-+++ sender.c	2004-07-03 20:17:10
-@@ -27,6 +27,7 @@ extern int dry_run;
+--- orig/sender.c	2004-07-16 20:07:23
++++ sender.c	2004-07-16 20:10:19
+@@ -26,6 +26,7 @@ extern int io_error;
+ extern int dry_run;
  extern int am_server;
  extern int am_daemon;
- extern int protocol_version;
 +extern int delete_sent_files;
+ extern int protocol_version;
+ extern struct stats stats;
  
- 
- /**
-@@ -104,7 +105,29 @@ static struct sum_struct *receive_sums(i
+@@ -107,7 +108,29 @@ static struct sum_struct *receive_sums(i
  	return s;
  }
  
@@ -258,7 +253,7 @@ command before "make":
  
  void send_files(struct file_list *flist, int f_out, int f_in)
  {
-@@ -123,6 +146,8 @@ void send_files(struct file_list *flist,
+@@ -125,6 +148,8 @@ void send_files(struct file_list *flist,
  	if (verbose > 2)
  		rprintf(FINFO, "send_files starting\n");
  
@@ -267,7 +262,7 @@ command before "make":
  	while (1) {
  		unsigned int offset;
  
-@@ -245,6 +270,9 @@ void send_files(struct file_list *flist,
+@@ -247,6 +272,9 @@ void send_files(struct file_list *flist,
  
  		if (verbose > 2)
  			rprintf(FINFO, "sender finished %s\n", fname);
