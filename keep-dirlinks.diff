@@ -1,5 +1,5 @@
 --- generator.c	18 May 2004 08:50:17 -0000	1.85
-+++ generator.c	4 Jun 2004 05:05:23 -0000
++++ generator.c	5 Jun 2004 15:33:38 -0000
 @@ -26,6 +26,7 @@
  extern int verbose;
  extern int dry_run;
@@ -8,20 +8,24 @@
  extern int preserve_links;
  extern int am_root;
  extern int preserve_devices;
-@@ -320,6 +321,11 @@ void recv_generator(char *fname, struct 
- 		 * recursively create it. */
+@@ -302,6 +303,15 @@ void recv_generator(char *fname, struct 
+ 		return;
+ 	}
  
- 		if (dry_run) return; /* XXXX -- might cause inaccuracies?? -- mbp */
-+		if (statret == 0 && keep_dirlinks && S_ISLNK(st.st_mode)) {
-+			STRUCT_STAT st2;
-+			if (do_stat(fname, &st2) == 0 && S_ISDIR(st2.st_mode))
-+			    st = st2;
-+		}
- 		if (statret == 0 && !S_ISDIR(st.st_mode)) {
- 			if (robust_unlink(fname) != 0) {
- 				rsyserr(FERROR, errno,
++#if SUPPORT_LINKS
++	if (statret == 0 && keep_dirlinks
++	    && S_ISLNK(st.st_mode) && S_ISDIR(file->mode)) {
++		STRUCT_STAT st2;
++		if (do_stat(fname, &st2) == 0 && S_ISDIR(st2.st_mode))
++		    st = st2;
++	}
++#endif
++
+ 	if (statret == 0 &&
+ 	    !preserve_perms &&
+ 	    (S_ISDIR(st.st_mode) == S_ISDIR(file->mode))) {
 --- options.c	27 May 2004 21:51:53 -0000	1.153
-+++ options.c	4 Jun 2004 05:05:23 -0000
++++ options.c	5 Jun 2004 15:33:38 -0000
 @@ -38,6 +38,7 @@ int make_backups = 0;
  int whole_file = -1;
  
@@ -30,14 +34,14 @@
  int copy_links = 0;
  int preserve_links = 0;
  int preserve_hard_links = 0;
-@@ -233,6 +234,7 @@ void usage(enum logcode F)
+@@ -232,6 +233,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --backup-dir            make backups into this directory\n");
    rprintf(F,"     --suffix=SUFFIX         backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
    rprintf(F," -u, --update                update only (don't overwrite newer files)\n");
-   rprintf(F," -l, --links                 copy symlinks as symlinks\n");
 +  rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
+   rprintf(F," -l, --links                 copy symlinks as symlinks\n");
    rprintf(F," -L, --copy-links            copy the referent of all symlinks\n");
    rprintf(F,"     --copy-unsafe-links     copy the referent of \"unsafe\" symlinks\n");
-   rprintf(F,"     --safe-links            ignore \"unsafe\" symlinks\n");
 @@ -338,6 +340,7 @@ static struct poptOption long_options[] 
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
    {"cvs-exclude",     'C', POPT_ARG_NONE,   &cvs_exclude, 0, 0, 0 },
@@ -56,7 +60,7 @@
  	if (whole_file > 0)
  		argstr[x++] = 'W';
 --- rsync.yo	21 May 2004 09:44:32 -0000	1.170
-+++ rsync.yo	4 Jun 2004 05:05:24 -0000
++++ rsync.yo	5 Jun 2004 15:33:39 -0000
 @@ -289,6 +289,7 @@ verb(
       --backup-dir            make backups into this directory
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
