@@ -2,7 +2,7 @@ This adds the option --copy-dest, which works just like --link-dest
 except that identical files are copied into the destination instead
 of hard-linked.
 
---- orig/generator.c	2005-03-03 00:14:56
+--- orig/generator.c	2005-03-03 02:05:54
 +++ generator.c	2005-03-03 00:25:59
 @@ -65,6 +65,7 @@ extern int always_checksum;
  extern char *partial_dir;
@@ -12,7 +12,7 @@ of hard-linked.
  extern int link_dest;
  extern int whole_file;
  extern int local_server;
-@@ -824,6 +825,8 @@ static void recv_generator(char *fname, 
+@@ -837,6 +838,8 @@ static void recv_generator(char *fname, 
  					continue;
  				best_match = i;
  				match_level = 2;
@@ -21,7 +21,7 @@ of hard-linked.
  				/* FALL THROUGH */
  			case 2:
  				if (!unchanged_attrs(file, &st))
-@@ -857,7 +860,20 @@ static void recv_generator(char *fname, 
+@@ -870,7 +873,20 @@ static void recv_generator(char *fname, 
  				match_level = 2;
  			}
  #endif
@@ -117,8 +117,8 @@ of hard-linked.
  		return 0;
  	}
  
---- orig/rsync.yo	2005-03-02 18:01:33
-+++ rsync.yo	2005-02-23 02:05:34
+--- orig/rsync.yo	2005-03-03 02:23:27
++++ rsync.yo	2005-03-03 02:19:19
 @@ -353,6 +353,7 @@ to the detailed description below for a 
   -T, --temp-dir=DIR          create temporary files in directory DIR
   -y, --fuzzy                 find similar file for basis if no dest file
@@ -127,19 +127,14 @@ of hard-linked.
       --link-dest=DIR         hardlink to files in DIR when unchanged
   -z, --compress              compress file data during the transfer
   -C, --cvs-exclude           auto-ignore files in the same way CVS does
-@@ -554,8 +555,8 @@ bound.
- 
- The option implies bf(--partial) (since an interrupted transfer does not delete
- the file), but conflicts with bf(--partial-dir) and bf(--delay-updates).
--Prior to rsync 2.6.4 bf(--inplace) was also incompatible with bf(--compare-dest)
--and bf(--link-dest).
-+Prior to rsync 2.6.4 bf(--inplace) was also incompatible with bf(--compare-dest),
-+bf(--copy-dest), and bf(--link-dest).
- 
- WARNING: The file's data will be in an inconsistent state during the
- transfer (and possibly afterward if the transfer gets interrupted), so you
-@@ -957,9 +958,19 @@ the list in the order specified), and if
- of the em(DIR)s will be selected to try to speed up the transfer.
+@@ -954,13 +955,30 @@ have changed from an earlier backup.
+ Beginning in version 2.6.4, multiple bf(--compare-dest) directories may be
+ provided, which will cause rsync to search the list in the order specified
+ for an exact match.
++If a match is found that differs only in attributes, a local copy is made
++and the attributes updated.
+ If a match is not found, a basis file from one of the em(DIR)s will be
+ selected to try to speed up the transfer.
  
  If em(DIR) is a relative path, it is relative to the destination directory.
 -See also bf(--link-dest).
@@ -148,10 +143,15 @@ of hard-linked.
 -dit(bf(--link-dest=DIR)) This option behaves like bf(--compare-dest), but
 +dit(bf(--copy-dest=DIR)) This option behaves like bf(--compare-dest), but
 +rsync will also copy unchanged files found in em(DIR) to the destination
-+directory (using the data in the em(DIR) for an efficient copy).  This is
++directory using a local copy.  This is
 +useful for doing transfers to a new destination while leaving existing
 +files intact, and then doing a flash-cutover when all files have been
 +successfully transferred.
++
++Multiple bf(--copy-dest) directories may be provided, which will cause
++rsync to search the list in the order specified for an unchanged file.
++If a match is not found, a basis file from one of the em(DIR)s will be
++selected to try to speed up the transfer.
 +
 +If em(DIR) is a relative path, it is relative to the destination directory.
 +See also bf(--compare-dest) and bf(--link-dest).
@@ -160,8 +160,14 @@ of hard-linked.
  unchanged files are hard linked from em(DIR) to the destination directory.
  The files must be identical in all preserved attributes (e.g. permissions,
  possibly ownership) in order for the files to be linked together.
-@@ -973,7 +984,7 @@ the list in the order specified), and if
- of the em(DIR)s will be selected to try to speed up the transfer.
+@@ -971,11 +989,13 @@ quote(tt(  rsync -av --link-dest=$PWD/pr
+ Beginning in version 2.6.4, multiple bf(--link-dest) directories may be
+ provided, which will cause rsync to search the list in the order specified
+ for an exact match.
++If a match is found that differs only in attributes, a local copy is made
++and the attributes updated.
+ If a match is not found, a basis file from one of the em(DIR)s will be
+ selected to try to speed up the transfer.
  
  If em(DIR) is a relative path, it is relative to the destination directory.
 -See also bf(--compare-dest).
