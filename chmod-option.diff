@@ -196,26 +196,26 @@
 +	}
 +	return 0;
 +}
---- flist.c	11 Feb 2004 02:48:58 -0000	1.205
-+++ flist.c	20 Mar 2004 18:26:01 -0000
+--- flist.c	14 Apr 2004 23:33:34 -0000	1.213
++++ flist.c	15 Apr 2004 19:00:26 -0000
 @@ -33,6 +33,7 @@ extern int verbose;
  extern int do_progress;
  extern int am_root;
  extern int am_server;
 +extern int am_sender;
+ extern int am_daemon;
  extern int always_checksum;
  extern int module_id;
- extern int ignore_errors;
-@@ -63,6 +64,8 @@ extern int sanitize_paths;
+@@ -64,6 +65,8 @@ extern int sanitize_paths;
  extern int read_batch;
  extern int write_batch;
  
 +extern struct chmod_mode_struct *chmod_modes;
 +
- extern struct exclude_struct **exclude_list;
- extern struct exclude_struct **server_exclude_list;
- extern struct exclude_struct **local_exclude_list;
-@@ -831,7 +834,10 @@ skip_excludes:
+ extern struct exclude_list_struct exclude_list;
+ extern struct exclude_list_struct server_exclude_list;
+ extern struct exclude_list_struct local_exclude_list;
+@@ -863,7 +866,10 @@ skip_excludes:
  	file->flags = flags;
  	file->modtime = st.st_mtime;
  	file->length = st.st_size;
@@ -227,9 +227,9 @@
  	file->uid = st.st_uid;
  	file->gid = st.st_gid;
  
---- options.c	22 Feb 2004 08:56:43 -0000	1.139
-+++ options.c	20 Mar 2004 17:56:45 -0000
-@@ -119,6 +119,7 @@ char *log_format = NULL;
+--- options.c	14 Apr 2004 23:33:34 -0000	1.146
++++ options.c	15 Apr 2004 19:00:26 -0000
+@@ -121,6 +121,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
@@ -237,7 +237,7 @@
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = RSYNC_PORT;
  int link_dest = 0;
-@@ -132,6 +133,8 @@ int list_only = 0;
+@@ -134,6 +135,8 @@ int list_only = 0;
  #define MAX_BATCH_PREFIX_LEN 256	/* Must be less than MAXPATHLEN-13 */
  char *batch_prefix = NULL;
  
@@ -246,7 +246,7 @@
  static int daemon_opt;   /* sets am_daemon after option error-reporting */
  static int modify_window_set;
  
-@@ -239,6 +242,7 @@ void usage(enum logcode F)
+@@ -241,6 +244,7 @@ void usage(enum logcode F)
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F," -D, --devices               preserve devices (root only)\n");
    rprintf(F," -t, --times                 preserve times\n");
@@ -254,7 +254,7 @@
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy whole files, no incremental checks\n");
-@@ -342,6 +346,7 @@ static struct poptOption long_options[] 
+@@ -344,6 +348,7 @@ static struct poptOption long_options[] 
    {"perms",           'p', POPT_ARG_NONE,   &preserve_perms, 0, 0, 0 },
    {"owner",           'o', POPT_ARG_NONE,   &preserve_uid, 0, 0, 0 },
    {"group",           'g', POPT_ARG_NONE,   &preserve_gid, 0, 0, 0 },
@@ -262,7 +262,7 @@
    {"devices",         'D', POPT_ARG_NONE,   &preserve_devices, 0, 0, 0 },
    {"times",           't', POPT_ARG_NONE,   &preserve_times, 0, 0, 0 },
    {"checksum",        'c', POPT_ARG_NONE,   &always_checksum, 0, 0, 0 },
-@@ -687,6 +692,13 @@ int parse_arguments(int *argc, const cha
+@@ -720,6 +725,13 @@ int parse_arguments(int *argc, const cha
  		exit_cleanup(RERR_SYNTAX);
  	}
  
@@ -276,7 +276,7 @@
  	if (do_progress && !verbose)
  		verbose = 1;
  
-@@ -932,6 +944,11 @@ void server_options(char **args,int *arg
+@@ -951,6 +963,11 @@ void server_options(char **args,int *arg
  		 */
  		args[ac++] = link_dest ? "--link-dest" : "--compare-dest";
  		args[ac++] = compare_dest;
@@ -288,8 +288,8 @@
  	}
  
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
---- proto.h	17 Feb 2004 23:13:06 -0000	1.184
-+++ proto.h	20 Mar 2004 17:56:45 -0000
+--- proto.h	14 Apr 2004 23:33:30 -0000	1.188
++++ proto.h	15 Apr 2004 19:00:26 -0000
 @@ -25,6 +25,9 @@ void file_checksum(char *fname,char *sum
  void sum_init(void);
  void sum_update(char *p, int len);
@@ -300,36 +300,8 @@
  void close_all(void);
  void _exit_cleanup(int code, const char *file, int line);
  void cleanup_disable(void);
---- rsync.1	2 Feb 2004 18:23:09 -0000	1.163
-+++ rsync.1	20 Mar 2004 18:12:57 -0000
-@@ -336,6 +336,7 @@ to the detailed description below for a 
-  -g, --group                 preserve group
-  -D, --devices               preserve devices (root only)
-  -t, --times                 preserve times
-+     --chmod=CHMOD           change destination permissions
-  -S, --sparse                handle sparse files efficiently
-  -n, --dry-run               show what would have been transferred
-  -W, --whole-file            copy whole files, no incremental checks
-@@ -614,6 +615,17 @@ modified cannot be effective; in other w
- cause the next transfer to behave as if it used -I, and all files will have
- their checksums compared and show up in log messages even if they haven\&'t
- changed\&.
-+.IP 
-+.IP "\fB--chmod\fP" 
-+This options tells rsync to apply the listed "chmod" pattern
-+to the permission of the files on the destination\&.  In addition to the normal
-+parsing rules specified in the chmod manpage, you can specify an item that
-+should only apply to a directory by prefixing it with a \&'D\&', or specify an
-+item that should only apply to a file by prefixing it with a \&'F\&'\&.  For example:
-+.IP 
-+.RS 
-+--chmod=Dg+s,ug+w,Fo-w,+X
-+.RE 
- .IP 
- .IP "\fB-n, --dry-run\fP" 
- This tells rsync to not do any file transfers,
---- rsync.yo	2 Feb 2004 18:23:09 -0000	1.147
-+++ rsync.yo	20 Mar 2004 18:12:58 -0000
+--- rsync.yo	15 Apr 2004 18:32:24 -0000	1.157
++++ rsync.yo	15 Apr 2004 19:00:27 -0000
 @@ -299,6 +299,7 @@ verb(
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
@@ -338,7 +310,7 @@
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy whole files, no incremental checks
-@@ -534,6 +535,14 @@ modified cannot be effective; in other w
+@@ -536,6 +537,14 @@ modified cannot be effective; in other w
  cause the next transfer to behave as if it used -I, and all files will have
  their checksums compared and show up in log messages even if they haven't
  changed.

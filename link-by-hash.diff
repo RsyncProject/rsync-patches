@@ -390,9 +390,9 @@ Patch Summary:
 +}
 +
 +#endif
---- Makefile.in	2004-02-23 10:22:51.000000000 -0500
-+++ Makefile.in	2004-02-23 10:22:51.000000000 -0500
-@@ -35,7 +35,7 @@
+--- Makefile.in	10 Feb 2004 17:06:11 -0000	1.98
++++ Makefile.in	15 Apr 2004 19:18:59 -0000
+@@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
  	fileio.o batch.o clientname.o
@@ -401,9 +401,9 @@ Patch Summary:
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
---- options.c	2004-02-23 10:22:51.000000000 -0500
-+++ options.c	2004-02-23 10:29:14.000000000 -0500
-@@ -119,6 +119,7 @@
+--- options.c	14 Apr 2004 23:33:34 -0000	1.146
++++ options.c	15 Apr 2004 19:19:00 -0000
+@@ -121,6 +121,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
@@ -411,7 +411,7 @@ Patch Summary:
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = RSYNC_PORT;
  int link_dest = 0;
-@@ -264,6 +265,7 @@
+@@ -266,6 +267,7 @@ void usage(enum logcode F)
    rprintf(F," -T  --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --link-dest=DIR         create hardlinks to DIR for unchanged files\n");
@@ -419,7 +419,7 @@ Patch Summary:
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
-@@ -303,7 +305,7 @@
+@@ -305,7 +307,7 @@ void usage(enum logcode F)
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
@@ -428,15 +428,15 @@ Patch Summary:
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -360,6 +362,7 @@
+@@ -362,6 +364,7 @@ static struct poptOption long_options[] 
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, &compare_dest, 0, 0, 0 },
-   {"link-dest",        0,  POPT_ARG_STRING, 0,              OPT_LINK_DEST, 0, 0 },
+   {"link-dest",        0,  POPT_ARG_STRING, &compare_dest,  OPT_LINK_DEST, 0, 0 },
 +  {"link-by-hash",     0,  POPT_ARG_STRING, 0,              OPT_LINK_BY_HASH, 0, 0},
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -577,6 +580,19 @@
+@@ -584,6 +587,19 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -456,21 +456,21 @@ Patch Summary:
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -934,6 +950,11 @@
+@@ -951,6 +967,11 @@ void server_options(char **args,int *arg
+ 		 */
+ 		args[ac++] = link_dest ? "--link-dest" : "--compare-dest";
  		args[ac++] = compare_dest;
- 	}
- 
++	}
++
 +	if (link_by_hash_dir && am_sender) {
 +		args[ac++] = "--link-by-hash";
 +		args[ac++] = link_by_hash_dir;
-+	}
-+
+ 	}
+ 
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
- 		if (remote_filesfrom_file) {
- 			args[ac++] = "--files-from";
---- proto.h	2004-02-23 10:22:51.000000000 -0500
-+++ proto.h	2004-02-23 11:06:03.000000000 -0500
-@@ -93,6 +93,12 @@
+--- proto.h	14 Apr 2004 23:33:30 -0000	1.188
++++ proto.h	15 Apr 2004 19:19:00 -0000
+@@ -92,6 +92,12 @@ char *f_name(struct file_struct *f);
  void write_sum_head(int f, struct sum_struct *sum);
  void recv_generator(char *fname, struct file_struct *file, int i, int f_out);
  void generate_files(int f, struct file_list *flist, char *local_name);
@@ -483,9 +483,17 @@ Patch Summary:
  void init_hard_links(struct file_list *flist);
  int hard_link_check(struct file_struct *file, int skip);
  void do_hard_links(void);
---- receiver.c	2004-02-23 10:22:51.000000000 -0500
-+++ receiver.c	2004-02-23 10:22:51.000000000 -0500
-@@ -186,10 +186,11 @@
+--- receiver.c	23 Mar 2004 16:50:40 -0000	1.75
++++ receiver.c	15 Apr 2004 19:19:00 -0000
+@@ -45,6 +45,7 @@ extern int cleanup_got_literal;
+ extern int module_id;
+ extern int ignore_errors;
+ extern int orig_umask;
++extern char *link_by_hash_dir;
+ 
+ static void delete_one(char *fn, int is_dir)
+ {
+@@ -190,10 +191,11 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in,struct map_struct *mapbuf,int fd,char *fname,
@@ -498,7 +506,7 @@ Patch Summary:
  	unsigned int len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -199,7 +200,9 @@
+@@ -203,7 +205,9 @@ static int receive_data(int f_in,struct 
  	char *map=NULL;
  
  	read_sum_head(f_in, &sum);
@@ -509,7 +517,7 @@ Patch Summary:
  	sum_init();
  
  	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -216,6 +219,8 @@
+@@ -220,6 +224,8 @@ static int receive_data(int f_in,struct 
  			cleanup_got_literal = 1;
  
  			sum_update(data,i);
@@ -518,7 +526,7 @@ Patch Summary:
  
  			if (fd != -1 && write_file(fd,data,i) != i) {
  				rprintf(FERROR, "write failed on %s: %s\n",
-@@ -243,6 +248,8 @@
+@@ -247,6 +253,8 @@ static int receive_data(int f_in,struct 
  
  			see_token(map, len);
  			sum_update(map,len);
@@ -527,7 +535,7 @@ Patch Summary:
  		}
  
  		if (fd != -1 && write_file(fd,map,len) != (int) len) {
-@@ -265,6 +272,8 @@
+@@ -269,6 +277,8 @@ static int receive_data(int f_in,struct 
  	}
  
  	sum_end(file_sum1);
@@ -536,15 +544,7 @@ Patch Summary:
  
  	read_buf(f_in,file_sum2,MD4_SUM_LENGTH);
  	if (verbose > 2) {
-@@ -299,6 +308,7 @@
- 	extern int preserve_perms;
- 	extern int delete_after;
- 	extern int orig_umask;
-+	extern char *link_by_hash_dir;
- 	struct stats initial_stats;
- 
- 	if (verbose > 2) {
-@@ -372,7 +382,7 @@
+@@ -372,7 +382,7 @@ int recv_files(int f_in,struct file_list
  		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
  			rprintf(FERROR, "fstat %s failed: %s\n",
  				full_fname(fnamecmp), strerror(errno));
@@ -553,7 +553,7 @@ Patch Summary:
  			close(fd1);
  			continue;
  		}
-@@ -385,7 +395,7 @@
+@@ -385,7 +395,7 @@ int recv_files(int f_in,struct file_list
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -562,7 +562,7 @@ Patch Summary:
  			close(fd1);
  			continue;
  		}
-@@ -437,7 +447,7 @@
+@@ -437,7 +447,7 @@ int recv_files(int f_in,struct file_list
  		if (fd2 == -1) {
  			rprintf(FERROR, "mkstemp %s failed: %s\n",
  				full_fname(fnametmp), strerror(errno));
@@ -571,7 +571,7 @@ Patch Summary:
  			if (mapbuf) unmap_file(mapbuf);
  			if (fd1 != -1) close(fd1);
  			continue;
-@@ -450,7 +460,12 @@
+@@ -450,7 +460,12 @@ int recv_files(int f_in,struct file_list
  		}
  
  		/* recv file data */
@@ -585,9 +585,9 @@ Patch Summary:
  
  		log_recv(file, &initial_stats);
  
---- rsync.c	2004-02-23 10:22:51.000000000 -0500
-+++ rsync.c	2004-02-23 12:49:33.000000000 -0500
-@@ -33,6 +33,7 @@
+--- rsync.c	23 Mar 2004 16:16:15 -0000	1.135
++++ rsync.c	15 Apr 2004 19:19:00 -0000
+@@ -33,6 +33,7 @@ extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_perms;
  extern int make_backups;
@@ -595,7 +595,7 @@ Patch Summary:
  
  
  /*
-@@ -236,8 +237,13 @@
+@@ -235,8 +236,12 @@ void finish_transfer(char *fname, char *
  	if (make_backups && !make_backup(fname))
  		return;
  
@@ -607,13 +607,12 @@ Patch Summary:
 +	else
 +#endif
 +		ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
-+
- 	if (ret != 0) {
+ 	if (ret < 0) {
  		rprintf(FERROR, "%s %s -> \"%s\": %s\n",
  		    ret == -2 ? "copy" : "rename",
---- rsync.h	2004-02-23 10:22:51.000000000 -0500
-+++ rsync.h	2004-02-23 12:42:59.000000000 -0500
-@@ -513,6 +513,14 @@
+--- rsync.h	14 Apr 2004 23:33:37 -0000	1.196
++++ rsync.h	15 Apr 2004 19:19:00 -0000
+@@ -519,6 +519,14 @@ struct stats {
  	int current_file_index;
  };
  
