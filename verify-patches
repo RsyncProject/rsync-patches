@@ -1,0 +1,72 @@
+#!/bin/sh
+
+[ -d patches ] && cd patches
+
+if [ ! -f verify-patches ]; then
+    echo "Please run this script from the root of the rsync dir"
+    echo "or from inside the patches subdir."
+    exit 1
+fi
+
+root=`cat ../CVS/Root`
+cvsdir=,cvsdir-for-patch-tests
+tmpdir=,tmpdir-for-patch-tests
+
+[ -d $tmpdir ] || mkdir $tmpdir
+cvs -d "$root" co -d $cvsdir rsync
+
+cd $tmpdir || exit 1
+
+if [ -z "$1" ]; then
+    set -- ../*.diff
+fi
+
+for xx in "${@}"; do
+    case "$xx" in
+    *gzip-rsyncable.diff) continue ;;
+    patches/*) xx=`echo $xx | sed 's:patches:..:'` ;;
+    */*.diff) ;;
+    *.diff) xx=../$xx ;;
+    *) continue ;;
+    esac
+    rsync -a --delete ../$cvsdir/ .
+    echo -e "\n----------- $xx ------------"
+    patch -p0 <$xx | tee ,patch.output
+    new=''
+    for nn in `sed -n 's/^patching file //p' ,patch.output`; do
+	[ -f ../$cvsdir/$nn ] || new="$new $nn"
+    done
+    while : ; do
+	echo -ne "\nFix rejections, Make proto.h, Edit diffs, Update, Next: [n] "
+	read ans
+	case "$ans" in
+	'') break ;;
+	[Ee]*)
+	    [ ! -z "$new" ] && cvs add $new
+	    new=''
+	    rm -f *.rej *.orig
+	    cvs diff -N | grep -v '^Index: ' |
+		grep -v '^=========' |
+		grep -v '^diff -' |
+		grep -v '^RCS file: ' |
+		grep -v '^retrieving revision ' >,new.patch
+	    vim -d $xx ,new.patch
+	    ;;
+	[Ff]*)
+	    vim *.rej
+	    ;;
+	[Mm]*)
+	    cat *.c lib/compat.c | awk -f mkproto.awk >proto.h
+	    echo -e "\nRegenerated proto.h"
+	    ;;
+	[Uu]*)
+	    if [ -f ,new.patch ]; then
+		cp -p ,new.patch $xx
+		echo -e "\nCopied ,new.patch to $xx"
+	    else
+		echo -e "\n*** Edit the diffs first. ***"
+	    fi
+	    ;;
+	esac
+    done
+done
