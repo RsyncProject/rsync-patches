@@ -4,7 +4,7 @@ to be simpler and more efficient by Wayne Davison.
 Do we need configure support for mktime()?
 
 --- io.c	15 May 2004 19:31:10 -0000	1.121
-+++ io.c	17 May 2004 19:39:48 -0000
++++ io.c	17 May 2004 21:26:50 -0000
 @@ -44,6 +44,7 @@ static int io_multiplexing_in;
  static int multiplex_in_fd = -1;
  static int multiplex_out_fd = -1;
@@ -39,7 +39,7 @@ Do we need configure support for mktime()?
  	if (last_io && io_timeout && (t-last_io) >= io_timeout) {
  		if (!am_server && !am_daemon) {
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	17 May 2004 19:39:48 -0000
++++ options.c	17 May 2004 21:26:50 -0000
 @@ -92,6 +92,7 @@ int modify_window = 0;
  int blocking_io = -1;
  int checksum_seed = 0;
@@ -129,7 +129,7 @@ Do we need configure support for mktime()?
  		args[ac++] = arg;
  	}
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	17 May 2004 19:39:49 -0000
++++ rsync.yo	17 May 2004 21:26:52 -0000
 @@ -346,6 +346,8 @@ verb(
       --log-format=FORMAT     log file transfers using specified format
       --password-file=FILE    get password from FILE
@@ -149,8 +149,8 @@ Do we need configure support for mktime()?
 +2004-12-3lT23:59).  You can specify a 2 or 4-digit year.  You can also
 +leave off various items and the result will be the next possible time
 +that matches the specified data.  For example, "1-30" specifies the next
-+January 30th (at midnight), "04:00" specifies the next 4am, "1T"
-+specifies the next 1st of the month at midnight, and "59" specifies the
++January 30th (at midnight), "04:00" specifies the next 4am, "1"
++specifies the next 1st of the month at midnight, and ":59" specifies the
 +next 59th minute after the hour.
 +
 +dit(bf(--time-limit=MINS)) This option allows you to specify the maximum
@@ -159,8 +159,8 @@ Do we need configure support for mktime()?
  dit(bf(--write-batch=PREFIX)) Generate a set of files that can be
  transferred as a batch update. Each filename in the set starts with
 --- util.c	15 May 2004 19:31:10 -0000	1.143
-+++ util.c	17 May 2004 19:39:49 -0000
-@@ -122,6 +122,129 @@ void overflow(char *str)
++++ util.c	17 May 2004 21:26:52 -0000
+@@ -122,6 +122,132 @@ void overflow(char *str)
  	exit_cleanup(RERR_MALLOC);
  }
  
@@ -176,41 +176,43 @@ Do we need configure support for mktime()?
 +	const char *cp;
 +	time_t val, now = time(NULL);
 +	struct tm t, *today = localtime(&now);
-+	int in_date = 1, n;
++	int in_date, n;
 +
 +	memset(&t, 0, sizeof t);
 +	t.tm_year = t.tm_mon = t.tm_mday = -1;
 +	t.tm_hour = t.tm_min = t.tm_isdst = -1;
-+	for (cp = arg; ; cp++) {
-+		if (isdigit(*cp)) {
-+			n = 0;
-+			do {
-+				n = n * 10 + *cp++ - '0';
-+			} while (isdigit(*cp));
-+		} else if ((*cp == 'T' || *cp == 't') && in_date) {
-+			in_date = 0;
-+			continue;
-+		} else
++	cp = arg;
++	if (*cp == 'T' || *cp == 't' || *cp == ':') {
++		cp++;
++		in_date = 0;
++	} else
++		in_date = 1;
++	for ( ; ; cp++) {
++		if (!isdigit(*cp))
 +			return -1;
++
++		n = 0;
++		do {
++			n = n * 10 + *cp++ - '0';
++		} while (isdigit(*cp));
++
++		if (*cp == ':')
++			in_date = 0;
 +		if (in_date) {
-+			if (*cp == ':' || (!*cp && t.tm_mday < 0))
-+				in_date = 0;
-+			else {
-+				if (t.tm_year != -1)
-+					return -1;
-+				t.tm_year = t.tm_mon;
-+				t.tm_mon = t.tm_mday;
-+				t.tm_mday = n;
-+				if (!*cp)
++			if (t.tm_year != -1)
++				return -1;
++			t.tm_year = t.tm_mon;
++			t.tm_mon = t.tm_mday;
++			t.tm_mday = n;
++			if (!*cp)
++				break;
++			if (*cp == 'T' || *cp == 't') {
++				if (!cp[1])
 +					break;
-+				if (*cp == 'T' || *cp == 't') {
-+					if (!cp[1])
-+						break;
-+					in_date = 0;
-+				} else if (*cp != '-' && *cp != '/')
-+					return -1;
-+				continue;
-+			}
++				in_date = 0;
++			} else if (*cp != '-' && *cp != '/')
++				return -1;
++			continue;
 +		}
 +		if (t.tm_hour != -1)
 +			return -1;
@@ -237,8 +239,6 @@ Do we need configure support for mktime()?
 +	} else
 +		t.tm_mon--;
 +	if (t.tm_mday < 0) {
-+		if (t.tm_min < 0)
-+			return -1;
 +		t.tm_mday = today->tm_mday;
 +		in_date = 3;
 +	}
@@ -254,7 +254,10 @@ Do we need configure support for mktime()?
 +		n = 60*60;
 +	}
 +
-+	if ((val = mktime(&t)) == (time_t)-1)
++	if (t.tm_hour > 23 || t.tm_min > 59
++	    || t.tm_mon < 0 || t.tm_mon >= 12
++	    || t.tm_mday < 1 || t.tm_mday > 31
++	    || (val = mktime(&t)) == (time_t)-1)
 +		return -1;
 +
 +	if (val <= now && in_date) {
