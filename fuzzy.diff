@@ -6,9 +6,9 @@ Very lightly tested.
 
 Be sure to run "make proto" before "make".
 
---- orig/generator.c	2004-07-30 07:18:03
+--- orig/generator.c	2004-09-07 21:55:02
 +++ generator.c	2004-07-30 18:11:15
-@@ -41,6 +41,7 @@ extern int ignore_times;
+@@ -43,6 +43,7 @@ extern int ignore_times;
  extern int size_only;
  extern int io_timeout;
  extern int protocol_version;
@@ -16,7 +16,7 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *compare_dest;
-@@ -239,6 +240,93 @@ static void generate_and_send_sums(int f
+@@ -244,6 +245,93 @@ static void generate_and_send_sums(int f
  }
  
  
@@ -110,9 +110,9 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -453,6 +541,15 @@ static void recv_generator(char *fname, 
- 		stat_errno = ENOENT;
- 	}
+@@ -468,6 +556,15 @@ static void recv_generator(char *fname, 
+ 	} else
+ 		partialptr = NULL;
  
 +	if (statret == -1 && fuzzy_basis) {
 +		if (find_fuzzy(fname, fnamecmpbuf, &st) == 0
@@ -126,7 +126,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -479,7 +576,7 @@ static void recv_generator(char *fname, 
+@@ -494,7 +591,7 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -135,7 +135,7 @@ Be sure to run "make proto" before "make".
  		if (fnamecmp_type == G2R_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
  		return;
-@@ -527,6 +624,21 @@ static void recv_generator(char *fname, 
+@@ -570,6 +667,21 @@ prepare_to_open:
  notify_others:
  	if (f_out_name >= 0) {
  		write_byte(f_out_name, fnamecmp_type);
@@ -176,7 +176,7 @@ Be sure to run "make proto" before "make".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
---- orig/options.c	2004-08-12 18:34:38
+--- orig/options.c	2004-09-07 21:45:30
 +++ options.c	2004-07-16 20:14:12
 @@ -85,6 +85,7 @@ int safe_symlinks = 0;
  int copy_unsafe_links = 0;
@@ -202,7 +202,7 @@ Be sure to run "make proto" before "make".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -1090,6 +1093,9 @@ void server_options(char **args,int *arg
+@@ -1092,6 +1095,9 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -212,7 +212,7 @@ Be sure to run "make proto" before "make".
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2004-07-30 07:17:48
+--- orig/receiver.c	2004-09-07 21:57:20
 +++ receiver.c	2004-07-30 18:21:38
 @@ -323,6 +323,27 @@ static int receive_data(int f_in, char *
  }
@@ -242,9 +242,9 @@ Be sure to run "make proto" before "make".
  static void discard_receive_data(int f_in, OFF_T length)
  {
  	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
-@@ -449,6 +470,10 @@ int recv_files(int f_in, struct file_lis
- 			case G2R_PARTIAL_DIR:
- 				fnamecmp = partialptr ? partialptr : fname;
+@@ -452,6 +473,10 @@ int recv_files(int f_in, struct file_lis
+ 			case G2R_BACKUP:
+ 				fnamecmp = get_backup_name(fname);
  				break;
 +			case G2R_FUZZY:
 +				read_gen_name(f_in_name, fnamecmpbuf);
@@ -253,17 +253,17 @@ Be sure to run "make proto" before "make".
  			default:
  				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
  					 compare_dest, fname);
---- orig/rsync.h	2004-07-30 07:16:38
-+++ rsync.h	2004-07-30 07:45:40
-@@ -120,6 +120,7 @@
- 
+--- orig/rsync.h	2004-09-07 21:52:22
++++ rsync.h	2004-09-07 22:02:37
+@@ -121,6 +121,7 @@
  #define G2R_FNAME	0x80
  #define G2R_PARTIAL_DIR	0x81
-+#define G2R_FUZZY	0x82
+ #define G2R_BACKUP	0x82
++#define G2R_FUZZY	0x83
  
  
  /* Log-message categories.  FLOG is only used on the daemon side to
---- orig/rsync.yo	2004-08-13 07:18:59
+--- orig/rsync.yo	2004-09-07 19:54:51
 +++ rsync.yo	2004-07-03 19:27:25
 @@ -356,6 +356,7 @@ verb(
   -T  --temp-dir=DIR          create temporary files in directory DIR
