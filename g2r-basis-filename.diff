@@ -255,7 +255,7 @@ You must run "make proto" before compiling.
  	}
  
  	if (verbose > 2)
---- orig/main.c	2004-07-17 15:20:05
+--- orig/main.c	2004-07-19 17:14:44
 +++ main.c	2004-07-17 15:58:11
 @@ -57,6 +57,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
@@ -334,8 +334,8 @@ You must run "make proto" before compiling.
  
  	get_redo_num(); /* Read final MSG_DONE and any prior messages. */
  	report(-1);
---- orig/receiver.c	2004-07-16 20:07:22
-+++ receiver.c	2004-07-17 21:27:55
+--- orig/receiver.c	2004-07-19 17:06:10
++++ receiver.c	2004-07-19 16:44:39
 @@ -28,6 +28,7 @@ extern int max_delete;
  extern int csum_length;
  extern struct stats stats;
@@ -344,9 +344,9 @@ You must run "make proto" before compiling.
  extern int am_server;
  extern int relative_paths;
  extern int keep_dirlinks;
-@@ -299,13 +300,38 @@ static int receive_data(int f_in,struct 
- 	return 1;
+@@ -303,6 +304,30 @@ static int receive_data(int f_in,struct 
  }
+ 
  
 +static char *read_gen_name(int fd, char *buf, char *realname)
 +{
@@ -371,8 +371,11 @@ You must run "make proto" before compiling.
 +	return realname;
 +}
 +
- 
- /**
++
+ static void discard_receive_data(int f_in, OFF_T length)
+ {
+ 	receive_data(f_in, NULL, -1, NULL, length);
+@@ -313,8 +338,10 @@ static void discard_receive_data(int f_i
   * main routine for receiver process.
   *
   * Receiver process runs on the same host as the generator process. */
@@ -384,7 +387,7 @@ You must run "make proto" before compiling.
  	int fd1,fd2;
  	STRUCT_STAT st;
  	char *fname, fbuf[MAXPATHLEN];
-@@ -332,8 +358,20 @@ int recv_files(int f_in, struct file_lis
+@@ -341,6 +368,17 @@ int recv_files(int f_in, struct file_lis
  
  		i = read_int(f_in);
  		if (i == -1) {
@@ -401,11 +404,8 @@ You must run "make proto" before compiling.
 +
  			if (phase)
  				break;
-+
- 			phase = 1;
- 			csum_length = SUM_LENGTH;
- 			if (verbose > 2)
-@@ -373,19 +411,31 @@ int recv_files(int f_in, struct file_lis
+ 
+@@ -383,7 +421,26 @@ int recv_files(int f_in, struct file_lis
  		if (verbose > 2)
  			rprintf(FINFO,"recv_files(%s)\n",fname);
  
@@ -418,9 +418,9 @@ You must run "make proto" before compiling.
 +				next_gen_i = read_int(f_name_in);
 +			}
 +			if (i < next_gen_i) {
-+				rprintf(FINFO, "skipping update for %s\n",
++				rprintf(FINFO, "skipping update for \"%s\"\n",
 +					fname);
-+				receive_data(f_in,NULL,-1,NULL,file->length);
++				discard_receive_data(f_in, file->length);
 +				continue;
 +			}
 +			next_gen_i = -1;
@@ -430,8 +430,10 @@ You must run "make proto" before compiling.
 +			fnamecmp = read_gen_name(f_name_in, fnamecmpbuf, fname);
 +		else
 +			fnamecmp = fname;
-+
  
+ 		if (server_exclude_list.head
+ 		    && check_exclude(&server_exclude_list, fname,
+@@ -400,14 +457,6 @@ int recv_files(int f_in, struct file_lis
  		/* open the file */
  		fd1 = do_open(fnamecmp, O_RDONLY, 0);
  
