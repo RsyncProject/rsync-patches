@@ -1,12 +1,14 @@
+Depends-On-Patch: delete-during.diff
+
 The changes to generator.c were greatly simplified, making the patch
 easier to maintain and fixing the failing test in the testsuite.
 Lightly tested.
 
 Be sure to run "make proto" before "make".
 
---- orig/generator.c	2005-01-17 23:11:45
+--- orig/generator.c	2005-01-18 23:14:23
 +++ generator.c	2005-01-18 19:25:55
-@@ -44,6 +44,7 @@ extern int size_only;
+@@ -46,6 +46,7 @@ extern int size_only;
  extern OFF_T max_size;
  extern int io_timeout;
  extern int protocol_version;
@@ -14,22 +16,22 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -242,6 +243,89 @@ static void generate_and_send_sums(int f
+@@ -243,6 +244,89 @@ static void generate_and_send_sums(int f
+ 		unmap_file(mapbuf);
  }
- 
  
 +/* Try to find a filename in the same dir as "fname" with a similar name.
 + *
 + * TODO:
-+ *
-+ * 1. We should be using a cache of names for the current dir, not
++ *  - We should be using a cache of names for the current dir, not
 + *    re-reading the destination directory for every file.
-+ * 2. We must not return an rsync tempfile from the current transfer.
-+ * 3. If the highest-rated name is not a normal file, we should fall-
++ *  - We must not return an rsync tempfile from the current transfer.
++ *  - If the highest-rated name is not a normal file, we should fall-
 + *    back to the next highest-rated file.
-+ * 4. We must not return a destination file that is being updated
++ *  - We must not return a destination file that is being updated
 + *    during the current transfer, even if we already processed it
 + *    (since the receiver may not be done with it yet).
++ *  - We must weed out any names that a daemon's config has excluded.
 + */
 +static int find_fuzzy(const char *fname, char *buf, STRUCT_STAT *st_ptr)
 +{
@@ -104,7 +106,7 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -496,6 +580,15 @@ static void recv_generator(char *fname, 
+@@ -498,6 +582,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -120,7 +122,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -524,6 +617,8 @@ static void recv_generator(char *fname, 
+@@ -526,6 +619,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -129,7 +131,7 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -598,8 +693,24 @@ notify_others:
+@@ -600,8 +695,24 @@ notify_others:
  	write_int(f_out, i);
  	if (protocol_version >= 29 && inplace && !read_batch)
  		write_byte(f_out, fnamecmp_type);
@@ -155,9 +157,9 @@ Be sure to run "make proto" before "make".
  
  	if (dry_run || read_batch)
  		return;
---- orig/main.c	2005-01-17 23:11:45
+--- orig/main.c	2005-01-18 21:56:05
 +++ main.c	2005-01-14 18:33:15
-@@ -48,6 +48,7 @@ extern int keep_dirlinks;
+@@ -49,6 +49,7 @@ extern int keep_dirlinks;
  extern int preserve_hard_links;
  extern int protocol_version;
  extern int recurse;
@@ -165,7 +167,7 @@ Be sure to run "make proto" before "make".
  extern int relative_paths;
  extern int rsync_port;
  extern int whole_file;
-@@ -464,7 +465,8 @@ static int do_recv(int f_in,int f_out,st
+@@ -465,7 +466,8 @@ static int do_recv(int f_in,int f_out,st
  	int pid;
  	int status = 0;
  	int error_pipe[2], name_pipe[2];
@@ -175,9 +177,9 @@ Be sure to run "make proto" before "make".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
---- orig/options.c	2005-01-17 23:11:45
+--- orig/options.c	2005-01-19 01:07:34
 +++ options.c	2005-01-15 21:08:13
-@@ -86,6 +86,7 @@ int copy_unsafe_links = 0;
+@@ -89,6 +89,7 @@ int copy_unsafe_links = 0;
  int size_only = 0;
  int daemon_bwlimit = 0;
  int bwlimit = 0;
@@ -185,7 +187,7 @@ Be sure to run "make proto" before "make".
  size_t bwlimit_writemax = 0;
  int delete_after = 0;
  int only_existing = 0;
-@@ -288,6 +289,7 @@ void usage(enum logcode F)
+@@ -292,6 +293,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -193,7 +195,7 @@ Be sure to run "make proto" before "make".
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
-@@ -384,6 +386,7 @@ static struct poptOption long_options[] 
+@@ -390,6 +392,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -201,9 +203,9 @@ Be sure to run "make proto" before "make".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
-@@ -1234,6 +1237,9 @@ void server_options(char **args,int *arg
- 			args[ac++] = "--no-relative";
- 	}
+@@ -1247,6 +1250,9 @@ void server_options(char **args,int *arg
+ 	if (!implied_dirs && !am_sender)
+ 		args[ac++] = "--no-implied-dirs";
  
 +	if (fuzzy_basis && am_sender)
 +		args[ac++] = "--fuzzy";
@@ -211,9 +213,9 @@ Be sure to run "make proto" before "make".
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2005-01-17 23:11:45
+--- orig/receiver.c	2005-01-18 22:47:38
 +++ receiver.c	2005-01-15 21:21:02
-@@ -324,6 +324,27 @@ static int receive_data(int f_in, char *
+@@ -234,6 +234,27 @@ static int receive_data(int f_in, char *
  }
  
  
@@ -241,7 +243,7 @@ Be sure to run "make proto" before "make".
  static void discard_receive_data(int f_in, OFF_T length)
  {
  	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
-@@ -454,6 +475,10 @@ int recv_files(int f_in, struct file_lis
+@@ -364,6 +385,10 @@ int recv_files(int f_in, struct file_lis
  			case FNAMECMP_BACKUP:
  				fnamecmp = get_backup_name(fname);
  				break;
@@ -262,9 +264,9 @@ Be sure to run "make proto" before "make".
  
  
  /* Log-message categories.  FLOG is only used on the daemon side to
---- orig/rsync.yo	2005-01-17 23:11:46
+--- orig/rsync.yo	2005-01-19 01:05:05
 +++ rsync.yo	2005-01-15 21:48:52
-@@ -358,6 +358,7 @@ verb(
+@@ -359,6 +359,7 @@ verb(
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
@@ -272,7 +274,7 @@ Be sure to run "make proto" before "make".
   -P                          equivalent to --partial --progress
   -z, --compress              compress file data
   -C, --cvs-exclude           auto ignore files in the same way CVS does
-@@ -878,6 +879,14 @@ Note that rsync versions prior to 2.6.1 
+@@ -888,6 +889,14 @@ Note that rsync versions prior to 2.6.1 
  (or implied by -a).  You can work-around this bug by avoiding the -o option
  when sending to an old rsync.
  
