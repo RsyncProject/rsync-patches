@@ -34,7 +34,7 @@ the -i option).
 ..wayne..
 
 --- orig/exclude.c	2004-08-05 23:16:37
-+++ exclude.c	2004-08-06 22:58:08
++++ exclude.c	2004-08-06 23:22:00
 @@ -27,17 +27,66 @@
  #include "rsync.h"
  
@@ -180,7 +180,7 @@ the -i option).
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +196,244 @@ static void make_exclude(struct exclude_
+@@ -96,22 +196,247 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -289,7 +289,7 @@ the -i option).
 +	*x = '\0';
 +	if (dir[dirlen]) /* avoid writing to a read-only string */
 +		dir[dirlen] = '\0';
-+	pathjoin(dirbuf, MAXPATHLEN, curr_dir, dir);
++	pathjoin(dirbuf, MAXPATHLEN, sanitize_paths ? "" : curr_dir, dir);
 +	if (dirlen == 2 && *dir == '.') {
 +		int len = strlen(dirbuf);
 +		dirbuf[len-2] = '\0';
@@ -305,7 +305,10 @@ the -i option).
 +	clean_fname(buf);
 +	if (!*buf || buf[1])
 +		strlcat(buf, "/", MAXPATHLEN);
-+	for (x = buf, y = dirbuf; *x && *x == *y; x++, y++) {}
++	x = buf;
++	if (sanitize_paths)
++		x += strlen(lp_path(module_id));
++	for (y = dirbuf; *x && *x == *y; x++, y++) {}
 +	if (*x)
 +		y += strlen(y);
 +
@@ -431,7 +434,7 @@ the -i option).
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,7 +444,7 @@ static int check_one_exclude(char *name,
+@@ -122,7 +447,7 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -440,7 +443,7 @@ the -i option).
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
-@@ -133,7 +455,8 @@ static int check_one_exclude(char *name,
+@@ -133,7 +458,8 @@ static int check_one_exclude(char *name,
  		name = full_name;
  	}
  
@@ -450,7 +453,7 @@ the -i option).
  
  	if (ex->match_flags & MATCHFLG_DIRECTORY && !name_is_dir)
  		return 0;
-@@ -148,9 +471,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +474,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -462,7 +465,7 @@ the -i option).
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +544,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +547,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -476,7 +479,7 @@ the -i option).
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -253,12 +583,41 @@ static const char *get_exclude_tok(const
+@@ -253,12 +586,41 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -520,7 +523,7 @@ the -i option).
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
  
-@@ -292,9 +651,15 @@ void add_exclude(struct exclude_list_str
+@@ -292,9 +654,15 @@ void add_exclude(struct exclude_list_str
  	cp = pattern;
  	pat_len = 0;
  	while (1) {
@@ -536,7 +539,7 @@ the -i option).
  
  		if (mflags & MATCHFLG_CLEAR_LIST) {
  			if (verbose > 2) {
-@@ -306,13 +671,23 @@ void add_exclude(struct exclude_list_str
+@@ -306,13 +674,23 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -566,7 +569,7 @@ the -i option).
  	}
  }
  
-@@ -321,7 +696,7 @@ void add_exclude_file(struct exclude_lis
+@@ -321,7 +699,7 @@ void add_exclude_file(struct exclude_lis
  		      int xflags)
  {
  	FILE *fp;
@@ -575,7 +578,7 @@ the -i option).
  	char *eob = line + sizeof line - 1;
  	int word_split = xflags & XFLG_WORD_SPLIT;
  
-@@ -343,6 +718,11 @@ void add_exclude_file(struct exclude_lis
+@@ -343,6 +721,11 @@ void add_exclude_file(struct exclude_lis
  		return;
  	}
  
@@ -587,7 +590,7 @@ the -i option).
  	while (1) {
  		char *s = line;
  		int ch, overflow = 0;
-@@ -402,7 +782,21 @@ void send_exclude_list(int f)
+@@ -402,7 +785,21 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -610,7 +613,7 @@ the -i option).
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +837,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +840,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
