@@ -1,0 +1,143 @@
+--- io.c	2004-01-16 11:31:47.000000000 -0500
++++ io.c	2004-04-19 16:07:57.000000000 -0400
+@@ -47,6 +47,7 @@
+ static int no_flush;
+ 
+ extern int bwlimit;
++extern int timelimit;
+ extern int verbose;
+ extern int io_timeout;
+ extern int am_server;
+@@ -759,6 +760,26 @@
+ 	select(0, NULL, NULL, NULL, &tv);
+ }
+ 
++/*
++ * When --timelimit is used, compare rsync_start_time and the current time
++ * and return 1 when the timelimit has been reached.
++ */
++static int has_timelimit_expired()
++{
++	struct timeval tv;
++	time_t start_time = 0;
++	time_t expiration_time = 0;
++
++	assert(timelimit > 0);
++
++	start_time = get_rsync_start_time();
++	assert(start_time > 0);
++
++	gettimeofday(&tv, NULL);
++	expiration_time = start_time + (timelimit * 60);
++
++	return tv.tv_sec > expiration_time;
++}
+ 
+ /**
+  * Write len bytes to the file descriptor @p fd.
+@@ -837,6 +858,11 @@
+ 			}
+ 
+ 			sleep_for_bwlimit(ret);
++
++			if (timelimit && has_timelimit_expired()) {
++				rprintf(FERROR, RSYNC_NAME ": \n%d minute time limit exceeded.\n", timelimit);
++				exit_cleanup(RERR_PARTIAL);
++			}
+  
+ 			total += ret;
+ 
+--- options.c	2004-04-17 13:07:23.000000000 -0400
++++ options.c	2004-04-19 16:07:57.000000000 -0400
+@@ -83,6 +83,7 @@
+ int copy_unsafe_links = 0;
+ int size_only = 0;
+ int bwlimit = 0;
++int timelimit = 0;
+ int delete_after = 0;
+ int only_existing = 0;
+ int opt_ignore_existing = 0;
+@@ -288,6 +289,7 @@
+   rprintf(F,"     --log-format=FORMAT     log file transfers using specified format\n");
+   rprintf(F,"     --password-file=FILE    get password from FILE\n");
+   rprintf(F,"     --bwlimit=KBPS          limit I/O bandwidth, KBytes per second\n");
++  rprintf(F,"     --timelimit=MINS        Stop rsync after MINS minutes\n");
+   rprintf(F,"     --write-batch=PREFIX    write batch fileset starting with PREFIX\n");
+   rprintf(F,"     --read-batch=PREFIX     read batch fileset starting with PREFIX\n");
+   rprintf(F," -h, --help                  show this help screen\n");
+@@ -377,6 +379,7 @@
+   {"port",             0,  POPT_ARG_INT,    &rsync_port, 0, 0, 0 },
+   {"log-format",       0,  POPT_ARG_STRING, &log_format, 0, 0, 0 },
+   {"bwlimit",          0,  POPT_ARG_INT,    &bwlimit, 0, 0, 0 },
++  {"timelimit",        0,  POPT_ARG_INT,    &timelimit, 0, 0, 0 },
+   {"address",          0,  POPT_ARG_STRING, &bind_address, 0, 0, 0 },
+   {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
+   {"hard-links",      'H', POPT_ARG_NONE,   &preserve_hard_links, 0, 0, 0 },
+@@ -881,6 +884,12 @@
+ 
+ 	if (bwlimit) {
+ 		if (asprintf(&arg, "--bwlimit=%d", bwlimit) < 0)
++			goto oom;
++		args[ac++] = arg;
++	}
++
++	if (timelimit) {
++		if (asprintf(&arg, "--timelimit=%d", timelimit) < 0)
+ 			goto oom;
+ 		args[ac++] = arg;
+ 	}
+--- proto.h	2004-04-14 19:33:30.000000000 -0400
++++ proto.h	2004-04-19 16:07:57.000000000 -0400
+@@ -267,6 +267,7 @@
+ int unsafe_symlink(const char *dest, const char *src);
+ char *timestring(time_t t);
+ int msleep(int t);
++time_t get_rsync_start_time(void);
+ int cmp_modtime(time_t file1, time_t file2);
+ int _Insure_trap_error(int a1, int a2, int a3, int a4, int a5, int a6);
+ void *_new_array(unsigned int size, unsigned long num);
+--- rsync.yo	17 Apr 2004 18:40:16 -0000	1.159
++++ rsync.yo	19 Apr 2004 20:50:45 -0000
+@@ -346,6 +346,7 @@
+      --log-format=FORMAT     log file transfers using specified format
+      --password-file=FILE    get password from FILE
+      --bwlimit=KBPS          limit I/O bandwidth, KBytes per second
++     --timelimit=MINS        Stop rsync after MINS minutes
+      --write-batch=PREFIX    write batch fileset starting with PREFIX
+      --read-batch=PREFIX     read batch fileset starting with PREFIX
+  -h, --help                  show this help screen
+@@ -880,6 +881,10 @@
+ transfer was too fast, it will wait before sending the next data block. The
+ result is an average transfer rate equaling the specified limit. A value
+ of zero specifies no limit.
++
++dit(bf(--timelimit=MINS)) This option allows you to specify the maximum
++number of minutes rsync will run for. Ths time starts when the first
++file starts transferring.
+ 
+ dit(bf(--write-batch=PREFIX)) Generate a set of files that can be
+ transferred as a batch update. Each filename in the set starts with
+--- util.c	2004-04-17 13:06:03.000000000 -0400
++++ util.c	2004-04-19 16:07:57.000000000 -0400
+@@ -1050,6 +1050,21 @@
+ 	return True;
+ }
+ 
++/**
++ * Return the time that rsync is started, used by --time-limit
++ */
++time_t get_rsync_start_time(void)
++{
++	static struct timeval tval;
++	static int has_set_rsync_start_time = 0;
++
++	if (!has_set_rsync_start_time) {
++		gettimeofday(&tval, NULL);
++		has_set_rsync_start_time = 1;
++	}
++
++	return tval.tv_sec;
++}
+ 
+ /**
+  * Determine if two file modification times are equivalent (either
