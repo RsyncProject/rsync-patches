@@ -23,8 +23,8 @@ Optional:
      memmove lchown vsnprintf snprintf asprintf setsid glob strpbrk \
      strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid)
  
---- orig/match.c	2004-07-02 23:31:44
-+++ match.c	2004-07-03 20:19:54
+--- orig/match.c	2004-07-04 08:08:30
++++ match.c	2004-07-04 08:03:36
 @@ -23,6 +23,7 @@ extern int verbose;
  extern int am_server;
  extern int do_progress;
@@ -33,71 +33,20 @@ Optional:
  
  typedef unsigned short tag;
  
-@@ -52,9 +53,26 @@ static size_t *tag_table;
- #define gettag2(s1,s2) (((s1) + (s2)) & 0xFFFF)
- #define gettag(sum) gettag2((sum)&0xFFFF,(sum)>>16)
- 
-+static struct sum_buf *current_sums;
-+static int current_s2length;
-+
- static int compare_targets(struct target *t1,struct target *t2)
- {
--	return (int)t1->t - (int)t2->t;
-+	struct sum_buf *s1, *s2;
-+
-+	if (t1->t != t2->t)
-+		return t1->t < t2->t ? -1 : 1;
-+
-+	s1 = &current_sums[t1->i];
-+	s2 = &current_sums[t2->i];
-+
-+	if (s1->sum1 != s2->sum1)
-+		return s1->sum1 < s2->sum1 ? -1 : 1;
-+
-+	if (s1->len != s2->len)
-+		return s1->len < s2->len ? -1 : 1;
-+
-+	return memcmp(s1->sum2, s2->sum2, current_s2length);
- }
- 
- 
-@@ -74,6 +92,8 @@ static void build_hash_table(struct sum_
- 		targets[i].t = gettag(s->sums[i].sum1);
- 	}
- 
-+	current_sums = s->sums;
-+	current_s2length = s->s2length;
- 	qsort(targets,s->count,sizeof(targets[0]),(int (*)())compare_targets);
- 
- 	for (i = 0; i < TABLESIZE; i++)
-@@ -192,12 +212,24 @@ static void hash_search(int f,struct sum
- 			unsigned int l;
- 			size_t i = targets[j].i;
- 
--			if (sum != s->sums[i].sum1)
-+			if (sum != s->sums[i].sum1) {
-+				if (done_csum2)
-+					break;
+@@ -200,6 +201,12 @@ static void hash_search(int f,struct sum
+ 			if (l != s->sums[i].len)
  				continue;
-+			}
  
- 			/* also make sure the two blocks are the same length */
- 			l = MIN((OFF_T)s->blength, len-offset);
--			if (l != s->sums[i].len)
-+			if (l != s->sums[i].len) {
-+				if (done_csum2)
-+					break;
-+				continue;
-+			}
-+
 +			/* inplace: ensure chunk's offset is either >= our
 +			 * offset or that the data didn't move. */
 +			if (inplace && s->sums[i].offset < offset
 +			    && s->sums[i].i >= 0)
- 				continue;
- 
++				continue;
++
  			if (verbose > 3)
-@@ -215,15 +247,41 @@ static void hash_search(int f,struct sum
+ 				rprintf(FINFO,"potential match at %.0f target=%.0f %.0f sum=%08x\n",
+ 					(double)offset,(double)j,(double)i,sum);
+@@ -215,15 +222,41 @@ static void hash_search(int f,struct sum
  				continue;
  			}
  
