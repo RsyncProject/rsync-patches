@@ -1,0 +1,232 @@
+This patch allows multiple --compare-dest or --link-dest options to be
+used, making the transfer of some files more optimal.  Note that the
+algorithm does NOT search for the best match -- it stops at the first
+match and uses that as the basis file for the transfer, so be sure to
+order your arguments appropriately.
+
+--- generator.c	18 Jun 2004 16:30:24 -0000	1.88
++++ generator.c	23 Jun 2004 17:08:19 -0000
+@@ -42,7 +42,7 @@ extern int size_only;
+ extern int io_timeout;
+ extern int protocol_version;
+ extern int always_checksum;
+-extern char *compare_dest;
++extern char *compare_dest[];
+ extern int link_dest;
+ extern int whole_file;
+ extern int local_server;
+@@ -81,13 +81,12 @@ static int skip_file(char *fname, struct
+ 	if (always_checksum && S_ISREG(st->st_mode)) {
+ 		char sum[MD4_SUM_LENGTH];
+ 		char fnamecmpdest[MAXPATHLEN];
++		int i;
+ 
+-		if (compare_dest != NULL) {
+-			if (access(fname, 0) != 0) {
+-				pathjoin(fnamecmpdest, sizeof fnamecmpdest,
+-					 compare_dest, fname);
+-				fname = fnamecmpdest;
+-			}
++		for (i = 0; access(fname, 0) != 0 && compare_dest[i] != NULL; i++) {
++			pathjoin(fnamecmpdest, sizeof fnamecmpdest,
++					compare_dest[i], fname);
++			fname = fnamecmpdest;
+ 		}
+ 		file_checksum(fname,sum,st->st_size);
+ 		return memcmp(sum, file->u.sum, protocol_version < 21 ? 2
+@@ -426,13 +425,18 @@ void recv_generator(char *fname, struct 
+ 
+ 	fnamecmp = fname;
+ 
+-	if (statret == -1 && compare_dest != NULL) {
++	if (statret == -1 && compare_dest[0] != NULL) {
+ 		/* try the file at compare_dest instead */
+ 		int saveerrno = errno;
+-		pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest, fname);
+-		statret = link_stat(fnamecmpbuf, &st, 0);
+-		if (!S_ISREG(st.st_mode))
+-			statret = -1;
++		int i;
++		for (i = 0; compare_dest[i] != NULL; i++) {
++			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest[i], fname);
++			if ((statret = link_stat(fnamecmpbuf, &st, 0)) == 0) {
++				if (S_ISREG(st.st_mode))
++					break;
++				statret = -1;
++			}
++		}
+ 		if (statret == -1)
+ 			errno = saveerrno;
+ #if HAVE_LINK
+--- options.c	20 Jun 2004 19:47:05 -0000	1.157
++++ options.c	23 Jun 2004 17:08:19 -0000
+@@ -117,7 +117,8 @@ unsigned int backup_dir_remainder;
+ 
+ char *backup_suffix = NULL;
+ char *tmpdir = NULL;
+-char *compare_dest = NULL;
++char *compare_dest[MAX_COMP_DEST+1];
++int num_comp_dest = 0;
+ char *config_file = NULL;
+ char *shell_cmd = NULL;
+ char *log_format = NULL;
+@@ -139,6 +140,7 @@ char *batch_prefix = NULL;
+ 
+ static int daemon_opt;   /* sets am_daemon after option error-reporting */
+ static int modify_window_set;
++static int saw_compare_dest = 0;
+ 
+ /** Local address to bind.  As a character string because it's
+  * interpreted by the IPv6 layer: should be a numeric IP4 or IP6
+@@ -308,7 +310,7 @@ void usage(enum logcode F)
+ }
+ 
+ enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+-      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
++      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_COMPARE_DEST, OPT_LINK_DEST,
+       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
+       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
+       OPT_REFUSED_BASE = 9000};
+@@ -366,8 +368,8 @@ static struct poptOption long_options[] 
+   {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
+   {"timeout",          0,  POPT_ARG_INT,    &io_timeout, OPT_TIMEOUT, 0, 0 },
+   {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
+-  {"compare-dest",     0,  POPT_ARG_STRING, &compare_dest, 0, 0, 0 },
+-  {"link-dest",        0,  POPT_ARG_STRING, &compare_dest,  OPT_LINK_DEST, 0, 0 },
++  {"compare-dest",     0,  POPT_ARG_STRING, 0,              OPT_COMPARE_DEST, 0, 0 },
++  {"link-dest",        0,  POPT_ARG_STRING, 0,              OPT_LINK_DEST, 0, 0 },
+   /* TODO: Should this take an optional int giving the compression level? */
+   {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
+   {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
+@@ -585,8 +587,36 @@ int parse_arguments(int *argc, const cha
+ 				select_timeout = io_timeout;
+ 			break;
+ 
++		case OPT_COMPARE_DEST:
++#if HAVE_LINK
++			if (num_comp_dest >= MAX_COMP_DEST-1) {
++				rprintf(FERROR, "ERROR: %s\n", "too many --compare-dest args given");
++				return 0;
++			}
++			arg = poptGetOptArg(pc);
++			if (sanitize_paths)
++				arg = alloc_sanitize_path(arg, curr_dir);
++			compare_dest[num_comp_dest++] = (char *)arg;
++			saw_compare_dest = 1;
++			break;
++#else
++			snprintf(err_buf, sizeof err_buf,
++				 "hard links are not supported on this %s\n",
++				 am_server ? "server" : "client");
++			rprintf(FERROR, "ERROR: %s", err_buf);
++			return 0;
++#endif
++
+ 		case OPT_LINK_DEST:
+ #if HAVE_LINK
++			if (num_comp_dest >= MAX_COMP_DEST-1) {
++				rprintf(FERROR, "ERROR: %s\n", "too many --compare-dest args given");
++				return 0;
++			}
++			arg = poptGetOptArg(pc);
++			if (sanitize_paths)
++				arg = alloc_sanitize_path(arg, curr_dir);
++			compare_dest[num_comp_dest++] = (char *)arg;
+ 			link_dest = 1;
+ 			break;
+ #else
+@@ -661,6 +691,11 @@ int parse_arguments(int *argc, const cha
+ 		exit_cleanup(RERR_SYNTAX);
+ 	}
+ 
++	if (saw_compare_dest && link_dest) {
++		rprintf(FINFO,
++			"WARNING: promoting --compare-dest options to --link-dest.\n");
++	}
++
+ 	if (archive_mode) {
+ 		if (!files_from)
+ 			recurse = 1;
+@@ -689,8 +724,6 @@ int parse_arguments(int *argc, const cha
+ 			(*argv)[i] = alloc_sanitize_path((*argv)[i], NULL);
+ 		if (tmpdir)
+ 			tmpdir = alloc_sanitize_path(tmpdir, curr_dir);
+-		if (compare_dest)
+-			compare_dest = alloc_sanitize_path(compare_dest, curr_dir);
+ 		if (backup_dir)
+ 			backup_dir = alloc_sanitize_path(backup_dir, curr_dir);
+ 		if (files_from)
+@@ -785,8 +818,8 @@ int parse_arguments(int *argc, const cha
+  **/
+ void server_options(char **args,int *argc)
+ {
++	static char argstr[50+MAX_COMP_DEST*2];
+ 	int ac = *argc;
+-	static char argstr[50];
+ 	char *arg;
+ 
+ 	int i, x;
+@@ -968,13 +1001,16 @@ void server_options(char **args,int *arg
+ 		args[ac++] = tmpdir;
+ 	}
+ 
+-	if (compare_dest && am_sender) {
++	if (compare_dest[0] && am_sender) {
+ 		/* the server only needs this option if it is not the sender,
+ 		 *   and it may be an older version that doesn't know this
+ 		 *   option, so don't send it if client is the sender.
+ 		 */
+-		args[ac++] = link_dest ? "--link-dest" : "--compare-dest";
+-		args[ac++] = compare_dest;
++		int i;
++		for (i = 0; i < num_comp_dest; i++) {
++			args[ac++] = link_dest ? "--link-dest" : "--compare-dest";
++			args[ac++] = compare_dest[i];
++		}
+ 	}
+ 
+ 	if (files_from && (!am_sender || remote_filesfrom_file)) {
+--- receiver.c	14 Jun 2004 15:09:36 -0000	1.82
++++ receiver.c	23 Jun 2004 17:08:19 -0000
+@@ -36,7 +36,7 @@ extern int preserve_perms;
+ extern int cvs_exclude;
+ extern int io_error;
+ extern char *tmpdir;
+-extern char *compare_dest;
++extern char *compare_dest[];
+ extern int make_backups;
+ extern int do_progress;
+ extern char *backup_dir;
+@@ -306,7 +306,7 @@ int recv_files(int f_in,struct file_list
+ 	struct file_struct *file;
+ 	struct stats initial_stats;
+ 	int save_make_backups = make_backups;
+-	int i, recv_ok, phase = 0;
++	int i, j, recv_ok, phase = 0;
+ 
+ 	if (verbose > 2) {
+ 		rprintf(FINFO,"recv_files(%d) starting\n",flist->count);
+@@ -369,10 +369,10 @@ int recv_files(int f_in,struct file_list
+ 		/* open the file */
+ 		fd1 = do_open(fnamecmp, O_RDONLY, 0);
+ 
+-		if (fd1 == -1 && compare_dest != NULL) {
++		for (j = 0; fd1 == -1 && compare_dest[j] != NULL; j++) {
+ 			/* try the file at compare_dest instead */
+ 			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
+-				 compare_dest, fname);
++				 compare_dest[j], fname);
+ 			fnamecmp = fnamecmpbuf;
+ 			fd1 = do_open(fnamecmp, O_RDONLY, 0);
+ 		}
+--- rsync.h	16 May 2004 07:28:24 -0000	1.204
++++ rsync.h	23 Jun 2004 17:08:20 -0000
+@@ -98,6 +98,8 @@
+ 
+ #define MAX_ARGS 1000
+ 
++#define MAX_COMP_DEST 20
++
+ #define MPLEX_BASE 7
+ 
+ #define NO_EXCLUDES	0
