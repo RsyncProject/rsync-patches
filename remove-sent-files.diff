@@ -4,8 +4,8 @@ command before "make":
     make proto
 
 
---- io.c	6 Jun 2004 19:15:58 -0000	1.125
-+++ io.c	6 Jun 2004 21:19:26 -0000
+--- io.c	9 Jun 2004 03:07:50 -0000	1.129
++++ io.c	18 Jun 2004 17:24:12 -0000
 @@ -225,6 +225,14 @@ static void read_msg_fd(void)
  		read_loop(fd, buf, 4);
  		redo_list_add(IVAL(buf,0));
@@ -21,7 +21,7 @@ command before "make":
  	case MSG_INFO:
  	case MSG_ERROR:
  	case MSG_LOG:
-@@ -639,6 +647,16 @@ static int read_unbuffered(int fd, char 
+@@ -636,6 +644,16 @@ static int readfd_unbuffered(int fd, cha
  			read_loop(fd, buffer, remaining);
  			bufferIdx = 0;
  			break;
@@ -38,26 +38,26 @@ command before "make":
  		case MSG_INFO:
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
---- main.c	19 May 2004 22:19:19 -0000	1.195
-+++ main.c	6 Jun 2004 21:19:27 -0000
+--- main.c	18 Jun 2004 16:50:20 -0000	1.198
++++ main.c	18 Jun 2004 17:24:12 -0000
 @@ -42,6 +42,7 @@ extern int list_only;
  extern int local_server;
  extern int log_got_error;
  extern int module_id;
 +extern int need_messages_from_generator;
  extern int orig_umask;
+ extern int keep_dirlinks;
  extern int preserve_hard_links;
- extern int protocol_version;
-@@ -572,6 +573,8 @@ void start_server(int f_in, int f_out, i
- 		io_start_multiplex_out(f_out);
+@@ -575,6 +576,8 @@ void start_server(int f_in, int f_out, i
  
  	if (am_sender) {
+ 		keep_dirlinks = 0; /* Must be disabled on the sender. */
 +		if (need_messages_from_generator)
 +			io_start_multiplex_in(f_in);
  		if (!read_batch) {
  			recv_exclude_list(f_in);
  			if (cvs_exclude)
-@@ -638,6 +641,9 @@ int client_run(int f_in, int f_out, pid_
+@@ -642,6 +645,9 @@ int client_run(int f_in, int f_out, pid_
  		exit_cleanup(status);
  	}
  
@@ -67,8 +67,8 @@ command before "make":
  	if (argc == 0)
  		list_only = 1;
  
---- options.c	6 Jun 2004 19:02:40 -0000	1.155
-+++ options.c	6 Jun 2004 21:19:27 -0000
+--- options.c	7 Jun 2004 22:05:22 -0000	1.156
++++ options.c	18 Jun 2004 17:24:12 -0000
 @@ -87,6 +87,7 @@ int size_only = 0;
  int bwlimit = 0;
  size_t bwlimit_writemax = 0;
@@ -112,7 +112,7 @@ command before "make":
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"exclude",          0,  POPT_ARG_STRING, 0,              OPT_EXCLUDE, 0, 0 },
-@@ -518,6 +522,11 @@ int parse_arguments(int *argc, const cha
+@@ -513,6 +517,11 @@ int parse_arguments(int *argc, const cha
  			delete_mode = 1;
  			break;
  
@@ -124,7 +124,7 @@ command before "make":
  		case OPT_EXCLUDE:
  			if (am_server || sanitize_paths)
  				return 0; /* Impossible... */
-@@ -994,6 +1003,9 @@ void server_options(char **args,int *arg
+@@ -989,6 +998,9 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -134,9 +134,9 @@ command before "make":
  	*argc = ac;
  	return;
  
---- receiver.c	21 May 2004 08:27:04 -0000	1.79
-+++ receiver.c	6 Jun 2004 21:19:28 -0000
-@@ -47,6 +47,7 @@ extern int ignore_errors;
+--- receiver.c	14 Jun 2004 15:09:36 -0000	1.82
++++ receiver.c	18 Jun 2004 17:24:13 -0000
+@@ -48,6 +48,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
  extern int checksum_seed;
@@ -144,7 +144,7 @@ command before "make":
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -295,7 +296,7 @@ int recv_files(int f_in,struct file_list
+@@ -300,7 +301,7 @@ int recv_files(int f_in,struct file_list
  	char *fname, fbuf[MAXPATHLEN];
  	char template[MAXPATHLEN];
  	char fnametmp[MAXPATHLEN];
@@ -152,8 +152,8 @@ command before "make":
 +	char *fnamecmp, numbuf[4];
  	char fnamecmpbuf[MAXPATHLEN];
  	struct map_struct *mapbuf;
- 	int i;
-@@ -477,16 +478,20 @@ int recv_files(int f_in,struct file_list
+ 	struct file_struct *file;
+@@ -482,16 +483,20 @@ int recv_files(int f_in,struct file_list
  
  		cleanup_disable();
  
@@ -179,7 +179,7 @@ command before "make":
  		}
  	}
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	6 Jun 2004 21:19:28 -0000
++++ rsync.h	18 Jun 2004 17:24:13 -0000
 @@ -60,6 +60,7 @@
  #define FLAG_TOP_DIR (1<<0)
  #define FLAG_HLINK_EOL (1<<1)	/* generator only */
@@ -197,7 +197,7 @@ command before "make":
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
 --- rsync.yo	5 Jun 2004 16:16:30 -0000	1.171
-+++ rsync.yo	6 Jun 2004 21:19:29 -0000
++++ rsync.yo	18 Jun 2004 17:24:14 -0000
 @@ -313,6 +313,7 @@ verb(
       --delete                delete files that don't exist on sender
       --delete-excluded       also delete excluded files on receiver
@@ -218,8 +218,8 @@ command before "make":
  dit(bf(--ignore-errors)) Tells --delete to go ahead and delete files
  even when there are I/O errors.
  
---- sender.c	15 May 2004 19:31:10 -0000	1.40
-+++ sender.c	6 Jun 2004 21:19:29 -0000
+--- sender.c	18 Jun 2004 16:55:12 -0000	1.41
++++ sender.c	18 Jun 2004 17:24:14 -0000
 @@ -27,6 +27,7 @@ extern int dry_run;
  extern int am_server;
  extern int am_daemon;
