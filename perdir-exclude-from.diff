@@ -1,17 +1,22 @@
---- exclude.c	14 Apr 2004 23:33:40 -0000	1.67
-+++ exclude.c	15 Apr 2004 21:02:10 -0000
-@@ -27,8 +27,10 @@
+--- exclude.c	17 Apr 2004 17:55:45 -0000	1.68
++++ exclude.c	17 Apr 2004 18:13:35 -0000
+@@ -27,6 +27,7 @@
  #include "rsync.h"
  
  extern int verbose;
 +extern int protocol_version;
+ extern int eol_nulls;
+ extern int list_only;
+ extern int recurse;
+@@ -34,6 +35,7 @@ extern int recurse;
+ extern char curr_dir[];
  
  struct exclude_list_struct exclude_list;
-+struct exclude_list_struct subdir_exclude_list;
++struct exclude_list_struct perdir_exclude_list;
  struct exclude_list_struct local_exclude_list;
  struct exclude_list_struct server_exclude_list;
  char *exclude_path_prefix = NULL;
-@@ -80,6 +82,8 @@ static void make_exclude(struct exclude_
+@@ -85,6 +87,8 @@ static void make_exclude(struct exclude_
  	for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
  		ret->slash_cnt++;
  
@@ -20,7 +25,7 @@
  	if (!listp->tail)
  		listp->head = listp->tail = ret;
  	else {
-@@ -101,6 +105,13 @@ void free_exclude_list(struct exclude_li
+@@ -106,6 +110,13 @@ void free_exclude_list(struct exclude_li
  	if (verbose > 2)
  		rprintf(FINFO, "[%s] clearing exclude list\n", who_am_i());
  
@@ -34,7 +39,7 @@
  	for (ent = listp->head; ent; ent = next) {
  		next = ent->next;
  		free_exclude(ent);
-@@ -109,6 +120,13 @@ void free_exclude_list(struct exclude_li
+@@ -114,6 +125,13 @@ void free_exclude_list(struct exclude_li
  	memset(listp, 0, sizeof listp[0]);
  }
  
@@ -48,7 +53,7 @@
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -209,21 +227,24 @@ static void report_exclude_result(char c
+@@ -213,21 +231,24 @@ static void report_exclude_result(char c
  
  /*
   * Return true if file NAME is defined to be excluded by the specified
@@ -77,7 +82,7 @@
  }
  
  
-@@ -249,10 +270,10 @@ static const char *get_exclude_tok(const
+@@ -253,10 +274,10 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -91,7 +96,7 @@
  		s += 2;
  	} else
  		*incl_ptr = xflags & XFLG_DEF_INCLUDE;
-@@ -382,8 +403,12 @@ void send_exclude_list(int f)
+@@ -387,8 +408,12 @@ void send_exclude_list(int f)
  
  		if (ent->include) {
  			write_int(f, l + 2);
@@ -106,13 +111,13 @@
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
---- flist.c	14 Apr 2004 23:33:34 -0000	1.213
-+++ flist.c	15 Apr 2004 21:02:10 -0000
+--- flist.c	17 Apr 2004 17:14:12 -0000	1.214
++++ flist.c	17 Apr 2004 18:13:36 -0000
 @@ -40,6 +40,7 @@ extern int ignore_errors;
  extern int numeric_ids;
  
  extern int cvs_exclude;
-+extern const char *subdir_exclude_filename;
++extern const char *perdir_exclude_from;
  
  extern int recurse;
  extern char curr_dir[MAXPATHLEN];
@@ -120,7 +125,7 @@
  
  extern struct exclude_list_struct exclude_list;
  extern struct exclude_list_struct server_exclude_list;
-+extern struct exclude_list_struct subdir_exclude_list;
++extern struct exclude_list_struct perdir_exclude_list;
  extern struct exclude_list_struct local_exclude_list;
  
  int io_error;
@@ -129,9 +134,9 @@
  static int check_exclude_file(char *fname, int is_dir, int exclude_level)
  {
 +	static struct exclude_list_struct *elist[] = {
-+	    &exclude_list, &subdir_exclude_list, &local_exclude_list, NULL };
++	    &exclude_list, &perdir_exclude_list, &local_exclude_list, NULL };
 +	static char *edesc[] = {
-+	    "pattern", "subdir-exclude", "local-ignore" };
++	    "pattern", "perdir-exclude", "local-ignore" };
 +	int i, rc;
 +
  #if 0 /* This currently never happens, so avoid a useless compare. */
@@ -170,12 +175,12 @@
  	    && !(file->flags & FLAG_MOUNT_POINT)) {
  		struct exclude_list_struct last_list = local_exclude_list;
 -		memset(&local_exclude_list, 0, sizeof local_exclude_list);
-+		struct exclude_list_struct sub_list = subdir_exclude_list;
++		struct exclude_list_struct sub_list = perdir_exclude_list;
 +		clear_exclude_list(&local_exclude_list, NULL);
-+		clear_exclude_list(&subdir_exclude_list, sub_list.head);
++		clear_exclude_list(&perdir_exclude_list, sub_list.head);
  		send_directory(f, flist, f_name_to(file, fbuf));
-+		free_exclude_list(&subdir_exclude_list);
-+		subdir_exclude_list = sub_list;
++		free_exclude_list(&perdir_exclude_list);
++		perdir_exclude_list = sub_list;
  		free_exclude_list(&local_exclude_list);
  		local_exclude_list = last_list;
  	}
@@ -187,24 +192,24 @@
 +		}
 +	}
 +
-+	if (subdir_exclude_filename) {
-+		if (strlcpy(p, subdir_exclude_filename, MAXPATHLEN - offset)
++	if (perdir_exclude_from) {
++		if (strlcpy(p, perdir_exclude_from, MAXPATHLEN - offset)
 +		    < MAXPATHLEN - offset)
-+			add_exclude_file(&subdir_exclude_list, fname, 0);
++			add_exclude_file(&perdir_exclude_list, fname, 0);
 +		else {
 +			io_error |= IOERR_GENERAL;
 +			rprintf(FINFO,
-+				"cannot subdir-exclude in long-named directory %s\n",
++				"cannot perdir-exclude in long-named directory %s\n",
  				full_fname(fname));
  		}
  	}
---- options.c	14 Apr 2004 23:33:34 -0000	1.146
-+++ options.c	15 Apr 2004 21:02:10 -0000
+--- options.c	17 Apr 2004 17:07:23 -0000	1.147
++++ options.c	17 Apr 2004 18:13:36 -0000
 @@ -70,6 +70,7 @@ int am_server = 0;
  int am_sender = 0;
  int am_generator = 0;
  char *files_from = NULL;
-+char *subdir_exclude_filename = NULL;
++char *perdir_exclude_from = NULL;
  int filesfrom_fd = -1;
  char *remote_filesfrom_file = NULL;
  int eol_nulls = 0;
@@ -212,7 +217,7 @@
    rprintf(F,"     --exclude-from=FILE     exclude patterns listed in FILE\n");
    rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
    rprintf(F,"     --include-from=FILE     don't exclude patterns listed in FILE\n");
-+  rprintf(F,"     --subdir-exclude=FILE   look in each subdir for exclude file FILE\n");
++  rprintf(F,"     --perdir-exclude-from=F look in each dir for exclude-file F\n");
    rprintf(F,"     --files-from=FILE       read FILE for list of source-file names\n");
    rprintf(F," -0  --from0                 all *-from file lists are delimited by nulls\n");
    rprintf(F,"     --version               print version number\n");
@@ -220,12 +225,12 @@
    {"dry-run",         'n', POPT_ARG_NONE,   &dry_run, 0, 0, 0 },
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
    {"cvs-exclude",     'C', POPT_ARG_NONE,   &cvs_exclude, 0, 0, 0 },
-+  {"subdir-exclude",   0,  POPT_ARG_STRING, &subdir_exclude_filename, 0, 0, 0 },
++  {"perdir-exclude-from",0,POPT_ARG_STRING, &perdir_exclude_from, 0, 0, 0 },
    {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
    {"links",           'l', POPT_ARG_NONE,   &preserve_links, 0, 0, 0 },
    {"copy-links",      'L', POPT_ARG_NONE,   &copy_links, 0, 0, 0 },
 --- proto.h	14 Apr 2004 23:33:30 -0000	1.188
-+++ proto.h	15 Apr 2004 21:02:11 -0000
++++ proto.h	17 Apr 2004 18:13:36 -0000
 @@ -52,8 +52,10 @@ int daemon_main(void);
  void setup_protocol(int f_out,int f_in);
  int claim_connection(char *fname,int max_connections);
@@ -238,8 +243,8 @@
  void add_exclude(struct exclude_list_struct *listp, const char *pattern,
  		 int xflags);
  void add_exclude_file(struct exclude_list_struct *listp, const char *fname,
---- rsync.h	14 Apr 2004 23:33:37 -0000	1.196
-+++ rsync.h	15 Apr 2004 21:02:11 -0000
+--- rsync.h	17 Apr 2004 17:14:16 -0000	1.197
++++ rsync.h	17 Apr 2004 18:13:36 -0000
 @@ -502,6 +502,7 @@ struct exclude_struct {
  struct exclude_list_struct {
  	struct exclude_struct *head;
@@ -248,33 +253,43 @@
  };
  
  struct stats {
---- rsync.yo	15 Apr 2004 18:32:24 -0000	1.157
-+++ rsync.yo	15 Apr 2004 21:02:11 -0000
+--- rsync.yo	17 Apr 2004 18:12:33 -0000	1.158
++++ rsync.yo	17 Apr 2004 18:13:37 -0000
 @@ -331,6 +331,7 @@ verb(
       --exclude-from=FILE     exclude patterns listed in FILE
       --include=PATTERN       don't exclude files matching PATTERN
       --include-from=FILE     don't exclude patterns listed in FILE
-+     --subdir-exclude=FILE   look in each subdir for exclude file FILE
++     --perdir-exclude-from=F look in each dir for exclude file F
       --files-from=FILE       read FILE for list of source-file names
   -0  --from0                 all file lists are delimited by nulls
       --version               print version number
-@@ -651,6 +652,15 @@ dit(bf(--exclude=PATTERN)) This option a
- certain files from the list of files to be transferred. This is most
- useful in combination with a recursive transfer.
+@@ -672,6 +673,15 @@ dit(bf(--include-from=FILE)) This specif
+ from a file.
+ If em(FILE) is bf(-) the list will be read from standard input.
  
-+dit(bf(--subdir-exclude=FILE)) In any given directory, patterns listed
-+in FILE (one per line) are excluded from the file lists associated with
-+that directory and all of its subdirectories. Rules specified in a subdir
-+take precedence over rules evaluated in a parent dir (think of each set
-+of rules being prefixed to the prior rules).  If you don't want to
-+inherit the parent-dir rules, start the FILE with a single exclamation
-+mark ! to clear them out. You may prefix names with an explicit exclude,
-+include, or super-include prefix (see below).
++dit(bf(--perdir-exclude-from=FILE)) In any given directory, patterns
++listed in FILE (one per line) are excluded from the file lists
++associated with that directory and all of its subdirectories. Rules
++specified in a subdir take precedence over rules evaluated in a parent
++dir (think of each file's rules being prefixed to the prior rules).  If
++you don't want to inherit the parent-dir rules, start the FILE with a
++single exclamation mark ! to clear them out. You may prefix names with
++an explicit exclude, include, or super-include prefix (see below).
 +
- You may use as many --exclude options on the command line as you like
- to build up the list of files to exclude.
+ dit(bf(--files-from=FILE)) Using this option allows you to specify the
+ exact list of files to transfer (as read from the specified FILE or "-"
+ for stdin).  It also tweaks the default behavior of rsync to make
+@@ -711,7 +721,8 @@ was located on the remote "src" host.
  
-@@ -996,6 +1006,12 @@ itemize(
+ dit(bf(-0, --from0)) This tells rsync that the filenames it reads from a
+ file are terminated by a null ('\0') character, not a NL, CR, or CR+LF.
+-This affects --exclude-from, --include-from, and --files-from.
++This affects --exclude-from, --include-from, --perdir-exclude-from,
++and --files-from.
+ It does not affect --cvs-exclude (since all names read from a .cvsignore
+ file are split on whitespace).
+ 
+@@ -998,6 +1009,12 @@ itemize(
    it() if the pattern starts with "- " (a minus followed by a space)
    then it is always considered an exclude pattern, even if specified as
    part of an include option. The prefix is discarded before matching.
@@ -287,8 +302,8 @@
  
    it() if the pattern is a single exclamation mark ! then the current
    include/exclude list is reset, removing all previously defined patterns.
---- util.c	14 Apr 2004 23:33:34 -0000	1.135
-+++ util.c	15 Apr 2004 21:02:12 -0000
+--- util.c	17 Apr 2004 17:06:03 -0000	1.136
++++ util.c	17 Apr 2004 18:13:37 -0000
 @@ -477,7 +477,7 @@ static int exclude_server_path(char *arg
  		for (s = arg; (s = strchr(s, '/')) != NULL; ) {
  			*s = '\0';
