@@ -25,7 +25,7 @@
  			}
  		} else
  			write_arg(fd, p);
---- orig/generator.c	2005-03-29 01:05:12
+--- orig/generator.c	2005-03-30 16:35:08
 +++ generator.c	2005-03-24 07:07:12
 @@ -25,6 +25,7 @@
  
@@ -53,7 +53,7 @@
  		if (preserve_hard_links && file->link_u.links)
  			hard_link_cluster(file, ndx, itemizing, code);
  		return;
-@@ -1121,9 +1122,9 @@ void generate_files(int f_out, struct fi
+@@ -1122,9 +1123,9 @@ void generate_files(int f_out, struct fi
  		maybe_PERMS_REPORT = log_format_has_i ? 0 : PERMS_REPORT;
  		code = daemon_log_format_has_i ? 0 : FLOG;
  	} else if (am_daemon) {
@@ -65,9 +65,9 @@
  	} else if (!am_server) {
  		itemizing = log_format_has_i;
  		maybe_PERMS_REPORT = log_format_has_i ? 0 : PERMS_REPORT;
---- orig/main.c	2005-03-16 02:19:30
+--- orig/main.c	2005-03-30 16:57:27
 +++ main.c	2005-03-24 07:07:12
-@@ -168,7 +168,7 @@ static void report(int f)
+@@ -170,7 +170,7 @@ static void handle_stats(int f)
  			stats.flist_buildtime = read_longint(f);
  			stats.flist_xfertime = read_longint(f);
  		}
@@ -76,7 +76,7 @@
  		/* The --read-batch process is going to be a client
  		 * receiver, so we need to give it the stats. */
  		write_longint(batch_fd, total_read);
-@@ -583,7 +583,7 @@ static int do_recv(int f_in,int f_out,st
+@@ -591,7 +591,7 @@ static int do_recv(int f_in,int f_out,st
  
  	am_generator = 1;
  	close_multiplexing_in();
@@ -85,7 +85,7 @@
  		stop_write_batch();
  
  	close(error_pipe[1]);
-@@ -756,7 +756,7 @@ int client_run(int f_in, int f_out, pid_
+@@ -764,7 +764,7 @@ int client_run(int f_in, int f_out, pid_
  		if (filesfrom_host)
  			filesfrom_fd = f_in;
  
@@ -94,7 +94,7 @@
  			start_write_batch(f_out);
  		flist = send_file_list(f_out, argc, argv);
  		set_msg_fd_in(-1);
-@@ -793,7 +793,7 @@ int client_run(int f_in, int f_out, pid_
+@@ -802,7 +802,7 @@ int client_run(int f_in, int f_out, pid_
  		filesfrom_fd = -1;
  	}
  
@@ -103,7 +103,7 @@
  		start_write_batch(f_in);
  	flist = recv_file_list(f_in);
  	if (!flist || flist->count == 0) {
-@@ -1111,7 +1111,7 @@ int main(int argc,char *argv[])
+@@ -1123,7 +1123,7 @@ int main(int argc,char *argv[])
  
  	init_flist();
  
@@ -112,7 +112,7 @@
  		if (write_batch)
  			write_batch_shell_file(orig_argc, orig_argv, argc);
  
-@@ -1130,6 +1130,8 @@ int main(int argc,char *argv[])
+@@ -1142,6 +1142,8 @@ int main(int argc,char *argv[])
  		if (read_batch)
  			read_stream_flags(batch_fd);
  	}
@@ -121,7 +121,7 @@
  
  	if (am_daemon && !am_server)
  		return daemon_main();
---- orig/options.c	2005-03-28 20:56:55
+--- orig/options.c	2005-03-31 00:24:21
 +++ options.c	2005-03-24 07:07:13
 @@ -53,6 +53,7 @@ int omit_dir_times = 0;
  int update_only = 0;
@@ -188,7 +188,7 @@
  	if (verbose && !log_format) {
  		log_format = "%n%L";
  		log_before_transfer = !am_server;
-@@ -1246,7 +1258,7 @@ void server_options(char **args,int *arg
+@@ -1245,7 +1257,7 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'b';
  	if (update_only)
  		argstr[x++] = 'u';
@@ -197,7 +197,7 @@
  		argstr[x++] = 'n';
  	if (preserve_links)
  		argstr[x++] = 'l';
-@@ -1374,6 +1386,8 @@ void server_options(char **args,int *arg
+@@ -1373,6 +1385,8 @@ void server_options(char **args,int *arg
  			args[ac++] = "--delete-after";
  		if (force_delete)
  			args[ac++] = "--force";
@@ -227,7 +227,7 @@
  		if (!am_sender)
  			filesfrom_fd = -1;
  
---- orig/receiver.c	2005-03-24 16:41:46
+--- orig/receiver.c	2005-03-29 22:39:37
 +++ receiver.c	2005-03-24 07:07:13
 @@ -21,7 +21,7 @@
  #include "rsync.h"
@@ -246,7 +246,7 @@
  extern int batch_gen_fd;
  extern int protocol_version;
  extern int relative_paths;
-@@ -435,13 +436,18 @@ int recv_files(int f_in, struct file_lis
+@@ -452,13 +453,18 @@ int recv_files(int f_in, struct file_lis
  			exit_cleanup(RERR_PROTOCOL);
  		}
  
@@ -265,8 +265,8 @@
 +		}
  
  		if (read_batch) {
- 			while (i > next_gen_i) {
---- orig/rsync.yo	2005-03-28 20:56:55
+ 			next_gen_i = get_next_gen_i(batch_gen_fd, next_gen_i, i);
+--- orig/rsync.yo	2005-03-30 16:57:29
 +++ rsync.yo	2005-03-27 05:13:01
 @@ -379,6 +379,7 @@ to the detailed description below for a 
       --list-only             list the files instead of copying them

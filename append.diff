@@ -1,9 +1,9 @@
 This patch adds the --append option, which works like a "resume" mode in
 an ftp client, appending new data onto the end of the files it updates.
 
---- orig/generator.c	2005-03-29 01:05:12
+--- orig/generator.c	2005-03-30 16:35:08
 +++ generator.c	2005-03-03 02:59:17
-@@ -52,6 +52,7 @@ extern int delay_updates;
+@@ -53,6 +53,7 @@ extern int delay_updates;
  extern int update_only;
  extern int opt_ignore_existing;
  extern int inplace;
@@ -71,16 +71,16 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
-@@ -1142,7 +1153,7 @@ void generate_files(int f_out, struct fi
- 	if (delete_before && !local_name && flist->count > 0)
+@@ -1144,7 +1155,7 @@ void generate_files(int f_out, struct fi
  		do_delete_pass(flist);
+ 	do_progress = 0;
  
 -	if (whole_file < 0)
 +	if (append_mode || whole_file < 0)
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1193,6 +1204,8 @@ void generate_files(int f_out, struct fi
+@@ -1195,6 +1206,8 @@ void generate_files(int f_out, struct fi
  	only_existing = max_size = opt_ignore_existing = 0;
  	update_only = always_checksum = size_only = 0;
  	ignore_times = 1;
@@ -130,7 +130,7 @@ an ftp client, appending new data onto the end of the files it updates.
  			matched(f, s, buf, j, -2);
  		matched(f, s, buf, len, -1);
  	}
---- orig/options.c	2005-03-28 20:56:55
+--- orig/options.c	2005-03-31 00:24:21
 +++ options.c	2005-03-11 11:21:34
 @@ -39,6 +39,7 @@ int make_backups = 0;
   **/
@@ -140,8 +140,8 @@ an ftp client, appending new data onto the end of the files it updates.
  int archive_mode = 0;
  int keep_dirlinks = 0;
  int copy_links = 0;
-@@ -165,6 +166,7 @@ static int F_option_cnt = 0;
- static int modify_window_set;
+@@ -165,6 +166,7 @@ static int modify_window_set;
+ static int itemize_changes = 0;
  static int refused_delete, refused_archive_part;
  static int refused_partial, refused_progress, refused_delete_before;
 +static int refused_inplace;
@@ -173,7 +173,7 @@ an ftp client, appending new data onto the end of the files it updates.
  					break;
  				}
  				if (!is_wild)
-@@ -1109,6 +1115,14 @@ int parse_arguments(int *argc, const cha
+@@ -1108,6 +1114,14 @@ int parse_arguments(int *argc, const cha
  			bwlimit_writemax = 512;
  	}
  
@@ -188,7 +188,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (delay_updates && !partial_dir)
  		partial_dir = partialdir_for_delayupdate;
  
-@@ -1419,7 +1433,9 @@ void server_options(char **args,int *arg
+@@ -1418,7 +1432,9 @@ void server_options(char **args,int *arg
  	if (opt_ignore_existing && am_sender)
  		args[ac++] = "--ignore-existing";
  
@@ -199,7 +199,7 @@ an ftp client, appending new data onto the end of the files it updates.
  		args[ac++] = "--inplace";
  
  	if (tmpdir) {
---- orig/receiver.c	2005-03-24 16:41:46
+--- orig/receiver.c	2005-03-29 22:39:37
 +++ receiver.c	2005-02-11 20:26:32
 @@ -44,6 +44,7 @@ extern int remove_sent_files;
  extern int module_id;
@@ -209,7 +209,7 @@ an ftp client, appending new data onto the end of the files it updates.
  extern int keep_partial;
  extern int checksum_seed;
  extern int inplace;
-@@ -210,6 +211,28 @@ static int receive_data(int f_in, char *
+@@ -211,6 +212,28 @@ static int receive_data(int f_in, char *
  
  	sum_init(checksum_seed);
  
@@ -238,7 +238,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	while ((i = recv_token(f_in, &data)) != 0) {
  		if (do_progress)
  			show_progress(offset, total_size);
-@@ -399,6 +422,7 @@ int recv_files(int f_in, struct file_lis
+@@ -416,6 +439,7 @@ int recv_files(int f_in, struct file_lis
  			send_msg(MSG_DONE, "", 0);
  			if (keep_partial && !partial_dir)
  				make_backups = 0; /* prevents double backup */
@@ -246,7 +246,7 @@ an ftp client, appending new data onto the end of the files it updates.
  			continue;
  		}
  
---- orig/rsync.yo	2005-03-28 20:56:55
+--- orig/rsync.yo	2005-03-30 16:57:29
 +++ rsync.yo	2005-02-11 20:36:38
 @@ -308,6 +308,7 @@ to the detailed description below for a 
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)

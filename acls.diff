@@ -1193,7 +1193,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	free(file);
  
  	if (verbose > 1) {
---- orig/configure.in	2005-03-16 02:19:29
+--- orig/configure.in	2005-03-29 11:15:05
 +++ configure.in	2004-08-19 19:53:27
 @@ -467,6 +467,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
      AC_CHECK_LIB(resolv, strcasecmp)
@@ -1285,18 +1285,18 @@ ACLs to a non-ACL-supporting disk should complain.
  AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
  AC_OUTPUT
  
---- orig/flist.c	2005-03-16 02:19:29
+--- orig/flist.c	2005-03-30 17:31:41
 +++ flist.c	2005-03-16 02:24:11
-@@ -970,6 +970,8 @@ static struct file_struct *send_file_nam
+@@ -971,6 +971,8 @@ static struct file_struct *send_file_nam
  	file = make_file(fname, flist, f == -2 ? SERVER_FILTERS : ALL_FILTERS);
  	if (!file)
  		return NULL;
 +	if (!MAKE_ACL(file, fname))
 +		return;
  
- 	maybe_emit_filelist_progress(flist);
+ 	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
-@@ -978,6 +980,10 @@ static struct file_struct *send_file_nam
+@@ -979,6 +981,10 @@ static struct file_struct *send_file_nam
  	if (file->basename[0]) {
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f, base_flags);
@@ -1307,7 +1307,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  	return file;
  }
-@@ -1304,6 +1310,8 @@ struct file_list *recv_file_list(int f)
+@@ -1305,6 +1311,8 @@ struct file_list *recv_file_list(int f)
  			flags |= read_byte(f) << 8;
  		file = receive_file_entry(flist, flags, f);
  
@@ -1316,7 +1316,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (S_ISREG(file->mode))
  			stats.total_size += file->length;
  
-@@ -1326,6 +1334,8 @@ struct file_list *recv_file_list(int f)
+@@ -1327,6 +1335,8 @@ struct file_list *recv_file_list(int f)
  
  	clean_flist(flist, relative_paths, 1);
  
@@ -1325,7 +1325,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (f >= 0) {
  		/* Now send the uid/gid list. This was introduced in
  		 * protocol version 15 */
---- orig/generator.c	2005-03-29 01:05:12
+--- orig/generator.c	2005-03-30 16:35:08
 +++ generator.c	2005-03-11 11:18:22
 @@ -711,6 +711,10 @@ static void recv_generator(char *fname, 
  		if (set_perms(fname, file, statret ? NULL : &st, 0)
@@ -4597,7 +4597,7 @@ ACLs to a non-ACL-supporting disk should complain.
    next;
  }
  
---- orig/options.c	2005-03-28 20:56:55
+--- orig/options.c	2005-03-31 00:24:21
 +++ options.c	2005-02-14 02:46:05
 @@ -44,6 +44,7 @@ int keep_dirlinks = 0;
  int copy_links = 0;
@@ -4679,7 +4679,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1265,6 +1291,8 @@ void server_options(char **args,int *arg
+@@ -1264,6 +1290,8 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
@@ -4748,7 +4748,7 @@ ACLs to a non-ACL-supporting disk should complain.
  #include "proto.h"
  
  /* We have replacement versions of these if they're missing. */
---- orig/rsync.yo	2005-03-28 20:56:55
+--- orig/rsync.yo	2005-03-30 16:57:29
 +++ rsync.yo	2004-07-03 20:11:58
 @@ -316,6 +316,7 @@ to the detailed description below for a 
   -H, --hard-links            preserve hard links
