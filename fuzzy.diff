@@ -1,20 +1,20 @@
 The changes to generator.c were greatly simplified, making the patch
 easier to maintain and fixing the failing test in the testsuite.
-Very lightly tested.
+Lightly tested.
 
 Be sure to run "make proto" before "make".
 
---- orig/generator.c	2004-11-03 20:30:45
-+++ generator.c	2004-11-03 22:52:53
-@@ -43,6 +43,7 @@ extern int ignore_times;
- extern int size_only;
+--- orig/generator.c	2004-11-27 17:53:24
++++ generator.c	2004-11-27 18:12:57
+@@ -44,6 +44,7 @@ extern int size_only;
+ extern OFF_T max_size;
  extern int io_timeout;
  extern int protocol_version;
 +extern int fuzzy_basis;
  extern int always_checksum;
  extern char *partial_dir;
- extern char *compare_dest;
-@@ -244,6 +245,92 @@ static void generate_and_send_sums(int f
+ extern char *basis_dir[];
+@@ -247,6 +248,92 @@ static void generate_and_send_sums(int f
  }
  
  
@@ -107,7 +107,7 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -466,6 +553,15 @@ static void recv_generator(char *fname, 
+@@ -501,6 +588,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -123,16 +123,16 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -492,7 +588,7 @@ static void recv_generator(char *fname, 
- 		return;
- 	}
+@@ -529,6 +625,8 @@ static void recv_generator(char *fname, 
  
--	if (skip_file(fnamecmp, file, &st)) {
-+	if (fnamecmp_type != FNAMECMP_FUZZY && skip_file(fnamecmp, file, &st)) {
+ 	if ((link_dest || copy_dest) && fnamecmp_type != FNAMECMP_FNAME)
+ 		;
++	else if (fnamecmp_type == FNAMECMP_FUZZY)
++		;
+ 	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
- 		return;
-@@ -563,8 +659,24 @@ prepare_to_open:
+@@ -600,8 +698,24 @@ prepare_to_open:
  
  notify_others:
  	write_int(f_out, i);
@@ -158,8 +158,8 @@ Be sure to run "make proto" before "make".
  
  	if (dry_run || read_batch)
  		return;
---- orig/main.c	2004-11-03 20:30:45
-+++ main.c	2004-07-22 00:32:31
+--- orig/main.c	2004-11-27 17:53:24
++++ main.c	2004-11-27 18:13:51
 @@ -48,6 +48,7 @@ extern int keep_dirlinks;
  extern int preserve_hard_links;
  extern int protocol_version;
@@ -172,39 +172,39 @@ Be sure to run "make proto" before "make".
  	int pid;
  	int status = 0;
  	int error_pipe[2], name_pipe[2];
--	BOOL need_name_pipe = compare_dest && !dry_run;
-+	BOOL need_name_pipe = (compare_dest || fuzzy_basis) && !dry_run;
+-	BOOL need_name_pipe = basis_dir[0] && !dry_run;
++	BOOL need_name_pipe = (basis_dir[0] || fuzzy_basis) && !dry_run;
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
---- orig/options.c	2004-10-14 17:11:40
-+++ options.c	2004-10-14 17:21:51
-@@ -85,6 +85,7 @@ int safe_symlinks = 0;
- int copy_unsafe_links = 0;
+--- orig/options.c	2004-11-27 17:53:24
++++ options.c	2004-11-27 18:14:43
+@@ -86,6 +86,7 @@ int copy_unsafe_links = 0;
  int size_only = 0;
+ int daemon_bwlimit = 0;
  int bwlimit = 0;
 +int fuzzy_basis = 0;
  size_t bwlimit_writemax = 0;
  int delete_after = 0;
  int only_existing = 0;
-@@ -279,6 +280,7 @@ void usage(enum logcode F)
-   rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
+@@ -288,6 +289,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
-   rprintf(F,"     --link-dest=DIR         create hardlinks to DIR for unchanged files\n");
+   rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
+   rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
 +  rprintf(F,"     --fuzzy                 use similar file as basis if basis doesn't exist\n");
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
-@@ -371,6 +373,7 @@ static struct poptOption long_options[] 
-   {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
-   {"compare-dest",     0,  POPT_ARG_STRING, &compare_dest, 0, 0, 0 },
-   {"link-dest",        0,  POPT_ARG_STRING, &compare_dest, OPT_LINK_DEST, 0, 0 },
+@@ -383,6 +385,7 @@ static struct poptOption long_options[] 
+   {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
+   {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
+   {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
 +  {"fuzzy",            0,  POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
-@@ -890,6 +893,11 @@ int parse_arguments(int *argc, const cha
- 				 link_dest ? "--link-dest" : "--compare-dest");
+@@ -963,6 +966,11 @@ int parse_arguments(int *argc, const cha
+ 				 dest_option);
  			return 0;
  		}
 +		if (compare_dest) {
@@ -215,7 +215,7 @@ Be sure to run "make proto" before "make".
  	} else {
  		if (keep_partial && !partial_dir)
  			partial_dir = getenv("RSYNC_PARTIAL_DIR");
-@@ -1156,6 +1164,9 @@ void server_options(char **args,int *arg
+@@ -1237,6 +1245,9 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -225,8 +225,8 @@ Be sure to run "make proto" before "make".
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2004-11-03 20:30:45
-+++ receiver.c	2004-11-03 22:54:05
+--- orig/receiver.c	2004-11-27 17:57:31
++++ receiver.c	2004-11-27 18:15:01
 @@ -320,6 +320,27 @@ static int receive_data(int f_in, char *
  }
  
@@ -255,7 +255,7 @@ Be sure to run "make proto" before "make".
  static void discard_receive_data(int f_in, OFF_T length)
  {
  	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
-@@ -449,6 +470,10 @@ int recv_files(int f_in, struct file_lis
+@@ -450,6 +471,10 @@ int recv_files(int f_in, struct file_lis
  			case FNAMECMP_BACKUP:
  				fnamecmp = get_backup_name(fname);
  				break;
@@ -263,12 +263,12 @@ Be sure to run "make proto" before "make".
 +				read_gen_name(f_in_name, fnamecmpbuf);
 +				fnamecmp = fnamecmpbuf;
 +				break;
- 			case FNAMECMP_CMPDEST:
+ 			case FNAMECMP_BASIS_DIR:
  			default:
  				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
---- orig/rsync.h	2004-11-03 20:30:45
+--- orig/rsync.h	2004-11-27 17:53:24
 +++ rsync.h	2004-11-03 22:53:09
-@@ -123,6 +123,7 @@
+@@ -125,6 +125,7 @@
  #define FNAMECMP_FNAME		0x80
  #define FNAMECMP_PARTIAL_DIR	0x81
  #define FNAMECMP_BACKUP 	0x82
@@ -276,12 +276,12 @@ Be sure to run "make proto" before "make".
  
  
  /* Log-message categories.  FLOG is only used on the daemon side to
---- orig/rsync.yo	2004-10-06 00:12:16
-+++ rsync.yo	2004-07-03 19:27:25
-@@ -356,6 +356,7 @@ verb(
-  -T  --temp-dir=DIR          create temporary files in directory DIR
+--- orig/rsync.yo	2004-11-27 17:53:24
++++ rsync.yo	2004-11-27 18:15:22
+@@ -358,6 +358,7 @@ verb(
       --compare-dest=DIR      also compare received files relative to DIR
-      --link-dest=DIR         create hardlinks to DIR for unchanged files
+      --copy-dest=DIR         ... and include copies of unchanged files
+      --link-dest=DIR         hardlink to files in DIR when unchanged
 +     --fuzzy                 use similar file as basis if basis is gone
   -P                          equivalent to --partial --progress
   -z, --compress              compress file data
