@@ -9,31 +9,8 @@ unmodified rules into server-side only rules).
 
 See the updated manpage for the details.
 
---- orig/compat.c	2005-02-01 10:39:22
-+++ compat.c	2005-02-05 05:31:06
-@@ -31,6 +31,7 @@ extern int verbose;
- extern int am_server;
- extern int am_sender;
- extern int read_batch;
-+extern int delete_excluded;
- extern int checksum_seed;
- extern int protocol_version;
- 
-@@ -74,6 +75,12 @@ void setup_protocol(int f_out,int f_in)
- 		exit_cleanup(RERR_PROTOCOL);
- 	}
- 
-+	/* In newer protocols, --delete-excluded does not avoid the exclude-
-+	 * list transfer to the receiver, so mark a modern --delete-excluded
-+	 * conversation with a 2 instead of a 1. */
-+	if (protocol_version >= 29 && delete_excluded)
-+		delete_excluded = 2;
-+
- 	if (am_server) {
- 		if (!checksum_seed)
- 			checksum_seed = time(NULL);
 --- orig/exclude.c	2005-02-11 10:53:14
-+++ exclude.c	2005-02-11 22:39:37
++++ exclude.c	2005-02-12 19:08:30
 @@ -53,7 +53,8 @@ struct filter_list_struct server_filter_
  #define MAX_RULE_PREFIX (16)
  
@@ -109,19 +86,21 @@ See the updated manpage for the details.
  			case 'w':
  				new_mflags |= MATCHFLG_WORD_SPLIT;
  				break;
-@@ -1013,6 +1051,11 @@ char *get_rule_prefix(int match_flags, c
+@@ -1013,6 +1051,13 @@ char *get_rule_prefix(int match_flags, c
  	}
  	if (match_flags & MATCHFLG_EXCLUDE_SELF)
  		*op++ = 'e';
-+	if (match_flags & MATCHFLG_SENDER_SIDE && !for_xfer)
++	if (match_flags & MATCHFLG_SENDER_SIDE
++	    && (!for_xfer || protocol_version >= 29))
 +		*op++ = 's';
 +	if (match_flags & MATCHFLG_RECEIVER_SIDE
-+	    && (!for_xfer || (delete_excluded && am_sender)))
++	    && (!for_xfer || protocol_version >= 29
++	     || (delete_excluded && am_sender)))
 +		*op++ = 'r';
  	if (legal_len)
  		*op++ = ' ';
  	if (op - buf > legal_len)
-@@ -1025,19 +1068,37 @@ char *get_rule_prefix(int match_flags, c
+@@ -1025,18 +1070,34 @@ char *get_rule_prefix(int match_flags, c
  
  static void send_rules(int f_out, struct filter_list_struct *flp)
  {
@@ -158,12 +137,18 @@ See the updated manpage for the details.
  				continue;
 -			}
  		}
-+		if (f_out < 0)
-+			continue;
  		p = get_rule_prefix(ent->match_flags, ent->pattern, 1, &plen);
  		if (!p) {
- 			rprintf(FERROR,
-@@ -1055,12 +1116,13 @@ static void send_rules(int f_out, struct
+@@ -1044,6 +1105,8 @@ static void send_rules(int f_out, struct
+ 				"filter rules are too modern for remote rsync.\n");
+ 			exit_cleanup(RERR_SYNTAX);
+ 		}
++		if (f_out < 0)
++			continue;
+ 		len = strlen(ent->pattern);
+ 		dlen = ent->match_flags & MATCHFLG_DIRECTORY ? 1 : 0;
+ 		if (!(plen + len + dlen))
+@@ -1055,12 +1118,14 @@ static void send_rules(int f_out, struct
  		if (dlen)
  			write_byte(f_out, '/');
  	}
@@ -174,11 +159,12 @@ See the updated manpage for the details.
  void send_filter_list(int f_out)
  {
 -	int receiver_wants_list = delete_mode && !delete_excluded;
-+	int receiver_wants_list = delete_mode && delete_excluded != 1;
++	int receiver_wants_list = delete_mode
++		&& (!delete_excluded || protocol_version >= 29);
  
  	if (local_server || (am_sender && !receiver_wants_list))
  		f_out = -1;
-@@ -1075,10 +1137,10 @@ void send_filter_list(int f_out)
+@@ -1075,10 +1140,10 @@ void send_filter_list(int f_out)
  	if (list_only == 1 && !recurse)
  		parse_rule(&filter_list, "/*/*", MATCHFLG_NO_PREFIXES, 0);
  
@@ -192,16 +178,18 @@ See the updated manpage for the details.
  
  	if (cvs_exclude) {
  		if (!am_sender || protocol_version < 29)
-@@ -1094,7 +1156,7 @@ void recv_filter_list(int f_in)
+@@ -1093,8 +1158,9 @@ void recv_filter_list(int f_in)
+ {
  	char line[MAXPATHLEN+MAX_RULE_PREFIX+1]; /* +1 for trailing slash. */
  	int xflags = protocol_version >= 29 ? 0 : XFLG_OLD_PREFIXES;
++	int receiver_wants_list = delete_mode
++		&& (!delete_excluded || protocol_version >= 29);
  	unsigned int len;
 -	int receiver_wants_list = delete_mode && !delete_excluded;
-+	int receiver_wants_list = delete_mode && delete_excluded != 1;
  
  	if (!local_server && (am_sender || receiver_wants_list)) {
  		while ((len = read_int(f_in)) != 0) {
-@@ -1111,4 +1173,7 @@ void recv_filter_list(int f_in)
+@@ -1111,4 +1177,7 @@ void recv_filter_list(int f_in)
  		if (local_server || am_sender)
  			parse_rule(&filter_list, "-C", 0, 0);
  	}
@@ -209,19 +197,31 @@ See the updated manpage for the details.
 +	if (local_server) /* filter out any rules that aren't for us. */
 +		send_rules(-1, &filter_list);
  }
---- orig/flist.c	2005-02-09 02:37:15
-+++ flist.c	2005-02-05 05:31:09
-@@ -978,7 +978,7 @@ void send_file_name(int f, struct file_l
+--- orig/flist.c	2005-02-12 18:39:09
++++ flist.c	2005-02-12 19:08:31
+@@ -64,7 +64,6 @@ extern int copy_links;
+ extern int copy_unsafe_links;
+ extern int protocol_version;
+ extern int sanitize_paths;
+-extern int delete_excluded;
+ extern int max_delete;
+ extern int orig_umask;
+ extern int list_only;
+@@ -976,11 +975,7 @@ void send_file_name(int f, struct file_l
+ 	struct file_struct *file;
+ 	char fbuf[MAXPATHLEN];
  
- 	/* f is set to -1 when calculating deletion file list */
- 	file = make_file(fname, flist,
+-	/* f is set to -1 when calculating deletion file list */
+-	file = make_file(fname, flist,
 -	    f == -1 && delete_excluded? SERVER_FILTERS : ALL_FILTERS);
-+	    f == -1 && delete_excluded == 1 ? SERVER_FILTERS : ALL_FILTERS);
- 
- 	if (!file)
+-
+-	if (!file)
++	if (!(file = make_file(fname, flist, ALL_FILTERS)))
  		return;
+ 
+ 	maybe_emit_filelist_progress(flist);
 --- orig/rsync.h	2005-02-07 20:41:57
-+++ rsync.h	2005-02-05 05:31:10
++++ rsync.h	2005-02-12 19:08:34
 @@ -565,9 +565,12 @@ struct map_struct {
  #define MATCHFLG_FINISH_SETUP	(1<<13)/* per-dir merge file needs setup */
  #define MATCHFLG_NEGATE 	(1<<14)/* rule matches when pattern does not */
@@ -236,8 +236,8 @@ See the updated manpage for the details.
  
  struct filter_struct {
  	struct filter_struct *next;
---- orig/rsync.yo	2005-02-11 10:53:15
-+++ rsync.yo	2005-02-11 22:40:50
+--- orig/rsync.yo	2005-02-11 23:14:49
++++ rsync.yo	2005-02-12 19:08:37
 @@ -679,7 +679,9 @@ send the whole directory (e.g. "dir" or 
  for the directory's contents (e.g. "dir/*") since the wildcard is expanded
  by the shell and rsync thus gets a request to transfer individual files, not
