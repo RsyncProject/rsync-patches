@@ -4,13 +4,13 @@ command before "make":
     make proto
 
 
---- orig/generator.c	2005-02-15 19:27:04
-+++ generator.c	2005-02-15 20:09:21
+--- orig/generator.c	2005-02-15 20:40:53
++++ generator.c	2005-02-15 20:43:59
 @@ -38,6 +38,7 @@ extern int preserve_gid;
  extern int preserve_times;
  extern int omit_dir_times;
  extern int delete_during;
-+extern int delete_sent_files;
++extern int remove_sent_files;
  extern int update_only;
  extern int opt_ignore_existing;
  extern int inplace;
@@ -18,7 +18,7 @@ command before "make":
  				    itemize_changes ? "" : safe_fname(fname),
  				    safe_fname(file->u.link));
  			}
-+			if (delete_sent_files) {
++			if (remove_sent_files) {
 +				char numbuf[4];
 +				SIVAL(numbuf, 0, ndx);
 +				io_multiplex_write(MSG_SUCCESS, numbuf, 4);
@@ -27,7 +27,7 @@ command before "make":
  #endif
  		return;
 --- orig/io.c	2005-02-03 02:04:20
-+++ io.c	2005-02-15 20:09:22
++++ io.c	2005-02-15 20:43:59
 @@ -244,6 +244,14 @@ static void read_msg_fd(void)
  		read_loop(fd, buf, 4);
  		redo_list_add(IVAL(buf,0));
@@ -61,12 +61,12 @@ command before "make":
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
 --- orig/main.c	2005-02-15 19:27:04
-+++ main.c	2005-02-15 20:09:22
++++ main.c	2005-02-15 20:43:59
 @@ -33,12 +33,14 @@ extern int verbose;
  extern int itemize_changes;
  extern int blocking_io;
  extern int delete_before;
-+extern int delete_sent_files;
++extern int remove_sent_files;
  extern int daemon_over_rsh;
  extern int do_stats;
  extern int dry_run;
@@ -81,9 +81,9 @@ command before "make":
  		exit_cleanup(RERR_SYNTAX);
  		return;
  	}
-+	if (am_daemon && lp_read_only(module_id) && delete_sent_files) {
++	if (am_daemon && lp_read_only(module_id) && remove_sent_files) {
 +		rprintf(FERROR,
-+		    "ERROR: --delete-sent-files cannot be used with a read-only module\n");
++		    "ERROR: --remove-sent-files cannot be used with a read-only module\n");
 +		exit_cleanup(RERR_SYNTAX);
 +		return;
 +	}
@@ -110,12 +110,12 @@ command before "make":
  		list_only |= 1;
  
 --- orig/options.c	2005-02-15 19:27:05
-+++ options.c	2005-02-15 20:09:23
++++ options.c	2005-02-15 20:44:00
 @@ -59,6 +59,7 @@ int delete_during = 0;
  int delete_before = 0;
  int delete_after = 0;
  int delete_excluded = 0;
-+int delete_sent_files = 0;
++int remove_sent_files = 0;
  int one_file_system = 0;
  int protocol_version = PROTOCOL_VERSION;
  int sparse_files = 0;
@@ -127,19 +127,19 @@ command before "make":
  int max_delete = 0;
  OFF_T max_size = 0;
  int ignore_errors = 0;
-@@ -291,6 +293,7 @@ void usage(enum logcode F)
-   rprintf(F,"     --delete-during         receiver deletes during transfer, not before\n");
-   rprintf(F,"     --delete-after          receiver deletes after transfer, not before\n");
-   rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
-+  rprintf(F,"     --delete-sent-files     updated/sent files are removed from sending side\n");
-   rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
-   rprintf(F,"     --force                 force deletion of directories even if not empty\n");
-   rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
+@@ -285,6 +287,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --rsync-path=PATH       specify path to rsync on the remote machine\n");
+   rprintf(F,"     --existing              only update files that already exist on receiver\n");
+   rprintf(F,"     --ignore-existing       ignore files that already exist on receiving side\n");
++  rprintf(F,"     --remove-sent-files     updated/sent files are removed from sending side\n");
+   rprintf(F,"     --del                   an alias for --delete-during\n");
+   rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
+   rprintf(F,"     --delete-before         receiver deletes before transfer (default)\n");
 @@ -368,6 +371,7 @@ static struct poptOption long_options[] 
    {"delete-during",    0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
    {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, 0, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
-+  {"delete-sent-files",0,  POPT_ARG_NONE,   &delete_sent_files, 0, 0, 0 },
++  {"remove-sent-files",0,  POPT_ARG_NONE,   &remove_sent_files, 0, 0, 0 },
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"filter",          'f', POPT_ARG_STRING, 0, OPT_FILTER, 0, 0 },
@@ -147,7 +147,7 @@ command before "make":
  		return 0;
  	}
  
-+	if (delete_sent_files) {
++	if (remove_sent_files) {
 +		if (refused_delete) {
 +			create_refuse_error(refused_delete);
 +			return 0;
@@ -162,19 +162,19 @@ command before "make":
  	if (fuzzy_basis && am_sender)
  		args[ac++] = "--fuzzy";
  
-+	if (delete_sent_files)
-+		args[ac++] = "--delete-sent-files";
++	if (remove_sent_files)
++		args[ac++] = "--remove-sent-files";
 +
  	*argc = ac;
  	return;
  
 --- orig/receiver.c	2005-02-15 19:27:05
-+++ receiver.c	2005-02-15 20:09:23
++++ receiver.c	2005-02-15 20:44:00
 @@ -42,6 +42,7 @@ extern int basis_dir_cnt;
  extern int make_backups;
  extern int do_progress;
  extern int cleanup_got_literal;
-+extern int delete_sent_files;
++extern int remove_sent_files;
  extern int module_id;
  extern int ignore_errors;
  extern int orig_umask;
@@ -193,7 +193,7 @@ command before "make":
  
 -		if (!recv_ok) {
 +		if (recv_ok) {
-+			if (delete_sent_files) {
++			if (remove_sent_files) {
 +				SIVAL(numbuf, 0, i);
 +				send_msg(MSG_SUCCESS, numbuf, 4);
 +			}
@@ -214,7 +214,7 @@ command before "make":
  		}
  	}
 --- orig/rsync.h	2005-02-15 19:27:05
-+++ rsync.h	2005-02-15 20:09:24
++++ rsync.h	2005-02-15 20:44:00
 @@ -62,6 +62,7 @@
  #define FLAG_MOUNT_POINT (1<<2)	/* sender only */
  #define FLAG_NO_FUZZY (1<<2)	/* generator only */
@@ -231,39 +231,39 @@ command before "make":
  	MSG_DONE=5,	/* current phase is done */
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
---- orig/rsync.yo	2005-02-15 19:27:05
-+++ rsync.yo	2005-02-15 20:09:25
-@@ -338,6 +338,7 @@ to the detailed description below for a 
-      --delete-during         receiver deletes during xfer, not before
-      --delete-after          receiver deletes after transfer, not before
-      --delete-excluded       also delete excluded files on receiver
-+     --delete-sent-files     updated/sent files are removed from sender
-      --ignore-errors         delete even if there are I/O errors
-      --force                 force deletion of dirs even if not empty
-      --max-delete=NUM        don't delete more than NUM files
-@@ -735,6 +736,11 @@ this way on the receiver, and for a way 
- bf(--delete-excluded).
- See bf(--delete) (which is implied) for more details on file-deletion.
+--- orig/rsync.yo	2005-02-15 20:42:04
++++ rsync.yo	2005-02-15 20:44:02
+@@ -332,6 +332,7 @@ to the detailed description below for a 
+      --rsync-path=PATH       specify path to rsync on the remote machine
+      --existing              only update files that already exist
+      --ignore-existing       ignore files that already exist on receiver
++     --remove-sent-files     sent files/symlinks are removed from sender
+      --del                   an alias for --delete-during
+      --delete                delete files that don't exist on sender
+      --delete-before         receiver deletes before transfer (default)
+@@ -665,6 +666,11 @@ dit(bf(--ignore-existing))
+ This tells rsync not to update files that already exist on
+ the destination.
  
-+dit(bf(--delete-sent-files)) This tells rsync to remove the source files
++dit(bf(--remove-sent-files)) This tells rsync to remove the source files
 +on the sending side that are successfully transferred to the receiving
 +side.  Directories and devices are not removed, nor are files/symlinks
 +whose content was not updated (just changing attributes does not count).
 +
- dit(bf(--ignore-errors)) Tells bf(--delete) to go ahead and delete files
- even when there are I/O errors.
- 
+ dit(bf(--delete)) This tells rsync to delete extraneous files from the
+ receiving side (ones that aren't on the sending side), but only for the
+ directories that are being synchronized.  You must have asked rsync to
 --- orig/sender.c	2005-02-15 19:27:05
-+++ sender.c	2005-02-15 20:09:25
++++ sender.c	2005-02-15 20:44:02
 @@ -27,6 +27,7 @@ extern int io_error;
  extern int dry_run;
  extern int am_server;
  extern int am_daemon;
-+extern int delete_sent_files;
++extern int remove_sent_files;
  extern int protocol_version;
  extern int updating_basis_file;
  extern int make_backups;
-@@ -95,7 +96,30 @@ static struct sum_struct *receive_sums(i
+@@ -95,7 +96,32 @@ static struct sum_struct *receive_sums(i
  	return s;
  }
  
@@ -288,13 +288,15 @@ command before "make":
 +	} else
 +		offset = 0;
 +	f_name_to(file, fname + offset);
-+	if (delete_sent_files && do_unlink(fname) == 0 && verbose)
-+		rprintf(FINFO, "sender removed %s\n", fname + offset);
++	if (remove_sent_files && do_unlink(fname) == 0 && verbose) {
++		rprintf(FINFO, "sender removed %s\n",
++			safe_fname(fname + offset));
++	}
 +}
  
  void send_files(struct file_list *flist, int f_out, int f_in)
  {
-@@ -114,6 +138,8 @@ void send_files(struct file_list *flist,
+@@ -114,6 +140,8 @@ void send_files(struct file_list *flist,
  	if (verbose > 2)
  		rprintf(FINFO, "send_files starting\n");
  
@@ -303,7 +305,7 @@ command before "make":
  	while (1) {
  		unsigned int offset;
  
-@@ -256,6 +282,9 @@ void send_files(struct file_list *flist,
+@@ -256,6 +284,9 @@ void send_files(struct file_list *flist,
  			rprintf(FINFO, "sender finished %s\n",
  				safe_fname(fname));
  		}
