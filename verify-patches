@@ -32,26 +32,32 @@ for xx in "${@}"; do
     *.diff) xx=../../$xx ;;
     *) continue ;;
     esac
-    rsync -a --delete ../,cvsdir/ .
-    echo -e "\n----------- $xx ------------"
-    patch -p0 <$xx | tee ,patch.output
-    new=''
-    for nn in `sed -n 's/^patching file //p' ,patch.output`; do
-	[ -f ../,cvsdir/$nn ] || new="$new $nn"
-    done
+    apply=y
     while : ; do
-	echo -ne "\nFix rejections, Make proto.h, Edit diffs, Update, Next, Quit: [n] "
+	echo -e "\n----------- $xx ------------"
+	if [ $apply = y ]; then
+	    rsync -a --delete ../,cvsdir/ .
+	    patch -p0 <$xx | tee ,patch.output
+	    new=''
+	    for nn in `sed -n 's/^patching file //p' ,patch.output`; do
+		[ -f ../,cvsdir/$nn ] || new="$new $nn"
+	    done
+	    apply=n
+	fi
+	echo -e "\nFix rejects, Make proto, Edit both diffs, Update patch,"
+	echo -n "Apply patch again, Next, Quit: [n] "
 	read ans
 	case "$ans" in
 	[Ee]*)
 	    [ ! -z "$new" ] && cvs add $new
 	    new=''
 	    rm -f *.rej *.orig
+	    sed '/^--- /,$ d' $xx >,new.patch
 	    cvs diff -N | grep -v '^Index: ' |
 		grep -v '^=========' |
 		grep -v '^diff -' |
 		grep -v '^RCS file: ' |
-		grep -v '^retrieving revision ' >,new.patch
+		grep -v '^retrieving revision ' >>,new.patch
 	    vim -d $xx ,new.patch
 	    ;;
 	[Ff]*)
@@ -68,6 +74,9 @@ for xx in "${@}"; do
 	    else
 		echo -e "\n*** Edit the diffs first. ***"
 	    fi
+	    ;;
+	[Aa]*)
+	    apply=y
 	    ;;
 	[Nn]*|'')
 	    break
