@@ -7,11 +7,11 @@ This patch adds the ability to merge rules into your excludes/includes
 using a ". FILE" idiom.  If you specify a name without slashes, that
 filename will be looked for in every subdirectory that rsync visits,
 and the rules found in that subdirectory's file will affect that dir
-and its subdirectories.
+and (optionally) its subdirectories.
 
 For example:
 
-  rsync -av --exclude='. .excl' from/ to
+  rsync -av --exclude='. .excl' --inherit=. from/ to
 
 The above will look for a file named ".excl" in every directory of the
 hierarchy that rsync visits, and it will exclude (by default) names
@@ -24,22 +24,25 @@ this:
   *.o
 
 Then the file ".excl2" will also be read in the current dir, and all
-subdirs of the current dir.  The file ".excl3" would just be read in
-for the current dir because its name contained a slash.
+subdirs of the current dir (due to the --inherit option).  The file
+".excl3" would just be read in for the current dir because its name
+contained a slash.
 
 ..wayne..
 
 --- exclude.c	22 May 2004 05:32:20 -0000	1.82
-+++ exclude.c	28 May 2004 21:56:09 -0000
-@@ -30,13 +30,57 @@ extern int verbose;
++++ exclude.c	4 Jun 2004 07:07:33 -0000
+@@ -30,13 +30,59 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
  extern int recurse;
 +extern int io_error;
-+extern int sanitize_paths;
++extern int module_id;
 +extern int inherit_exclude_levels;
++extern int sanitize_paths;
  
  extern char curr_dir[];
++extern unsigned int curr_dir_len;
  
  struct exclude_list_struct exclude_list = { 0, 0, "" };
 -struct exclude_list_struct local_exclude_list = { 0, 0, "per-dir .cvsignore " };
@@ -90,7 +93,7 @@ for the current dir because its name contained a slash.
  
  /** Build an exclude structure given an exclude pattern. */
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
-@@ -46,6 +90,24 @@ static void make_exclude(struct exclude_
+@@ -46,6 +92,24 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
@@ -115,7 +118,7 @@ for the current dir because its name contained a slash.
  	ret = new(struct exclude_struct);
  	if (!ret)
  		out_of_memory("make_exclude");
-@@ -81,14 +143,36 @@ static void make_exclude(struct exclude_
+@@ -81,14 +145,36 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -156,7 +159,7 @@ for the current dir because its name contained a slash.
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +180,143 @@ static void make_exclude(struct exclude_
+@@ -96,22 +182,150 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -190,25 +193,37 @@ for the current dir because its name contained a slash.
  	listp->head = listp->tail = NULL;
  }
  
-+static void pre_inherit_files(struct exclude_list_struct *lp, const char *fn,
-+			      int flags)
++void pre_inherit_files(char *fname, unsigned int len)
 +{
-+	char *t = dirbuf + dirbuf_offset;
++	char path[MAXPATHLEN], save[MAXPATHLEN];
++	unsigned int limit;
 +	int i;
 +
-+	if (dirbuf_offset + inherit_exclude_levels * 3 + strlen(fn)
-+	    >= MAXPATHLEN)
++	if (sanitize_paths)
++		limit = strlen(lp_path(module_id));
++	else
++		limit = 0;
++	fname[len] = '\0';
++	if (*fname == '/')
++		strcpy(path, fname);
++	else
++		len = pathjoin(path, sizeof path, curr_dir, fname);
++
++	if (len >= MAXPATHLEN || len == 0)
 +		return;
 +
-+	/* XXX sanitize_path() !! */
-+
-+	for (i = 0; i < inherit_exclude_levels; i++)
-+		*t++ = '.', *t++ = '.', *t++ = '/';
-+	while (i-- > 0) {
-+		lp->tail = NULL;
-+		strcpy(t, fn);
-+		add_exclude_file(lp, dirbuf, flags);
-+		t -= 3;
++	for (i = inherit_exclude_levels, len--; i && len > limit; ) {
++		if (path[--len] == '/')
++			i--;
++	}
++	for (len++; i < inherit_exclude_levels; i++) {
++		char *s = path + len;
++		strcpy(save, s);
++		push_local_excludes(path, len);
++		strcpy(s, save);
++		if (!(s = strchr(s, '/')))
++			break; /* Impossible ... */
++		len = s - path + 1;
 +	}
 +}
 +
@@ -254,8 +269,6 @@ for the current dir because its name contained a slash.
 +		} else {
 +			flags = ex->match_flags & MATCHFLG_INCLUDE
 +			    ? XFLG_DEF_INCLUDE : 0;
-+			if (inherit_exclude_levels > 0)
-+				pre_inherit_files(lp, ex->pattern, flags);
 +		}
 +		lp->tail = NULL; /* Switch any local rules to inherited. */
 +		if (strlcpy(dirbuf +  dirbuf_offset, ex->pattern,
@@ -268,9 +281,6 @@ for the current dir because its name contained a slash.
 +			    full_fname(dirbuf));
 +		}
 +	}
-+
-+	if (inherit_exclude_levels > 0)
-+		inherit_exclude_levels = 0;
 +
 +	return (void*)push;
 +}
@@ -306,7 +316,7 @@ for the current dir because its name contained a slash.
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,7 +327,7 @@ static int check_one_exclude(char *name,
+@@ -122,7 +336,7 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -315,7 +325,7 @@ for the current dir because its name contained a slash.
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
-@@ -148,9 +353,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +362,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -327,7 +337,7 @@ for the current dir because its name contained a slash.
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +426,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +435,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -341,7 +351,7 @@ for the current dir because its name contained a slash.
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -253,11 +465,16 @@ static const char *get_exclude_tok(const
+@@ -253,11 +474,16 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -360,7 +370,7 @@ for the current dir because its name contained a slash.
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -306,11 +523,54 @@ void add_exclude(struct exclude_list_str
+@@ -306,11 +532,54 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -416,7 +426,7 @@ for the current dir because its name contained a slash.
  				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
  		}
  	}
-@@ -343,6 +603,11 @@ void add_exclude_file(struct exclude_lis
+@@ -343,6 +612,11 @@ void add_exclude_file(struct exclude_lis
  		return;
  	}
  
@@ -428,7 +438,7 @@ for the current dir because its name contained a slash.
  	while (1) {
  		char *s = line;
  		int ch, overflow = 0;
-@@ -402,7 +667,11 @@ void send_exclude_list(int f)
+@@ -402,7 +676,11 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -441,7 +451,7 @@ for the current dir because its name contained a slash.
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +712,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +721,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -449,8 +459,8 @@ for the current dir because its name contained a slash.
  	add_exclude(&exclude_list, default_cvsignore,
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
---- flist.c	21 May 2004 23:22:14 -0000	1.225
-+++ flist.c	28 May 2004 21:56:09 -0000
+--- flist.c	29 May 2004 21:21:17 -0000	1.226
++++ flist.c	4 Jun 2004 07:07:33 -0000
 @@ -39,8 +39,6 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -460,7 +470,15 @@ for the current dir because its name contained a slash.
  extern int recurse;
  extern char curr_dir[MAXPATHLEN];
  extern char *files_from;
-@@ -65,7 +63,6 @@ extern int write_batch;
+@@ -58,6 +56,7 @@ extern int implied_dirs;
+ extern int copy_links;
+ extern int copy_unsafe_links;
+ extern int protocol_version;
++extern int inherit_exclude_levels;
+ extern int sanitize_paths;
+ 
+ extern int read_batch;
+@@ -65,7 +64,6 @@ extern int write_batch;
  
  extern struct exclude_list_struct exclude_list;
  extern struct exclude_list_struct server_exclude_list;
@@ -468,7 +486,7 @@ for the current dir because its name contained a slash.
  
  int io_error;
  
-@@ -210,8 +207,6 @@ int link_stat(const char *path, STRUCT_S
+@@ -210,8 +208,6 @@ int link_stat(const char *path, STRUCT_S
   */
  static int check_exclude_file(char *fname, int is_dir, int exclude_level)
  {
@@ -477,7 +495,7 @@ for the current dir because its name contained a slash.
  #if 0 /* This currently never happens, so avoid a useless compare. */
  	if (exclude_level == NO_EXCLUDES)
  		return 0;
-@@ -233,10 +228,7 @@ static int check_exclude_file(char *fnam
+@@ -233,10 +229,7 @@ static int check_exclude_file(char *fnam
  	if (exclude_level != ALL_EXCLUDES)
  		return 0;
  	if (exclude_list.head
@@ -489,7 +507,7 @@ for the current dir because its name contained a slash.
  		return 1;
  	return 0;
  }
-@@ -942,15 +934,7 @@ void send_file_name(int f, struct file_l
+@@ -942,15 +935,7 @@ void send_file_name(int f, struct file_l
  
  	if (recursive && S_ISDIR(file->mode)
  	    && !(file->flags & FLAG_MOUNT_POINT)) {
@@ -505,7 +523,7 @@ for the current dir because its name contained a slash.
  	}
  }
  
-@@ -961,6 +945,7 @@ static void send_directory(int f, struct
+@@ -961,6 +946,7 @@ static void send_directory(int f, struct
  	struct dirent *di;
  	char fname[MAXPATHLEN];
  	unsigned int offset;
@@ -513,7 +531,7 @@ for the current dir because its name contained a slash.
  	char *p;
  
  	d = opendir(dir);
-@@ -984,18 +969,7 @@ static void send_directory(int f, struct
+@@ -984,19 +970,13 @@ static void send_directory(int f, struct
  		offset++;
  	}
  
@@ -528,12 +546,17 @@ for the current dir because its name contained a slash.
 -				"cannot cvs-exclude in long-named directory %s\n",
 -				full_fname(fname));
 -		}
--	}
-+	save_excludes = push_local_excludes(fname, offset);
++	if (inherit_exclude_levels > 0) {
++		pre_inherit_files(fname, offset);
++		inherit_exclude_levels = 0;
+ 	}
  
++	save_excludes = push_local_excludes(fname, offset);
++
  	for (errno = 0, di = readdir(d); di; errno = 0, di = readdir(d)) {
  		char *dname = d_name(di);
-@@ -1016,6 +990,8 @@ static void send_directory(int f, struct
+ 		if (dname[0] == '.' && (dname[1] == '\0'
+@@ -1016,6 +996,8 @@ static void send_directory(int f, struct
  		rsyserr(FERROR, errno, "readdir(%s)", dir);
  	}
  
@@ -543,7 +566,7 @@ for the current dir because its name contained a slash.
  }
  
 --- options.c	27 May 2004 21:51:53 -0000	1.153
-+++ options.c	28 May 2004 21:56:09 -0000
++++ options.c	4 Jun 2004 07:07:34 -0000
 @@ -48,6 +48,7 @@ int preserve_gid = 0;
  int preserve_times = 0;
  int update_only = 0;
@@ -625,7 +648,7 @@ for the current dir because its name contained a slash.
  		if (asprintf(&arg, "-B%u", block_size) < 0)
  			goto oom;
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	28 May 2004 21:56:10 -0000
++++ rsync.h	4 Jun 2004 07:07:34 -0000
 @@ -108,6 +108,7 @@
  #define XFLG_DEF_INCLUDE	(1<<1)
  #define XFLG_WORDS_ONLY 	(1<<2)
@@ -653,7 +676,7 @@ for the current dir because its name contained a slash.
  
  struct exclude_list_struct {
 --- rsync.yo	21 May 2004 09:44:32 -0000	1.170
-+++ rsync.yo	28 May 2004 21:56:11 -0000
++++ rsync.yo	4 Jun 2004 07:07:35 -0000
 @@ -331,6 +331,7 @@ verb(
       --exclude-from=FILE     exclude patterns listed in FILE
       --include=PATTERN       don't exclude files matching PATTERN
@@ -772,7 +795,7 @@ for the current dir because its name contained a slash.
  
  bf(Note:) Batch mode should be considered experimental in this version
 --- testsuite/exclude.test	24 May 2004 00:16:07 -0000	1.8
-+++ testsuite/exclude.test	28 May 2004 21:56:11 -0000
++++ testsuite/exclude.test	4 Jun 2004 07:07:35 -0000
 @@ -23,19 +23,47 @@ export HOME CVSIGNORE
  makepath "$fromdir/foo/down/to/you"
  makepath "$fromdir/bar/down/to/foo/too"
