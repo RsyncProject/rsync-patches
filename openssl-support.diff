@@ -48,19 +48,19 @@ can't say if I've left any cleanup/compatibility errors in the code.
  
  TLS_OBJ = tls.o syscall.o lib/compat.o lib/snprintf.o lib/permstring.o
  
---- orig/cleanup.c	2004-10-14 17:11:40
-+++ cleanup.c	2004-07-03 20:22:28
-@@ -24,6 +24,9 @@
+--- orig/cleanup.c	2005-01-10 09:46:11
++++ cleanup.c	2005-01-10 10:43:22
+@@ -22,6 +22,9 @@
+ #include "rsync.h"
+ 
  extern int io_error;
- extern int keep_partial;
- extern int log_got_error;
 +#ifdef HAVE_OPENSSL
 +extern int use_ssl;
 +#endif
- 
- /**
-  * Close all open sockets and files, allowing a (somewhat) graceful
-@@ -97,6 +100,11 @@ void _exit_cleanup(int code, const char 
+ extern int keep_partial;
+ extern int log_got_error;
+ extern char *partial_dir;
+@@ -98,6 +101,11 @@ void _exit_cleanup(int code, const char 
  	signal(SIGUSR1, SIG_IGN);
  	signal(SIGUSR2, SIG_IGN);
  
@@ -72,9 +72,9 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (verbose > 3) {
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): entered\n",
  			code, file, line);
---- orig/clientserver.c	2004-11-27 18:27:35
+--- orig/clientserver.c	2005-01-01 21:11:00
 +++ clientserver.c	2004-10-08 20:44:59
-@@ -46,6 +46,9 @@ extern int io_timeout;
+@@ -47,6 +47,9 @@ extern int select_timeout;
  extern int orig_umask;
  extern int no_detach;
  extern int default_af_hint;
@@ -84,7 +84,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  extern char *bind_address;
  extern struct exclude_list_struct server_exclude_list;
  extern char *exclude_path_prefix;
-@@ -94,8 +97,18 @@ int start_socket_client(char *host, char
+@@ -98,8 +101,18 @@ int start_socket_client(char *host, char
  		exit_cleanup(RERR_SOCKETIO);
  
  	ret = start_inband_exchange(user, path, fd, fd, argc);
@@ -104,7 +104,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  }
  
  int start_inband_exchange(char *user, char *path, int f_in, int f_out, 
-@@ -150,6 +163,33 @@ int start_inband_exchange(char *user, ch
+@@ -154,6 +167,33 @@ int start_inband_exchange(char *user, ch
  	if (protocol_version > remote_protocol)
  		protocol_version = remote_protocol;
  
@@ -138,7 +138,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	p = strchr(path,'/');
  	if (p) *p = 0;
  	io_printf(f_out, "%s\n", path);
-@@ -178,6 +218,10 @@ int start_inband_exchange(char *user, ch
+@@ -182,6 +222,10 @@ int start_inband_exchange(char *user, ch
  			 * server to terminate the listing of modules.
  			 * We don't want to go on and transfer
  			 * anything; just exit. */
@@ -149,7 +149,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			exit(0);
  		}
  
-@@ -185,6 +229,10 @@ int start_inband_exchange(char *user, ch
+@@ -189,6 +233,10 @@ int start_inband_exchange(char *user, ch
  			rprintf(FERROR, "%s\n", line);
  			/* This is always fatal; the server will now
  			 * close the socket. */
@@ -160,7 +160,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			return RERR_STARTCLIENT;
  		} else {
  			rprintf(FINFO,"%s\n", line);
-@@ -497,6 +545,7 @@ static void send_listing(int fd)
+@@ -504,6 +552,7 @@ static void send_listing(int fd)
  		io_printf(fd,"@RSYNCD: EXIT\n");
  }
  
@@ -168,7 +168,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  /* this is called when a connection is established to a client
     and we want to start talking. The setup of the system is done from
     here */
-@@ -546,6 +595,9 @@ int start_daemon(int f_in, int f_out)
+@@ -553,6 +602,9 @@ int start_daemon(int f_in, int f_out)
  	if (protocol_version > remote_protocol)
  		protocol_version = remote_protocol;
  
@@ -178,7 +178,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	line[0] = 0;
  	if (!read_line(f_in, line, sizeof line - 1))
  		return -1;
-@@ -555,6 +607,20 @@ int start_daemon(int f_in, int f_out)
+@@ -562,6 +614,20 @@ int start_daemon(int f_in, int f_out)
  		return -1;
  	}
  
@@ -199,7 +199,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (*line == '#') {
  		/* it's some sort of command that I don't understand */
  		io_printf(f_out, "@ERROR: Unknown command '%s'\n", line);
---- orig/configure.in	2004-10-06 00:12:16
+--- orig/configure.in	2005-01-10 00:21:12
 +++ configure.in	2004-07-03 20:22:28
 @@ -271,6 +271,21 @@ yes
  	AC_SEARCH_LIBS(getaddrinfo, inet6)
@@ -223,7 +223,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  AC_MSG_CHECKING([whether to call shutdown on all sockets])
  case $host_os in
  	*cygwin* ) AC_MSG_RESULT(yes)
---- orig/main.c	2004-11-27 17:53:24
+--- orig/main.c	2005-01-10 00:22:54
 +++ main.c	2004-10-08 20:15:28
 @@ -56,6 +56,9 @@ extern int write_batch;
  extern int batch_fd;
@@ -235,7 +235,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  extern pid_t cleanup_child_pid;
  extern char *files_from;
  extern char *remote_filesfrom_file;
-@@ -807,33 +810,48 @@ static int start_client(int argc, char *
+@@ -806,33 +809,48 @@ static int start_client(int argc, char *
  	if ((rc = copy_argv(argv)))
  		return rc;
  
@@ -308,7 +308,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		p = find_colon(argv[0]);
  		if (p) { /* source is remote */
  			if (remote_filesfrom_file
-@@ -865,12 +883,26 @@ static int start_client(int argc, char *
+@@ -864,12 +882,26 @@ static int start_client(int argc, char *
  			argv++;
  		} else { /* source is local */
  			am_sender = 1;
@@ -338,7 +338,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  				p = strchr(host,'/');
  				if (p) {
  					*p = '\0';
---- orig/options.c	2004-11-27 18:27:35
+--- orig/options.c	2005-01-01 21:11:00
 +++ options.c	2004-11-27 18:31:46
 @@ -138,6 +138,14 @@ int quiet = 0;
  int always_checksum = 0;
@@ -387,7 +387,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  #ifdef MAINTAINER_MODE
  	rprintf(f, "              panic action: \"%s\"\n",
  		get_panic_action());
-@@ -311,6 +324,13 @@ void usage(enum logcode F)
+@@ -312,6 +325,13 @@ void usage(enum logcode F)
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
  #endif
@@ -401,7 +401,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    rprintf(F," -h, --help                  show this help screen\n");
  
    rprintf(F,"\nUse \"rsync --daemon --help\" to see the daemon-mode command-line options.\n");
-@@ -322,7 +342,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -323,7 +343,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED,
        OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
@@ -410,7 +410,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -408,6 +428,13 @@ static struct poptOption long_options[] 
+@@ -410,6 +430,13 @@ static struct poptOption long_options[] 
    {"ipv4",            '4', POPT_ARG_VAL,    &default_af_hint, AF_INET, 0, 0 },
    {"ipv6",            '6', POPT_ARG_VAL,    &default_af_hint, AF_INET6, 0, 0 },
  #endif
@@ -424,7 +424,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    /* All these options switch us into daemon-mode option-parsing. */
    {"address",          0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"config",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
-@@ -749,6 +776,12 @@ int parse_arguments(int *argc, const cha
+@@ -750,6 +777,12 @@ int parse_arguments(int *argc, const cha
  			basis_dir[basis_dir_cnt++] = (char *)arg;
  			break;
  
@@ -437,7 +437,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -943,6 +976,17 @@ int parse_arguments(int *argc, const cha
+@@ -944,6 +977,17 @@ int parse_arguments(int *argc, const cha
  			bwlimit_writemax = 512;
  	}
  
@@ -455,7 +455,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (inplace) {
  #if HAVE_FTRUNCATE
  		if (partial_dir) {
---- orig/rsync.h	2004-11-27 17:53:24
+--- orig/rsync.h	2005-01-10 00:21:12
 +++ rsync.h	2004-10-08 21:01:33
 @@ -32,6 +32,7 @@
  
