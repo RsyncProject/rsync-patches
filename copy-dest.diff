@@ -2,8 +2,8 @@ This adds the option --copy-dest, which works just like --link-dest
 except that identical files are copied into the destination instead
 of hard-linked.
 
---- orig/generator.c	2005-03-02 09:51:54
-+++ generator.c	2005-03-02 10:05:20
+--- orig/generator.c	2005-03-02 17:28:17
++++ generator.c	2005-03-02 17:30:18
 @@ -65,6 +65,7 @@ extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
@@ -21,11 +21,16 @@ of hard-linked.
  				/* FALL THROUGH */
  			case 2:
  				if (!unchanged_attrs(file, &st))
-@@ -854,8 +857,20 @@ static void recv_generator(char *fname, 
- 					statret = -1;
+@@ -862,10 +865,23 @@ static void recv_generator(char *fname, 
+ 						full_fname(fnamecmpbuf),
+ 						safe_fname(fname));
  				}
+-				match_level = 1;
++				match_level = 2;
  			}
-+			if (match_level == 2 && !dry_run) {
+ #endif
+-			if (match_level && match_level < 3) {
++			if (match_level == 2) {
 +				/* Copy the file locally. */
 +				if (copy_file(fnamecmpbuf, fname, file->mode) < 0) {
 +					if (verbose) {
@@ -34,27 +39,15 @@ of hard-linked.
 +							full_fname(fnamecmpbuf),
 +							safe_fname(fname));
 +					}
++					match_level = 0;
 +					statret = -1;
 +				} else
 +					set_perms(fname, file, NULL, 0);
- #ifdef HAVE_LINK
--			if (link_dest && match_level == 3 && !dry_run) {
-+			} else if (link_dest && match_level == 3 && !dry_run) {
- 				if (do_link(fnamecmpbuf, fname) < 0) {
- 					if (verbose) {
- 						rsyserr(FINFO, errno,
-@@ -866,9 +881,8 @@ static void recv_generator(char *fname, 
- 					fnamecmp = fnamecmpbuf;
- 					fnamecmp_type = i;
- 				}
--			} else
- #endif
--			if (statret == 0) {
-+			} else if (statret == 0) {
++			} else if (match_level == 1) {
  				fnamecmp = fnamecmpbuf;
  				fnamecmp_type = i;
  			}
---- orig/options.c	2005-03-02 09:17:42
+--- orig/options.c	2005-03-02 09:52:06
 +++ options.c	2005-03-02 10:05:21
 @@ -143,6 +143,7 @@ char *backup_dir = NULL;
  char backup_dir_buf[MAXPATHLEN];
