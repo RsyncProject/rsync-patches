@@ -1,8 +1,8 @@
 This patch adds the --append option, which works like a "resume" mode in
 an ftp client, appending new data onto the end of the files it updates.
 
---- orig/generator.c	2005-02-27 18:24:42
-+++ generator.c	2005-02-27 07:51:38
+--- orig/generator.c	2005-03-03 02:58:55
++++ generator.c	2005-03-03 02:59:17
 @@ -51,6 +51,7 @@ extern int remove_sent_files;
  extern int update_only;
  extern int opt_ignore_existing;
@@ -11,7 +11,7 @@ an ftp client, appending new data onto the end of the files it updates.
  extern int make_backups;
  extern int csum_length;
  extern int ignore_times;
-@@ -457,35 +458,42 @@ static void generate_and_send_sums(int f
+@@ -450,35 +451,42 @@ static void generate_and_send_sums(int f
  	OFF_T offset = 0;
  
  	sum_sizes_sqroot(&sum, len);
@@ -61,7 +61,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	}
  
  	if (mapbuf)
-@@ -925,6 +933,9 @@ static void recv_generator(char *fname, 
+@@ -923,6 +931,9 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -71,15 +71,15 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
-@@ -951,7 +962,7 @@ prepare_to_open:
+@@ -1102,7 +1113,7 @@ void generate_files(int f_out, struct fi
+ 	if (delete_before && !local_name && flist->count > 0)
+ 		do_delete_pass(flist, allowed_lull);
  
- 	if (dry_run || read_batch)
- 		goto notify_others;
--	if (whole_file > 0) {
-+	if (whole_file > 0 && !append_mode) {
- 		if (statret == 0)
- 			statret = 1;
- 		goto notify_others;
+-	if (whole_file < 0)
++	if (append_mode || whole_file < 0)
+ 		whole_file = 0;
+ 	if (verbose >= 2) {
+ 		rprintf(FINFO, "delta-transmission %s\n",
 @@ -1147,6 +1158,8 @@ void generate_files(int f_out, struct fi
  	only_existing = max_size = opt_ignore_existing = 0;
  	update_only = always_checksum = size_only = 0;
@@ -130,7 +130,7 @@ an ftp client, appending new data onto the end of the files it updates.
  			matched(f, s, buf, j, -2);
  		matched(f, s, buf, len, -1);
  	}
---- orig/options.c	2005-03-01 05:49:24
+--- orig/options.c	2005-03-02 09:52:06
 +++ options.c	2005-02-16 15:36:40
 @@ -39,6 +39,7 @@ int make_backups = 0;
   **/
@@ -246,9 +246,9 @@ an ftp client, appending new data onto the end of the files it updates.
  			continue;
  		}
  
---- orig/rsync.yo	2005-03-01 01:22:59
+--- orig/rsync.yo	2005-03-03 02:23:27
 +++ rsync.yo	2005-02-11 20:36:38
-@@ -309,6 +309,7 @@ to the detailed description below for a 
+@@ -308,6 +308,7 @@ to the detailed description below for a 
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
   -u, --update                skip files that are newer on the receiver
       --inplace               update destination files in-place
@@ -256,7 +256,7 @@ an ftp client, appending new data onto the end of the files it updates.
   -d, --dirs                  transfer directories without recursing
   -l, --links                 copy symlinks as symlinks
   -L, --copy-links            transform symlink into referent file/dir
-@@ -564,6 +565,14 @@ should not use this option to update fil
+@@ -563,6 +564,14 @@ should not use this option to update fil
  rsync will be unable to update a file in-place that is not writable by the
  receiving user.
  
