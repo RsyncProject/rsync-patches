@@ -12,8 +12,8 @@ Optional:
 
     make rsync.1
 
---- configure.in	30 Apr 2004 18:03:33 -0000	1.196
-+++ configure.in	3 Jul 2004 00:16:50 -0000
+--- orig/configure.in	2004-04-30 18:04:07
++++ configure.in	2004-07-03 20:19:54
 @@ -442,7 +442,7 @@ dnl AC_FUNC_MEMCMP
  AC_FUNC_UTIME_NULL
  AC_FUNC_ALLOCA
@@ -23,8 +23,8 @@ Optional:
      memmove lchown vsnprintf snprintf asprintf setsid glob strpbrk \
      strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid)
  
---- match.c	2 Jul 2004 23:35:30 -0000	1.63
-+++ match.c	3 Jul 2004 00:16:50 -0000
+--- orig/match.c	2004-07-02 23:31:44
++++ match.c	2004-07-03 20:19:54
 @@ -23,6 +23,7 @@ extern int verbose;
  extern int am_server;
  extern int do_progress;
@@ -33,7 +33,7 @@ Optional:
  
  typedef unsigned short tag;
  
-@@ -52,9 +53,23 @@ static size_t *tag_table;
+@@ -52,9 +53,26 @@ static size_t *tag_table;
  #define gettag2(s1,s2) (((s1) + (s2)) & 0xFFFF)
  #define gettag(sum) gettag2((sum)&0xFFFF,(sum)>>16)
  
@@ -54,11 +54,14 @@ Optional:
 +	if (s1->sum1 != s2->sum1)
 +		return s1->sum1 < s2->sum1 ? -1 : 1;
 +
++	if (s1->len != s2->len)
++		return s1->len < s2->len ? -1 : 1;
++
 +	return memcmp(s1->sum2, s2->sum2, current_s2length);
  }
  
  
-@@ -74,6 +89,8 @@ static void build_hash_table(struct sum_
+@@ -74,6 +92,8 @@ static void build_hash_table(struct sum_
  		targets[i].t = gettag(s->sums[i].sum1);
  	}
  
@@ -67,7 +70,7 @@ Optional:
  	qsort(targets,s->count,sizeof(targets[0]),(int (*)())compare_targets);
  
  	for (i = 0; i < TABLESIZE; i++)
-@@ -192,12 +209,24 @@ static void hash_search(int f,struct sum
+@@ -192,12 +212,24 @@ static void hash_search(int f,struct sum
  			unsigned int l;
  			size_t i = targets[j].i;
  
@@ -94,18 +97,15 @@ Optional:
  				continue;
  
  			if (verbose > 3)
-@@ -215,15 +244,39 @@ static void hash_search(int f,struct sum
+@@ -215,15 +247,41 @@ static void hash_search(int f,struct sum
  				continue;
  			}
  
--			/* we've found a match, but now check to see
--			 * if last_i can hint at a better match */
-+			/* We've found a match, but now check to see if last_i
-+			 * can hint at a better match.  If inplace is enabled,
-+			 * the best possible match is one with an identical
-+			 * offset, so we prefer that over a last_i+1 match. */
++			/* If inplace is enabled, the best possible match is
++			 * one with an identical offset, so we prefer that over
++			 * the following last_i+1 optimization. */
 +			if (inplace) {
-+				for (; j < s->count && targets[j].t == t; j++) {
++				do {
 +					size_t i2 = targets[j].i;
 +					if (s->sums[i2].offset != offset)
 +						continue;
@@ -122,8 +122,11 @@ Optional:
 +					 * both the sender and the receiver. */
 +					s->sums[i].i = -1;
 +					goto set_last_i;
-+				}
++				} while (++j < s->count && targets[j].t == t);
 +			}
++
+ 			/* we've found a match, but now check to see
+ 			 * if last_i can hint at a better match */
  			if (i != last_i + 1 && last_i + 1 < s->count
 +			    && (!inplace || s->sums[last_i+1].offset >= offset || s->sums[last_i+1].i < 0)
  			    && sum == s->sums[last_i+1].sum1
@@ -136,8 +139,8 @@ Optional:
  			last_i = i;
  
  			matched(f,s,buf,offset,i);
---- options.c	20 Jun 2004 19:47:05 -0000	1.157
-+++ options.c	3 Jul 2004 00:16:50 -0000
+--- orig/options.c	2004-06-20 19:30:00
++++ options.c	2004-07-03 20:19:54
 @@ -94,6 +94,7 @@ int ignore_errors = 0;
  int modify_window = 0;
  int blocking_io = -1;
@@ -221,8 +224,8 @@ Optional:
  	if (tmpdir) {
  		args[ac++] = "--temp-dir";
  		args[ac++] = tmpdir;
---- receiver.c	2 Jul 2004 18:23:57 -0000	1.86
-+++ receiver.c	3 Jul 2004 00:16:50 -0000
+--- orig/receiver.c	2004-07-02 18:23:01
++++ receiver.c	2004-07-03 20:19:54
 @@ -48,6 +48,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
@@ -360,8 +363,8 @@ Optional:
  
  		if (!am_server && verbose)
  			rprintf(FINFO, "%s\n", fname);
---- rsync.c	2 Jul 2004 18:13:53 -0000	1.142
-+++ rsync.c	3 Jul 2004 00:16:51 -0000
+--- orig/rsync.c	2004-07-02 18:06:32
++++ rsync.c	2004-07-03 20:19:54
 @@ -34,6 +34,7 @@ extern int force_delete;
  extern int recurse;
  extern int make_backups;
@@ -384,8 +387,8 @@ Optional:
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
---- rsync.yo	5 Jun 2004 16:16:30 -0000	1.171
-+++ rsync.yo	3 Jul 2004 00:16:52 -0000
+--- orig/rsync.yo	2004-06-17 06:32:00
++++ rsync.yo	2004-07-03 20:19:55
 @@ -289,6 +289,7 @@ verb(
       --backup-dir            make backups into this directory
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
