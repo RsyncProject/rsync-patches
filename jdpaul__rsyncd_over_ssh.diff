@@ -1,0 +1,1300 @@
+Here's a new version of my rsync-server-over-remote-shell patch:
+
+- diffs (-u) against 2.5.0 
+
+- syntax for running rsync server over remote shell is
+
+rsync [options] -e ssh source [user@]host::module[/dest]
+rsync [options] -e ssh [user@]host::module[/source] dest
+
+  If you need different usernames at the rsyncd and ssh levels, you
+  can do
+
+rsync [options] -e "ssh -l ssh-user" source rsyncd-user@host::module[/path]
+
+- rsync_module() now uses the SSH_CLIENT environment variable to get
+  an IP address.  As Martin mentioned, there is the potential for
+  spoofing here, if the client can control what the SSH_CLIENT
+  environment variable contains.  (However, if the client can control
+  the environment on the server side, it can do pretty much whatever
+  it wants anyway....)  If you're using this in a locked-down scheme
+  with single-use SSH keys, then there's no way for the client to do
+  anything to the environment, and it should be safe.
+
+Cheers --
+
+					JD Paul
+					jdpaul@interstel.net
+
+P.S.  Question -- is the enum { } of all the OPT_ variables in
+options.c necessary any more?  It looks like it's not.
+
+On Tue, 20 Nov 2001, JD Paul wrote:
+
+> Hi --
+> 
+> I've made the changes to my code changes and the new diffs (against
+> 2.4.6 again) are included below.
+> 
+> Syntax for running rsync server over a remote shell (e.g. ssh) is now:
+> 
+> rsync [options] -e ssh source [user@]host::module[/dest]
+> rsync [options] -e ssh [user@]host::module[/source] dest
+> 
+> Cheers --
+> 
+> 					JD
+> 					jdpaul@interstel.net
+> 
+
+-------------------------<cut here>-----------------------------------
+
+
+Index: authenticate.c
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/authenticate.c,v
+retrieving revision 1.1.1.5
+retrieving revision 1.4
+diff -u -b -r1.1.1.5 -r1.4
+--- authenticate.c	2001/12/03 23:48:45	1.1.1.5
++++ authenticate.c	2001/12/04 00:10:38	1.4
+@@ -203,7 +203,7 @@
+ 
+    otherwise return username
+ */
+-char *auth_server(int fd, int module, char *addr, char *leader)
++char *auth_server(int f_in, int f_out, int module, char *addr, char *leader)
+ {
+ 	char *users = lp_auth_users(module);
+ 	char challenge[16];
+@@ -222,9 +222,9 @@
+ 	
+ 	base64_encode(challenge, 16, b64_challenge);
+ 
+-	io_printf(fd,"%s%s\n", leader, b64_challenge);
++	io_printf(f_out,"%s%s\n", leader, b64_challenge);
+ 
+-	if (!read_line(fd, line, sizeof(line)-1)) {
++	if (!read_line(f_in, line, sizeof(line)-1)) {
+ 		return NULL;
+ 	}
+ 
+Index: clientserver.c
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/clientserver.c,v
+retrieving revision 1.1.1.5
+retrieving revision 1.11
+diff -u -b -r1.1.1.5 -r1.11
+--- clientserver.c	2001/12/03 23:48:48	1.1.1.5
++++ clientserver.c	2001/12/04 04:51:10	1.11
+@@ -35,34 +35,22 @@
+  */
+ int start_socket_client(char *host, char *path, int argc, char *argv[])
+ {
+-	int fd, i;
+-	char *sargs[MAX_ARGS];
+-	int sargc=0;
+-	char line[MAXPATHLEN];
++	int fd;
++	int ret;
+ 	char *p, *user=NULL;
+ 	extern int remote_version;
+ 	extern int am_sender;
+ 	extern char *shell_cmd;
+-	extern int kludge_around_eof;
+ 	extern char *bind_address;
+        
+ 	if (argc == 0 && !am_sender) {
+ 		extern int list_only;
+ 		list_only = 1;
+ 	}
+-
+-        /* This is just a friendliness enhancement: if the connection
+-         * is to an rsyncd then there is no point specifying the -e option.
+-         * Note that this is only set if the -e was explicitly specified,
+-         * not if the environment variable just happens to be set.
+-         * See http://lists.samba.org/pipermail/rsync/2000-September/002744.html
+-         */
+-        if (shell_cmd) {
+-                rprintf(FERROR, "WARNING: --rsh or -e option ignored when "
+-                        "connecting to rsync daemon\n");
+-                /* continue */
+-        }
+         
++	/* this is redundant with code in start_inband_exchange(), but
++	   this short-circuits a problem before we open a socket, and 
++	   the extra check won't hurt */
+ 	if (*path == '/') {
+ 		rprintf(FERROR,"ERROR: The remote path must start with a module name not a /\n");
+ 		return -1;
+@@ -75,15 +63,46 @@
+ 		*p = 0;
+ 	}
+ 
+-	if (!user) user = getenv("USER");
+-	if (!user) user = getenv("LOGNAME");
+-
+ 	fd = open_socket_out_wrapped (host, rsync_port, bind_address,
+ 				      global_opts.af_hint);
+ 	if (fd == -1) {
+ 		exit_cleanup(RERR_SOCKETIO);
+ 	}
+ 	
++	ret = start_inband_exchange(user, path, fd, fd, argc, argv);
++
++	return (ret < 0 ) ? ret : client_run(fd, fd, -1, argc, argv);
++}
++
++int start_inband_exchange(char *user, char *path, int f_in, int f_out, int argc, char *argv[])
++{
++	int i;
++	char *sargs[MAX_ARGS];
++	int sargc = 0;
++	char line[MAXPATHLEN];
++	char *p;
++	extern int remote_version;
++	extern int kludge_around_eof;
++	extern int am_sender;
++	extern int daemon_over_rsh;
++
++	if (argc == 0 && !am_sender) {
++		extern int list_only;
++		list_only = 1;
++	}
++
++	if (*path == '/') {
++		rprintf(FERROR,"ERROR: The remote path must start with a module name\n");
++		return -1;
++	}
++
++	if (!user) user = getenv("USER");
++	if (!user) user = getenv("LOGNAME");
++
++	/* set daemon_over_rsh to false since we need to build the 
++	   true set of args passed through the rsh/ssh connection; 
++	   this is a no-op for direct-socket-connection mode */
++	daemon_over_rsh = 0;
+ 	server_options(sargs,&sargc);
+ 
+ 	sargs[sargc++] = ".";
+@@ -93,9 +112,9 @@
+ 
+ 	sargs[sargc] = NULL;
+ 
+-	io_printf(fd,"@RSYNCD: %d\n", PROTOCOL_VERSION);
++	io_printf(f_out,"@RSYNCD: %d\n", PROTOCOL_VERSION);
+ 
+-	if (!read_line(fd, line, sizeof(line)-1)) {
++	if (!read_line(f_in, line, sizeof(line)-1)) {
+ 		return -1;
+ 	}
+ 
+@@ -105,7 +124,7 @@
+ 
+ 	p = strchr(path,'/');
+ 	if (p) *p = 0;
+-	io_printf(fd,"%s\n",path);
++	io_printf(f_out,"%s\n",path);
+ 	if (p) *p = '/';
+ 
+ 	/* Old servers may just drop the connection here,
+@@ -113,12 +132,12 @@
+ 	kludge_around_eof = remote_version < 25;
+ 
+ 	while (1) {
+-		if (!read_line(fd, line, sizeof(line)-1)) {
++		if (!read_line(f_in, line, sizeof(line)-1)) {
+ 			return -1;
+ 		}
+ 
+ 		if (strncmp(line,"@RSYNCD: AUTHREQD ",18) == 0) {
+-			auth_client(fd, user, line+18);
++			auth_client(f_out, user, line+18);
+ 			continue;
+ 		}
+ 
+@@ -131,69 +150,97 @@
+ 	kludge_around_eof = False;
+ 
+ 	for (i=0;i<sargc;i++) {
+-		io_printf(fd,"%s\n", sargs[i]);
++		io_printf(f_out,"%s\n", sargs[i]);
+ 	}
+-	io_printf(fd,"\n");
++	io_printf(f_out,"\n");
+ 
+ 	if (remote_version < 23) {
+ 		if (remote_version == 22 || (remote_version > 17 && !am_sender))
+-			io_start_multiplex_in(fd);
++			io_start_multiplex_in(f_in);
+ 	}
+ 
+-	return client_run(fd, fd, -1, argc, argv);
+-}
++	return 0;
+ 
++}
+ 
+ 
+-static int rsync_module(int fd, int i)
++static int rsync_module(int f_in, int f_out, int i)
+ {
+ 	int argc=0;
+ 	char *argv[MAX_ARGS];
+ 	char **argp;
+ 	char line[MAXPATHLEN];
++	char addr_buf[128];
+ 	uid_t uid = (uid_t)-2;  /* canonically "nobody" */
+ 	gid_t gid = (gid_t)-2;
+ 	char *p;
+-	char *addr = client_addr(fd);
+-	char *host = client_name(fd);
++	char *addr;
++	char *host;
+ 	char *name = lp_name(i);
+ 	int use_chroot = lp_use_chroot(i);
+ 	int start_glob=0;
+ 	int ret;
+ 	char *request=NULL;
+ 	extern int am_sender;
++	extern int am_server;
++	extern int am_daemon;
+ 	extern int remote_version;
+ 	extern int am_root;
+ 
++	if (is_a_socket(f_in)) {
++		addr = client_addr(f_in);
++		host = client_name(f_in);
++	} else {
++		char *ssh_client = getenv("SSH_CLIENT");
++		if (ssh_client) {
++			strlcpy(addr_buf, ssh_client, sizeof(addr_buf));
++			/* truncate SSH_CLIENT to just IP address */
++			p = strchr(addr_buf, ' ');
++			if (p) {
++				*p = '\0';
++			}
++			addr = addr_buf;
++			host = "remote.shell.connection";
++		} else {
++			addr = "0.0.0.0";
++			host = "remote.shell.connection";
++		}
++	}
++
+ 	if (!allow_access(addr, host, lp_hosts_allow(i), lp_hosts_deny(i))) {
+ 		rprintf(FERROR,"rsync denied on module %s from %s (%s)\n",
+-			name, client_name(fd), client_addr(fd));
+-		io_printf(fd,"@ERROR: access denied to %s from %s (%s)\n",
+-			  name, client_name(fd), client_addr(fd));
++			name, host, addr);
++		io_printf(f_out,"@ERROR: access denied to %s from %s (%s)\n",
++			  name, host, addr);
+ 		return -1;
+ 	}
+ 
++	if (am_daemon && am_server) {
++		rprintf(FINFO, "rsync allowed access on module %s from %s (%s)\n",
++			name, host, addr);
++	}
++
+ 	if (!claim_connection(lp_lock_file(i), lp_max_connections(i))) {
+ 		if (errno) {
+ 			rprintf(FERROR,"failed to open lock file %s : %s\n",
+ 				lp_lock_file(i), strerror(errno));
+-			io_printf(fd,"@ERROR: failed to open lock file %s : %s\n",
++			io_printf(f_out,"@ERROR: failed to open lock file %s : %s\n",
+ 				  lp_lock_file(i), strerror(errno));
+ 		} else {
+ 			rprintf(FERROR,"max connections (%d) reached\n",
+ 				lp_max_connections(i));
+-			io_printf(fd,"@ERROR: max connections (%d) reached - try again later\n", lp_max_connections(i));
++			io_printf(f_out,"@ERROR: max connections (%d) reached - try again later\n", lp_max_connections(i));
+ 		}
+ 		return -1;
+ 	}
+ 
+ 	
+-	auth_user = auth_server(fd, i, addr, "@RSYNCD: AUTHREQD ");
++	auth_user = auth_server(f_in, f_out, i, addr, "@RSYNCD: AUTHREQD ");
+ 
+ 	if (!auth_user) {
+ 		rprintf(FERROR,"auth failed on module %s from %s (%s)\n",
+-			name, client_name(fd), client_addr(fd));
+-		io_printf(fd,"@ERROR: auth failed on module %s\n",name);
++			name, host, addr);
++		io_printf(f_out,"@ERROR: auth failed on module %s\n",name);
+ 		return -1;		
+ 	}
+ 
+@@ -206,7 +253,7 @@
+ 		if (!name_to_uid(p, &uid)) {
+ 			if (!isdigit(*p)) {
+ 				rprintf(FERROR,"Invalid uid %s\n", p);
+-				io_printf(fd,"@ERROR: invalid uid %s\n", p);
++				io_printf(f_out,"@ERROR: invalid uid\n");
+ 				return -1;
+ 			} 
+ 			uid = atoi(p);
+@@ -216,7 +263,7 @@
+ 		if (!name_to_gid(p, &gid)) {
+ 			if (!isdigit(*p)) {
+ 				rprintf(FERROR,"Invalid gid %s\n", p);
+-				io_printf(fd,"@ERROR: invalid gid %s\n", p);
++				io_printf(f_out,"@ERROR: invalid gid\n");
+ 				return -1;
+ 			} 
+ 			gid = atoi(p);
+@@ -259,20 +306,20 @@
+ 		 */
+ 		if (chroot(lp_path(i))) {
+ 			rsyserr(FERROR, errno, "chroot %s failed", lp_path(i));
+-			io_printf(fd,"@ERROR: chroot failed\n");
++			io_printf(f_out,"@ERROR: chroot failed\n");
+ 			return -1;
+ 		}
+ 
+ 		if (!push_dir("/", 0)) {
+                         rsyserr(FERROR, errno, "chdir %s failed\n", lp_path(i));
+-			io_printf(fd,"@ERROR: chdir failed\n");
++			io_printf(f_out,"@ERROR: chdir failed\n");
+ 			return -1;
+ 		}
+ 
+ 	} else {
+ 		if (!push_dir(lp_path(i), 0)) {
+ 			rsyserr(FERROR, errno, "chdir %s failed\n", lp_path(i));
+-			io_printf(fd,"@ERROR: chdir failed\n");
++			io_printf(f_out,"@ERROR: chdir failed\n");
+ 			return -1;
+ 		}
+ 		sanitize_paths = 1;
+@@ -281,25 +328,25 @@
+ 	if (am_root) {
+ 		if (setgid(gid)) {
+ 			rsyserr(FERROR, errno, "setgid %d failed", (int) gid);
+-			io_printf(fd,"@ERROR: setgid failed\n");
++			io_printf(f_out,"@ERROR: setgid failed\n");
+ 			return -1;
+ 		}
+ 
+ 		if (setuid(uid)) {
+ 			rsyserr(FERROR, errno, "setuid %d failed", (int) uid);
+-			io_printf(fd,"@ERROR: setuid failed\n");
++			io_printf(f_out,"@ERROR: setuid failed\n");
+ 			return -1;
+ 		}
+ 
+ 		am_root = (getuid() == 0);
+ 	}
+ 
+-	io_printf(fd,"@RSYNCD: OK\n");
++	io_printf(f_out,"@RSYNCD: OK\n");
+ 
+ 	argv[argc++] = "rsyncd";
+ 
+ 	while (1) {
+-		if (!read_line(fd, line, sizeof(line)-1)) {
++		if (!read_line(f_in, line, sizeof(line)-1)) {
+ 			return -1;
+ 		}
+ 
+@@ -367,7 +414,7 @@
+ 
+ 	if (remote_version < 23) {
+ 		if (remote_version == 22 || (remote_version > 17 && am_sender))
+-			io_start_multiplex_out(fd);
++			io_start_multiplex_out(f_out);
+ 	}
+         
+         /* For later protocol versions, we don't start multiplexing
+@@ -388,7 +435,7 @@
+ 		io_timeout = lp_timeout(i);
+ 	}
+ 
+-	start_server(fd, fd, argc, argp);
++	start_server(f_in, f_out, argc, argp);
+ 
+ 	return 0;
+ }
+@@ -409,26 +456,29 @@
+ 		io_printf(fd,"@RSYNCD: EXIT\n");
+ }
+ 
+-/* this is called when a socket connection is established to a client
++/* this is called when a connection is established to a client
+    and we want to start talking. The setup of the system is done from
+    here */
+-static int start_daemon(int fd)
++int start_daemon(int f_in, int f_out)
+ {
+ 	char line[200];
+ 	char *motd;
+ 	int i = -1;
+ 	extern char *config_file;
+ 	extern int remote_version;
++	extern int am_server;
+ 
+ 	if (!lp_load(config_file, 0)) {
+ 		exit_cleanup(RERR_SYNTAX);
+ 	}
+ 
+-	set_socket_options(fd,"SO_KEEPALIVE");
+-	set_socket_options(fd,lp_socket_options());
+-	set_nonblocking(fd);
++	if ( !am_server ) {
++		set_socket_options(f_in,"SO_KEEPALIVE");
++		set_socket_options(f_in,lp_socket_options());
++		set_nonblocking(f_in);
++	}
+ 
+-	io_printf(fd,"@RSYNCD: %d\n", PROTOCOL_VERSION);
++	io_printf(f_out,"@RSYNCD: %d\n", PROTOCOL_VERSION);
+ 
+ 	motd = lp_motd_file();
+ 	if (motd && *motd) {
+@@ -437,50 +487,49 @@
+ 			int len = fread(line, 1, sizeof(line)-1, f);
+ 			if (len > 0) {
+ 				line[len] = 0;
+-				io_printf(fd,"%s", line);
++				io_printf(f_out,"%s", line);
+ 			}
+ 		}
+ 		if (f) fclose(f);
+-		io_printf(fd,"\n");
++		io_printf(f_out,"\n");
+ 	}
+ 
+-	if (!read_line(fd, line, sizeof(line)-1)) {
++	if (!read_line(f_in, line, sizeof(line)-1)) {
+ 		return -1;
+ 	}
+ 
+ 	if (sscanf(line,"@RSYNCD: %d", &remote_version) != 1) {
+-		io_printf(fd,"@ERROR: protocol startup error\n");
++		io_printf(f_out,"@ERROR: protocol startup error\n");
+ 		return -1;
+ 	}	
+ 
+ 	while (i == -1) {
+ 		line[0] = 0;
+-		if (!read_line(fd, line, sizeof(line)-1)) {
++		if (!read_line(f_in, line, sizeof(line)-1)) {
+ 			return -1;
+ 		}
+ 
+ 		if (!*line || strcmp(line,"#list")==0) {
+-			send_listing(fd);
++			send_listing(f_out);
+ 			return -1;
+ 		} 
+ 
+ 		if (*line == '#') {
+ 			/* it's some sort of command that I don't understand */
+-			io_printf(fd,"@ERROR: Unknown command '%s'\n", line);
++			io_printf(f_out,"@ERROR: Unknown command '%s'\n", line);
+ 			return -1;
+ 		}
+ 
+ 		i = lp_number(line);
+ 		if (i == -1) {
+-			io_printf(fd,"@ERROR: Unknown module '%s'\n", line);
++			io_printf(f_out,"@ERROR: Unknown module '%s'\n", line);
+ 			return -1;
+ 		}
+ 	}
+ 
+-	return rsync_module(fd, i);
++	return rsync_module(f_in, f_out, i);
+ }
+ 
+-
+ int daemon_main(void)
+ {
+ 	extern char *config_file;
+@@ -498,7 +547,7 @@
+ 			open("/dev/null", O_RDWR);
+ 		}
+ 
+-		return start_daemon(STDIN_FILENO);
++		return start_daemon(STDIN_FILENO, STDIN_FILENO);
+ 	}
+ 
+ 	become_daemon();
+Index: main.c
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/main.c,v
+retrieving revision 1.1.1.7
+retrieving revision 1.7
+diff -u -b -r1.1.1.7 -r1.7
+--- main.c	2001/12/03 23:48:56	1.1.1.7
++++ main.c	2001/12/04 00:10:38	1.7
+@@ -133,9 +133,11 @@
+ 	int i,argc=0;
+ 	pid_t ret;
+ 	char *tok,*dir=NULL;
++	int dash_l_set = 0;
+ 	extern int local_server;
+ 	extern char *rsync_path;
+ 	extern int blocking_io;
++	extern int daemon_over_rsh;
+ 	extern int read_batch;
+ 
+ 	if (!read_batch && !local_server) { /* dw -- added read_batch */
+@@ -151,15 +153,23 @@
+ 			args[argc++] = tok;
+ 		}
+ 
++		/* check to see if we've already been given '-l user' in 
++		   the remote-shell command */
++		for (i=0;i<(argc-1);i++) {
++			if (!strcmp("-l", args[i]) && (args[i+1][0] != '-')) {
++				dash_l_set = 1;
++			}
++		}
++
+ #if HAVE_REMSH
+ 		/* remsh (on HPUX) takes the arguments the other way around */
+ 		args[argc++] = machine;
+-		if (user) {
++		if (user && !(daemon_over_rsh && dash_l_set)) {
+ 			args[argc++] = "-l";
+ 			args[argc++] = user;
+ 		}
+ #else
+-		if (user) {
++		if (user && !(daemon_over_rsh && dash_l_set)) {
+ 			args[argc++] = "-l";
+ 			args[argc++] = user;
+ 		}
+@@ -176,8 +186,10 @@
+ 
+ 	args[argc++] = ".";
+ 
++	if (!daemon_over_rsh) {
+ 	if (path && *path) 
+ 		args[argc++] = path;
++	}
+ 
+ 	args[argc] = NULL;
+ 
+@@ -617,15 +629,17 @@
+ 	extern int am_sender;
+ 	extern char *shell_cmd;
+ 	extern int rsync_port;
++	extern int daemon_over_rsh;
+ 	extern int whole_file;
+ 	extern int read_batch;
+ 	int rc;
+ 
+ 	/* Don't clobber argv[] so that ps(1) can still show the right
+            command line. */
+-	if ((rc = copy_argv (argv)))
++	if ((rc = copy_argv(argv)))
+ 		return rc;
+ 
++	/* rsync:// always uses rsync server over direct socket connection */
+ 	if (strncasecmp(URL_PREFIX, argv[0], strlen(URL_PREFIX)) == 0) {
+ 		char *host, *path;
+ 
+@@ -651,7 +665,13 @@
+ 	if (p) {
+ 		if (p[1] == ':') {
+ 			*p = 0;
+-			return start_socket_client(argv[0], p+2, argc-1, argv+1);
++			if (!shell_cmd) {
++				return start_socket_client(argv[0], p+2, 
++							   argc-1, argv+1);
++			} else {
++				++p;
++				daemon_over_rsh = 1;
++			}
+ 		}
+ 
+ 		if (argc < 1) {
+@@ -675,7 +695,13 @@
+ 			whole_file = 1;
+ 		} else if (p[1] == ':') {
+ 			*p = 0;
+-			return start_socket_client(argv[argc-1], p+2, argc-1, argv);
++			if (!shell_cmd) {
++				return start_socket_client(argv[argc-1], p+2, 
++							   argc-1, argv);
++			} else {
++				++p;
++				daemon_over_rsh = 1;
++			}
+ 		}
+ 
+ 		if (argc < 2) {
+@@ -726,8 +752,20 @@
+ 		list_only = 1;
+ 	}
+ 	
+-	pid = do_cmd(shell_cmd,shell_machine,shell_user,shell_path,&f_in,&f_out);
++	pid = do_cmd(shell_cmd,shell_machine,shell_user,shell_path,
++	             &f_in,&f_out);
+ 	
++	/* if we're running an rsync server on the remote host over a
++	   remote shell command, we need to do the RSYNCD protocol first */
++	if (daemon_over_rsh) {
++		int tmpret;
++		tmpret = start_inband_exchange(shell_user, shell_path,
++					       f_in, f_out, argc, argv);
++		if ( tmpret < 0 ) {
++			return tmpret;
++		}
++	}
++
+ 	ret = client_run(f_in, f_out, pid, argc, argv);
+ 
+ 	fflush(stdout);
+@@ -813,7 +851,7 @@
+ 	    set_batch_file_ext(batch_ext);
+ 	}
+ 
+-	if (am_daemon) {
++	if (am_daemon && !am_server) {
+ 		return daemon_main();
+ 	}
+ 
+@@ -835,7 +873,11 @@
+ 	if (am_server) {
+ 		set_nonblocking(STDIN_FILENO);
+ 		set_nonblocking(STDOUT_FILENO);
++		if (am_daemon) {
++			return start_daemon(STDIN_FILENO, STDOUT_FILENO);
++		} else {
+ 		start_server(STDIN_FILENO, STDOUT_FILENO, argc, argv);
++		}
+ 	}
+ 
+ 	ret = start_client(argc, argv);
+Index: options.c
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/options.c,v
+retrieving revision 1.1.1.5
+retrieving revision 1.11
+diff -u -b -r1.1.1.5 -r1.11
+--- options.c	2001/12/03 23:48:57	1.1.1.5
++++ options.c	2001/12/04 05:30:27	1.11
+@@ -21,6 +21,7 @@
+ #include "rsync.h"
+ #include "popt.h"
+ 
++
+ int make_backups = 0;
+ int whole_file = 0;
+ int copy_links = 0;
+@@ -53,6 +54,7 @@
+ int module_id = -1;
+ int am_server = 0;
+ int am_sender = 0;
++int daemon_over_rsh = 0;
+ int recurse = 0;
+ int am_daemon=0;
+ int do_stats=0;
+@@ -535,6 +537,13 @@
+ 	int i, x;
+ 
+ 	args[ac++] = "--server";
++
++	if (daemon_over_rsh) {
++		args[ac++] = "--daemon";
++		*argc = ac;
++		/* if we're passing --daemon, we're done */
++		return;
++	}
+ 
+ 	if (!am_sender)
+ 		args[ac++] = "--sender";
+Index: proto.h
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/proto.h,v
+retrieving revision 1.1.1.7
+retrieving revision 1.5
+diff -u -b -r1.1.1.7 -r1.5
+--- proto.h	2001/12/03 23:48:57	1.1.1.7
++++ proto.h	2001/12/04 00:10:38	1.5
+@@ -1,7 +1,7 @@
+ /* This file is automatically generated with "make proto". DO NOT EDIT */
+ 
+ int allow_access(char *addr, char *host, char *allow_list, char *deny_list);
+-char *auth_server(int fd, int module, char *addr, char *leader);
++char *auth_server(int f_in, int f_out, int module, char *addr, char *leader);
+ void auth_client(int fd, char *user, char *challenge);
+ int make_backup(char *fname);
+ void create_batch_file_ext();
+@@ -37,6 +37,8 @@
+ 		 struct map_struct *buf, int fd1, int fd2);
+ void cleanup_set_pid(int pid);
+ int start_socket_client(char *host, char *path, int argc, char *argv[]);
++int start_inband_exchange(char *user, char *path, int f_in, int f_out, int argc, char *argv[]);
++int start_daemon(int f_in, int f_out);
+ int daemon_main(void);
+ void setup_protocol(int f_out,int f_in);
+ int claim_connection(char *fname,int max_connections);
+@@ -173,7 +175,7 @@
+ 			     const char *bind_address,
+ 			     int af_hint);
+ int is_a_socket(int fd);
+-void start_accept_loop(int port, int (*fn)(int ));
++void start_accept_loop(int port, int (*fn)(int, int));
+ void set_socket_options(int fd, char *options);
+ void become_daemon(void);
+ char *client_addr(int fd);
+Index: rsync.1
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/rsync.1,v
+retrieving revision 1.1.1.7
+retrieving revision 1.9
+diff -u -b -r1.1.1.7 -r1.9
+--- rsync.1	2001/12/03 23:48:58	1.1.1.7
++++ rsync.1	2001/12/04 05:02:26	1.9
+@@ -47,7 +47,7 @@
+ .PP 
+ .SH "GENERAL" 
+ .PP 
+-There are six different ways of using rsync\&. They are:
++There are eight different ways of using rsync\&. They are:
+ .PP 
+ .IP o 
+ for copying local files\&. This is invoked when neither
+@@ -75,6 +75,20 @@
+ separator\&. 
+ .IP 
+ .IP o 
++for copying from a remote machine using a remote shell
++program as the transport, using rsync server on the remote
++machine\&.  This is invoked when the source path contains a ::
++separator and the --rsh=COMMAND (aka "-e COMMAND") option is
++also provided\&.
++.IP 
++.IP o 
++for copying from the local machine to a remote machine
++using a remote shell program as the transport, using rsync
++server on the remote machine\&.  This is invoked when the
++destination path contains a :: separator and the
++--rsh=COMMMAND option is also provided\&.
++.IP 
++.IP o 
+ for listing files on a remote machine\&. This is done the
+ same way as rsync transfers except that you leave off the
+ local destination\&.  
+@@ -139,7 +153,7 @@
+ using the --delete option\&.
+ .PP 
+ You can also use rsync in local-only mode, where both the source and
+-destination don\&'t have a \&':\&' in the name\&. In this case it behaves like
++destination don\'t have a \':\' in the name\&. In this case it behaves like
+ an improved copy command\&.
+ .PP 
+ .RS 
+@@ -155,7 +169,7 @@
+ transport\&. In this case you will connect to a remote rsync server
+ running on TCP port 873\&. 
+ .PP 
+-You may establish the connetcion via a web proxy by setting the
++You may establish the connection via a web proxy by setting the
+ environment variable RSYNC_PROXY to a hostname:port pair pointing to
+ your web proxy\&. Note that your web proxy must allow proxying to port
+ 873, this must be configured in your proxy servers ruleset\&.
+@@ -188,17 +202,70 @@
+ WARNING: On some systems environment variables are visible to all
+ users\&. On those systems using --password-file is recommended\&.
+ .PP 
++.SH "CONNECTING TO AN RSYNC SERVER OVER A REMOTE SHELL PROGRAM" 
++.PP 
++It is sometimes useful to be able to set up file transfers using rsync
++server capabilities on the remote machine, while still using rsh or
++ssh for transport\&.  This is especially useful when you want to connect
++to a remote machine via ssh (for encryption or to get through a
++firewall), but you still want to have access to the rsync server
++features (see RUNNING AN RSYNC SERVER OVER A REMOTE SHELL PROGRAM,
++below)\&.  
++.PP 
++From the user\'s perspective, using rsync in this way is the same as
++using it to connect to an rsync server, except that you must
++explicitly set the remote shell program on the command line with
++--rsh=COMMAND\&.  (Setting RSYNC_RSH in the environment will not turn on
++this functionality\&.)
++.PP 
++In order to distinguish between the remote-shell user and the rsync
++server user, you can use \'-l user\' on your remote-shell command:
++.PP 
++.RS 
++rsync -av --rsh="ssh -l ssh-user" rsync-user@host::module[/path] local-path
++.RE 
++.PP 
++The "ssh-user" will be used at the ssh level; the "rsync-user" will be
++used to check against the rsyncd\&.conf on the remote host\&.
++.PP 
+ .SH "RUNNING AN RSYNC SERVER" 
+ .PP 
+ An rsync server is configured using a config file which by default is
+ called /etc/rsyncd\&.conf\&. Please see the rsyncd\&.conf(5) man page for more
+ information\&. 
+ .PP 
++.SH "RUNNING AN RSYNC SERVER OVER A REMOTE SHELL PROGRAM" 
++.PP 
++See the rsyncd\&.conf(5) man page for full information on the rsync
++server configuration file\&.  
++.PP 
++Several configuration options will not be available unless the remote
++user is root (e\&.g\&. chroot, setuid/setgid, etc\&.)\&.  There is no need to
++configure inetd or the services map to include the rsync server port
++if you run an rsync server only via a remote shell program\&.
++.PP 
++To run an rsync server out of a single-use ssh key, use the
++"command=\fICOMMAND\fP" syntax in the remote user\'s
++authorized_keys entry, where command would be
++.PP 
++.RS 
++rsync --server --daemon \&.
++.RE 
++.PP 
++NOTE: rsync\'s argument parsing expects the trailing "\&.", so make sure
++that it\'s there\&.  If you want to use a rsyncd\&.conf(5)-style
++configuration file other than /etc/rsyncd\&.conf, you can added a
++--config-file option to the \fIcommand\fP:
++.PP 
++.RS 
++rsync --server --daemon --config-file=\fIfile\fP \&.
++.RE 
++.PP 
+ .SH "EXAMPLES" 
+ .PP 
+ Here are some examples of how I use rsync\&.
+ .PP 
+-To backup my wife\&'s home directory, which consists of large MS Word
++To backup my wife\'s home directory, which consists of large MS Word
+ files and mail folders, I use a cron job that runs
+ .PP 
+ .RS 
+@@ -214,7 +281,7 @@
+ .RS 
+ get:
+ .br 
+-rsync -avuzb --exclude \&'*~\&' samba:samba/ \&.
++rsync -avuzb --exclude \'*~\' samba:samba/ \&.
+ .PP 
+ put:
+ .br 
+@@ -225,7 +292,7 @@
+ .PP 
+ this allows me to sync with a CVS directory at the other end of the
+ link\&. I then do cvs operations on the remote machine, which saves a
+-lot of time as the remote cvs protocol isn\&'t very efficient\&.
++lot of time as the remote cvs protocol isn\'t very efficient\&.
+ .PP 
+ I mirror a directory between my "old" and "new" ftp sites with the
+ command
+@@ -254,7 +321,7 @@
+  -b, --backup                make backups (default ~ suffix)
+      --backup-dir            make backups into this directory
+      --suffix=SUFFIX         override backup suffix
+- -u, --update                update only (don\&'t overwrite newer files)
++ -u, --update                update only (don\'t overwrite newer files)
+  -l, --links                 preserve soft links
+  -L, --copy-links            treat soft links like regular files
+      --copy-unsafe-links     copy links outside the source tree
+@@ -268,22 +335,22 @@
+  -S, --sparse                handle sparse files efficiently
+  -n, --dry-run               show what would have been transferred
+  -W, --whole-file            copy whole files, no incremental checks
+- -x, --one-file-system       don\&'t cross filesystem boundaries
++ -x, --one-file-system       don\'t cross filesystem boundaries
+  -B, --block-size=SIZE       checksum blocking size (default 700)
+  -e, --rsh=COMMAND           specify rsh replacement
+      --rsync-path=PATH       specify path to rsync on the remote machine
+  -C, --cvs-exclude           auto ignore files in the same way CVS does
+      --existing              only update files that already exist
+-     --delete                delete files that don\&'t exist on the sending side
++     --delete                delete files that don\'t exist on the sending side
+      --delete-excluded       also delete excluded files on the receiving side
+      --delete-after          delete after transferring, not before
+      --ignore-errors         delete even if there are IO errors
+-     --max-delete=NUM        don\&'t delete more than NUM files
++     --max-delete=NUM        don\'t delete more than NUM files
+      --partial               keep partially transferred files
+      --force                 force deletion of directories even if not empty
+-     --numeric-ids           don\&'t map uid/gid values by user/group name
++     --numeric-ids           don\'t map uid/gid values by user/group name
+      --timeout=TIME          set IO timeout in seconds
+- -I, --ignore-times          don\&'t exclude files that match length and time
++ -I, --ignore-times          don\'t exclude files that match length and time
+      --size-only             only use file size when determining if a file should be transferred
+      --modify-window=NUM     Timestamp window (seconds) for file match (default=0)
+  -T  --temp-dir=DIR          create temporary files in directory DIR
+@@ -292,8 +359,8 @@
+  -z, --compress              compress file data
+      --exclude=PATTERN       exclude files matching PATTERN
+      --exclude-from=FILE     exclude patterns listed in FILE
+-     --include=PATTERN       don\&'t exclude files matching PATTERN
+-     --include-from=FILE     don\&'t exclude patterns listed in FILE
++     --include=PATTERN       don\'t exclude files matching PATTERN
++     --include-from=FILE     don\'t exclude patterns listed in FILE
+      --version               print version number
+      --daemon                run as a rsync daemon
+      --address               bind to the specified address
+@@ -320,7 +387,7 @@
+ rsync uses the GNU long options package\&. Many of the command line
+ options have two variants, one short and one long\&.  These are shown
+ below, separated by commas\&. Some options only have a long variant\&.
+-The \&'=\&' for options that take a parameter is optional; whitespace
++The \'=\' for options that take a parameter is optional; whitespace
+ can be used instead\&.
+ .PP 
+ .IP "\fB-h, --help\fP" 
+@@ -384,7 +451,7 @@
+ .IP 
+ .IP "\fB-r, --recursive\fP" 
+ This tells rsync to copy directories
+-recursively\&. If you don\&'t specify this then rsync won\&'t copy
++recursively\&. If you don\'t specify this then rsync won\'t copy
+ directories at all\&.
+ .IP 
+ .IP "\fB-R, --relative\fP" 
+@@ -502,7 +569,7 @@
+ option is not used, the optimization that excludes files that have not been
+ modified cannot be effective; in other words, a missing -t or -a will
+ cause the next transfer to behave as if it used -I, and all files will have
+-their checksums compared and show up in log messages even if they haven\&'t
++their checksums compared and show up in log messages even if they haven\'t
+ changed\&.
+ .IP 
+ .IP "\fB-n, --dry-run\fP" 
+@@ -513,8 +580,8 @@
+ Try to handle sparse files efficiently so they take
+ up less space on the destination\&.
+ .IP 
+-NOTE: Don\&'t use this option when the destination is a Solaris "tmpfs"
+-filesystem\&. It doesn\&'t seem to handle seeks over null regions
++NOTE: Don\'t use this option when the destination is a Solaris "tmpfs"
++filesystem\&. It doesn\'t seem to handle seeks over null regions
+ correctly and ends up corrupting the files\&.
+ .IP 
+ .IP "\fB-x, --one-file-system\fP" 
+@@ -533,14 +600,14 @@
+ .IP 
+ .IP "\fB--delete\fP" 
+ This tells rsync to delete any files on the receiving
+-side that aren\&'t on the sending side\&.   Files that are excluded from
++side that aren\'t on the sending side\&.   Files that are excluded from
+ transfer are excluded from being deleted unless you use --delete-excluded\&.
+ .IP 
+ This option has no effect if directory recursion is not selected\&.
+ .IP 
+ This option can be dangerous if used incorrectly!  It is a very good idea
+ to run first using the dry run option (-n) to see what files would be
+-deleted to make sure important files aren\&'t listed\&.
++deleted to make sure important files aren\'t listed\&.
+ .IP 
+ If the sending side detects any IO errors then the deletion of any
+ files at the destination will be automatically disabled\&. This is to
+@@ -582,14 +649,29 @@
+ remote copies of rsync\&. By default, rsync will use rsh, but you may
+ like to instead use ssh because of its high security\&.
+ .IP 
++If this option is used with \fB[user@]host::module/path\fP, then the
++remote shell \fICOMMMAND\fP will be used to run an rsync server on the
++remote host, and all data will be transmitted through that remote
++shell connection, rather than through a direct socket connection to a
++running rsync server on the remote host\&.
++.IP 
+ You can also choose the remote shell program using the RSYNC_RSH
+ environment variable\&.
+ .IP 
++In either case, rsync will tokenize the remote-shell command, so you
++can use constructions like
++.IP 
++.RS 
++rsync [options] --rsh="ssh -l user -i identity" source dest
++.RE 
++.IP 
++to control things at a fine level\&.
++.IP 
+ See also the --blocking-io option which is affected by this option\&.
+ .IP 
+ .IP "\fB--rsync-path=PATH\fP" 
+ Use this to specify the path to the copy of
+-rsync on the remote machine\&. Useful when it\&'s not in your path\&. Note
++rsync on the remote machine\&. Useful when it\'s not in your path\&. Note
+ that this is the full path to the binary, not just the directory that
+ the binary is in\&.
+ .IP 
+@@ -608,7 +690,7 @@
+ This option is similar to the --exclude
+ option, but instead it adds all exclude patterns listed in the file
+ FILE to the exclude list\&.  Blank lines in FILE and lines starting with
+-\&';\&' or \&'#\&' are ignored\&.
++\';\' or \'#\' are ignored\&.
+ .IP 
+ .IP "\fB--include=PATTERN\fP" 
+ This option tells rsync to not exclude the
+@@ -624,7 +706,7 @@
+ .IP 
+ .IP "\fB-C, --cvs-exclude\fP" 
+ This is a useful shorthand for excluding a
+-broad range of files that you often don\&'t want to transfer between
++broad range of files that you often don\'t want to transfer between
+ systems\&. It uses the same algorithm that CVS uses to determine if
+ a file should be ignored\&.
+ .IP 
+@@ -676,7 +758,7 @@
+ flash-cutover when all files have been successfully transferred (for
+ example by moving directories around and removing the old directory,
+ although this requires also doing the transfer with -I to avoid skipping
+-files that haven\&'t changed)\&.  This option increases the usefulness of
++files that haven\'t changed)\&.  This option increases the usefulness of
+ --partial because partially transferred files will remain in the new
+ temporary destination until they have a chance to be completed\&.  If DIR is
+ a relative path, it is relative to the destination directory\&.
+@@ -741,7 +823,7 @@
+ a remote shell transport\&.  If -e or --rsh are not specified or are set to
+ the default "rsh", this defaults to blocking IO, otherwise it defaults to
+ non-blocking IO\&.  You may find the --blocking-io option is needed for some
+-remote shells that can\&'t handle non-blocking IO\&.  Ssh prefers blocking IO\&.
++remote shells that can\'t handle non-blocking IO\&.  Ssh prefers blocking IO\&.
+ .IP 
+ .IP "\fB--log-format=FORMAT\fP" 
+ This allows you to specify exactly what the
+@@ -847,7 +929,7 @@
+ .IP o 
+ if the pattern contains a / (not counting a trailing /) then it
+ is matched against the full filename, including any leading
+-directory\&. If the pattern doesn\&'t contain a / then it is matched
++directory\&. If the pattern doesn\'t contain a / then it is matched
+ only against the final component of the filename\&.  Again, remember
+ that the algorithm is applied recursively so "full filename" can 
+ actually be any portion of a path\&.
+@@ -869,12 +951,12 @@
+ The +/- rules are most useful in exclude lists, allowing you to have a
+ single exclude list that contains both include and exclude options\&.
+ .PP 
+-If you end an exclude list with --exclude \&'*\&', note that since the
++If you end an exclude list with --exclude \'*\', note that since the
+ algorithm is applied recursively that unless you explicitly include
+ parent directories of files you want to include then the algorithm
+ will stop at the parent directories and never see the files below
+-them\&.  To include all directories, use --include \&'*/\&' before the
+---exclude \&'*\&'\&.
++them\&.  To include all directories, use --include \'*/\' before the
++--exclude \'*\'\&.
+ .PP 
+ Here are some exclude/include examples:
+ .PP 
+@@ -1020,7 +1102,7 @@
+ are used to determine the default username sent to a rsync server\&.
+ .IP 
+ .IP "\fBHOME\fP" 
+-The HOME environment variable is used to find the user\&'s
++The HOME environment variable is used to find the user\'s
+ default \&.cvsignore file\&.
+ .IP 
+ .PP 
+@@ -1070,7 +1152,7 @@
+ .SH "THANKS" 
+ .PP 
+ Thanks to Richard Brent, Brendan Mackay, Bill Waite, Stephen Rothwell
+-and David Bell for helpful suggestions and testing of rsync\&. I\&'ve
++and David Bell for helpful suggestions and testing of rsync\&. I\'ve
+ probably missed some people, my apologies if I have\&.
+ .PP 
+ .SH "AUTHOR" 
+Index: rsync.yo
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/rsync.yo,v
+retrieving revision 1.1.1.5
+retrieving revision 1.4
+diff -u -b -r1.1.1.5 -r1.4
+--- rsync.yo	2001/12/03 23:49:01	1.1.1.5
++++ rsync.yo	2001/12/04 00:10:39	1.4
+@@ -42,7 +42,7 @@
+ 
+ manpagesection(GENERAL)
+ 
+-There are six different ways of using rsync. They are:
++There are eight different ways of using rsync. They are:
+ 
+ itemize(
+ 	it() for copying local files. This is invoked when neither
+@@ -65,6 +65,18 @@
+ 	server. This is invoked when the destination path contains a ::
+ 	separator. 
+ 
++	it() for copying from a remote machine using a remote shell
++	program as the transport, using rsync server on the remote
++	machine.  This is invoked when the source path contains a ::
++	separator and the --rsh=COMMAND (aka "-e COMMAND") option is
++	also provided.
++
++	it() for copying from the local machine to a remote machine
++	using a remote shell program as the transport, using rsync
++	server on the remote machine.  This is invoked when the
++	destination path contains a :: separator and the
++	--rsh=COMMMAND option is also provided.
++
+ 	it() for listing files on a remote machine. This is done the
+ 	same way as rsync transfers except that you leave off the
+ 	local destination.  
+@@ -139,7 +151,7 @@
+ transport. In this case you will connect to a remote rsync server
+ running on TCP port 873. 
+ 
+-You may establish the connetcion via a web proxy by setting the
++You may establish the connection via a web proxy by setting the
+ environment variable RSYNC_PROXY to a hostname:port pair pointing to
+ your web proxy. Note that your web proxy must allow proxying to port
+ 873, this must be configured in your proxy servers ruleset.
+@@ -170,12 +182,59 @@
+ WARNING: On some systems environment variables are visible to all
+ users. On those systems using --password-file is recommended.
+ 
++manpagesection(CONNECTING TO AN RSYNC SERVER OVER A REMOTE SHELL PROGRAM)
++
++It is sometimes useful to be able to set up file transfers using rsync
++server capabilities on the remote machine, while still using rsh or
++ssh for transport.  This is especially useful when you want to connect
++to a remote machine via ssh (for encryption or to get through a
++firewall), but you still want to have access to the rsync server
++features (see RUNNING AN RSYNC SERVER OVER A REMOTE SHELL PROGRAM,
++below).  
++
++From the user's perspective, using rsync in this way is the same as
++using it to connect to an rsync server, except that you must
++explicitly set the remote shell program on the command line with
++--rsh=COMMAND.  (Setting RSYNC_RSH in the environment will not turn on
++this functionality.)
++
++In order to distinguish between the remote-shell user and the rsync
++server user, you can use '-l user' on your remote-shell command:
++
++quote(rsync -av --rsh="ssh -l ssh-user" rsync-user@host::module[/path] local-path)
++
++The "ssh-user" will be used at the ssh level; the "rsync-user" will be
++used to check against the rsyncd.conf on the remote host.
++
+ manpagesection(RUNNING AN RSYNC SERVER)
+ 
+ An rsync server is configured using a config file which by default is
+ called /etc/rsyncd.conf. Please see the rsyncd.conf(5) man page for more
+ information. 
+ 
++manpagesection(RUNNING AN RSYNC SERVER OVER A REMOTE SHELL PROGRAM)
++
++See the rsyncd.conf(5) man page for full information on the rsync
++server configuration file.  
++
++Several configuration options will not be available unless the remote
++user is root (e.g. chroot, setuid/setgid, etc.).  There is no need to
++configure inetd or the services map to include the rsync server port
++if you run an rsync server only via a remote shell program.
++
++To run an rsync server out of a single-use ssh key, use the
++"command=em(COMMAND)" syntax in the remote user's
++authorized_keys entry, where command would be
++
++quote(rsync --server --daemon .)
++
++NOTE: rsync's argument parsing expects the trailing ".", so make sure
++that it's there.  If you want to use a rsyncd.conf(5)-style
++configuration file other than /etc/rsyncd.conf, you can added a
++--config-file option to the em(command):
++
++quote(rsync --server --daemon --config-file=em(file) .)
++
+ manpagesection(EXAMPLES)
+ 
+ Here are some examples of how I use rsync.
+@@ -501,8 +560,21 @@
+ remote copies of rsync. By default, rsync will use rsh, but you may
+ like to instead use ssh because of its high security.
+ 
++If this option is used with bf([user@]host::module/path), then the
++remote shell em(COMMMAND) will be used to run an rsync server on the
++remote host, and all data will be transmitted through that remote
++shell connection, rather than through a direct socket connection to a
++running rsync server on the remote host.
++
+ You can also choose the remote shell program using the RSYNC_RSH
+ environment variable.
++
++In either case, rsync will tokenize the remote-shell command, so you
++can use constructions like
++
++quote(rsync [options] --rsh="ssh -l user -i identity" source dest)
++
++to control things at a fine level.
+ 
+ See also the --blocking-io option which is affected by this option.
+ 
+Index: rsyncd.conf.5
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/rsyncd.conf.5,v
+retrieving revision 1.1.1.5
+retrieving revision 1.3
+diff -u -b -r1.1.1.5 -r1.3
+--- rsyncd.conf.5	2001/12/03 23:48:52	1.1.1.5
++++ rsyncd.conf.5	2001/12/04 00:10:39	1.3
+@@ -238,6 +238,11 @@
+ "secrets file" option\&. The default is for all users to be able to
+ connect without a password (this is called "anonymous rsync")\&.
+ .IP 
++See also the \fBCONNECTING TO AN RSYNC SERVER OVER A REMOTE SHELL
++PROGRAM\fP section in rsync(1) for information on how handle an
++rsyncd\&.conf-level username that differs from the remote-shell-level
++username when using a remote shell to connect to a rsync server\&.
++.IP 
+ .IP "\fBsecrets file\fP" 
+ The "secrets file" option specifies the name of
+ a file that contains the username:password pairs used for
+Index: rsyncd.conf.yo
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/rsyncd.conf.yo,v
+retrieving revision 1.1.1.5
+retrieving revision 1.3
+diff -u -b -r1.1.1.5 -r1.3
+--- rsyncd.conf.yo	2001/12/03 23:49:02	1.1.1.5
++++ rsyncd.conf.yo	2001/12/04 00:10:39	1.3
+@@ -219,6 +219,11 @@
+ "secrets file" option. The default is for all users to be able to
+ connect without a password (this is called "anonymous rsync").
+ 
++See also the bf(CONNECTING TO AN RSYNC SERVER OVER A REMOTE SHELL
++PROGRAM) section in rsync(1) for information on how handle an
++rsyncd.conf-level username that differs from the remote-shell-level
++username when using a remote shell to connect to a rsync server.
++
+ dit(bf(secrets file)) The "secrets file" option specifies the name of
+ a file that contains the username:password pairs used for
+ authenticating this module. This file is only consulted if the "auth
+Index: socket.c
+===================================================================
+RCS file: /juno/repository/usr/local/pkg/rsync/socket.c,v
+retrieving revision 1.1.1.5
+retrieving revision 1.3
+diff -u -b -r1.1.1.5 -r1.3
+--- socket.c	2001/12/03 23:49:04	1.1.1.5
++++ socket.c	2001/12/04 00:10:39	1.3
+@@ -349,7 +349,7 @@
+ }
+ 
+ 
+-void start_accept_loop(int port, int (*fn)(int ))
++void start_accept_loop(int port, int (*fn)(int, int))
+ {
+ 	int s;
+ 	extern char *bind_address;
+@@ -407,7 +407,7 @@
+ 			/* open log file in child before possibly giving
+ 			   up privileges  */
+ 			log_open();
+-			_exit(fn(fd));
++			_exit(fn(fd, fd));
+ 		}
+ 
+ 		close(fd);
+
+
