@@ -1,0 +1,134 @@
+Index: clientserver.c
+--- clientserver.c	5 Jun 2004 19:59:03 -0000	1.123
++++ clientserver.c	5 Jun 2004 20:38:15 -0000
+@@ -207,7 +207,8 @@ int start_inband_exchange(char *user, ch
+ static int rsync_module(int f_in, int f_out, int i)
+ {
+ 	int argc = 0;
+-	char *argv[MAX_ARGS];
++	int maxargs;
++	char **argv;
+ 	char **argp;
+ 	char line[MAXPATHLEN];
+ 	uid_t uid = (uid_t)-2;  /* canonically "nobody" */
+@@ -385,6 +386,9 @@ static int rsync_module(int f_in, int f_
+ 
+ 	io_printf(f_out, "@RSYNCD: OK\n");
+ 
++	maxargs = MAX_ARGS;
++	if (!(argv = new_array(char *, maxargs)))
++		out_of_memory("rsync_module");
+ 	argv[argc++] = "rsyncd";
+ 
+ 	while (1) {
+@@ -396,23 +400,25 @@ static int rsync_module(int f_in, int f_
+ 
+ 		p = line;
+ 
++		if (argc == maxargs) {
++			maxargs += MAX_ARGS;
++			if (!(argv = realloc_array(argv, char *, maxargs)))
++				out_of_memory("rsync_module");
++		}
+ 		if (!(argv[argc] = strdup(p)))
+-			return -1;
++			out_of_memory("rsync_module");
+ 
+ 		if (start_glob) {
+ 			if (start_glob == 1) {
+ 				request = strdup(p);
+ 				start_glob++;
+ 			}
+-			glob_expand(name, argv, &argc, MAX_ARGS);
++			glob_expand(name, &argv, &argc, &maxargs);
+ 		} else
+ 			argc++;
+ 
+ 		if (strcmp(line, ".") == 0)
+ 			start_glob = 1;
+-
+-		if (argc == MAX_ARGS)
+-			return -1;
+ 	}
+ 
+ 	argp = argv;
+Index: proto.h
+--- proto.h	5 Jun 2004 20:28:09 -0000	1.195
++++ proto.h	5 Jun 2004 20:38:15 -0000
+@@ -254,7 +254,7 @@ void kill_all(int sig);
+ int name_to_uid(char *name, uid_t *uid);
+ int name_to_gid(char *name, gid_t *gid);
+ int lock_range(int fd, int offset, int len);
+-void glob_expand(char *base1, char **argv, int *argc_ptr, int maxargs);
++void glob_expand(char *base1, char ***argv_ptr, int *argc_ptr, int *maxargs_ptr);
+ void strlower(char *s);
+ size_t pathjoin(char *dest, size_t destsize, const char *p1, const char *p2);
+ size_t stringjoin(char *dest, size_t destsize, ...);
+Index: util.c
+--- util.c	5 Jun 2004 20:26:56 -0000	1.148
++++ util.c	5 Jun 2004 20:38:16 -0000
+@@ -495,12 +495,20 @@ static int exclude_server_path(char *arg
+ 	return 0;
+ }
+ 
+-static void glob_expand_one(char *s, char **argv, int *argc_ptr, int maxargs)
++static void glob_expand_one(char *s, char ***argv_ptr, int *argc_ptr,
++			    int *maxargs_ptr)
+ {
++	char **argv = *argv_ptr;
+ 	int argc = *argc_ptr;
++	int maxargs = *maxargs_ptr;
+ #if !(defined(HAVE_GLOB) && defined(HAVE_GLOB_H))
+-	if (maxargs <= argc)
+-		return;
++	if (argc == maxargs) {
++		maxargs += MAX_ARGS;
++		if (!(argv = realloc_array(argv, char *, maxargs)))
++			out_of_memory("glob_expand_one");
++		*argv_ptr = argv;
++		*maxargs_ptr = maxargs;
++	}
+ 	if (!*s)
+ 		s = ".";
+ 	s = argv[argc++] = strdup(s);
+@@ -521,12 +529,17 @@ static void glob_expand_one(char *s, cha
+ 	memset(&globbuf, 0, sizeof globbuf);
+ 	if (!exclude_server_path(s))
+ 		glob(s, 0, NULL, &globbuf);
++	if (MAX((int)globbuf.gl_pathc, 1) > maxargs - argc) {
++		maxargs += globbuf.gl_pathc + MAX_ARGS;
++		if (!(argv = realloc_array(argv, char *, maxargs)))
++			out_of_memory("glob_expand_one");
++		*argv_ptr = argv;
++		*maxargs_ptr = maxargs;
++	}
+ 	if (globbuf.gl_pathc == 0)
+ 		argv[argc++] = s;
+ 	else {
+ 		int j = globbuf.gl_pathc;
+-		if (j > maxargs - argc)
+-			j = maxargs - argc;
+ 		free(s);
+ 		for (i = 0; i < j; i++) {
+ 			if (!(argv[argc++] = strdup(globbuf.gl_pathv[i])))
+@@ -539,9 +552,9 @@ static void glob_expand_one(char *s, cha
+ }
+ 
+ /* This routine is only used in daemon mode. */
+-void glob_expand(char *base1, char **argv, int *argc_ptr, int maxargs)
++void glob_expand(char *base1, char ***argv_ptr, int *argc_ptr, int *maxargs_ptr)
+ {
+-	char *s = argv[*argc_ptr];
++	char *s = (*argv_ptr)[*argc_ptr];
+ 	char *p, *q;
+ 	char *base = base1;
+ 	int base_len = strlen(base);
+@@ -562,7 +575,7 @@ void glob_expand(char *base1, char **arg
+ 	for (q = s; *q; q = p + base_len) {
+ 		if ((p = strstr(q, base)) != NULL)
+ 			*p = '\0'; /* split it at this point */
+-		glob_expand_one(q, argv, argc_ptr, maxargs);
++		glob_expand_one(q, argv_ptr, argc_ptr, maxargs_ptr);
+ 		if (!p)
+ 			break;
+ 	}
