@@ -1,7 +1,7 @@
 This patch adds the --append option, which works like a "resume" mode in
 an ftp client, appending new data onto the end of the files it updates.
 
---- orig/generator.c	2005-02-16 15:35:52
+--- orig/generator.c	2005-02-18 20:17:34
 +++ generator.c	2005-02-15 19:31:13
 @@ -41,6 +41,7 @@ extern int delete_during;
  extern int update_only;
@@ -11,7 +11,7 @@ an ftp client, appending new data onto the end of the files it updates.
  extern int make_backups;
  extern int csum_length;
  extern int ignore_times;
-@@ -232,35 +233,42 @@ static void generate_and_send_sums(int f
+@@ -234,35 +235,42 @@ static void generate_and_send_sums(int f
  	OFF_T offset = 0;
  
  	sum_sizes_sqroot(&sum, len);
@@ -61,7 +61,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	}
  
  	if (mapbuf)
-@@ -677,6 +685,9 @@ static void recv_generator(char *fname, 
+@@ -689,6 +697,9 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -71,7 +71,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
-@@ -703,7 +714,7 @@ prepare_to_open:
+@@ -715,7 +726,7 @@ prepare_to_open:
  
  	if (dry_run || read_batch)
  		goto notify_others;
@@ -80,7 +80,7 @@ an ftp client, appending new data onto the end of the files it updates.
  		if (statret == 0)
  			statret = 1;
  		goto notify_others;
-@@ -869,6 +880,9 @@ void generate_files(int f_out, struct fi
+@@ -881,6 +892,9 @@ void generate_files(int f_out, struct fi
  	csum_length = SUM_LENGTH;
  	only_existing = max_size = opt_ignore_existing = 0;
  	update_only = always_checksum = size_only = 0;
@@ -131,7 +131,7 @@ an ftp client, appending new data onto the end of the files it updates.
  			matched(f, s, buf, j, -2);
  		matched(f, s, buf, len, -1);
  	}
---- orig/options.c	2005-02-16 15:35:53
+--- orig/options.c	2005-02-18 18:02:45
 +++ options.c	2005-02-16 15:36:40
 @@ -39,6 +39,7 @@ int make_backups = 0;
   **/
@@ -143,7 +143,7 @@ an ftp client, appending new data onto the end of the files it updates.
  int copy_links = 0;
 @@ -154,6 +155,7 @@ static int F_option_cnt = 0;
  static int modify_window_set;
- static int refused_verbose, refused_delete, refused_archive_part;
+ static int refused_delete, refused_archive_part;
  static int refused_partial, refused_progress, refused_delete_before;
 +static int refused_inplace;
  static char *dest_option = NULL;
@@ -165,7 +165,7 @@ an ftp client, appending new data onto the end of the files it updates.
    {"whole-file",      'W', POPT_ARG_VAL,    &whole_file, 1, 0, 0 },
    {"no-whole-file",    0,  POPT_ARG_VAL,    &whole_file, 0, 0, 0 },
    {"copy-unsafe-links",0,  POPT_ARG_NONE,   &copy_unsafe_links, 0, 0, 0 },
-@@ -564,6 +568,8 @@ static void set_refuse_options(char *bp)
+@@ -561,6 +565,8 @@ static void set_refuse_options(char *bp)
  						refused_partial = op->val;
  					else if (wildmatch("progress", op->longName))
  						refused_progress = op->val;
@@ -174,7 +174,7 @@ an ftp client, appending new data onto the end of the files it updates.
  					break;
  				}
  				if (!is_wild)
-@@ -1084,6 +1090,14 @@ int parse_arguments(int *argc, const cha
+@@ -1083,6 +1089,14 @@ int parse_arguments(int *argc, const cha
  			bwlimit_writemax = 512;
  	}
  
@@ -189,7 +189,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (delay_updates && !partial_dir)
  		partial_dir = partialdir_for_delayupdate;
  
-@@ -1372,7 +1386,9 @@ void server_options(char **args,int *arg
+@@ -1369,7 +1383,9 @@ void server_options(char **args,int *arg
  	if (opt_ignore_existing && am_sender)
  		args[ac++] = "--ignore-existing";
  
@@ -200,7 +200,7 @@ an ftp client, appending new data onto the end of the files it updates.
  		args[ac++] = "--inplace";
  
  	if (tmpdir) {
---- orig/receiver.c	2005-02-16 15:35:53
+--- orig/receiver.c	2005-02-18 20:17:35
 +++ receiver.c	2005-02-11 20:26:32
 @@ -46,6 +46,7 @@ extern int cleanup_got_literal;
  extern int module_id;
@@ -247,7 +247,7 @@ an ftp client, appending new data onto the end of the files it updates.
  			continue;
  		}
  
---- orig/rsync.yo	2005-02-16 15:35:54
+--- orig/rsync.yo	2005-02-18 20:17:35
 +++ rsync.yo	2005-02-11 20:36:38
 @@ -309,6 +309,7 @@ to the detailed description below for a 
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
@@ -257,7 +257,7 @@ an ftp client, appending new data onto the end of the files it updates.
   -d, --dirs                  transfer directories without recursing
   -l, --links                 copy symlinks as symlinks
   -L, --copy-links            transform symlink into referent file/dir
-@@ -555,6 +556,14 @@ should not use this option to update fil
+@@ -564,6 +565,14 @@ should not use this option to update fil
  rsync will be unable to update a file in-place that is not writable by the
  receiving user.
  
@@ -272,7 +272,7 @@ an ftp client, appending new data onto the end of the files it updates.
  dit(bf(-d, --dirs)) Tell the sending side to include any directories that
  are encountered.  Unlike bf(--recursive), a directory's contents are not copied
  unless the directory was specified on the command-line as either "." or a
---- orig/sender.c	2005-02-16 15:35:54
+--- orig/sender.c	2005-02-18 20:17:35
 +++ sender.c	2005-02-16 15:36:53
 @@ -33,6 +33,7 @@ extern int updating_basis_file;
  extern int make_backups;
