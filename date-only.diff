@@ -12,58 +12,106 @@ Again, thanks!
 
 Best Regards,
 Jeremy Bornstein
-diff rsync-2.5.4/README rsync-2.5.4-patched/README
-70a71
->      --date-only             only use modification date when determining if a file should be transferred
-Common subdirectories: rsync-2.5.4/doc and rsync-2.5.4-patched/doc
-diff rsync-2.5.4/generator.c rsync-2.5.4-patched/generator.c
-39a40
-> extern int date_only;
-50a52,56
-> 	if (date_only) {
-> 		return (cmp_modtime(st->st_mtime,file->modtime) == 0);
-> 	}
-> 
-> 
-Common subdirectories: rsync-2.5.4/lib and rsync-2.5.4-patched/lib
-diff rsync-2.5.4/options.c rsync-2.5.4-patched/options.c
-64a65
-> int date_only=0;
-223a225
->   rprintf(F,"     --date-only             only use modification date when determining if a file should be transferred\n");
-265c267
-<       OPT_LOG_FORMAT, OPT_PASSWORD_FILE, OPT_SIZE_ONLY, OPT_ADDRESS,
----
->       OPT_LOG_FORMAT, OPT_PASSWORD_FILE, OPT_SIZE_ONLY, OPT_DATE_ONLY, OPT_ADDRESS,
-278a281
->   {"date-only",        0,  POPT_ARG_NONE,   &date_only},
-704a708,710
-> 
-> 	if (date_only)
-> 		args[ac++] = "--date-only";
-Common subdirectories: rsync-2.5.4/packaging and rsync-2.5.4-patched/packaging
-Common subdirectories: rsync-2.5.4/popt and rsync-2.5.4-patched/popt
-diff rsync-2.5.4/rsync.1 rsync-2.5.4-patched/rsync.1
-289a290
->      --date-only             only use modification date when determining if a file should be transferred
-363a365,371
-> .IP 
-> .IP "\fB--date-only\fP" 
-> Normally rsync will skip any files that are
-> already the same length and have the same time-stamp\&. With the
-> --date-only option files will be skipped if they have the same timestamp,
-> regardless of size\&. This may be useful when the remote files have passed
-> through a size-changing filter, e.g. for encryption\&.
-diff rsync-2.5.4/rsync.yo rsync-2.5.4-patched/rsync.yo
-260a261
->      --date-only             only use modification date when determining if a file should be transferred
-326a328,333
-> 
-> dit(bf(--date-only)) Normally rsync will skip any files that are
-> already the same length and have the same time-stamp. With the
-> --date-only option files will be skipped if they have the same
-> timestamp, regardless of size. This may be useful when the remote
-> files have passed through a size-changing filter, e.g. for encryption.
-Common subdirectories: rsync-2.5.4/testhelp and rsync-2.5.4-patched/testhelp
-Common subdirectories: rsync-2.5.4/testsuite and rsync-2.5.4-patched/testsuite
-Common subdirectories: rsync-2.5.4/zlib and rsync-2.5.4-patched/zlib
+
+[Patched update to have context and apply to latest CVS source.]
+
+--- generator.c	10 Feb 2004 22:56:16 -0000	1.75
++++ generator.c	24 Feb 2004 19:17:31 -0000
+@@ -43,11 +43,14 @@
+ extern int always_checksum;
+ extern char *compare_dest;
+ extern int link_dest;
++extern int date_only;
+ 
+ 
+ /* choose whether to skip a particular file */
+ static int skip_file(char *fname, struct file_struct *file, STRUCT_STAT *st)
+ {
++	if (date_only)
++		return cmp_modtime(st->st_mtime,file->modtime) == 0;
+ 	if (st->st_size != file->length) {
+ 		return 0;
+ 	}
+--- options.c	22 Feb 2004 08:56:43 -0000	1.139
++++ options.c	24 Feb 2004 19:17:31 -0000
+@@ -80,6 +80,7 @@
+ int safe_symlinks = 0;
+ int copy_unsafe_links = 0;
+ int size_only = 0;
++int date_only = 0;
+ int bwlimit = 0;
+ int delete_after = 0;
+ int only_existing = 0;
+@@ -260,6 +261,7 @@
+   rprintf(F,"     --timeout=TIME          set I/O timeout in seconds\n");
+   rprintf(F," -I, --ignore-times          turn off mod time & file size quick check\n");
+   rprintf(F,"     --size-only             ignore mod time for quick check (use size)\n");
++  rprintf(F,"     --date-only             ignore size for quick check (use mod time)\n");
+   rprintf(F,"     --modify-window=NUM     compare mod times with reduced accuracy\n");
+   rprintf(F," -T  --temp-dir=DIR          create temporary files in directory DIR\n");
+   rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
+@@ -314,6 +316,7 @@
+   {"password-file",    0,  POPT_ARG_STRING, &password_file,	0, 0, 0 },
+   {"ignore-times",    'I', POPT_ARG_NONE,   &ignore_times, 0, 0, 0 },
+   {"size-only",        0,  POPT_ARG_NONE,   &size_only, 0, 0, 0 },
++  {"date-only",        0,  POPT_ARG_NONE,   &date_only, 0, 0, 0 },
+   {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
+   {"one-file-system", 'x', POPT_ARG_NONE,   &one_file_system, 0, 0, 0 },
+   {"delete",           0,  POPT_ARG_NONE,   &delete_mode, 0, 0, 0 },
+@@ -886,6 +889,9 @@
+ 
+ 	if (size_only)
+ 		args[ac++] = "--size-only";
++
++	if (date_only)
++		args[ac++] = "--date-only";
+ 
+ 	if (modify_window_set) {
+ 		if (asprintf(&arg, "--modify-window=%d", modify_window) < 0)
+--- rsync.1	2 Feb 2004 18:23:09 -0000	1.163
++++ rsync.1	24 Feb 2004 19:17:32 -0000
+@@ -357,6 +357,7 @@
+      --timeout=TIME          set I/O timeout in seconds
+  -I, --ignore-times          turn off mod time & file size quick check
+      --size-only             ignore mod time for quick check (use size)
++     --date-only             ignore size for quick check (use mod time)
+      --modify-window=NUM     compare mod times with reduced accuracy
+  -T  --temp-dir=DIR          create temporary files in directory DIR
+      --compare-dest=DIR      also compare received files relative to DIR
+@@ -435,6 +436,13 @@
+ regardless of timestamp\&. This is useful when starting to use rsync
+ after using another mirroring system which may not preserve timestamps
+ exactly\&.
++.IP 
++.IP "\fB--date-only\fP" 
++Normally rsync will skip any files that are
++already the same size and have the same modification time-stamp\&. With the
++--date-only option, files will be skipped if they have the same
++timestamp, regardless of size\&. This may be useful when the remote
++files have passed through a size-changing filter, e\&.g\&. for encryption\&.
+ .IP 
+ .IP "\fB--modify-window\fP" 
+ When comparing two timestamps rsync treats
+--- rsync.yo	2 Feb 2004 18:23:09 -0000	1.147
++++ rsync.yo	24 Feb 2004 19:17:33 -0000
+@@ -320,6 +320,7 @@
+      --timeout=TIME          set I/O timeout in seconds
+  -I, --ignore-times          turn off mod time & file size quick check
+      --size-only             ignore mod time for quick check (use size)
++     --date-only             ignore size for quick check (use mod time)
+      --modify-window=NUM     compare mod times with reduced accuracy
+  -T  --temp-dir=DIR          create temporary files in directory DIR
+      --compare-dest=DIR      also compare received files relative to DIR
+@@ -390,6 +391,12 @@
+ regardless of timestamp. This is useful when starting to use rsync
+ after using another mirroring system which may not preserve timestamps
+ exactly.
++
++dit(bf(--date-only)) Normally rsync will skip any files that are
++already the same size and have the same modification time-stamp. With the
++--date-only option, files will be skipped if they have the same
++timestamp, regardless of size. This may be useful when the remote
++files have passed through a size-changing filter, e.g. for encryption.
+ 
+ dit(bf(--modify-window)) When comparing two timestamps rsync treats
+ the timestamps as being equal if they are within the value of
