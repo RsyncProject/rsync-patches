@@ -1,4 +1,4 @@
---- orig/options.c	2004-08-11 23:42:23
+--- orig/options.c	2004-08-12 18:34:38
 +++ options.c	2004-07-03 20:17:33
 @@ -48,6 +48,7 @@ int preserve_devices = 0;
  int preserve_uid = 0;
@@ -69,9 +69,9 @@
  			rsyserr(FERROR, errno, "failed to set times on %s",
  				full_fname(fname));
  			return 0;
---- orig/rsync.yo	2004-08-11 17:26:27
+--- orig/rsync.yo	2004-08-13 07:18:59
 +++ rsync.yo	2004-08-11 17:27:51
-@@ -300,7 +300,8 @@ verb(
+@@ -329,7 +329,8 @@ verb(
   -o, --owner                 preserve owner (root only)
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
@@ -81,7 +81,7 @@
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy whole files, no incremental checks
-@@ -566,14 +567,23 @@ dit(bf(-D, --devices)) This option cause
+@@ -595,14 +596,23 @@ dit(bf(-D, --devices)) This option cause
  block device information to the remote system to recreate these
  devices. This option is only available to the super-user.
  
@@ -107,6 +107,45 @@
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
  
+--- orig/testsuite/batch-mode.test	2004-07-23 02:13:34
++++ testsuite/batch-mode.test	2004-08-13 09:00:07
+@@ -16,12 +16,12 @@ hands_setup
+ cd "$tmpdir"
+ 
+ # Build chkdir for the daemon tests using a normal rsync and an --exclude.
+-$RSYNC -av --exclude=foobar.baz "$fromdir/" "$chkdir/"
++$RSYNC -adv --exclude=foobar.baz "$fromdir/" "$chkdir/"
+ 
+-runtest "local --write-batch" 'checkit "$RSYNC -av --write-batch=BATCH \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
++runtest "local --write-batch" 'checkit "$RSYNC -adv --write-batch=BATCH \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
+ 
+ rm -rf "$todir"
+-runtest "--read-batch" 'checkit "$RSYNC -av --read-batch=BATCH \"$todir\"" "$fromdir" "$todir"'
++runtest "--read-batch" 'checkit "$RSYNC -adv --read-batch=BATCH \"$todir\"" "$fromdir" "$todir"'
+ 
+ build_rsyncd_conf
+ 
+@@ -29,17 +29,17 @@ RSYNC_CONNECT_PROG="$RSYNC --config=$con
+ export RSYNC_CONNECT_PROG
+ 
+ rm -rf "$todir"
+-runtest "daemon sender --write-batch" 'checkit "$RSYNC -av --write-batch=BATCH rsync://localhost/test-from/ \"$todir\"" "$chkdir" "$todir"'
++runtest "daemon sender --write-batch" 'checkit "$RSYNC -adv --write-batch=BATCH rsync://localhost/test-from/ \"$todir\"" "$chkdir" "$todir"'
+ 
+ rm -rf "$todir"
+-runtest "--read-batch from daemon" 'checkit "$RSYNC -av --read-batch=BATCH \"$todir\"" "$chkdir" "$todir"'
++runtest "--read-batch from daemon" 'checkit "$RSYNC -adv --read-batch=BATCH \"$todir\"" "$chkdir" "$todir"'
+ 
+ rm -rf "$todir"
+ runtest "BATCH.sh use of --read-batch" 'checkit "./BATCH.sh" "$chkdir" "$todir"'
+ 
+ rm -rf "$todir"
+ mkdir "$todir" || test_fail "failed to restore empty destination directory"
+-runtest "daemon recv --write-batch" 'checkit "$RSYNC -av --write-batch=BATCH \"$fromdir/\" rsync://localhost/test-to" "$chkdir" "$todir"'
++runtest "daemon recv --write-batch" 'checkit "$RSYNC -adv --write-batch=BATCH \"$fromdir/\" rsync://localhost/test-to" "$chkdir" "$todir"'
+ 
+ # The script would have aborted on error, so getting here means we pass.
+ exit 0
 --- orig/testsuite/chgrp.test	2004-05-21 23:56:27
 +++ testsuite/chgrp.test	2004-07-03 20:17:33
 @@ -26,7 +26,7 @@ do
@@ -115,6 +154,36 @@
  
 -checkit "$RSYNC -rtgpvvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
 +checkit "$RSYNC -rtdgpvvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- orig/testsuite/chmod-temp-dir.test	2004-08-13 07:18:59
++++ testsuite/chmod-temp-dir.test	2004-08-13 08:59:40
+@@ -32,10 +32,10 @@ e="$fromdir/dir/subdir/subsubdir/etc-ltr
+ chmod 2670 "$e" || chmod 1670 "$e" || chmod 670 "$e"
+ 
+ # First a normal copy.
+-runtest "normal copy" 'checkit "$RSYNC -avv --temp-dir=\"$tmpdir2\" \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
++runtest "normal copy" 'checkit "$RSYNC -advv --temp-dir=\"$tmpdir2\" \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
+ 
+ # Then we update all the files.
+-runtest "update copy" 'checkit "$RSYNC -avvI --no-whole-file --temp-dir=\"$tmpdir2\" \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
++runtest "update copy" 'checkit "$RSYNC -advvI --no-whole-file --temp-dir=\"$tmpdir2\" \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
+ 
+ # The script would have aborted on error, so getting here means we've won.
+ exit 0
+--- orig/testsuite/chmod.test	2004-08-13 07:18:59
++++ testsuite/chmod.test	2004-08-13 08:59:49
+@@ -23,10 +23,10 @@ e="$fromdir/dir/subdir/subsubdir/etc-ltr
+ chmod 2670 "$e" || chmod 1670 "$e" || chmod 670 "$e"
+ 
+ # First a normal copy.
+-runtest "normal copy" 'checkit "$RSYNC -avv \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
++runtest "normal copy" 'checkit "$RSYNC -advv \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
+ 
+ # Then we update all the files.
+-runtest "update copy" 'checkit "$RSYNC -avvI --no-whole-file \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
++runtest "update copy" 'checkit "$RSYNC -advvI --no-whole-file \"$fromdir/\" \"$todir\"" "$fromdir" "$todir"'
  
  # The script would have aborted on error, so getting here means we've won.
  exit 0
@@ -129,6 +198,27 @@
  
  # The script would have aborted on error, so getting here means we've won.
  exit 0
+--- orig/testsuite/compare-dest.test	2004-07-23 17:16:13
++++ testsuite/compare-dest.test	2004-08-13 09:00:35
+@@ -18,15 +18,15 @@ altdir="$tmpdir/alt"
+ hands_setup
+ 
+ # Setup the alt and chk dirs
+-$RSYNC -av --include=text --include='*/' --exclude='*' "$fromdir/" "$altdir/"
++$RSYNC -adv --include=text --include='*/' --exclude='*' "$fromdir/" "$altdir/"
+ 
+ sleep 1
+ touch "$fromdir/dir/text"
+ 
+-$RSYNC -av --exclude=/text "$fromdir/" "$chkdir/"
++$RSYNC -adv --exclude=/text "$fromdir/" "$chkdir/"
+ 
+ # Let's do it!
+-checkit "$RSYNC -avv --no-whole-file --compare-dest=\"$altdir\" \
++checkit "$RSYNC -advv --no-whole-file --compare-dest=\"$altdir\" \
+     \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
 --- orig/testsuite/daemon-gzip-download.test	2004-05-18 09:14:24
 +++ testsuite/daemon-gzip-download.test	2004-07-03 20:17:33
 @@ -29,9 +29,9 @@ export RSYNC_CONNECT_PROG
