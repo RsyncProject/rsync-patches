@@ -61,7 +61,7 @@ foreach my $diff (@ARGV) {
 	    $has_dependencies = 1;
 	    print "\nApplying dependency patch $dep...\n";
 	    if (system("patch -d cvsdir -p0 -b -Vt -Zf <../$dep") != 0) {
-		print "Unable to cleanly apply depenency patch -- skipping $diff\n";
+		print "Unable to cleanly apply dependency patch -- skipping $diff\n";
 		system "rm -f cvsdir/*.rej cvsdir/*/*.rej";
 		&restore_cvsdir;
 		next DIFF;
@@ -72,7 +72,8 @@ foreach my $diff (@ARGV) {
 
     my $default = apply_patch($diff);
     if ($default =~ s/^D,// || $default eq 'N') {
-	generate_new_patch($diff);
+	my $def = generate_new_patch($diff);
+	$default = 'U,N' if $default eq 'N' && $def eq 'E';
     }
 
     PROMPT:
@@ -163,10 +164,10 @@ sub apply_patch
     my($diff) = @_;
 
     undef @new;
-    my $def = 'N';
     system "rsync -a --delete --exclude='*~' cvsdir/ workdir/";
     print "\nApplying patch $diff...\n";
     undef @rejects;
+    my($saw_failure, $saw_offset, $saw_fuzz);
     open(IN, "patch -d workdir -p0 --no-backup-if-mismatch -Zf <../$diff |") or die $!;
     while (<IN>) {
 	print $_;
@@ -176,13 +177,17 @@ sub apply_patch
 	} elsif (s/.* saving rejects to file //) {
 	    push(@rejects, $_);
 	} elsif (/^Hunk #\d+ FAILED/) {
-	    $def = 'F,D,E';
-	} elsif (/^Hunk #\d+ succeeded/) {
-	    $def = 'D,E' unless $def =~ /F/;
+	    $saw_failure = 1;
+	} elsif (/^Hunk #\d+ succeeded at \d+( with fuzz )?/) {
+	    $saw_fuzz ||= defined $1;
+	    $saw_offset = 1;
 	}
     }
     close IN;
-    $def;
+    return 'F,D,E' if $saw_failure;
+    return 'D,E' if $saw_fuzz;
+    return 'D,U,N' if $saw_offset;
+    'N';
 }
 
 sub generate_new_patch
