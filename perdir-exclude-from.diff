@@ -1,0 +1,283 @@
+--- exclude.c	14 Apr 2004 23:33:40 -0000	1.67
++++ exclude.c	15 Apr 2004 18:09:37 -0000
+@@ -27,10 +27,13 @@
+ #include "rsync.h"
+ 
+ extern int verbose;
++extern int protocol_version;
+ 
+ struct exclude_list_struct exclude_list;
++struct exclude_list_struct subdir_exclude_list;
+ struct exclude_list_struct local_exclude_list;
+ struct exclude_list_struct server_exclude_list;
++struct exclude_struct *preserve_exclude_sublist;
+ char *exclude_path_prefix = NULL;
+ 
+ /** Build an exclude structure given a exclude pattern */
+@@ -102,6 +105,10 @@ void free_exclude_list(struct exclude_li
+ 		rprintf(FINFO, "[%s] clearing exclude list\n", who_am_i());
+ 
+ 	for (ent = listp->head; ent; ent = next) {
++		if (ent == preserve_exclude_sublist) {
++			preserve_exclude_sublist = NULL;
++			break;
++		}
+ 		next = ent->next;
+ 		free_exclude(ent);
+ 	}
+@@ -209,21 +216,24 @@ static void report_exclude_result(char c
+ 
+ /*
+  * Return true if file NAME is defined to be excluded by the specified
+- * exclude list.
++ * exclude list.  Returns -1 for exclude, 0 for normal include, or 1
++ * for super include.
+  */
+ int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir,
+-		  const char *type)
++		  const char *type, int current_exclusion)
+ {
+ 	struct exclude_struct *ent;
+ 
+ 	for (ent = listp->head; ent; ent = ent->next) {
++		if (current_exclusion < 0 && ent->include < 2)
++			continue;
+ 		if (check_one_exclude(name, ent, name_is_dir)) {
+ 			report_exclude_result(name, ent, name_is_dir, type);
+-			return !ent->include;
++			return ent->include - 1;
+ 		}
+ 	}
+ 
+-	return 0;
++	return current_exclusion;
+ }
+ 
+ 
+@@ -249,10 +259,10 @@ static const char *get_exclude_tok(const
+ 		p = (const char *)s;
+ 	}
+ 
+-	/* Is this a '+' or '-' followed by a space (not whitespace)? */
++	/* Is this a +/-/& followed by a space (not whitespace)? */
+ 	if (!(xflags & XFLG_NO_PREFIXES)
+-	    && (*s == '-' || *s == '+') && s[1] == ' ') {
+-		*incl_ptr = *s == '+';
++	    && (*s == '-' || *s == '+' || *s == '&') && s[1] == ' ') {
++		*incl_ptr = *s == '+' ? 1 : *s == '&' ? 2 : 0;
+ 		s += 2;
+ 	} else
+ 		*incl_ptr = xflags & XFLG_DEF_INCLUDE;
+@@ -382,8 +392,12 @@ void send_exclude_list(int f)
+ 
+ 		if (ent->include) {
+ 			write_int(f, l + 2);
+-			write_buf(f, "+ ", 2);
+-		} else if ((*p == '-' || *p == '+') && p[1] == ' ') {
++			if (ent->include > 1 && protocol_version >= 28)
++				write_buf(f, "& ", 2);
++			else
++				write_buf(f, "+ ", 2);
++		} else if ((*p == '-' || *p == '+' || *p == '&')
++		    && p[1] == ' ') {
+ 			write_int(f, l + 2);
+ 			write_buf(f, "- ", 2);
+ 		} else
+--- flist.c	14 Apr 2004 23:33:34 -0000	1.213
++++ flist.c	15 Apr 2004 18:09:38 -0000
+@@ -40,6 +40,7 @@ extern int ignore_errors;
+ extern int numeric_ids;
+ 
+ extern int cvs_exclude;
++extern const char *subdir_exclude_filename;
+ 
+ extern int recurse;
+ extern char curr_dir[MAXPATHLEN];
+@@ -66,7 +67,9 @@ extern int write_batch;
+ 
+ extern struct exclude_list_struct exclude_list;
+ extern struct exclude_list_struct server_exclude_list;
++extern struct exclude_list_struct subdir_exclude_list;
+ extern struct exclude_list_struct local_exclude_list;
++extern struct exclude_struct *preserve_exclude_sublist;
+ 
+ int io_error;
+ 
+@@ -211,6 +214,12 @@ int link_stat(const char *path, STRUCT_S
+  */
+ static int check_exclude_file(char *fname, int is_dir, int exclude_level)
+ {
++	int i, rc;
++	struct exclude_list_struct *elist[] = {
++	    &exclude_list, &subdir_exclude_list, &local_exclude_list, NULL };
++	char *edesc[] = {
++	    "pattern", "subdir-exclude", "local-ignore" };
++
+ #if 0 /* This currently never happens, so avoid a useless compare. */
+ 	if (exclude_level == NO_EXCLUDES)
+ 		return 0;
+@@ -228,18 +237,18 @@ static int check_exclude_file(char *fnam
+ 	}
+ 	if (server_exclude_list.head
+ 	 && check_exclude(&server_exclude_list, fname, is_dir,
+-			  "server pattern"))
++			  "server pattern", 0) < 0)
+ 		return 1;
+ 	if (exclude_level != ALL_EXCLUDES)
+ 		return 0;
+-	if (exclude_list.head
+-	    && check_exclude(&exclude_list, fname, is_dir, "pattern"))
+-		return 1;
+-	if (local_exclude_list.head
+-	    && check_exclude(&local_exclude_list, fname, is_dir,
+-			     "local-cvsignore"))
+-		return 1;
+-	return 0;
++	for (i = 0, rc = 0; elist[i]; i++) {
++		if (!elist[i]->head)
++			continue;
++		rc = check_exclude(elist[i], fname, is_dir, edesc[i], rc);
++		if (rc > 0)
++			return 0;
++	}
++	return rc < 0;
+ }
+ 
+ /* used by the one_file_system code */
+@@ -957,8 +966,14 @@ void send_file_name(int f, struct file_l
+ 	if (recursive && S_ISDIR(file->mode)
+ 	    && !(file->flags & FLAG_MOUNT_POINT)) {
+ 		struct exclude_list_struct last_list = local_exclude_list;
++		struct exclude_list_struct sub_list = subdir_exclude_list;
+ 		memset(&local_exclude_list, 0, sizeof local_exclude_list);
++		preserve_exclude_sublist = sub_list.head;
+ 		send_directory(f, flist, f_name_to(file, fbuf));
++		preserve_exclude_sublist = sub_list.head;
++		free_exclude_list(&subdir_exclude_list);
++		subdir_exclude_list = sub_list;
++		preserve_exclude_sublist = NULL;
+ 		free_exclude_list(&local_exclude_list);
+ 		local_exclude_list = last_list;
+ 	}
+@@ -1004,6 +1019,27 @@ static void send_directory(int f, struct
+ 			io_error |= IOERR_GENERAL;
+ 			rprintf(FINFO,
+ 				"cannot cvs-exclude in long-named directory %s\n",
++				full_fname(fname));
++		}
++	}
++
++	if (subdir_exclude_filename) {
++		if (strlcpy(p, subdir_exclude_filename, MAXPATHLEN - offset)
++		    < MAXPATHLEN - offset) {
++			struct exclude_struct *t = subdir_exclude_list.tail;
++			add_exclude_file(&subdir_exclude_list, fname, 0);
++			/* Move this file's rules prior to the older rules. */
++			if (preserve_exclude_sublist && t) {
++				subdir_exclude_list.tail->next
++				    = subdir_exclude_list.head;
++				subdir_exclude_list.head = t->next;
++				subdir_exclude_list.tail = t;
++				t->next = NULL;
++			}
++		} else {
++			io_error |= IOERR_GENERAL;
++			rprintf(FINFO,
++				"cannot subdir-exclude in long-named directory %s\n",
+ 				full_fname(fname));
+ 		}
+ 	}
+--- options.c	14 Apr 2004 23:33:34 -0000	1.146
++++ options.c	15 Apr 2004 18:09:38 -0000
+@@ -70,6 +70,7 @@ int am_server = 0;
+ int am_sender = 0;
+ int am_generator = 0;
+ char *files_from = NULL;
++char *subdir_exclude_filename = NULL;
+ int filesfrom_fd = -1;
+ char *remote_filesfrom_file = NULL;
+ int eol_nulls = 0;
+@@ -273,6 +274,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --exclude-from=FILE     exclude patterns listed in FILE\n");
+   rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
+   rprintf(F,"     --include-from=FILE     don't exclude patterns listed in FILE\n");
++  rprintf(F,"     --subdir-exclude=FILE   look in each subdir for exclude file FILE\n");
+   rprintf(F,"     --files-from=FILE       read FILE for list of source-file names\n");
+   rprintf(F," -0  --from0                 all *-from file lists are delimited by nulls\n");
+   rprintf(F,"     --version               print version number\n");
+@@ -335,6 +337,7 @@ static struct poptOption long_options[] 
+   {"dry-run",         'n', POPT_ARG_NONE,   &dry_run, 0, 0, 0 },
+   {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
+   {"cvs-exclude",     'C', POPT_ARG_NONE,   &cvs_exclude, 0, 0, 0 },
++  {"subdir-exclude",   0,  POPT_ARG_STRING, &subdir_exclude_filename, 0, 0, 0 },
+   {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
+   {"links",           'l', POPT_ARG_NONE,   &preserve_links, 0, 0, 0 },
+   {"copy-links",      'L', POPT_ARG_NONE,   &copy_links, 0, 0, 0 },
+--- proto.h	14 Apr 2004 23:33:30 -0000	1.188
++++ proto.h	15 Apr 2004 18:09:38 -0000
+@@ -53,7 +53,7 @@ void setup_protocol(int f_out,int f_in);
+ int claim_connection(char *fname,int max_connections);
+ void free_exclude_list(struct exclude_list_struct *listp);
+ int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir,
+-		  const char *type);
++		  const char *type, int current_exclusion);
+ void add_exclude(struct exclude_list_struct *listp, const char *pattern,
+ 		 int xflags);
+ void add_exclude_file(struct exclude_list_struct *listp, const char *fname,
+--- rsync.yo	13 Apr 2004 00:32:58 -0000	1.156
++++ rsync.yo	15 Apr 2004 18:12:48 -0000
+@@ -331,6 +331,7 @@ verb(
+      --exclude-from=FILE     exclude patterns listed in FILE
+      --include=PATTERN       don't exclude files matching PATTERN
+      --include-from=FILE     don't exclude patterns listed in FILE
++     --subdir-exclude=FILE   look in each subdir for exclude file FILE
+      --files-from=FILE       read FILE for list of source-file names
+  -0  --from0                 all file lists are delimited by nulls
+      --version               print version number
+@@ -651,6 +652,15 @@ dit(bf(--exclude=PATTERN)) This option a
+ certain files from the list of files to be transferred. This is most
+ useful in combination with a recursive transfer.
+ 
++dit(bf(--subdir-exclude=FILE)) In any given directory, patterns listed
++in FILE (one per line) are excluded from the file lists associated with
++that directory and all of its subdirectories. Rules specified in a subdir
++take precedence over rules evaluated in a parent dir (think of each set
++of rules being prefixed to the prior rules).  If you don't want to
++inherit the parent-dir rules, start the FILE with a single exclamation
++mark ! to clear them out. You may prefix names with an explicit exclude,
++include, or super-include prefix (see below).
++
+ You may use as many --exclude options on the command line as you like
+ to build up the list of files to exclude.
+ 
+@@ -991,11 +1001,17 @@ itemize(
+ 
+   it() if the pattern starts with "+ " (a plus followed by a space)
+   then it is always considered an include pattern, even if specified as
+-  part of an exclude option. The "+ " part is discarded before matching.
++  part of an exclude option. The prefix is discarded before matching.
+ 
+   it() if the pattern starts with "- " (a minus followed by a space)
+   then it is always considered an exclude pattern, even if specified as
+-  part of an include option. The "- " part is discarded before matching.
++  part of an include option. The prefix is discarded before matching.
++
++  it() if the pattern starts with "& " (an ampersand followed by a space)
++  then it is considered a super-include pattern.  A super-include will
++  override an exclude from another exclude list (a normal include only
++  overrides an exclusion from further down in the same list).  The
++  prefix is discarded before matching.
+ 
+   it() if the pattern is a single exclamation mark ! then the current
+   include/exclude list is reset, removing all previously defined patterns.
+--- util.c	14 Apr 2004 23:33:34 -0000	1.135
++++ util.c	15 Apr 2004 18:09:40 -0000
+@@ -477,7 +477,7 @@ static int exclude_server_path(char *arg
+ 		for (s = arg; (s = strchr(s, '/')) != NULL; ) {
+ 			*s = '\0';
+ 			if (check_exclude(&server_exclude_list, arg, 1,
+-			    "server pattern")) {
++					  "server pattern", 0) < 0) {
+ 				/* We must leave arg truncated! */
+ 				return 1;
+ 			}
