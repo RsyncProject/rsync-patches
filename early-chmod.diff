@@ -1,25 +1,26 @@
---- orig/rsync.c	2004-07-16 20:07:23
-+++ rsync.c	2004-07-03 20:17:55
-@@ -247,6 +247,9 @@ void finish_transfer(char *fname, char *
- 		return;
+--- orig/rsync.c	2004-07-23 17:16:13
++++ rsync.c	2004-07-26 06:27:27
+@@ -246,6 +246,9 @@ void finish_transfer(char *fname, char *
+ 		goto do_set_perms;
  	}
  
 +	/* Change permissions before putting the file into place. */
-+	set_perms(fnametmp, file, NULL, 0);
++	set_perms(fnametmp, file, NULL, ok_to_set_time ? 0 : PERMS_SKIP_MTIME);
 +
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
-@@ -256,7 +259,8 @@ void finish_transfer(char *fname, char *
- 		    ret == -2 ? "copy" : "rename",
- 		    full_fname(fnametmp), fname);
+@@ -257,6 +260,10 @@ void finish_transfer(char *fname, char *
  		do_unlink(fnametmp);
--	} else {
-+	} else if (ret == 1) {
-+		/* The file got copied, so set the permissions again. */
- 		set_perms(fname, file, NULL,
- 			  ok_to_set_time ? 0 : PERMS_SKIP_MTIME);
+ 		return;
  	}
++	if (ret == 0) {
++		/* The file was moved into place (not copied), so it's done. */
++		return;
++	}
+     do_set_perms:
+ 	set_perms(fname, file, NULL, ok_to_set_time ? 0 : PERMS_SKIP_MTIME);
+ }
 --- orig/t_stub.c	2004-05-15 20:10:13
 +++ t_stub.c	2004-07-03 20:17:55
 @@ -26,6 +26,7 @@
