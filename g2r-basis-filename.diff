@@ -78,7 +78,7 @@ You must run "make proto" before compiling.
 -				write_sum_head(f_out, NULL);
 -		} else if (verbose > 1) {
 +		if (errno == ENOENT)
-+			goto notify_sender;
++			goto notify_others;
 +		if (verbose > 1) {
  			rsyserr(FERROR, errno,
  				"recv_generator: failed to open %s",
@@ -100,7 +100,7 @@ You must run "make proto" before compiling.
 -			write_sum_head(f_out, NULL);
 -		return;
 +		statret = -1;
-+		goto notify_sender;
++		goto notify_others;
  	}
  
 -	if (opt_ignore_existing && fnamecmp == fname) {
@@ -136,10 +136,10 @@ You must run "make proto" before compiling.
 -		return;
 +	if (dry_run || whole_file) {
 +		statret = -1;
-+		goto notify_sender;
++		goto notify_others;
  	}
 +	if (read_batch)
-+		goto notify_sender;
++		goto notify_others;
  
  	/* open the file */
  	fd = do_open(fnamecmp, O_RDONLY, 0);
@@ -151,7 +151,7 @@ You must run "make proto" before compiling.
 -		write_sum_head(f_out, NULL);
 -		return;
 +		statret = -1;
-+		goto notify_sender;
++		goto notify_others;
  	}
  
  	if (st.st_size > 0)
@@ -167,7 +167,7 @@ You must run "make proto" before compiling.
  
 -	write_int(f_out,i);
 -	generate_and_send_sums(mapbuf, st.st_size, f_out);
-+notify_sender:
++notify_others:
 +	if (f_nameout >= 0) {
 +		uchar lenbuf[3], *lb = lenbuf;
 +		int len = statret == -1 ? 0 : strlen(fnamecmpbuf);
@@ -265,7 +265,7 @@ You must run "make proto" before compiling.
  extern char *rsync_path;
  extern char *shell_cmd;
  extern char *batch_name;
-@@ -444,7 +445,8 @@ static int do_recv(int f_in,int f_out,st
+@@ -444,20 +445,21 @@ static int do_recv(int f_in,int f_out,st
  {
  	int pid;
  	int status = 0;
@@ -275,8 +275,13 @@ You must run "make proto" before compiling.
  
  	if (preserve_hard_links)
  		init_hard_links(flist);
-@@ -456,8 +458,9 @@ static int do_recv(int f_in,int f_out,st
- 		}
+ 
+ 	if (!delete_after) {
+ 		/* I moved this here from recv_files() to prevent a race condition */
+-		if (recurse && delete_mode && !local_name && flist->count>0) {
++		if (recurse && delete_mode && !local_name && flist->count > 0)
+ 			delete_files(flist);
+-		}
  	}
  
 -	if (fd_pair(error_pipe) < 0) {
@@ -287,7 +292,7 @@ You must run "make proto" before compiling.
  		exit_cleanup(RERR_SOCKETIO);
  	}
  
-@@ -465,6 +468,11 @@ static int do_recv(int f_in,int f_out,st
+@@ -465,6 +467,11 @@ static int do_recv(int f_in,int f_out,st
  
  	if ((pid = do_fork()) == 0) {
  		close(error_pipe[0]);
@@ -299,7 +304,7 @@ You must run "make proto" before compiling.
  		if (f_in != f_out)
  			close(f_out);
  
-@@ -474,7 +482,7 @@ static int do_recv(int f_in,int f_out,st
+@@ -474,7 +481,7 @@ static int do_recv(int f_in,int f_out,st
  		/* set place to send errors */
  		set_msg_fd_out(error_pipe[1]);
  
@@ -308,7 +313,7 @@ You must run "make proto" before compiling.
  		io_flush(FULL_FLUSH);
  		report(f_in);
  
-@@ -492,6 +500,11 @@ static int do_recv(int f_in,int f_out,st
+@@ -492,6 +499,11 @@ static int do_recv(int f_in,int f_out,st
  		stop_write_batch();
  
  	close(error_pipe[1]);
@@ -320,7 +325,7 @@ You must run "make proto" before compiling.
  	if (f_in != f_out)
  		close(f_in);
  
-@@ -499,7 +512,7 @@ static int do_recv(int f_in,int f_out,st
+@@ -499,7 +511,7 @@ static int do_recv(int f_in,int f_out,st
  
  	set_msg_fd_in(error_pipe[0]);
  
