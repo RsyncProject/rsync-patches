@@ -1,16 +1,11 @@
---- backup.c	4 May 2004 03:10:45 -0000	1.29
-+++ backup.c	8 May 2004 18:35:15 -0000
-@@ -102,7 +102,7 @@ static int make_bak_dir(char *fullpath)
- 				    "make_bak_dir stat %s failed: %s\n",
- 				    full_fname(rel), strerror(errno));
- 			} else {
--				set_modtime(fullpath, st.st_mtime);
-+				set_times(fullpath, st.st_mtime, time(NULL));
- 				do_lchown(fullpath, st.st_uid, st.st_gid);
- 				do_chmod(fullpath, st.st_mode);
- 			}
+After applying this patch and running configure, you MUST run this
+command before "make":
+
+    make proto
+
+
 --- batch.c	6 Mar 2004 07:45:52 -0000	1.31
-+++ batch.c	8 May 2004 18:35:16 -0000
++++ batch.c	13 May 2004 18:54:03 -0000
 @@ -342,6 +342,8 @@ void show_flist(int index, struct file_s
  		rprintf(FINFO, "flist->flags=%#x\n", fptr[i]->flags);
  		rprintf(FINFO, "flist->modtime=%#lx\n",
@@ -20,9 +15,9 @@
  		rprintf(FINFO, "flist->length=%.0f\n",
  			(double) fptr[i]->length);
  		rprintf(FINFO, "flist->mode=%#o\n", (int) fptr[i]->mode);
---- flist.c	3 May 2004 01:24:10 -0000	1.220
-+++ flist.c	8 May 2004 18:35:16 -0000
-@@ -58,6 +58,7 @@ extern int relative_paths;
+--- flist.c	11 May 2004 17:25:16 -0000	1.221
++++ flist.c	13 May 2004 18:54:03 -0000
+@@ -57,6 +57,7 @@ extern int relative_paths;
  extern int implied_dirs;
  extern int copy_links;
  extern int copy_unsafe_links;
@@ -30,7 +25,7 @@
  extern int protocol_version;
  extern int sanitize_paths;
  
-@@ -140,16 +141,16 @@ static void list_file_entry(struct file_
+@@ -139,16 +140,16 @@ static void list_file_entry(struct file_
  
  #if SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -51,7 +46,7 @@
  }
  
  
-@@ -326,6 +327,7 @@ void send_file_entry(struct file_struct 
+@@ -325,6 +326,7 @@ void send_file_entry(struct file_struct 
  {
  	unsigned short flags;
  	static time_t modtime;
@@ -59,7 +54,7 @@
  	static mode_t mode;
  	static uint64 dev;
  	static dev_t rdev;
-@@ -341,7 +343,7 @@ void send_file_entry(struct file_struct 
+@@ -340,7 +342,7 @@ void send_file_entry(struct file_struct 
  
  	if (!file) {
  		write_byte(f, 0);
@@ -68,7 +63,7 @@
  		dev = 0, rdev = makedev(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -390,6 +392,12 @@ void send_file_entry(struct file_struct 
+@@ -389,6 +391,12 @@ void send_file_entry(struct file_struct 
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -81,7 +76,7 @@
  
  #if SUPPORT_HARD_LINKS
  	if (file->link_u.idev) {
-@@ -445,6 +453,8 @@ void send_file_entry(struct file_struct 
+@@ -444,6 +452,8 @@ void send_file_entry(struct file_struct 
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -90,7 +85,7 @@
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -518,6 +528,7 @@ void receive_file_entry(struct file_stru
+@@ -517,6 +527,7 @@ void receive_file_entry(struct file_stru
      struct file_list *flist, int f)
  {
  	static time_t modtime;
@@ -98,7 +93,7 @@
  	static mode_t mode;
  	static uint64 dev;
  	static dev_t rdev;
-@@ -534,7 +545,7 @@ void receive_file_entry(struct file_stru
+@@ -533,7 +544,7 @@ void receive_file_entry(struct file_stru
  	struct file_struct *file;
  
  	if (!fptr) {
@@ -107,7 +102,7 @@
  		dev = 0, rdev = makedev(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -589,6 +600,8 @@ void receive_file_entry(struct file_stru
+@@ -588,6 +599,8 @@ void receive_file_entry(struct file_stru
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -116,7 +111,7 @@
  
  	if (preserve_uid && !(flags & XMIT_SAME_UID))
  		uid = (uid_t)read_int(f);
-@@ -639,6 +652,7 @@ void receive_file_entry(struct file_stru
+@@ -638,6 +651,7 @@ void receive_file_entry(struct file_stru
  
  	file->flags = flags & XMIT_TOP_DIR ? FLAG_TOP_DIR : 0;
  	file->modtime = modtime;
@@ -124,7 +119,7 @@
  	file->length = file_length;
  	file->mode = mode;
  	file->uid = uid;
-@@ -853,6 +867,7 @@ skip_excludes:
+@@ -852,6 +866,7 @@ skip_excludes:
  
  	file->flags = flags;
  	file->modtime = st.st_mtime;
@@ -132,8 +127,8 @@
  	file->length = st.st_size;
  	file->mode = st.st_mode;
  	file->uid = st.st_uid;
---- generator.c	5 May 2004 17:15:03 -0000	1.81
-+++ generator.c	8 May 2004 18:35:16 -0000
+--- generator.c	13 May 2004 06:55:01 -0000	1.82
++++ generator.c	13 May 2004 18:54:03 -0000
 @@ -98,7 +98,7 @@ static int skip_file(char *fname, struct
  		return 0;
  	}
@@ -143,7 +138,7 @@
  }
  
  
-@@ -465,7 +465,7 @@ void recv_generator(char *fname, struct 
+@@ -466,7 +466,7 @@ void recv_generator(char *fname, struct 
  		return;
  	}
  
@@ -153,7 +148,7 @@
  			rprintf(FINFO,"%s is newer\n",fname);
  		return;
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	8 May 2004 18:35:16 -0000
++++ options.c	13 May 2004 18:54:04 -0000
 @@ -46,6 +46,7 @@ int preserve_devices = 0;
  int preserve_uid = 0;
  int preserve_gid = 0;
@@ -187,52 +182,35 @@
  	if (preserve_perms)
  		argstr[x++] = 'p';
  	if (recurse)
---- proto.h	22 Apr 2004 09:58:09 -0000	1.189
-+++ proto.h	8 May 2004 18:35:17 -0000
-@@ -242,7 +242,7 @@ int fd_pair(int fd[2]);
- void print_child_argv(char **cmd);
- void out_of_memory(char *str);
- void overflow(char *str);
--int set_modtime(char *fname, time_t modtime);
-+int set_times(char *fname, time_t modtime, time_t atime);
- int create_directory_path(char *fname, int base_umask);
- int copy_file(char *source, char *dest, mode_t mode);
- int robust_unlink(char *fname);
-@@ -266,7 +266,7 @@ int u_strcmp(const char *cs1, const char
- int unsafe_symlink(const char *dest, const char *src);
- char *timestring(time_t t);
- int msleep(int t);
--int cmp_modtime(time_t file1, time_t file2);
-+int cmp_time(time_t file1, time_t file2);
- int _Insure_trap_error(int a1, int a2, int a3, int a4, int a5, int a6);
- void *_new_array(unsigned int size, unsigned long num);
- void *_realloc_array(void *ptr, unsigned int size, unsigned long num);
---- rsync.c	23 Mar 2004 16:16:15 -0000	1.135
-+++ rsync.c	8 May 2004 18:35:17 -0000
+--- rsync.c	13 May 2004 18:51:22 -0000	1.138
++++ rsync.c	13 May 2004 18:54:04 -0000
 @@ -25,6 +25,7 @@
  extern int verbose;
  extern int dry_run;
  extern int preserve_times;
 +extern int copy_atimes;
  extern int am_root;
- extern int am_server;
  extern int am_sender;
-@@ -140,17 +141,28 @@ int set_perms(char *fname,struct file_st
- 		st = &st2;
- 	}
+ extern int am_generator;
+@@ -140,17 +141,31 @@ int set_perms(char *fname,struct file_st
  
--	if (preserve_times && !S_ISLNK(st->st_mode) &&
--	    cmp_modtime(st->st_mtime, file->modtime) != 0) {
-+	if (!S_ISLNK(st->st_mode) && (preserve_times || copy_atimes)) {
+ 	if (!preserve_times || S_ISLNK(st->st_mode))
+ 		flags |= PERMS_SKIP_MTIME;
+-	if (!(flags & PERMS_SKIP_MTIME)
+-	    && cmp_modtime(st->st_mtime, file->modtime) != 0) {
++	if (!copy_atimes || S_ISLNK(st->st_mode) || S_ISDIR(st->st_mode))
++		flags |= PERMS_SKIP_ATIME;
++	if (!(flags & (PERMS_SKIP_MTIME|PERMS_SKIP_ATIME))) {
 +		time_t atime, mtime;
 +
-+		if (copy_atimes && !S_ISDIR(st->st_mode)
++		if (!(flags & PERMS_SKIP_ATIME)
 +		    && cmp_time(st->st_atime, file->atime) != 0) {
 +			atime = file->atime;
 +			updated = 1;
 +		} else
 +			atime = st->st_atime;
-+		if (preserve_times && cmp_time(st->st_mtime, file->modtime) != 0) {
++		if (!(flags & PERMS_SKIP_MTIME)
++		    && cmp_time(st->st_mtime, file->modtime) != 0) {
 +			mtime = file->modtime;
 +			updated = 1;
 +		} else
@@ -250,8 +228,8 @@
  	}
  
  	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
---- rsync.h	2 May 2004 16:34:33 -0000	1.200
-+++ rsync.h	8 May 2004 18:35:17 -0000
+--- rsync.h	13 May 2004 18:51:22 -0000	1.203
++++ rsync.h	13 May 2004 18:54:04 -0000
 @@ -54,6 +54,7 @@
  #define XMIT_HAS_IDEV_DATA (1<<9)
  #define XMIT_SAME_DEV (1<<10)
@@ -260,7 +238,15 @@
  
  /* These flags are used in the live flist data. */
  
-@@ -419,6 +420,7 @@ struct file_struct {
+@@ -111,6 +112,7 @@
+ 
+ #define PERMS_REPORT		(1<<0)
+ #define PERMS_SKIP_MTIME	(1<<1)
++#define PERMS_SKIP_ATIME	(1<<2)
+ 
+ #define FULL_FLUSH	1
+ #define NORMAL_FLUSH	0
+@@ -422,6 +424,7 @@ struct file_struct {
  		struct hlink *links;
  	} link_u;
  	time_t modtime;
@@ -269,7 +255,7 @@
  	gid_t gid;
  	mode_t mode;
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	8 May 2004 18:35:18 -0000
++++ rsync.yo	13 May 2004 18:54:05 -0000
 @@ -299,6 +299,7 @@ verb(
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
@@ -291,7 +277,7 @@
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
 --- tls.c	9 Apr 2004 20:22:44 -0000	1.19
-+++ tls.c	8 May 2004 18:35:18 -0000
++++ tls.c	13 May 2004 18:54:05 -0000
 @@ -39,6 +39,7 @@
  
  
@@ -427,8 +413,8 @@
  
  	return 0;
  }
---- util.c	27 Apr 2004 19:59:37 -0000	1.141
-+++ util.c	8 May 2004 18:35:18 -0000
+--- util.c	8 May 2004 20:03:39 -0000	1.142
++++ util.c	13 May 2004 18:54:05 -0000
 @@ -124,32 +124,40 @@ void overflow(char *str)
  
  
@@ -476,7 +462,7 @@
  		t[0].tv_usec = 0;
  		t[1].tv_sec = modtime;
  		t[1].tv_usec = 0;
-@@ -1060,8 +1068,8 @@ int msleep(int t)
+@@ -1063,8 +1071,8 @@ int msleep(int t)
  
  
  /**
@@ -487,7 +473,7 @@
   * --modify-window).
   *
   * @retval 0 if the times should be treated as the same
-@@ -1070,7 +1078,7 @@ int msleep(int t)
+@@ -1073,7 +1081,7 @@ int msleep(int t)
   *
   * @retval -1 if the 2nd is later
   **/
@@ -497,7 +483,7 @@
  	extern int modify_window;
  
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ testsuite/copy-atimes.test	8 May 2004 18:35:18 -0000
++++ testsuite/copy-atimes.test	13 May 2004 18:54:05 -0000
 @@ -0,0 +1,22 @@
 +#! /bin/sh
 +
@@ -522,7 +508,7 @@
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
 --- testsuite/rsync.fns	4 Feb 2004 07:32:48 -0000	1.59
-+++ testsuite/rsync.fns	8 May 2004 18:35:18 -0000
++++ testsuite/rsync.fns	13 May 2004 18:54:05 -0000
 @@ -51,7 +51,7 @@ printmsg() {
  
  

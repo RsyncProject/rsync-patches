@@ -1,19 +1,95 @@
 Add support for logging daemon messages to an SQL database.
 
-After applying this patch you'll need to run autoconf and autoheader to
-generate updated versions of "configure" and "config.h.in".
+After applying this patch, run these commands for a successful build:
 
-You'll need to run configure with the --with-ODBC option in order for the
-extended features to be active.
+    autoconf
+    autoheader
+    ./configure --with-ODBC
+    make proto
+    make
 
-Patch provided by Steve Sether.
+Steve Sether writes:
 
-(Tweaked by Wayne Davison for rsync-style purposes but not compiled, so if the
-dblog.c file has a compile problem, it's probably my fault...)
+This patch adds the following options:
+
+"database logging"
+    If set to True, rsync will attempt to connect to
+    the specified datasource and write to the named tables.
+    Defaults to False.
+
+"database datasource"
+    Specifies the name of the ODBC data source to use.
+
+"database username"
+    The username to use when connecting to the database.
+
+"database password"
+    The password to use when connecting to the database.
+
+"transfer table name"
+    The name of the transfer table to log to.  This table contains individual
+    filenames, file sizes, bytes transferred, checksum bytes transferred,
+    operation (send or receive), and a timestamp.
+
+"session table name"
+    The name of the session table to log to.  This table contains the username,
+    module name, module path, ip address, process ID, and a timestamp.
+
+"exit table name"
+
+    The name of the exit table to log to.  This table contains the total bytes
+    read, total bytes written, total size of all files, error code, line the
+    error occured at, file the error occured at and the text of the error.
+    (most of which will be blank if the program exited normally).
+
+"unique id method"
+    Different databases use different methods to get a unique identifier.
+    Some databases support sequence objects, and use various forms of the
+    nextval command to retrieve a unique identifier from it.  Other databases
+    support an autonumber field, and support different methds of retrieving
+    the ID used in the last insert.  Valid values for this option are:
+
+	nextval-postgres
+	    uses the syntax of nextval for PostgreSQL databases
+
+	nextval-oracle
+	    uses the syntax of nextval for Oracle databases
+
+	nextval-db2
+	    uses the syntax of nextval for DB2 databases
+
+	last_insert_id
+	    uses the last_insert_id() command for the MySQL databases
+
+	@@IDENTITY
+	    uses the @@IDENTITY command for Sybase databases
+
+	custom
+	    Define your own method to get a unique identifier.  See the
+	    "custom unique id select", and the "get custom id before select"
+	    parameters.
+
+"sequence name"
+    If your database supports sequences, list the name of the sequence to use
+    for the session unique identifier.
+
+"custom unique id select"
+    Only used if you specify the custom method in "unique id method".  This is
+    a SQL statement to be executed to get a unique ID.  This SQL statement must
+    return one column with the unique ID to use for the session ID.  Should be
+    used in concert with the "get custom id before select" parameter.
+
+"get custom id before insert"
+    This parameter is ignored unless the "unique id method" is set to custom.
+    If set to true, the "custom unique id select" statement will be executed
+    BEFORE the session row is inserted into the database.  (as is done when a
+    sequence is used for unique IDs).  If False the statement will be executed
+    after the session row is inserted (as is done when the session ID is
+    automatically generates unique IDs).  Defaults to True.
 
 
---- Makefile.in	10 Feb 2004 17:06:11 -0000	1.98
-+++ Makefile.in	30 Apr 2004 18:08:05 -0000
+--- Makefile.in	2 May 2004 17:04:14 -0000	1.100
++++ Makefile.in	13 May 2004 18:17:08 -0000
 @@ -32,7 +32,7 @@ ZLIBOBJ=zlib/deflate.o zlib/infblock.o z
  	zlib/inflate.o zlib/inftrees.o zlib/infutil.o zlib/trees.o \
  	zlib/zutil.o zlib/adler32.o
@@ -23,92 +99,9 @@ dblog.c file has a compile problem, it's probably my fault...)
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
  	fileio.o batch.o clientname.o
  OBJS3=progress.o pipe.o
---- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ README-ODBC	30 Apr 2004 18:08:05 -0000
-@@ -0,0 +1,80 @@
-+This patch adds the following options:
-+
-+"database logging"
-+If set to True, rsync will attempt to connect to
-+the specified datasource and write to the named tables.
-+Defaults to False.
-+
-+
-+"database datasource"
-+Specifies the name of the ODBC data source to use.
-+
-+"database username"
-+The username to use when connecting to the database.
-+
-+"database password"
-+The password to use when connecting to the database.
-+
-+"transfer table name"
-+The name of the transfer table to log to.
-+This table contains individual filenames, file sizes, bytes transferred, checksum bytes transferred, operation (send or receive), and a timestamp.
-+
-+"session table name"
-+The name of the session table to log to.
-+This table contains the username, module name, module path, ip address, process ID, and a timestamp.
-+
-+"exit table name"
-+The name of the exit table to log to.
-+This table contains the total bytes read, total bytes written, total size
-+of all files, error code, line the error occured at, file the error occured at
-+and the text of the error. (most of which will be blank if the program exited normally).
-+
-+
-+"unique id method"
-+Different databases use different methods to get a unique identifier.
-+Some databases support sequence objects, and use various forms of the
-+nextval command to retrieve a unique identifier from it.  Other databases
-+support an autonumber field, and support different methds of retrieving
-+the ID used in the last insert.  Valid values for this option are:
-+
-+	nextval-postgres
-+	uses the syntax of nextval for PostgreSQL databases
-+
-+	nextval-oracle
-+	uses the syntax of nextval for Oracle databases
-+
-+	nextval-db2
-+	uses the syntax of nextval for  DB2 databases
-+
-+	last_insert_id
-+	uses the last_insert_id() command for the MySQL databases
-+
-+	@@IDENTITY
-+	uses the @@IDENTITY command for Sybase databases
-+
-+	custom
-+	Define your own method to get a unique identifier.  See the
-+	"custom unique id select", and the "get custom id before select"
-+	parameters.
-+
-+
-+"sequence name"
-+If your database supports sequences, list the name of the sequence to use
-+for the session unique identifier.
-+
-+"custom unique id select"
-+Only used if you specify the custom method in "unique id method".  This
-+is a SQL statement to be executed to get a unique ID.  This SQL
-+statement must return one column with the unique ID to use for
-+the session ID.  Should be used in concert with the "get custom
-+id before select" parameter.
-+
-+"get custom id before insert"
-+This parameter is ignored unless the "unique id method" is set to custom.
-+If set to true, the "custom unique id select" statement will
-+be executed BEFORE the session row is inserted into the database.
-+(as is done when a sequence is used for unique IDs).
-+If False the statement will be executed after the session
-+row is inserted (as is done when the session ID is automatically generates
-+unique IDs).
-+Defaults to True.
---- cleanup.c	27 Jan 2004 08:14:33 -0000	1.21
-+++ cleanup.c	30 Apr 2004 18:08:06 -0000
-@@ -138,7 +138,12 @@ void _exit_cleanup(int code, const char 
+--- cleanup.c	13 May 2004 07:08:18 -0000	1.22
++++ cleanup.c	13 May 2004 18:17:08 -0000
+@@ -140,7 +140,12 @@ void _exit_cleanup(int code, const char 
  			code = RERR_VANISHED;
  	}
  
@@ -120,10 +113,10 @@ dblog.c file has a compile problem, it's probably my fault...)
 +#endif
 +	}
  
- 	if (verbose > 2)
- 		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): about to call exit(%d)\n", 
+ 	if (verbose > 2) {
+ 		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): about to call exit(%d)\n",
 --- clientserver.c	14 Apr 2004 23:33:34 -0000	1.121
-+++ clientserver.c	30 Apr 2004 18:08:06 -0000
++++ clientserver.c	13 May 2004 18:17:08 -0000
 @@ -311,6 +311,9 @@ static int rsync_module(int f_in, int f_
  	exclude_path_prefix = NULL;
  
@@ -145,7 +138,7 @@ dblog.c file has a compile problem, it's probably my fault...)
  			rprintf(FINFO,"rsync %s %s from %s (%s)\n",
  				am_sender?"on":"to",
 --- configure.in	30 Apr 2004 18:03:33 -0000	1.196
-+++ configure.in	30 Apr 2004 18:08:06 -0000
++++ configure.in	13 May 2004 18:17:08 -0000
 @@ -94,6 +94,8 @@ AC_ARG_WITH(rsync-path,
  	[  --with-rsync-path=PATH  set default --rsync-path to PATH (default: rsync)],
  	[ RSYNC_PATH="$with_rsync_path" ],
@@ -171,7 +164,7 @@ dblog.c file has a compile problem, it's probably my fault...)
  
  AC_MSG_CHECKING([whether to use included libpopt])
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ dblog-tables-mysql.sql	30 Apr 2004 18:08:06 -0000
++++ dblog-tables-mysql.sql	13 May 2004 18:17:08 -0000
 @@ -0,0 +1,43 @@
 +drop table transfer;
 +drop table exit;
@@ -217,7 +210,7 @@ dblog.c file has a compile problem, it's probably my fault...)
 +	foreign key (session_id) references session (id)
 +);
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ dblog-tables-postgresql.sql	30 Apr 2004 18:08:06 -0000
++++ dblog-tables-postgresql.sql	13 May 2004 18:17:08 -0000
 @@ -0,0 +1,45 @@
 +drop table transfer;
 +drop table exit;
@@ -265,7 +258,7 @@ dblog.c file has a compile problem, it's probably my fault...)
 +	foreign key (session_id) references session (id)
 +);
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ dblog.c	30 Apr 2004 18:08:06 -0000
++++ dblog.c	13 May 2004 18:17:08 -0000
 @@ -0,0 +1,352 @@
 +/*
 + *  ODBC Database logging functions
@@ -620,7 +613,7 @@ dblog.c file has a compile problem, it's probably my fault...)
 +	}
 +}
 --- loadparm.c	4 Feb 2004 07:31:29 -0000	1.50
-+++ loadparm.c	30 Apr 2004 18:08:07 -0000
++++ loadparm.c	13 May 2004 18:17:08 -0000
 @@ -122,6 +122,17 @@ typedef struct
  	BOOL list;
  	BOOL use_chroot;
@@ -694,7 +687,7 @@ dblog.c file has a compile problem, it's probably my fault...)
  FN_LOCAL_BOOL(lp_ignore_nonreadable, ignore_nonreadable)
  FN_LOCAL_STRING(lp_uid, uid)
 --- log.c	29 Apr 2004 19:34:31 -0000	1.72
-+++ log.c	30 Apr 2004 18:08:07 -0000
++++ log.c	13 May 2004 18:17:09 -0000
 @@ -75,7 +75,7 @@ struct {
  /*
   * Map from rsync error code to name, or return NULL.
@@ -705,7 +698,7 @@ dblog.c file has a compile problem, it's probably my fault...)
  	int i;
  	for (i = 0; rerr_names[i].name; i++) {
 --- main.c	10 Feb 2004 03:54:47 -0000	1.192
-+++ main.c	30 Apr 2004 18:08:07 -0000
++++ main.c	13 May 2004 18:17:09 -0000
 @@ -120,6 +120,9 @@ static void report(int f)
  
  	if (am_daemon) {
@@ -716,50 +709,9 @@ dblog.c file has a compile problem, it's probably my fault...)
  		if (f == -1 || !am_sender) return;
  	}
  
---- proto.h	22 Apr 2004 09:58:09 -0000	1.189
-+++ proto.h	30 Apr 2004 18:08:07 -0000
-@@ -51,6 +51,12 @@ int start_daemon(int f_in, int f_out);
- int daemon_main(void);
- void setup_protocol(int f_out,int f_in);
- int claim_connection(char *fname,int max_connections);
-+char *sanitizeSql(const char *input);
-+void db_log_open(void);
-+void db_log_close();
-+void db_log_session();
-+void db_log_transfer(struct file_struct *file,struct stats *initial_stats,char *operation);
-+void db_log_exit(int code, const char *file, int line);
- void free_exclude_list(struct exclude_list_struct *listp);
- int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir);
- void add_exclude(struct exclude_list_struct *listp, const char *pattern,
-@@ -135,6 +141,17 @@ BOOL lp_read_only(int );
- BOOL lp_list(int );
- BOOL lp_use_chroot(int );
- BOOL lp_transfer_logging(int );
-+BOOL lp_database_logging(int );
-+char *lp_database_datasource(int );
-+char *lp_database_username(int );
-+char *lp_database_password(int );
-+char *lp_transfer_table_name(int );
-+char *lp_exit_table_name(int );
-+char *lp_session_table_name(int );
-+char *lp_sequence_name(int );
-+char *lp_unique_id_method(int );
-+char *lp_custom_unique_id_select(int );
-+BOOL lp_get_custom_id_before_insert(int );
- BOOL lp_ignore_errors(int );
- BOOL lp_ignore_nonreadable(int );
- char *lp_uid(int );
-@@ -156,6 +173,7 @@ int lp_max_connections(int );
- BOOL lp_load(char *pszFname, int globals_only);
- int lp_numservices(void);
- int lp_number(char *name);
-+char const *rerr_name(int code);
- void log_init(void);
- void log_open(void);
- void log_close(void);
---- receiver.c	27 Apr 2004 19:51:33 -0000	1.76
-+++ receiver.c	30 Apr 2004 18:08:08 -0000
-@@ -453,7 +453,9 @@ int recv_files(int f_in,struct file_list
+--- receiver.c	13 May 2004 07:08:22 -0000	1.77
++++ receiver.c	13 May 2004 18:17:09 -0000
+@@ -454,7 +454,9 @@ int recv_files(int f_in,struct file_list
  		recv_ok = receive_data(f_in,mapbuf,fd2,fname,file->length);
  
  		log_recv(file, &initial_stats);
@@ -770,11 +722,11 @@ dblog.c file has a compile problem, it's probably my fault...)
  		if (mapbuf) unmap_file(mapbuf);
  		if (fd1 != -1) {
  			close(fd1);
---- sender.c	17 Feb 2004 21:57:44 -0000	1.38
-+++ sender.c	30 Apr 2004 18:08:08 -0000
-@@ -283,6 +283,9 @@ void send_files(struct file_list *flist,
+--- sender.c	11 May 2004 19:53:16 -0000	1.39
++++ sender.c	13 May 2004 18:17:09 -0000
+@@ -280,6 +280,9 @@ void send_files(struct file_list *flist,
  		} else  {
- 			match_sums(f_out, s, buf, st.st_size);
+ 			match_sums(f_out, s, mbuf, st.st_size);
  			log_send(file, &initial_stats);
 +#ifdef HAVE_LIBODBC
 +			db_log_transfer(file, &initial_stats,"send");

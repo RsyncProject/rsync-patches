@@ -1,7 +1,12 @@
------BEGIN PGP SIGNED MESSAGE-----
-Hash: SHA1
+After applying this patch, run these commands for a successful build:
 
-Hi.
+    autoconf
+    autoheader
+    ./configure
+    make proto
+    make
+
+Casey Marshall writes:
 
 I've been hacking together a way to use rsync with OpenSSL, and have
 attached my current patch against a recent CVS tree. The details of
@@ -31,24 +36,9 @@ this implementation are:
 All warnings apply; I don't do C programming all that often, so I
 can't say if I've left any cleanup/compatibility errors in the code.
 
-Also: <http://rsync.samba.org/lists.html> refers to the (now gone)
-smart-questions document on tuxedo.org, which should now be catb.org.
-
-Cheers,
-
-- -- 
-Casey Marshall || rsdio@metastatic.org
------BEGIN PGP SIGNATURE-----
-Version: GnuPG v1.2.1 (GNU/Linux)
-Comment: Processed by Mailcrypt 3.5.7 <http://mailcrypt.sourceforge.net/>
-
-iD8DBQE/ih9xgAuWMgRGsWsRAp8RAJ0XyONLiOSDgHHAOBRNO6sZ/P2dRwCeKfu8
-LEvhhkUglOm3xMyrdJT4u9Q=
-=aT/N
------END PGP SIGNATURE-----
 
 --- Makefile.in	2 May 2004 17:04:14 -0000	1.100
-+++ Makefile.in	8 May 2004 18:40:16 -0000
++++ Makefile.in	13 May 2004 19:07:03 -0000
 @@ -39,7 +39,7 @@ OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
@@ -58,19 +48,19 @@ LEvhhkUglOm3xMyrdJT4u9Q=
  
  TLS_OBJ = tls.o syscall.o lib/permstring.o
  
---- cleanup.c	27 Jan 2004 08:14:33 -0000	1.21
-+++ cleanup.c	8 May 2004 18:40:16 -0000
-@@ -87,6 +87,9 @@ void _exit_cleanup(int code, const char 
- 	int ocode = code;
- 	extern int keep_partial;
- 	extern int log_got_error;
+--- cleanup.c	13 May 2004 07:08:18 -0000	1.22
++++ cleanup.c	13 May 2004 19:07:03 -0000
+@@ -24,6 +24,9 @@
+ extern int io_error;
+ extern int keep_partial;
+ extern int log_got_error;
 +#ifdef HAVE_OPENSSL
-+	extern int use_ssl;
++extern int use_ssl;
 +#endif
- 	static int inside_cleanup = 0;
  
- 	if (inside_cleanup > 10) {
-@@ -97,6 +100,11 @@ void _exit_cleanup(int code, const char 
+ /**
+  * Close all open sockets and files, allowing a (somewhat) graceful
+@@ -98,6 +101,11 @@ void _exit_cleanup(int code, const char 
  
  	signal(SIGUSR1, SIG_IGN);
  	signal(SIGUSR2, SIG_IGN);
@@ -80,10 +70,10 @@ LEvhhkUglOm3xMyrdJT4u9Q=
 +		end_tls();
 +#endif
  
- 	if (verbose > 3)
- 		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): entered\n", 
+ 	if (verbose > 3) {
+ 		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): entered\n",
 --- clientserver.c	14 Apr 2004 23:33:34 -0000	1.121
-+++ clientserver.c	8 May 2004 18:40:16 -0000
++++ clientserver.c	13 May 2004 19:07:03 -0000
 @@ -46,6 +46,9 @@ extern int io_timeout;
  extern int orig_umask;
  extern int no_detach;
@@ -200,7 +190,7 @@ LEvhhkUglOm3xMyrdJT4u9Q=
  		if (*line == '#') {
  			/* it's some sort of command that I don't understand */
 --- config.h.in	29 Apr 2004 19:40:39 -0000	1.90
-+++ config.h.in	8 May 2004 18:40:16 -0000
++++ config.h.in	13 May 2004 19:07:03 -0000
 @@ -167,6 +167,9 @@
  /* */
  #undef HAVE_OFF64_T
@@ -212,7 +202,7 @@ LEvhhkUglOm3xMyrdJT4u9Q=
  #undef HAVE_READLINK
  
 --- configure.in	30 Apr 2004 18:03:33 -0000	1.196
-+++ configure.in	8 May 2004 18:40:16 -0000
++++ configure.in	13 May 2004 19:07:03 -0000
 @@ -271,6 +271,21 @@ yes
  	AC_SEARCH_LIBS(getaddrinfo, inet6)
  fi
@@ -236,7 +226,7 @@ LEvhhkUglOm3xMyrdJT4u9Q=
  case $host_os in
  	*cygwin* ) AC_MSG_RESULT(yes)
 --- main.c	10 Feb 2004 03:54:47 -0000	1.192
-+++ main.c	8 May 2004 18:40:16 -0000
++++ main.c	13 May 2004 19:07:03 -0000
 @@ -51,6 +51,9 @@ extern int rsync_port;
  extern int read_batch;
  extern int write_batch;
@@ -313,7 +303,7 @@ LEvhhkUglOm3xMyrdJT4u9Q=
  				if (p) {
  					*p = 0;
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	8 May 2004 18:40:17 -0000
++++ options.c	13 May 2004 19:07:04 -0000
 @@ -130,6 +130,14 @@ int quiet = 0;
  int always_checksum = 0;
  int list_only = 0;
@@ -436,23 +426,8 @@ LEvhhkUglOm3xMyrdJT4u9Q=
  
  	if (files_from) {
  		char *colon;
---- proto.h	22 Apr 2004 09:58:09 -0000	1.189
-+++ proto.h	8 May 2004 18:40:17 -0000
-@@ -209,6 +209,12 @@ void start_accept_loop(int port, int (*f
- void set_socket_options(int fd, char *options);
- void become_daemon(void);
- int sock_exec(const char *prog);
-+int init_tls(void);
-+char *get_ssl_error(void);
-+int get_tls_rfd(void);
-+int get_tls_wfd(void);
-+int start_tls(int f_in, int f_out);
-+void end_tls(void);
- int do_unlink(char *fname);
- int do_symlink(char *fname1, char *fname2);
- int do_link(char *fname1, char *fname2);
---- rsync.h	2 May 2004 16:34:33 -0000	1.200
-+++ rsync.h	8 May 2004 18:40:17 -0000
+--- rsync.h	13 May 2004 18:51:22 -0000	1.203
++++ rsync.h	13 May 2004 19:07:04 -0000
 @@ -32,6 +32,7 @@
  
  #define DEFAULT_LOCK_FILE "/var/run/rsyncd.lock"
@@ -461,7 +436,7 @@ LEvhhkUglOm3xMyrdJT4u9Q=
  
  #define BACKUP_SUFFIX "~"
  
-@@ -321,6 +322,11 @@ enum msgcode {
+@@ -324,6 +325,11 @@ enum msgcode {
  #else
  /* As long as it gets... */
  #define uint64 unsigned off_t
@@ -474,7 +449,7 @@ LEvhhkUglOm3xMyrdJT4u9Q=
  
  /* Starting from protocol version 26, we always use 64-bit
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ ssl.c	8 May 2004 18:40:17 -0000
++++ ssl.c	13 May 2004 19:07:04 -0000
 @@ -0,0 +1,366 @@
 +/* -*- c-file-style: "linux" -*-
 + * ssl.c: operations for negotiating SSL rsync connections. 

@@ -1,43 +1,29 @@
-To: rsync@lists.samba.org
-From: "Jason M. Felice" <jfelice@cronosys.com>
-Subject: [patch] Add `--link-by-hash' option (rev 5).
-Date: Mon, 23 Feb 2004 13:29:08 -0500
+After applying this patch and running configure, you MUST run this
+command before "make":
+
+    make proto
+
+Jason M. Felice writes:
 
 This patch adds the --link-by-hash=DIR option, which hard links received
 files in a link farm arranged by MD4 file hash.  The result is that the system
 will only store one copy of the unique contents of each file, regardless of
 the file's name.
 
-(rev 5)
-* Fixed silly logic error.
 
-(rev 4)
-* Updated for committed robust_rename() patch, other changes in CVS.
-
-(rev 3)
-* Don't link empty files.
-* Roll over to new file when filesystem maximum link count is reached.
-* If link fails for another reason, leave non-linked file there.
-* Depends on rsync-rename.diff
-
-(rev 2)
-* This revision is actually against CVS HEAD (I didn't realize I was working
-  from a stale rsync'd CVS).
-* Apply permissions after linking (permissions were lost if we already had
-  a copy of the file in the link farm).
-
-Patch Summary:
-
-    -1   +1    Makefile.in
-    -0   +351  hashlink.c (new)
-    -1   +22   options.c
-    -0   +6    proto.h
-    -6   +21   receiver.c
-    -2   +8    rsync.c
-    -0   +8    rsync.h
-
---- hashlink.c	1969-12-31 19:00:00.000000000 -0500
-+++ hashlink.c	2004-02-23 10:30:45.000000000 -0500
+--- Makefile.in	2 May 2004 17:04:14 -0000	1.100
++++ Makefile.in	13 May 2004 19:04:49 -0000
+@@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
+ 	main.o checksum.o match.o syscall.o log.o backup.o
+ OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
+ 	fileio.o batch.o clientname.o
+-OBJS3=progress.o pipe.o
++OBJS3=progress.o pipe.o hashlink.o
+ DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
+ popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
+ 	popt/popthelp.o popt/poptparse.o
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ hashlink.c	13 May 2004 19:04:49 -0000
 @@ -0,0 +1,351 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
@@ -390,19 +376,8 @@ Patch Summary:
 +}
 +
 +#endif
---- Makefile.in	10 Feb 2004 17:06:11 -0000	1.98
-+++ Makefile.in	15 Apr 2004 19:18:59 -0000
-@@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
- 	main.o checksum.o match.o syscall.o log.o backup.o
- OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
- 	fileio.o batch.o clientname.o
--OBJS3=progress.o pipe.o
-+OBJS3=progress.o pipe.o hashlink.o
- DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
- popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
- 	popt/popthelp.o popt/poptparse.o
---- options.c	14 Apr 2004 23:33:34 -0000	1.146
-+++ options.c	15 Apr 2004 19:19:00 -0000
+--- options.c	6 May 2004 21:08:01 -0000	1.148
++++ options.c	13 May 2004 19:04:49 -0000
 @@ -121,6 +121,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
@@ -468,32 +443,17 @@ Patch Summary:
  	}
  
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
---- proto.h	14 Apr 2004 23:33:30 -0000	1.188
-+++ proto.h	15 Apr 2004 19:19:00 -0000
-@@ -91,6 +91,12 @@ char *f_name(struct file_struct *f);
- void write_sum_head(int f, struct sum_struct *sum);
- void recv_generator(char *fname, struct file_struct *file, int i, int f_out);
- void generate_files(int f, struct file_list *flist, char *local_name);
-+char* make_hash_name(struct file_struct *file);
-+void kill_hashfile(struct hashfile_struct *hashfile);
-+void kill_hashfiles(struct hashfile_struct *hashfiles);
-+struct hashfile_struct *find_hashfiles(char *hashname, int64 size, long *fnbr);
-+struct hashfile_struct *compare_hashfiles(int fd,struct hashfile_struct *files);
-+int link_by_hash(char *fnametmp,char *fname,struct file_struct *file);
- void init_hard_links(struct file_list *flist);
- int hard_link_check(struct file_struct *file, int skip);
- void do_hard_links(void);
---- receiver.c	23 Mar 2004 16:50:40 -0000	1.75
-+++ receiver.c	15 Apr 2004 19:19:00 -0000
-@@ -45,6 +45,7 @@ extern int cleanup_got_literal;
- extern int module_id;
+--- receiver.c	13 May 2004 07:08:22 -0000	1.77
++++ receiver.c	13 May 2004 19:04:49 -0000
+@@ -46,6 +46,7 @@ extern int module_id;
  extern int ignore_errors;
  extern int orig_umask;
+ extern int keep_partial;
 +extern char *link_by_hash_dir;
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -190,10 +191,11 @@ static int get_tmpname(char *fnametmp, c
+@@ -191,10 +192,11 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in,struct map_struct *mapbuf,int fd,char *fname,
@@ -506,7 +466,7 @@ Patch Summary:
  	unsigned int len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -203,7 +205,9 @@ static int receive_data(int f_in,struct 
+@@ -204,7 +206,9 @@ static int receive_data(int f_in,struct 
  	char *map=NULL;
  
  	read_sum_head(f_in, &sum);
@@ -517,7 +477,7 @@ Patch Summary:
  	sum_init();
  
  	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -220,6 +224,8 @@ static int receive_data(int f_in,struct 
+@@ -221,6 +225,8 @@ static int receive_data(int f_in,struct 
  			cleanup_got_literal = 1;
  
  			sum_update(data,i);
@@ -526,7 +486,7 @@ Patch Summary:
  
  			if (fd != -1 && write_file(fd,data,i) != i) {
  				rprintf(FERROR, "write failed on %s: %s\n",
-@@ -247,6 +253,8 @@ static int receive_data(int f_in,struct 
+@@ -248,6 +254,8 @@ static int receive_data(int f_in,struct 
  
  			see_token(map, len);
  			sum_update(map,len);
@@ -535,7 +495,7 @@ Patch Summary:
  		}
  
  		if (fd != -1 && write_file(fd,map,len) != (int) len) {
-@@ -269,6 +277,8 @@ static int receive_data(int f_in,struct 
+@@ -270,6 +278,8 @@ static int receive_data(int f_in,struct 
  	}
  
  	sum_end(file_sum1);
@@ -544,7 +504,7 @@ Patch Summary:
  
  	read_buf(f_in,file_sum2,MD4_SUM_LENGTH);
  	if (verbose > 2) {
-@@ -372,7 +382,7 @@ int recv_files(int f_in,struct file_list
+@@ -373,7 +383,7 @@ int recv_files(int f_in,struct file_list
  		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
  			rprintf(FERROR, "fstat %s failed: %s\n",
  				full_fname(fnamecmp), strerror(errno));
@@ -553,7 +513,7 @@ Patch Summary:
  			close(fd1);
  			continue;
  		}
-@@ -385,7 +395,7 @@ int recv_files(int f_in,struct file_list
+@@ -386,7 +396,7 @@ int recv_files(int f_in,struct file_list
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -562,7 +522,7 @@ Patch Summary:
  			close(fd1);
  			continue;
  		}
-@@ -437,7 +447,7 @@ int recv_files(int f_in,struct file_list
+@@ -438,7 +448,7 @@ int recv_files(int f_in,struct file_list
  		if (fd2 == -1) {
  			rprintf(FERROR, "mkstemp %s failed: %s\n",
  				full_fname(fnametmp), strerror(errno));
@@ -571,7 +531,7 @@ Patch Summary:
  			if (mapbuf) unmap_file(mapbuf);
  			if (fd1 != -1) close(fd1);
  			continue;
-@@ -450,7 +460,12 @@ int recv_files(int f_in,struct file_list
+@@ -451,7 +461,12 @@ int recv_files(int f_in,struct file_list
  		}
  
  		/* recv file data */
@@ -585,17 +545,17 @@ Patch Summary:
  
  		log_recv(file, &initial_stats);
  
---- rsync.c	23 Mar 2004 16:16:15 -0000	1.135
-+++ rsync.c	15 Apr 2004 19:19:00 -0000
-@@ -33,6 +33,7 @@ extern int preserve_uid;
+--- rsync.c	13 May 2004 18:51:22 -0000	1.138
++++ rsync.c	13 May 2004 19:04:49 -0000
+@@ -31,6 +31,7 @@ extern int am_generator;
+ extern int preserve_uid;
  extern int preserve_gid;
- extern int preserve_perms;
  extern int make_backups;
 +extern char *link_by_hash_dir;
  
  
  /*
-@@ -235,8 +236,12 @@ void finish_transfer(char *fname, char *
+@@ -236,8 +237,12 @@ void finish_transfer(char *fname, char *
  	if (make_backups && !make_backup(fname))
  		return;
  
@@ -610,9 +570,9 @@ Patch Summary:
  	if (ret < 0) {
  		rprintf(FERROR, "%s %s -> \"%s\": %s\n",
  		    ret == -2 ? "copy" : "rename",
---- rsync.h	14 Apr 2004 23:33:37 -0000	1.196
-+++ rsync.h	15 Apr 2004 19:19:00 -0000
-@@ -518,6 +518,14 @@ struct stats {
+--- rsync.h	13 May 2004 18:51:22 -0000	1.203
++++ rsync.h	13 May 2004 19:04:50 -0000
+@@ -521,6 +521,14 @@ struct stats {
  	int current_file_index;
  };
  
