@@ -4,8 +4,8 @@ Lightly tested.
 
 Be sure to run "make proto" before "make".
 
---- orig/generator.c	2005-01-15 21:18:09
-+++ generator.c	2005-01-15 21:20:10
+--- orig/generator.c	2005-01-17 23:11:45
++++ generator.c	2005-01-16 02:16:38
 @@ -44,6 +44,7 @@ extern int size_only;
  extern OFF_T max_size;
  extern int io_timeout;
@@ -14,24 +14,10 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -239,6 +240,90 @@ static void generate_and_send_sums(int f
+@@ -242,6 +243,83 @@ static void generate_and_send_sums(int f
  }
  
  
-+static void split_names(char *fname, char **dirname, char **basename)
-+{
-+	char *slash = strrchr(fname, '/');
-+	if (slash) {
-+		*dirname = fname;
-+		*slash = '\0';
-+		*basename = slash+1;
-+	} else {
-+		*basename = fname;
-+		*dirname = ".";
-+	}
-+}
-+
-+
 +static unsigned int measure_name(const char *name, const char *basename,
 +				 const char *ext)
 +{
@@ -54,22 +40,29 @@ Be sure to run "make proto" before "make".
 +{
 +	DIR *d;
 +	struct dirent *di;
-+	char *basename, *dirname;
-+	char mangled_name[MAXPATHLEN];
++	char *basename, *dirname, *slash;
 +	char bestname[MAXPATHLEN];
 +	unsigned int bestscore = 0;
 +	const char *ext;
 +
-+	strlcpy(mangled_name, fname, sizeof mangled_name);
++	strlcpy(buf, fname, MAXPATHLEN);
++	if ((slash = strrchr(buf, '/')) != NULL) {
++		dirname = buf;
++		*slash = '\0';
++		basename = slash + 1;
++	} else {
++		basename = buf;
++		dirname = ".";
++	}
 +
-+	split_names(mangled_name, &dirname, &basename);
 +	if (!(d = opendir(dirname))) {
 +		rsyserr(FERROR, errno, "recv_generator opendir(%s)", dirname);
 +		return -1;
 +	}
 +
 +	/* Get final extension, eg. .gz; never full basename though. */
-+	if (!(ext = strrchr(basename + 1, '.')))
++	for (ext = basename; *ext == '.'; ext++) {}
++	if (!(ext = strrchr(ext, '.')))
 +		ext = basename + strlen(basename); /* ext = "" */
 +
 +	while ((di = readdir(d)) != NULL) {
@@ -94,7 +87,7 @@ Be sure to run "make proto" before "make".
 +
 +	/* Found a candidate. */
 +	if (bestscore != 0) {
-+		pathjoin(buf, MAXPATHLEN, dirname, bestname);
++		strlcpy(basename, MAXPATHLEN - (basename - buf), bestname);
 +		if (verbose > 2)
 +			rprintf(FINFO, "fuzzy match %s->%s\n", fname, buf);
 +		return link_stat(buf, st_ptr, 0);
@@ -105,7 +98,7 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -493,6 +578,15 @@ static void recv_generator(char *fname, 
+@@ -496,6 +574,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -121,7 +114,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -521,6 +615,8 @@ static void recv_generator(char *fname, 
+@@ -524,6 +611,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -130,10 +123,10 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -593,8 +689,24 @@ prepare_to_open:
- 
- notify_others:
+@@ -598,8 +687,24 @@ notify_others:
  	write_int(f_out, i);
+ 	if (protocol_version >= 29 && inplace && !read_batch)
+ 		write_byte(f_out, fnamecmp_type);
 -	if (f_out_name >= 0)
 +	if (f_out_name >= 0) {
  		write_byte(f_out_name, fnamecmp_type);
@@ -156,7 +149,7 @@ Be sure to run "make proto" before "make".
  
  	if (dry_run || read_batch)
  		return;
---- orig/main.c	2005-01-14 18:30:18
+--- orig/main.c	2005-01-17 23:11:45
 +++ main.c	2005-01-14 18:33:15
 @@ -48,6 +48,7 @@ extern int keep_dirlinks;
  extern int preserve_hard_links;
@@ -176,7 +169,7 @@ Be sure to run "make proto" before "make".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
---- orig/options.c	2005-01-15 21:23:15
+--- orig/options.c	2005-01-17 23:11:45
 +++ options.c	2005-01-15 21:08:13
 @@ -86,6 +86,7 @@ int copy_unsafe_links = 0;
  int size_only = 0;
@@ -202,20 +195,7 @@ Be sure to run "make proto" before "make".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
-@@ -952,10 +955,10 @@ int parse_arguments(int *argc, const cha
- 			return 0;
- 		}
- 		keep_partial = 0;
--		if (dest_option) {
-+		if (dest_option || fuzzy_basis) {
- 			snprintf(err_buf, sizeof err_buf,
- 				 "--inplace does not yet work with %s\n",
--				 dest_option);
-+				 dest_option ? dest_option : "--fuzzy");
- 			return 0;
- 		}
- #else
-@@ -1240,6 +1243,9 @@ void server_options(char **args,int *arg
+@@ -1234,6 +1237,9 @@ void server_options(char **args,int *arg
  			args[ac++] = "--no-relative";
  	}
  
@@ -225,7 +205,7 @@ Be sure to run "make proto" before "make".
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2005-01-15 21:18:09
+--- orig/receiver.c	2005-01-17 23:11:45
 +++ receiver.c	2005-01-15 21:21:02
 @@ -324,6 +324,27 @@ static int receive_data(int f_in, char *
  }
@@ -266,9 +246,9 @@ Be sure to run "make proto" before "make".
  			default:
  				if (j >= basis_dir_cnt) {
  					rprintf(FERROR,
---- orig/rsync.h	2005-01-15 21:18:09
+--- orig/rsync.h	2005-01-17 23:11:45
 +++ rsync.h	2005-01-15 21:24:09
-@@ -127,6 +127,7 @@
+@@ -128,6 +128,7 @@
  #define FNAMECMP_FNAME		0x80
  #define FNAMECMP_PARTIAL_DIR	0x81
  #define FNAMECMP_BACKUP 	0x82
@@ -276,7 +256,7 @@ Be sure to run "make proto" before "make".
  
  
  /* Log-message categories.  FLOG is only used on the daemon side to
---- orig/rsync.yo	2005-01-15 04:36:32
+--- orig/rsync.yo	2005-01-17 23:11:46
 +++ rsync.yo	2005-01-15 21:48:52
 @@ -358,6 +358,7 @@ verb(
       --compare-dest=DIR      also compare received files relative to DIR
@@ -286,9 +266,9 @@ Be sure to run "make proto" before "make".
   -P                          equivalent to --partial --progress
   -z, --compress              compress file data
   -C, --cvs-exclude           auto ignore files in the same way CVS does
-@@ -876,6 +877,11 @@ Note that rsync versions prior to 2.6.1 
- (or implied by -a).  If the receiving rsync is not new enough, you can work
- around this bug by avoiding the -o option.
+@@ -878,6 +879,11 @@ Note that rsync versions prior to 2.6.1 
+ (or implied by -a).  You can work-around this bug by avoiding the -o option
+ when sending to an old rsync.
  
 +dit(bf(--fuzzy)) This option tells rsync that it should look around for a
 +basis file for any destination file that is missing.  The current algorithm
