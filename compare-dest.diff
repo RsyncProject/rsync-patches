@@ -60,7 +60,7 @@ Before compiling, be sure to run "make proto".
  		}
  	}
  
---- orig/main.c	2004-11-03 20:30:45
+--- orig/main.c	2004-11-25 16:32:40
 +++ main.c	2004-07-30 07:23:54
 @@ -59,7 +59,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
@@ -80,9 +80,9 @@ Before compiling, be sure to run "make proto".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
---- orig/options.c	2004-11-11 22:13:09
-+++ options.c	2004-11-11 22:14:34
-@@ -115,12 +115,13 @@ int write_batch = 0;
+--- orig/options.c	2004-11-17 19:41:31
++++ options.c	2004-11-25 16:38:16
+@@ -116,12 +116,13 @@ int write_batch = 0;
  int read_batch = 0;
  int backup_dir_len = 0;
  int backup_suffix_len;
@@ -97,7 +97,7 @@ Before compiling, be sure to run "make proto".
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *log_format = NULL;
-@@ -141,6 +142,7 @@ char *batch_name = NULL;
+@@ -142,6 +143,7 @@ char *batch_name = NULL;
  
  static int daemon_opt;   /* sets am_daemon after option error-reporting */
  static int modify_window_set;
@@ -105,7 +105,7 @@ Before compiling, be sure to run "make proto".
  static char *max_size_arg;
  
  /** Local address to bind.  As a character string because it's
-@@ -313,7 +315,7 @@ void usage(enum logcode F)
+@@ -314,7 +316,7 @@ void usage(enum logcode F)
  }
  
  enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
@@ -114,7 +114,7 @@ Before compiling, be sure to run "make proto".
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
        OPT_REFUSED_BASE = 9000};
-@@ -373,8 +375,8 @@ static struct poptOption long_options[] 
+@@ -374,8 +376,8 @@ static struct poptOption long_options[] 
    {"max-size",         0,  POPT_ARG_STRING, &max_size_arg,  OPT_MAX_SIZE, 0, 0 },
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, OPT_TIMEOUT, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
@@ -125,36 +125,37 @@ Before compiling, be sure to run "make proto".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
-@@ -705,8 +707,28 @@ int parse_arguments(int *argc, const cha
- 				select_timeout = io_timeout;
- 			break;
- 
-+		case OPT_COMPARE_DEST:
-+			if (num_comp_dest >= MAX_COMP_DEST-1) {
-+				rprintf(FERROR, "ERROR: %s\n", "too many --compare-dest args given");
-+				return 0;
-+			}
-+			arg = poptGetOptArg(pc);
-+			if (sanitize_paths)
-+				arg = sanitize_path(NULL, arg, NULL, 0);
-+			compare_dest[num_comp_dest++] = (char *)arg;
-+			saw_compare_dest = 1;
-+			break;
-+
+@@ -712,7 +714,7 @@ int parse_arguments(int *argc, const cha
  		case OPT_LINK_DEST:
  #if HAVE_LINK
+ 			link_dest = 1;
+-			break;
++			goto compare_dest;
+ #else
+ 			snprintf(err_buf, sizeof err_buf,
+ 				 "hard links are not supported on this %s\n",
+@@ -720,6 +722,20 @@ int parse_arguments(int *argc, const cha
+ 			return 0;
+ #endif
+ 
++		case OPT_COMPARE_DEST:
++			saw_compare_dest = 1;
++		compare_dest:
 +			if (num_comp_dest >= MAX_COMP_DEST-1) {
-+				rprintf(FERROR, "ERROR: %s\n", "too many --link-dest args given");
++				rprintf(FERROR, "ERROR: too many %s args given\n",
++					link_dest ? "--link-dest" : "--compare-dest");
 +				return 0;
 +			}
 +			arg = poptGetOptArg(pc);
 +			if (sanitize_paths)
 +				arg = sanitize_path(NULL, arg, NULL, 0);
 +			compare_dest[num_comp_dest++] = (char *)arg;
- 			link_dest = 1;
- 			break;
- #else
-@@ -798,6 +820,11 @@ int parse_arguments(int *argc, const cha
++			break;
++
+ 		default:
+ 			/* A large opt value means that set_refuse_options()
+ 			 * turned this option off (opt-BASE is its index). */
+@@ -802,6 +818,11 @@ int parse_arguments(int *argc, const cha
  		return 0;
  	}
  
@@ -166,7 +167,7 @@ Before compiling, be sure to run "make proto".
  	if (archive_mode) {
  		if (!files_from)
  			recurse = 1;
-@@ -825,8 +852,6 @@ int parse_arguments(int *argc, const cha
+@@ -829,8 +850,6 @@ int parse_arguments(int *argc, const cha
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0);
  		if (partial_dir)
  			partial_dir = sanitize_path(NULL, partial_dir, NULL, 0);
@@ -175,7 +176,7 @@ Before compiling, be sure to run "make proto".
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0);
  		if (files_from)
-@@ -834,6 +859,7 @@ int parse_arguments(int *argc, const cha
+@@ -838,6 +857,7 @@ int parse_arguments(int *argc, const cha
  	}
  	if (server_exclude_list.head && !am_sender) {
  		struct exclude_list_struct *elp = &server_exclude_list;
@@ -183,7 +184,7 @@ Before compiling, be sure to run "make proto".
  		if (tmpdir) {
  			clean_fname(tmpdir, 1);
  			if (check_exclude(elp, tmpdir, 1) < 0)
-@@ -844,9 +870,9 @@ int parse_arguments(int *argc, const cha
+@@ -848,9 +868,9 @@ int parse_arguments(int *argc, const cha
  			if (check_exclude(elp, partial_dir, 1) < 0)
  				goto options_rejected;
  		}
@@ -196,7 +197,7 @@ Before compiling, be sure to run "make proto".
  				goto options_rejected;
  		}
  		if (backup_dir) {
-@@ -917,7 +943,7 @@ int parse_arguments(int *argc, const cha
+@@ -923,7 +943,7 @@ int parse_arguments(int *argc, const cha
  			 am_server ? "server" : "client");
  		return 0;
  #endif
@@ -205,7 +206,7 @@ Before compiling, be sure to run "make proto".
  			snprintf(err_buf, sizeof err_buf,
  				 "--inplace does not yet work with %s\n",
  				 link_dest ? "--link-dest" : "--compare-dest");
-@@ -984,8 +1010,8 @@ int parse_arguments(int *argc, const cha
+@@ -990,8 +1010,8 @@ int parse_arguments(int *argc, const cha
   **/
  void server_options(char **args,int *argc)
  {
@@ -215,7 +216,7 @@ Before compiling, be sure to run "make proto".
  	char *arg;
  
  	int i, x;
-@@ -1173,13 +1199,16 @@ void server_options(char **args,int *arg
+@@ -1179,13 +1199,16 @@ void server_options(char **args,int *arg
  		args[ac++] = tmpdir;
  	}
  
@@ -276,3 +277,35 @@ Before compiling, be sure to run "make proto".
  #define MPLEX_BASE 7
  
  #define NO_EXCLUDES	0
+--- orig/testsuite/compare-dest.test	2004-07-23 17:16:13
++++ testsuite/compare-dest.test	2004-11-25 16:56:33
+@@ -11,22 +11,25 @@
+ 
+ set -x
+ 
+-altdir="$tmpdir/alt"
++alt1dir="$tmpdir/alt1"
++alt2dir="$tmpdir/alt2"
+ 
+ # Build some files/dirs/links to copy
+ 
+ hands_setup
+ 
+ # Setup the alt and chk dirs
+-$RSYNC -av --include=text --include='*/' --exclude='*' "$fromdir/" "$altdir/"
++$RSYNC -av --include=text --include='*/' --exclude='*' "$fromdir/" "$alt1dir/"
++$RSYNC -av --include=etc-ltr-list --include='*/' --exclude='*' "$fromdir/" "$alt2dir/"
+ 
+ sleep 1
+ touch "$fromdir/dir/text"
+ 
+-$RSYNC -av --exclude=/text "$fromdir/" "$chkdir/"
++$RSYNC -av --exclude=/text --exclude=etc-ltr-list "$fromdir/" "$chkdir/"
+ 
+ # Let's do it!
+-checkit "$RSYNC -avv --no-whole-file --compare-dest=\"$altdir\" \
++checkit "$RSYNC -avv --no-whole-file \
++    --compare-dest=\"$alt1dir\" --compare-dest=\"$alt2dir\" \
+     \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
+ 
+ # The script would have aborted on error, so getting here means we've won.
