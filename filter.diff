@@ -29,8 +29,8 @@ for the current dir because its name contained a slash.
 
 ..wayne..
 
---- exclude.c	16 May 2004 07:28:21 -0000	1.78
-+++ exclude.c	16 May 2004 07:44:55 -0000
+--- exclude.c	16 May 2004 14:08:34 -0000	1.79
++++ exclude.c	16 May 2004 22:04:31 -0000
 @@ -30,14 +30,54 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
@@ -114,12 +114,35 @@ for the current dir because its name contained a slash.
  	ret = new(struct exclude_struct);
  	if (!ret)
  		out_of_memory("make_exclude");
-@@ -82,15 +140,32 @@ static void make_exclude(struct exclude_
+@@ -81,14 +139,35 @@ static void make_exclude(struct exclude_
+ 		mflags |= MATCHFLG_DIRECTORY;
  	}
  
- 	for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
+-	for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
 -		ret->slash_cnt++;
-+		ret->u.slash_cnt++;
++	if (mflags & MATCHFLG_MERGE_FILE) {
++		struct exclude_list_struct *lp = local_lists.array;
++		int ndx = local_lists.cnt++;
++		local_lists.array = realloc_array(local_lists.array,
++		    struct exclude_list_struct, local_lists.cnt);
++		if (!local_lists.array)
++			out_of_memory("make_exclude");
++		/* If "listp" was pointing inside the memory we just
++		 * reallocated, update it. */
++		if (ndx && listp >= lp && listp < lp + ndx)
++			listp = &local_lists.array[listp - lp];
++		lp = &local_lists.array[ndx];
++		lp->head = lp->tail = NULL;
++		lp->parent = ret;
++		if (asprintf(&lp->debug_type, "per-dir %s ", ret->pattern) < 0)
++			out_of_memory("make_exclude");
++		ret->u.array_index = ndx;
++	} else {
++		for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
++			ret->u.slash_cnt++;
++	}
+ 
+ 	ret->match_flags = mflags;
  
 -	if (!listp->tail)
 +	if (!listp->tail) {
@@ -131,26 +154,7 @@ for the current dir because its name contained a slash.
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
- 
-+	if (mflags & MATCHFLG_MERGE_FILE) {
-+		struct exclude_list_struct *lp;
-+		int ndx = local_lists.cnt++;
-+		local_lists.array = realloc_array(local_lists.array,
-+		    struct exclude_list_struct, local_lists.cnt);
-+		if (!local_lists.array)
-+			out_of_memory("make_exclude");
-+		lp = &local_lists.array[ndx];
-+		lp->head = lp->tail = NULL;
-+		lp->parent = ret;
-+		if (asprintf(&lp->debug_type, "per-dir %s ", ret->pattern) < 0)
-+			out_of_memory("make_exclude");
-+		ret->u.array_index = ndx; /* Overwrites u.slash_cnt. */
-+	}
-+
- 	ret->match_flags = mflags;
- }
- 
-@@ -100,18 +175,90 @@ static void free_exclude(struct exclude_
+@@ -100,18 +179,90 @@ static void free_exclude(struct exclude_
  	free(ex);
  }
  
@@ -247,7 +251,7 @@ for the current dir because its name contained a slash.
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,7 +269,7 @@ static int check_one_exclude(char *name,
+@@ -122,7 +273,7 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -256,7 +260,7 @@ for the current dir because its name contained a slash.
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
-@@ -148,9 +295,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +299,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -268,7 +272,7 @@ for the current dir because its name contained a slash.
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +368,14 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +372,14 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -283,7 +287,7 @@ for the current dir because its name contained a slash.
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -254,11 +409,16 @@ static const char *get_exclude_tok(const
+@@ -254,11 +413,16 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -302,7 +306,7 @@ for the current dir because its name contained a slash.
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -307,11 +467,42 @@ void add_exclude(struct exclude_list_str
+@@ -307,11 +471,42 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -346,7 +350,7 @@ for the current dir because its name contained a slash.
  				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
  		}
  	}
-@@ -403,7 +594,11 @@ void send_exclude_list(int f)
+@@ -403,7 +598,11 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -359,7 +363,7 @@ for the current dir because its name contained a slash.
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -444,6 +639,7 @@ void add_cvs_excludes(void)
+@@ -444,6 +643,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -368,7 +372,7 @@ for the current dir because its name contained a slash.
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
 --- flist.c	15 May 2004 19:31:10 -0000	1.223
-+++ flist.c	16 May 2004 07:44:56 -0000
++++ flist.c	16 May 2004 22:04:31 -0000
 @@ -39,8 +39,6 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -461,7 +465,7 @@ for the current dir because its name contained a slash.
  	closedir(d);
  }
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	16 May 2004 07:44:57 -0000
++++ rsync.h	16 May 2004 22:04:33 -0000
 @@ -496,16 +496,21 @@ struct map_struct {
  #define MATCHFLG_INCLUDE	(1<<4) /* this is an include, not an exclude */
  #define MATCHFLG_DIRECTORY	(1<<5) /* this matches only directories */
@@ -488,7 +492,7 @@ for the current dir because its name contained a slash.
  };
  
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	16 May 2004 07:44:58 -0000
++++ rsync.yo	16 May 2004 22:04:33 -0000
 @@ -1075,6 +1075,72 @@ itemize(
    it would be excluded by the "*")
  )
