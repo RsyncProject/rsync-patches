@@ -5,16 +5,10 @@ the receiver and makes future options that do more basis-file
 searching more efficient (such as the --fuzzy option and the
 support for multiple --compare-dest options).
 
-Also fixes a potential synchronization problem between the generator
-and the receiver in read-batch mode.  Should consider making the
-sending of the index value the default for this pipe (it's currently
-only sent in batch mode due to the sender not listening to the
-generator to determine what files get updated).
-
 You must run "make proto" before compiling.
 
---- orig/generator.c	2004-07-20 21:36:07
-+++ generator.c	2004-07-17 15:50:09
+--- orig/generator.c	2004-07-21 23:59:35
++++ generator.c	2004-07-22 00:05:38
 @@ -258,9 +258,9 @@ static void generate_and_send_sums(int f
   * out.  It might be wrong.
   */
@@ -27,17 +21,7 @@ You must run "make proto" before compiling.
  	STRUCT_STAT st;
  	int statret;
  	char *fnamecmp;
-@@ -404,9 +404,6 @@ static void recv_generator(char *fname, 
- 	}
- #endif
- 
--	if (read_batch)
--		return;
--
- 	if (preserve_hard_links && hard_link_check(file, HL_CHECK_MASTER))
- 		return;
- 
-@@ -424,8 +421,10 @@ static void recv_generator(char *fname, 
+@@ -421,8 +421,10 @@ static void recv_generator(char *fname, 
  		statret = link_stat(fnamecmpbuf, &st, 0);
  		if (!S_ISREG(st.st_mode))
  			statret = -1;
@@ -49,7 +33,7 @@ You must run "make proto" before compiling.
  #if HAVE_LINK
  		else if (link_dest && !dry_run) {
  			if (do_link(fnamecmpbuf, fname) != 0) {
-@@ -433,22 +432,22 @@ static void recv_generator(char *fname, 
+@@ -430,22 +432,22 @@ static void recv_generator(char *fname, 
  					rsyserr(FINFO, errno, "link %s => %s",
  						fnamecmpbuf, fname);
  				}
@@ -71,7 +55,7 @@ You must run "make proto" before compiling.
  			return;
 -		if (errno == ENOENT) {
 -			write_int(f_out,i);
--			if (!dry_run)
+-			if (!dry_run && !read_batch)
 -				write_sum_head(f_out, NULL);
 -		} else if (verbose > 1) {
 +		if (errno == ENOENT)
@@ -80,7 +64,7 @@ You must run "make proto" before compiling.
  			rsyserr(FERROR, errno,
  				"recv_generator: failed to open %s",
  				full_fname(fname));
-@@ -457,26 +456,23 @@ static void recv_generator(char *fname, 
+@@ -454,26 +456,23 @@ static void recv_generator(char *fname, 
  	}
  
  	if (!S_ISREG(st.st_mode)) {
@@ -93,7 +77,7 @@ You must run "make proto" before compiling.
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
 -		write_int(f_out,i);
--		if (!dry_run)
+-		if (!dry_run && !read_batch)
 -			write_sum_head(f_out, NULL);
 -		return;
 +		statret = -1;
@@ -112,7 +96,7 @@ You must run "make proto" before compiling.
  	    && cmp_modtime(st.st_mtime, file->modtime) > 0) {
  		if (verbose > 1)
  			rprintf(FINFO,"%s is newer\n",fname);
-@@ -484,21 +480,17 @@ static void recv_generator(char *fname, 
+@@ -481,21 +480,17 @@ static void recv_generator(char *fname, 
  	}
  
  	if (skip_file(fname, file, &st)) {
@@ -122,7 +106,7 @@ You must run "make proto" before compiling.
  		return;
  	}
  
--	if (dry_run) {
+-	if (dry_run || read_batch) {
 -		write_int(f_out,i);
 -		return;
 -	}
@@ -140,7 +124,7 @@ You must run "make proto" before compiling.
  
  	/* open the file */
  	fd = do_open(fnamecmp, O_RDONLY, 0);
-@@ -509,9 +501,8 @@ static void recv_generator(char *fname, 
+@@ -506,9 +501,8 @@ static void recv_generator(char *fname, 
  		/* pretend the file didn't exist */
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
@@ -152,7 +136,7 @@ You must run "make proto" before compiling.
  	}
  
  	if (verbose > 3) {
-@@ -522,14 +513,41 @@ static void recv_generator(char *fname, 
+@@ -519,14 +513,40 @@ static void recv_generator(char *fname, 
  	if (verbose > 2)
  		rprintf(FINFO, "generating and sending sums for %d\n", i);
  
@@ -162,8 +146,6 @@ You must run "make proto" before compiling.
 +	if (f_nameout >= 0) {
 +		uchar lenbuf[3], *lb = lenbuf;
 +		int len = statret == -1 ? 0 : strlen(fnamecmpbuf);
-+		if (read_batch)
-+			write_int(f_nameout, i);
 +		if (len > 0x7F) {
 +#if MAXPATHLEN > 0x7FFF
 +			*lb++ = len / 0x10000 + 0x80;
@@ -177,12 +159,13 @@ You must run "make proto" before compiling.
 +		if (len)
 +			write_buf(f_nameout, fnamecmpbuf, len);
 +	}
- 
--	close(fd);
-+	if (read_batch)
-+		return;
 +
 +	write_int(f_out, i);
++
++	if (read_batch)
++		return;
+ 
+-	close(fd);
 +	if (statret == 0) {
 +		generate_and_send_sums(fd, st.st_size, f_out);
 +
@@ -198,7 +181,7 @@ You must run "make proto" before compiling.
  {
  	int i;
  	int phase = 0;
-@@ -570,7 +588,7 @@ void generate_files(int f_out, struct fi
+@@ -567,7 +587,7 @@ void generate_files(int f_out, struct fi
  		}
  
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -207,15 +190,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -581,13 +599,15 @@ void generate_files(int f_out, struct fi
- 		rprintf(FINFO,"generate_files phase=%d\n",phase);
- 
- 	write_int(f_out, -1);
-+	if (read_batch)
-+		write_int(f_nameout, flist->count);
- 
- 	/* files can cycle through the system more than once
- 	 * to catch initial checksum errors */
+@@ -584,7 +604,7 @@ void generate_files(int f_out, struct fi
  	while ((i = get_redo_num()) != -1) {
  		struct file_struct *file = flist->files[i];
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -224,16 +199,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -595,6 +615,8 @@ void generate_files(int f_out, struct fi
- 		rprintf(FINFO,"generate_files phase=%d\n",phase);
- 
- 	write_int(f_out, -1);
-+	if (read_batch)
-+		write_int(f_nameout, flist->count);
- 
- 	if (preserve_hard_links)
- 		do_hard_links();
-@@ -606,7 +628,7 @@ void generate_files(int f_out, struct fi
+@@ -603,7 +623,7 @@ void generate_files(int f_out, struct fi
  		if (!file->basename || !S_ISDIR(file->mode))
  			continue;
  		recv_generator(local_name ? local_name : f_name(file),
@@ -242,9 +208,9 @@ You must run "make proto" before compiling.
  	}
  
  	if (verbose > 2)
---- orig/main.c	2004-07-19 17:14:44
-+++ main.c	2004-07-17 15:58:11
-@@ -57,6 +57,7 @@ extern int filesfrom_fd;
+--- orig/main.c	2004-07-21 23:59:35
++++ main.c	2004-07-22 00:10:43
+@@ -58,6 +58,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
  extern char *files_from;
  extern char *remote_filesfrom_file;
@@ -252,13 +218,13 @@ You must run "make proto" before compiling.
  extern char *rsync_path;
  extern char *shell_cmd;
  extern char *batch_name;
-@@ -444,20 +445,21 @@ static int do_recv(int f_in,int f_out,st
+@@ -454,20 +455,21 @@ static int do_recv(int f_in,int f_out,st
  {
  	int pid;
  	int status = 0;
 -	int error_pipe[2];
 +	int error_pipe[2], name_pipe[2];
-+	int need_name_pipe = compare_dest || read_batch;
++	int need_name_pipe = compare_dest;
  
  	if (preserve_hard_links)
  		init_hard_links(flist);
@@ -279,7 +245,7 @@ You must run "make proto" before compiling.
  		exit_cleanup(RERR_SOCKETIO);
  	}
  
-@@ -465,6 +467,11 @@ static int do_recv(int f_in,int f_out,st
+@@ -475,6 +477,11 @@ static int do_recv(int f_in,int f_out,st
  
  	if ((pid = do_fork()) == 0) {
  		close(error_pipe[0]);
@@ -291,7 +257,7 @@ You must run "make proto" before compiling.
  		if (f_in != f_out)
  			close(f_out);
  
-@@ -474,7 +481,7 @@ static int do_recv(int f_in,int f_out,st
+@@ -484,7 +491,7 @@ static int do_recv(int f_in,int f_out,st
  		/* set place to send errors */
  		set_msg_fd_out(error_pipe[1]);
  
@@ -300,7 +266,7 @@ You must run "make proto" before compiling.
  		io_flush(FULL_FLUSH);
  		report(f_in);
  
-@@ -492,6 +499,11 @@ static int do_recv(int f_in,int f_out,st
+@@ -502,6 +509,11 @@ static int do_recv(int f_in,int f_out,st
  		stop_write_batch();
  
  	close(error_pipe[1]);
@@ -312,7 +278,7 @@ You must run "make proto" before compiling.
  	if (f_in != f_out)
  		close(f_in);
  
-@@ -499,7 +511,7 @@ static int do_recv(int f_in,int f_out,st
+@@ -509,7 +521,7 @@ static int do_recv(int f_in,int f_out,st
  
  	set_msg_fd_in(error_pipe[0]);
  
@@ -321,17 +287,9 @@ You must run "make proto" before compiling.
  
  	get_redo_num(); /* Read final MSG_DONE and any prior messages. */
  	report(-1);
---- orig/receiver.c	2004-07-20 21:36:07
-+++ receiver.c	2004-07-19 16:44:39
-@@ -28,6 +28,7 @@ extern int max_delete;
- extern int csum_length;
- extern struct stats stats;
- extern int dry_run;
-+extern int read_batch;
- extern int am_server;
- extern int relative_paths;
- extern int keep_dirlinks;
-@@ -318,6 +319,30 @@ static int receive_data(int f_in, char *
+--- orig/receiver.c	2004-07-22 00:07:20
++++ receiver.c	2004-07-22 00:20:50
+@@ -320,6 +320,30 @@ static int receive_data(int f_in, char *
  }
  
  
@@ -362,7 +320,7 @@ You must run "make proto" before compiling.
  static void discard_receive_data(int f_in, OFF_T length)
  {
  	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
-@@ -328,8 +353,10 @@ static void discard_receive_data(int f_i
+@@ -330,7 +354,8 @@ static void discard_receive_data(int f_i
   * main routine for receiver process.
   *
   * Receiver process runs on the same host as the generator process. */
@@ -370,57 +328,57 @@ You must run "make proto" before compiling.
 +int recv_files(int f_in, struct file_list *flist, char *local_name,
 +	       int f_name_in)
  {
-+	int next_gen_i = -1;
+ 	int next_gen_i = -1;
  	int fd1,fd2;
- 	STRUCT_STAT st;
- 	char *fname, fbuf[MAXPATHLEN];
-@@ -355,6 +382,17 @@ int recv_files(int f_in, struct file_lis
- 
+@@ -359,8 +384,15 @@ int recv_files(int f_in, struct file_lis
  		i = read_int(f_in);
  		if (i == -1) {
-+			if (read_batch) {
-+				if (next_gen_i < 0)
-+					next_gen_i = read_int(f_name_in);
+ 			if (read_batch) {
+-				if (next_gen_i != flist->count)
+-					while (read_int(batch_gen_fd) != -1) {}
 +				while (next_gen_i < flist->count) {
-+					read_gen_name(f_name_in, fnamecmpbuf,
-+						      NULL);
++					if (f_name_in >= 0 && next_gen_i >= 0) {
++						read_gen_name(f_name_in,
++							fnamecmpbuf, NULL);
++					}
 +					next_gen_i = read_int(f_name_in);
++					if (next_gen_i < 0)
++						break;
 +				}
-+				next_gen_i = -1;
-+			}
-+
- 			if (phase)
- 				break;
+ 				next_gen_i = -1;
+ 			}
  
-@@ -397,7 +435,26 @@ int recv_files(int f_in, struct file_lis
+@@ -406,10 +438,12 @@ int recv_files(int f_in, struct file_lis
  		if (verbose > 2)
  			rprintf(FINFO,"recv_files(%s)\n",fname);
  
 -		fnamecmp = fname;
-+		if (read_batch) {
-+			if (next_gen_i < 0)
-+				next_gen_i = read_int(f_name_in);
-+			while (i > next_gen_i) {
-+				read_gen_name(f_name_in, fnamecmpbuf, NULL);
-+				next_gen_i = read_int(f_name_in);
-+			}
-+			if (i < next_gen_i) {
-+				rprintf(FINFO, "skipping update for \"%s\"\n",
-+					fname);
-+				discard_receive_data(f_in, file->length);
-+				continue;
-+			}
+-
+ 		if (read_batch) {
+ 			while (i > next_gen_i) {
++				if (f_name_in >= 0 && next_gen_i >= 0) {
++					read_gen_name(f_name_in, fnamecmpbuf,
++						      NULL);
++				}
+ 				next_gen_i = read_int(batch_gen_fd);
+ 				if (next_gen_i == -1)
+ 					next_gen_i = flist->count;
+@@ -420,8 +454,14 @@ int recv_files(int f_in, struct file_lis
+ 				discard_receive_data(f_in, file->length);
+ 				continue;
+ 			}
 +			next_gen_i = -1;
-+		}
-+
+ 		}
+ 
 +		if (f_name_in >= 0)
 +			fnamecmp = read_gen_name(f_name_in, fnamecmpbuf, fname);
 +		else
 +			fnamecmp = fname;
- 
++
  		if (server_exclude_list.head
  		    && check_exclude(&server_exclude_list, fname,
-@@ -414,14 +471,6 @@ int recv_files(int f_in, struct file_lis
+ 				     S_ISDIR(file->mode)) < 0) {
+@@ -437,14 +477,6 @@ int recv_files(int f_in, struct file_lis
  		/* open the file */
  		fd1 = do_open(fnamecmp, O_RDONLY, 0);
  
