@@ -87,17 +87,17 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  #define RERR_SIGNAL     20      /* status returned when sent SIGUSR1, SIGINT */
  #define RERR_WAITCHILD  21      /* some error returned by waitpid() */
---- orig/flist.c	2005-02-26 05:22:50
-+++ flist.c	2005-02-26 05:23:26
-@@ -63,6 +63,7 @@ extern int force_delete;
+--- orig/flist.c	2005-02-26 19:27:54
++++ flist.c	2005-02-26 19:32:53
+@@ -59,6 +59,7 @@ extern int copy_unsafe_links;
+ extern int protocol_version;
+ extern int sanitize_paths;
  extern int orig_umask;
- extern int make_backups;
- extern unsigned int curr_dir_len;
 +extern char *fname_convert_cmd;
- extern char *backup_dir;
- extern char *backup_suffix;
- extern int backup_suffix_len;
-@@ -345,7 +346,10 @@ void send_file_entry(struct file_struct 
+ 
+ extern char curr_dir[MAXPATHLEN];
+ 
+@@ -338,7 +339,10 @@ void send_file_entry(struct file_struct 
  
  	io_write_phase = "send_file_entry";
  
@@ -109,7 +109,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	flags = base_flags;
  
-@@ -561,6 +565,9 @@ static struct file_struct *receive_file_
+@@ -554,6 +558,9 @@ static struct file_struct *receive_file_
  
  	strlcpy(lastname, thisname, MAXPATHLEN);
  
@@ -119,7 +119,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	clean_fname(thisname, 0);
  
  	if (sanitize_paths)
-@@ -1074,6 +1081,9 @@ struct file_list *send_file_list(int f, 
+@@ -1071,6 +1078,9 @@ struct file_list *send_file_list(int f, 
  	start_write = stats.total_written;
  	gettimeofday(&start_tv, NULL);
  
@@ -129,7 +129,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	flist = flist_new(WITH_HLINK, "send_file_list");
  
  	io_start_buffering_out();
-@@ -1256,6 +1266,9 @@ struct file_list *send_file_list(int f, 
+@@ -1253,6 +1263,9 @@ struct file_list *send_file_list(int f, 
  	stats.flist_size = stats.total_written - start_write;
  	stats.num_files = flist->count;
  
@@ -137,9 +137,9 @@ Note that you'll need to run 'make proto' after applying this patch.
 +		cleanup_fname_convert();
 +
  	if (verbose > 3)
- 		output_flist(flist, who_am_i());
+ 		output_flist(flist);
  
-@@ -1277,6 +1290,9 @@ struct file_list *recv_file_list(int f)
+@@ -1274,6 +1287,9 @@ struct file_list *recv_file_list(int f)
  
  	start_read = stats.total_read;
  
@@ -149,7 +149,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	flist = flist_new(WITH_HLINK, "recv_file_list");
  	received_flist = flist;
  
-@@ -1330,6 +1346,9 @@ struct file_list *recv_file_list(int f)
+@@ -1327,6 +1343,9 @@ struct file_list *recv_file_list(int f)
  			io_error |= read_int(f);
  	}
  
@@ -157,7 +157,7 @@ Note that you'll need to run 'make proto' after applying this patch.
 +		cleanup_fname_convert();
 +
  	if (verbose > 3)
- 		output_flist(flist, who_am_i());
+ 		output_flist(flist);
  
 --- orig/fnameconv.c	2004-07-02 21:38:59
 +++ fnameconv.c	2004-07-02 21:38:59
@@ -382,9 +382,9 @@ Note that you'll need to run 'make proto' after applying this patch.
 +	if (verbose > 2)
 +		rprintf(FINFO, "Converted filename: %s -> %s\n", src, dest);
 +}
---- orig/generator.c	2005-02-26 03:22:59
+--- orig/generator.c	2005-02-26 19:27:54
 +++ generator.c	2005-02-03 02:07:33
-@@ -343,7 +343,13 @@ static int find_fuzzy(struct file_struct
+@@ -554,7 +554,13 @@ static int find_fuzzy(struct file_struct
   * start sending checksums.
   *
   * Note that f_out is set to -1 when doing final directory-permission and
@@ -398,7 +398,7 @@ Note that you'll need to run 'make proto' after applying this patch.
 + * reporting to the sender. */
  static void recv_generator(char *fname, struct file_list *flist,
  			   struct file_struct *file, int ndx,
- 			   int f_out, int f_out_name)
+ 			   int itemizing, int maybe_PERMS_REPORT,
 --- orig/log.c	2005-02-26 05:22:50
 +++ log.c	2004-07-03 20:18:02
 @@ -63,6 +63,7 @@ struct {
@@ -409,9 +409,9 @@ Note that you'll need to run 'make proto' after applying this patch.
  	{ RERR_SIGNAL     , "received SIGUSR1 or SIGINT" },
  	{ RERR_WAITCHILD  , "some error returned by waitpid()" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
---- orig/main.c	2005-02-23 02:57:26
+--- orig/main.c	2005-02-26 19:27:54
 +++ main.c	2004-07-22 00:31:47
-@@ -363,7 +363,7 @@ static pid_t do_cmd(char *cmd, char *mac
+@@ -362,7 +362,7 @@ static pid_t do_cmd(char *cmd, char *mac
  			whole_file = 1;
  		ret = local_child(argc, args, f_in, f_out, child_main);
  	} else
