@@ -1,7 +1,7 @@
 Delay the renaming of all the temp files until the end of the transfer.
 
 --- orig/options.c	2005-01-25 03:26:51
-+++ options.c	2005-01-25 03:28:41
++++ options.c	2005-01-25 09:21:08
 @@ -101,6 +101,7 @@ int modify_window = 0;
  int blocking_io = -1;
  int checksum_seed = 0;
@@ -14,7 +14,7 @@ Delay the renaming of all the temp files until the end of the transfer.
    rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
    rprintf(F,"     --partial               keep partially transferred files\n");
    rprintf(F,"     --partial-dir=DIR       put a partially transferred file into DIR\n");
-+  rprintf(F,"     --delay-renames         renames transferred files into place at end\n");
++  rprintf(F,"     --delay-renames         rename all transferred files into place at end\n");
    rprintf(F,"     --numeric-ids           don't map uid/gid values by user/group name\n");
    rprintf(F,"     --timeout=TIME          set I/O timeout in seconds\n");
    rprintf(F," -I, --ignore-times          turn off mod time & file size quick check\n");
@@ -35,8 +35,7 @@ Delay the renaming of all the temp files until the end of the transfer.
 +
  	if (inplace) {
  #if HAVE_FTRUNCATE
--		if (partial_dir) {
-+		if (partial_dir || delay_renames) {
+ 		if (partial_dir) {
  			snprintf(err_buf, sizeof err_buf,
 -				 "--inplace cannot be used with --partial-dir\n");
 +				 "--inplace cannot be used with --%s\n",
@@ -71,20 +70,21 @@ Delay the renaming of all the temp files until the end of the transfer.
  	struct file_struct *file;
  	struct stats initial_stats;
  	int save_make_backups = make_backups;
-@@ -285,6 +287,12 @@ int recv_files(int f_in, struct file_lis
+@@ -285,6 +287,13 @@ int recv_files(int f_in, struct file_lis
  		flist->hlink_pool = NULL;
  	}
  
 +	if (delay_renames) {
-+		if (!(delayed_bits = new_array(char, (flist->count + 7) / 8)))
++		int sz = (flist->count + 7) / 8;
++		if (!(delayed_bits = new_array(char, sz)))
 +			out_of_memory("recv_files");
-+		memset(delayed_bits, 0, (flist->count + 7) / 8);
++		memset(delayed_bits, 0, sz);
 +	}
 +
  	while (1) {
  		cleanup_disable();
  
-@@ -499,7 +507,7 @@ int recv_files(int f_in, struct file_lis
+@@ -499,7 +508,7 @@ int recv_files(int f_in, struct file_lis
  			exit_cleanup(RERR_FILEIO);
  		}
  
@@ -93,7 +93,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  			finish_transfer(fname, fnametmp, file, recv_ok, 1);
  			if (partialptr != fname && fnamecmp == partialptr) {
  				do_unlink(partialptr);
-@@ -509,6 +517,8 @@ int recv_files(int f_in, struct file_lis
+@@ -509,6 +518,8 @@ int recv_files(int f_in, struct file_lis
  		    && handle_partial_dir(partialptr, PDIR_CREATE)) {
  			finish_transfer(partialptr, fnametmp, file, recv_ok,
  					!partial_dir);
@@ -102,7 +102,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  		} else {
  			partialptr = NULL;
  			do_unlink(fnametmp);
-@@ -548,6 +558,33 @@ int recv_files(int f_in, struct file_lis
+@@ -548,6 +559,33 @@ int recv_files(int f_in, struct file_lis
  	}
  	make_backups = save_make_backups;
  
@@ -137,12 +137,12 @@ Delay the renaming of all the temp files until the end of the transfer.
  		delete_files(flist);
  
 --- orig/rsync.yo	2005-01-25 03:26:51
-+++ rsync.yo	2005-01-25 03:28:30
++++ rsync.yo	2005-01-25 09:30:44
 @@ -353,6 +353,7 @@ verb(
       --max-size=SIZE         don't transfer any file larger than SIZE
       --partial               keep partially transferred files
       --partial-dir=DIR       put a partially transferred file into DIR
-+     --delay-renames         renames transferred files into place at end
++     --delay-renames         rename transferred files into place at end
       --numeric-ids           don't map uid/gid values by user/group name
       --timeout=TIME          set I/O timeout in seconds
   -I, --ignore-times          turn off mod time & file size quick check
@@ -159,10 +159,24 @@ Delay the renaming of all the temp files until the end of the transfer.
  
  WARNING: The file's data will be in an inconsistent state during the
  transfer (and possibly afterward if the transfer gets interrupted), so you
-@@ -1036,6 +1037,17 @@ environment and then just use the -P opt
- does not look for this environment value is when --inplace was also
- specified (since --inplace conflicts with --partial-dir).
+@@ -1028,13 +1029,26 @@ is a security risk.  E.g. AVOID "/tmp".
  
+ You can also set the partial-dir value the RSYNC_PARTIAL_DIR environment
+ variable.  Setting this in the environment does not force --partial to be
+-enabled, but rather it effects where partial files go when --partial (or
+--P) is used.  For instance, instead of specifying --partial-dir=.rsync-tmp
++enabled, but rather it effects where partial files go when --partial is
++specified.  For instance, instead of using --partial-dir=.rsync-tmp
+ along with --progress, you could set RSYNC_PARTIAL_DIR=.rsync-tmp in your
+ environment and then just use the -P option to turn on the use of the
+-.rsync-tmp dir for partial transfers.  The only time the --partial option
+-does not look for this environment value is when --inplace was also
+-specified (since --inplace conflicts with --partial-dir).
++.rsync-tmp dir for partial transfers.  The only times the --partial option
++does not look for this environment value is (1) when --inplace was also
++specified (since --inplace conflicts with --partial-dir), and (2) when
++--delay-renames was also specified (see below).
++
 +dit(bf(--delay-renames)) This option puts the temporary file from each
 +updated file into the file's partial-dir (see above) until the end of the
 +transfer, at which time all the files are renamed into place in rapid
@@ -172,8 +186,8 @@ Delay the renaming of all the temp files until the end of the transfer.
 +this value).  Conflicts with --inplace.
 +
 +See also the "atomic-rsync" perl script in the "support" subdir for an
-+update algorithm that is even more atomic (it uses --link-dest).
-+
++update algorithm that is even more atomic (it uses --link-dest and a
++parallel hierarchy of files).
+ 
  dit(bf(--progress)) This option tells rsync to print information
  showing the progress of the transfer. This gives a bored user
- something to watch.
