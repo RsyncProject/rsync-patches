@@ -91,7 +91,7 @@ local instead of inherited.
  	log_init();
  
 --- orig/exclude.c	2005-01-13 23:15:56
-+++ exclude.c	2005-01-15 05:29:58
++++ exclude.c	2005-01-16 01:05:56
 @@ -30,13 +30,69 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
@@ -164,7 +164,7 @@ local instead of inherited.
  
  /** Build an exclude structure given an exclude pattern. */
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
-@@ -46,23 +102,50 @@ static void make_exclude(struct exclude_
+@@ -46,23 +102,44 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
@@ -185,12 +185,6 @@ local instead of inherited.
 +			    && memcmp(ex->pattern, pat, pat_len) == 0)
 +				return;
 +		}
-+		if ((pat_len == 10 || (pat_len > 10 && pat[pat_len-11] == '/'))
-+		    && strncmp(pat+pat_len-10, ".cvsignore", 10) == 0) {
-+			mflags |= MATCHFLG_CVSIGNORE;
-+			mflags &= ~MATCHFLG_INCLUDE;
-+		} else
-+			mflags &= ~MATCHFLG_CVSIGNORE;
 +	}
 +
  	ret = new(struct exclude_struct);
@@ -221,7 +215,7 @@ local instead of inherited.
  	strlcpy(ret->pattern + ex_len, pat, pat_len + 1);
  	pat_len += ex_len;
  
-@@ -81,14 +164,40 @@ static void make_exclude(struct exclude_
+@@ -81,14 +158,40 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -266,7 +260,7 @@ local instead of inherited.
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +205,267 @@ static void make_exclude(struct exclude_
+@@ -96,22 +199,267 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -540,7 +534,7 @@ local instead of inherited.
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -125,13 +479,14 @@ static int check_one_exclude(char *name,
+@@ -125,13 +473,14 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -558,7 +552,7 @@ local instead of inherited.
  		name = full_name;
  	}
  
-@@ -148,9 +503,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +497,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -570,7 +564,7 @@ local instead of inherited.
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +576,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +570,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -584,7 +578,7 @@ local instead of inherited.
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -254,12 +616,28 @@ static const char *get_exclude_tok(const
+@@ -254,12 +610,45 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -593,11 +587,27 @@ local instead of inherited.
 -	    && (*s == '-' || *s == '+') && s[1] == ' ') {
 +	/* Check for a leading '+' or '-'. */
 +	if (!(xflags & XFLG_WORDS_ONLY) && (*s == '-' || *s == '+')) {
++		if (!s[1]) {
++			rprintf(FERROR,
++			 	"no pattern followed %c in %sclude file.\n",
++				*s, xflags & XFLG_DEF_INCLUDE ? "in" : "ex");
++			exit_cleanup(RERR_SYNTAX);
++		}
  		if (*s == '+')
  			mflags |= MATCHFLG_INCLUDE;
 -		s += 2;
-+		while (*++s != ' ') {
++		while (*++s && *s != ' ') {
 +			switch (*s) {
++			case 'C':
++				mflags |= MATCHFLG_MERGE_FILE
++					| MATCHFLG_PERDIR_MERGE
++					| MATCHFLG_FINISH_SETUP
++					| MATCHFLG_CVSIGNORE;
++				mflags &= ~MATCHFLG_INCLUDE;
++				break;
++			case 'E':
++				mflags |= MATCHFLG_EXCLUDE_SELF;
++				break;
 +			case 'p':
 +				mflags |= MATCHFLG_MERGE_FILE
 +					| MATCHFLG_PERDIR_MERGE
@@ -613,12 +623,32 @@ local instead of inherited.
 +				exit_cleanup(RERR_SYNTAX);
 +			}
 +		}
-+		s++;
++		if (*s)
++			s++;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
  	if (xflags & XFLG_DIRECTORY)
-@@ -276,6 +654,8 @@ static const char *get_exclude_tok(const
+@@ -274,8 +663,27 @@ static const char *get_exclude_tok(const
+ 	} else
+ 		len = strlen(s);
  
++	if (mflags & MATCHFLG_PERDIR_MERGE) {
++		if (mflags & MATCHFLG_CVSIGNORE) {
++			if (len) {
++				rprintf(FERROR,
++					"unexpected trailing char%s after -C: `%s'\n",
++					len == 1 ? "" : "s", s);
++				exit_cleanup(RERR_SYNTAX);
++			}
++			s = ".cvsignore";
++			len = 10;
++		} else if ((len == 10 || (len > 10 && s[len-11] == '/'))
++		    && strncmp(s+len-10, ".cvsignore", 10) == 0) {
++			mflags |= MATCHFLG_CVSIGNORE;
++			mflags &= ~MATCHFLG_INCLUDE;
++		}
++	}
++
  	if (*p == '!' && len == 1)
  		mflags |= MATCHFLG_CLEAR_LIST;
 +	if (xflags & XFLG_ABS_PATH)
@@ -626,7 +656,7 @@ local instead of inherited.
  
  	*len_ptr = len;
  	*flag_ptr = mflags;
-@@ -287,7 +667,7 @@ void add_exclude(struct exclude_list_str
+@@ -287,7 +695,7 @@ void add_exclude(struct exclude_list_str
  		 int xflags)
  {
  	unsigned int pat_len, mflags;
@@ -635,7 +665,7 @@ local instead of inherited.
  
  	if (!pattern)
  		return;
-@@ -295,9 +675,15 @@ void add_exclude(struct exclude_list_str
+@@ -295,9 +703,15 @@ void add_exclude(struct exclude_list_str
  	cp = pattern;
  	pat_len = 0;
  	while (1) {
@@ -651,7 +681,7 @@ local instead of inherited.
  
  		if (mflags & MATCHFLG_CLEAR_LIST) {
  			if (verbose > 2) {
-@@ -309,13 +695,24 @@ void add_exclude(struct exclude_list_str
+@@ -309,13 +723,37 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -663,6 +693,16 @@ local instead of inherited.
 -				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
 +		if (mflags & MATCHFLG_MERGE_FILE) {
 +			unsigned int len = pat_len;
++			if (mflags & MATCHFLG_EXCLUDE_SELF) {
++				const char *name = strrchr(cp, '/');
++				if (name)
++					len -= ++name - cp;
++				else
++					name = cp;
++				make_exclude(listp, name, len, 0);
++				mflags &= ~MATCHFLG_EXCLUDE_SELF;
++				len = pat_len;
++			}
 +			if (mflags & MATCHFLG_PERDIR_MERGE) {
 +				if (parent_dirscan) {
 +					if (!(p = parse_merge_name(cp, &len, module_dirlen)))
@@ -671,9 +711,12 @@ local instead of inherited.
 +					continue;
 +				}
 +			} else {
++				int flgs = XFLG_FATAL_ERRORS;
 +				if (!(p = parse_merge_name(cp, &len, 0)))
 +					continue;
-+				add_exclude_file(listp, p, xflags | XFLG_FATAL_ERRORS);
++				if (mflags & MATCHFLG_INCLUDE)
++					flgs |= XFLG_DEF_INCLUDE;
++				add_exclude_file(listp, p, flgs);
 +				continue;
 +			}
  		}
@@ -682,7 +725,7 @@ local instead of inherited.
  	}
  }
  
-@@ -324,7 +721,7 @@ void add_exclude_file(struct exclude_lis
+@@ -324,7 +762,7 @@ void add_exclude_file(struct exclude_lis
  		      int xflags)
  {
  	FILE *fp;
@@ -691,7 +734,16 @@ local instead of inherited.
  	char *eob = line + sizeof line - 1;
  	int word_split = xflags & XFLG_WORD_SPLIT;
  
-@@ -345,6 +742,12 @@ void add_exclude_file(struct exclude_lis
+@@ -338,13 +776,19 @@ void add_exclude_file(struct exclude_lis
+ 	if (!fp) {
+ 		if (xflags & XFLG_FATAL_ERRORS) {
+ 			rsyserr(FERROR, errno,
+-				"failed to open %s file %s",
+-				xflags & XFLG_DEF_INCLUDE ? "include" : "exclude",
++				"failed to open %sclude file %s",
++				xflags & XFLG_DEF_INCLUDE ? "in" : "ex",
+ 				fname);
+ 			exit_cleanup(RERR_FILEIO);
  		}
  		return;
  	}
@@ -704,7 +756,7 @@ local instead of inherited.
  
  	while (1) {
  		char *s = line;
-@@ -402,7 +805,20 @@ void send_exclude_list(int f)
+@@ -402,7 +846,20 @@ void send_exclude_list(int f)
  			p[l] = '\0';
  		}
  
@@ -726,7 +778,7 @@ local instead of inherited.
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
  		} else if (*p == '-' || *p == '+') {
-@@ -419,7 +835,7 @@ void send_exclude_list(int f)
+@@ -419,7 +876,7 @@ void send_exclude_list(int f)
  
  void recv_exclude_list(int f)
  {
@@ -735,11 +787,11 @@ local instead of inherited.
  	unsigned int l;
  
  	while ((l = read_int(f)) != 0) {
-@@ -446,6 +862,7 @@ void add_cvs_excludes(void)
+@@ -446,6 +903,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
-+	add_exclude(&exclude_list, "-p .cvsignore", 0);
++	add_exclude(&exclude_list, "-C", 0);
  	add_exclude(&exclude_list, default_cvsignore,
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
@@ -874,17 +926,26 @@ local instead of inherited.
  		if (link_stat(fname, &st, keep_dirlinks) != 0) {
  			if (f != -1) {
  				io_error |= IOERR_GENERAL;
---- orig/options.c	2005-01-15 04:40:15
-+++ options.c	2005-01-13 23:52:00
-@@ -296,6 +296,7 @@ void usage(enum logcode F)
+--- orig/options.c	2005-01-15 21:23:15
++++ options.c	2005-01-15 23:50:05
+@@ -144,6 +144,7 @@ int list_only = 0;
+ char *batch_name = NULL;
+ 
+ static int daemon_opt;   /* sets am_daemon after option error-reporting */
++static int E_option_cnt = 0;
+ static int modify_window_set;
+ static char *dest_option = NULL;
+ static char *max_size_arg;
+@@ -295,6 +296,8 @@ void usage(enum logcode F)
+   rprintf(F,"     --exclude-from=FILE     exclude patterns listed in FILE\n");
    rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
    rprintf(F,"     --include-from=FILE     don't exclude patterns listed in FILE\n");
-   rprintf(F,"     --files-from=FILE       read FILE for list of source-file names\n");
 +  rprintf(F," -E                          same as --exclude='-p /.rsync-excludes'\n");
++  rprintf(F,"                             repeated: --exclude=.rsync-excludes\n");
+   rprintf(F,"     --files-from=FILE       read FILE for list of source-file names\n");
    rprintf(F," -0, --from0                 all *-from file lists are delimited by nulls\n");
    rprintf(F,"     --version               print version number\n");
-   rprintf(F,"     --port=PORT             specify double-colon alternate port number\n");
-@@ -393,6 +394,7 @@ static struct poptOption long_options[] 
+@@ -393,6 +396,7 @@ static struct poptOption long_options[] 
    {"ignore-errors",    0,  POPT_ARG_NONE,   &ignore_errors, 0, 0, 0 },
    {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
    {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
@@ -892,20 +953,28 @@ local instead of inherited.
    {0,                 'P', POPT_ARG_NONE,   0, 'P', 0, 0 },
    {"port",             0,  POPT_ARG_INT,    &rsync_port, 0, 0, 0 },
    {"log-format",       0,  POPT_ARG_STRING, &log_format, 0, 0, 0 },
-@@ -668,6 +670,11 @@ int parse_arguments(int *argc, const cha
+@@ -668,6 +672,19 @@ int parse_arguments(int *argc, const cha
  			am_sender = 1;
  			break;
  
 +		case 'E':
-+			add_exclude(&exclude_list,
-+				    "-p /.rsync-excludes", 0);
++			switch (++E_option_cnt) {
++			case 1:
++				add_exclude(&exclude_list,
++					    "-p /.rsync-excludes", 0);
++				break;
++			case 2:
++				add_exclude(&exclude_list,
++				 	    ".rsync-excludes", 0);
++				break;
++			}
 +			break;
 +
  		case 'P':
  			do_progress = 1;
  			keep_partial = 1;
---- orig/rsync.h	2005-01-10 00:21:12
-+++ rsync.h	2004-09-22 08:48:53
+--- orig/rsync.h	2005-01-15 21:18:09
++++ rsync.h	2005-01-16 00:37:39
 @@ -111,6 +111,7 @@
  #define XFLG_WORDS_ONLY 	(1<<2)
  #define XFLG_WORD_SPLIT 	(1<<3)
@@ -914,7 +983,7 @@ local instead of inherited.
  
  #define PERMS_REPORT		(1<<0)
  #define PERMS_SKIP_MTIME	(1<<1)
-@@ -510,11 +511,18 @@ struct map_struct {
+@@ -512,11 +513,19 @@ struct map_struct {
  #define MATCHFLG_INCLUDE	(1<<4) /* this is an include, not an exclude */
  #define MATCHFLG_DIRECTORY	(1<<5) /* this matches only directories */
  #define MATCHFLG_CLEAR_LIST 	(1<<6) /* this item is the "!" token */
@@ -922,6 +991,7 @@ local instead of inherited.
 +#define MATCHFLG_CVSIGNORE	(1<<8) /* parse this as a .cvsignore file */
 +#define MATCHFLG_PERDIR_MERGE	(1<<9) /* merge-file is searched per-dir */
 +#define MATCHFLG_FINISH_SETUP	(1<<10)/* per-dir merge file needs setup */
++#define MATCHFLG_EXCLUDE_SELF	(1<<11)/* merge-file name should be excluded */
  struct exclude_struct {
  	struct exclude_struct *next;
  	char *pattern;
@@ -935,16 +1005,42 @@ local instead of inherited.
  
  struct exclude_list_struct {
 --- orig/rsync.yo	2005-01-15 04:36:32
-+++ rsync.yo	2005-01-14 00:10:38
-@@ -366,6 +366,7 @@ verb(
++++ rsync.yo	2005-01-16 00:39:05
+@@ -365,6 +365,8 @@ verb(
+      --exclude-from=FILE     exclude patterns listed in FILE
       --include=PATTERN       don't exclude files matching PATTERN
       --include-from=FILE     don't exclude patterns listed in FILE
-      --files-from=FILE       read FILE for list of source-file names
 + -E                          same as --exclude='-p /.rsync-excludes'
++                             repeated: --exclude=.rsync-excludes
+      --files-from=FILE       read FILE for list of source-file names
   -0  --from0                 all file lists are delimited by nulls
       --version               print version number
-      --port=PORT             specify double-colon alternate port number
-@@ -1114,24 +1115,32 @@ The exclude and include patterns specifi
+@@ -779,6 +781,24 @@ dit(bf(--include-from=FILE)) This specif
+ from a file.
+ If em(FILE) is "-" the list will be read from standard input.
+ 
++dit(bf(-E)) The -E option is a shorthand for adding --exclude rules to
++your command.  The first time it is used is a shorthand for this rule:
++
++verb(
++  --exclude='-p /.rsync-excludes'
++)
++
++If it is repeated, it is a shorthand for this rule:
++
++verb(
++  --exclude=.rsync-excludes
++)
++
++This allows you to copy files from a hierarchy that has been sprinkled
++with ".rsync-excludes" files and those rules will affect the transfer by
++using specifying -E.  If you don't want the .rsync-excludes files to be
++sent along with the other files, specify -E a second time.
++
+ dit(bf(--files-from=FILE)) Using this option allows you to specify the
+ exact list of files to transfer (as read from the specified FILE or "-"
+ for standard input).  It also tweaks the default behavior of rsync to make
+@@ -1114,24 +1134,32 @@ The exclude and include patterns specifi
  selection of which files to transfer and which files to skip.
  
  Rsync builds an ordered list of include/exclude options as specified on
@@ -985,7 +1081,7 @@ local instead of inherited.
  
  Let's say that we want to match two source files, one with an absolute
  path of "/home/me/foo/bar", and one with a path of "/home/you/bar/baz".
-@@ -1178,23 +1187,27 @@ because rsync did not descend through th
+@@ -1178,23 +1206,27 @@ because rsync did not descend through th
  hierarchy.
  
  Note also that the --include and --exclude options take one pattern
@@ -1024,7 +1120,7 @@ local instead of inherited.
  
    it() if the pattern ends with a / then it will only match a
    directory, not a file, link, or device.
-@@ -1207,22 +1220,44 @@ itemize(
+@@ -1207,24 +1239,55 @@ itemize(
    single asterisk pattern "*" will stop at slashes.
  
    it() if the pattern contains a / (not counting a trailing /) or a "**"
@@ -1069,17 +1165,28 @@ local instead of inherited.
 +itemize(
 +
 +  it() An "m" means that the string following the space is to be taken to
-+  be a merge-file that is read in to supplement the current rules.  See the
-+  section on MERGED EXCLUDE FILES for more information.
++  be a merge-file that is read in to supplement the current rules.
 +
 +  it() A "p" means that the string following the space is to be taken to be
 +  a per-directory merge-file that is read in to supplement the current
-+  rules.  See the section on MERGED EXCLUDE FILES for more information.
++  rules.
++
++  it() A "C" (which must be followed by an empty pattern) will be
++  interpreted as though "-p .cvsignore" had been specified.
++
++  it() A "E" may be used in combination with any of the prior 3 letters in
++  order to specify that the merge-file name should be also excluded from
++  the transfer (e.g. "-pE .excl" is like "-p .excl" and "- .excl").
 +
  )
  
++See the section on MERGED EXCLUDE FILES for more information on how the
++above options work.
++
  The +/- rules are most useful in a list that was read from a file, allowing
-@@ -1269,8 +1304,157 @@ itemize(
+ you to have a single exclude list that contains both include and exclude
+ options in the proper order.
+@@ -1269,8 +1332,166 @@ itemize(
    it() --include "*/" --include "*.c" --exclude "*" would include all 
    directories and C source files
    it() --include "foo/" --include "foo/bar.c" --exclude "*" would include
@@ -1142,16 +1249,17 @@ local instead of inherited.
 +If a per-directory merge-file is specified with a path that is a parent
 +directory of the first transfer directory, rsync will scan all the parent
 +dirs from that starting point to the transfer directory for the indicated
-+per-directory file.  For instance, the -E option is an abbreviation for
-+this command:
++per-directory file.  For instance, here is a common exclude (see -E):
 +
 +verb(
 +  --exclude='-p /.rsync-excludes'
 +)
 +
 +That exclude tells rsync to scan for the file .rsync-excludes in all
-+directories from the root down through the source of the transfer.  (For
-+an rsync daemon, the "root dir" is always the module's "path" setting.)
++directories from the root down through the parent directory of the
++transfer prior to the start of the normal directory scan of the file in
++the directories that are sent as a part of the transfer.  (Note: for an
++rsync daemon, the root is always the same as the module's "path".)
 +
 +Some examples of this pre-scanning for per-directory files:
 +
@@ -1176,20 +1284,27 @@ local instead of inherited.
 +
 +Additionally, you can affect where the --cvs-exclude (-C) option's
 +inclusion of the per-directory .cvsignore file gets placed into your rules
-+by adding your own explicit per-directory merge rule for ".cvsignore".
-+Without this, rsync would add this rule at the end of all your other
-+rules (giving it a lower priority than your command-line rules).  For
-+example:
++by putting a "-C" somewhere in your exclude rules.  Without this, rsync
++would add the per-dir rule for the .cvignore file at the end of all your
++other rules (giving it a lower priority than your command-line rules).
++For example:
 +
 +verb(
-+  rsync -avC --exclude='-p .cvsignore' --exclude-from=foo a/ b
++  cat <<EOT
++  + foo.o
++  -C
++  *.old
++  EOT | rsync -avC --exclude-from=- a/ b
++
++  rsync -avC --include=foo.o --exclude=-C --exclude='*.old' a/ b
 +)
 +
-+The above will merge all the per-directory .cvsignore rules at the start of
-+your list rather than at the end.  This allows their dir-specific rules to
-+supersede your rules instead of being subservient to them.  (The global
-+rules taken from the $HOME/.cvsignore file and from $CVSIGNORE are not
-+repositioned by this.)
++Both of the above rsync commands are identical.  Each one will merge all
++the per-directory .cvsignore rules in the middle of the list rather than
++at the end.  This allows their dir-specific rules to supersede the rules
++that follow the -C instead of being subservient to all your rules.  (The
++global rules taken from the $HOME/.cvsignore file and from $CVSIGNORE are
++not repositioned from their spot at the end of your rules, however.)
 +
 +manpagesection(PER-DIRECTORY EXCLUDES AND DELETE)
 +
@@ -1212,11 +1327,11 @@ local instead of inherited.
 +  rsync -avE --delete-after host:src/dir /dest
 +)
 +
-+However, if the merge files are not a part of the transfer, you'll need
-+to either use a global exclude rule (i.e. specified on the command line),
-+or you'll need to maintain your own per-directory merge files on the
-+receiving side.  An example of the first is this (assume that the remote
-+.ctrl files exclude themselves):
++However, if the merge files are not a part of the transfer, you'll need to
++either specify some global exclude rules (i.e. specified on the command
++line), or you'll need to maintain your own per-directory merge files on
++the receiving side.  An example of the first is this (assume that the
++remote .ctrl files exclude themselves):
 +
 +verb(
 +  rsync -av --exclude='-p .ctrl' --exclude-from=/my/extra.rules
@@ -1232,15 +1347,16 @@ local instead of inherited.
 +to control what gets deleted on the receiving side.  To do this we must
 +specifically exclude the per-directory merge files (so that they don't get
 +deleted) and then put rules into the local files to control what else
-+should not get deleted.  Like this:
++should not get deleted.  Like one of these commands:
 +
 +verb(
-+  rsync -avE --exclude=.rsync-excludes --delete host:src/dir /dest
++  rsync -av --exclude='-pE /.rsync-excludes' --delete host:src/dir /dest
++  rsync -avEE --delete host:src/dir /dest
  )
  
  manpagesection(BATCH MODE)
 --- orig/testsuite/exclude.test	2004-05-29 21:25:45
-+++ testsuite/exclude.test	2005-01-14 00:14:33
++++ testsuite/exclude.test	2005-01-16 01:04:44
 @@ -23,19 +23,47 @@ export HOME CVSIGNORE
  makepath "$fromdir/foo/down/to/you"
  makepath "$fromdir/bar/down/to/foo/too"
@@ -1284,15 +1400,28 @@ local instead of inherited.
  echo one-in-one-out >"$fromdir/mid/.cvsignore"
  echo cvsin >"$fromdir/mid/one-for-all"
 +cat >"$fromdir/mid/.excl" <<EOF
-+-p .cvsignore
++-C
 +EOF
  echo cvsin >"$fromdir/mid/for/one-in-one-out"
  echo expunged >"$fromdir/mid/for/foo/extra"
  echo retained >"$fromdir/mid/for/foo/keep"
-@@ -100,5 +128,24 @@ $RSYNC -av --existing --include='*/' --e
- checkit "$RSYNC -avvC --exclude-from=\"$excl\" \
-     --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
+@@ -57,7 +85,7 @@ cat >"$excl" <<EOF
+ - to
+ + file4
+ - file[2-9]
+-- /mid/for/foo/extra
++/mid/for/foo/extra
+ EOF
  
+ cat >"$scratchdir/.cvsignore" <<EOF
+@@ -97,7 +125,26 @@ $RSYNC -av --existing --include='*/' --e
+ # Now, test if rsync excludes the same files, this time with --cvs-exclude
+ # and --delete-excluded.
+ 
+-checkit "$RSYNC -avvC --exclude-from=\"$excl\" \
++checkit "$RSYNC -avvC --include=\"-m $excl\" \
++    --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
++
 +# Modify the chk dir for our merge-exclude test and then tweak the dir times.
 +
 +rm "$chkdir"/.excl
@@ -1309,8 +1438,7 @@ local instead of inherited.
 +# Now, test if rsync excludes the same files, this time with a merge-exclude
 +# file.
 +
-+checkit "$RSYNC -avv --exclude='-p .excl' --exclude-from=\"$excl\" \
-+    --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
-+
++checkit "$RSYNC -avv --exclude='-p .excl' --exclude=\"-m $excl\" \
+     --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
+ 
  # The script would have aborted on error, so getting here means we've won.
- exit 0
