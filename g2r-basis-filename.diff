@@ -13,9 +13,9 @@ generator to determine what files get updated).
 
 You must run "make proto" before compiling.
 
---- orig/generator.c	2004-07-17 16:30:20
+--- orig/generator.c	2004-07-20 21:36:07
 +++ generator.c	2004-07-17 15:50:09
-@@ -251,11 +251,11 @@ static void generate_and_send_sums(struc
+@@ -258,9 +258,9 @@ static void generate_and_send_sums(int f
   * out.  It might be wrong.
   */
  static void recv_generator(char *fname, struct file_struct *file, int i,
@@ -25,12 +25,9 @@ You must run "make proto" before compiling.
 -	int fd;
 +	int fd = -1;
  	STRUCT_STAT st;
--	struct map_struct *mapbuf;
-+	struct map_struct *mapbuf = NULL;
  	int statret;
  	char *fnamecmp;
- 	char fnamecmpbuf[MAXPATHLEN];
-@@ -398,9 +398,6 @@ static void recv_generator(char *fname, 
+@@ -404,9 +404,6 @@ static void recv_generator(char *fname, 
  	}
  #endif
  
@@ -40,7 +37,7 @@ You must run "make proto" before compiling.
  	if (preserve_hard_links && hard_link_check(file, HL_CHECK_MASTER))
  		return;
  
-@@ -418,8 +415,10 @@ static void recv_generator(char *fname, 
+@@ -424,8 +421,10 @@ static void recv_generator(char *fname, 
  		statret = link_stat(fnamecmpbuf, &st, 0);
  		if (!S_ISREG(st.st_mode))
  			statret = -1;
@@ -52,7 +49,7 @@ You must run "make proto" before compiling.
  #if HAVE_LINK
  		else if (link_dest && !dry_run) {
  			if (do_link(fnamecmpbuf, fname) != 0) {
-@@ -427,22 +426,22 @@ static void recv_generator(char *fname, 
+@@ -433,22 +432,22 @@ static void recv_generator(char *fname, 
  					rsyserr(FINFO, errno, "link %s => %s",
  						fnamecmpbuf, fname);
  				}
@@ -83,7 +80,7 @@ You must run "make proto" before compiling.
  			rsyserr(FERROR, errno,
  				"recv_generator: failed to open %s",
  				full_fname(fname));
-@@ -451,26 +450,23 @@ static void recv_generator(char *fname, 
+@@ -457,26 +456,23 @@ static void recv_generator(char *fname, 
  	}
  
  	if (!S_ISREG(st.st_mode)) {
@@ -115,7 +112,7 @@ You must run "make proto" before compiling.
  	    && cmp_modtime(st.st_mtime, file->modtime) > 0) {
  		if (verbose > 1)
  			rprintf(FINFO,"%s is newer\n",fname);
-@@ -478,21 +474,17 @@ static void recv_generator(char *fname, 
+@@ -484,21 +480,17 @@ static void recv_generator(char *fname, 
  	}
  
  	if (skip_file(fname, file, &st)) {
@@ -143,7 +140,7 @@ You must run "make proto" before compiling.
  
  	/* open the file */
  	fd = do_open(fnamecmp, O_RDONLY, 0);
-@@ -503,15 +495,12 @@ static void recv_generator(char *fname, 
+@@ -509,9 +501,8 @@ static void recv_generator(char *fname, 
  		/* pretend the file didn't exist */
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
@@ -154,19 +151,13 @@ You must run "make proto" before compiling.
 +		goto notify_others;
  	}
  
- 	if (st.st_size > 0)
- 		mapbuf = map_file(fd,st.st_size);
--	else
--		mapbuf = NULL;
- 
  	if (verbose > 3) {
- 		rprintf(FINFO,"gen mapped %s of size %.0f\n", fnamecmp,
-@@ -521,16 +510,43 @@ static void recv_generator(char *fname, 
+@@ -522,14 +513,41 @@ static void recv_generator(char *fname, 
  	if (verbose > 2)
  		rprintf(FINFO, "generating and sending sums for %d\n", i);
  
 -	write_int(f_out,i);
--	generate_and_send_sums(mapbuf, st.st_size, f_out);
+-	generate_and_send_sums(fd, st.st_size, f_out);
 +notify_others:
 +	if (f_nameout >= 0) {
 +		uchar lenbuf[3], *lb = lenbuf;
@@ -188,18 +179,14 @@ You must run "make proto" before compiling.
 +	}
  
 -	close(fd);
--	if (mapbuf)
--		unmap_file(mapbuf);
 +	if (read_batch)
 +		return;
 +
 +	write_int(f_out, i);
 +	if (statret == 0) {
-+		generate_and_send_sums(mapbuf, st.st_size, f_out);
++		generate_and_send_sums(fd, st.st_size, f_out);
 +
 +		close(fd);
-+		if (mapbuf)
-+			unmap_file(mapbuf);
 +	} else if (!dry_run)
 +		write_sum_head(f_out, NULL);
  }
@@ -211,7 +198,7 @@ You must run "make proto" before compiling.
  {
  	int i;
  	int phase = 0;
-@@ -571,7 +587,7 @@ void generate_files(int f_out, struct fi
+@@ -570,7 +588,7 @@ void generate_files(int f_out, struct fi
  		}
  
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -220,7 +207,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -582,13 +598,15 @@ void generate_files(int f_out, struct fi
+@@ -581,13 +599,15 @@ void generate_files(int f_out, struct fi
  		rprintf(FINFO,"generate_files phase=%d\n",phase);
  
  	write_int(f_out, -1);
@@ -237,7 +224,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -596,6 +614,8 @@ void generate_files(int f_out, struct fi
+@@ -595,6 +615,8 @@ void generate_files(int f_out, struct fi
  		rprintf(FINFO,"generate_files phase=%d\n",phase);
  
  	write_int(f_out, -1);
@@ -246,7 +233,7 @@ You must run "make proto" before compiling.
  
  	if (preserve_hard_links)
  		do_hard_links();
-@@ -607,7 +627,7 @@ void generate_files(int f_out, struct fi
+@@ -606,7 +628,7 @@ void generate_files(int f_out, struct fi
  		if (!file->basename || !S_ISDIR(file->mode))
  			continue;
  		recv_generator(local_name ? local_name : f_name(file),
@@ -334,7 +321,7 @@ You must run "make proto" before compiling.
  
  	get_redo_num(); /* Read final MSG_DONE and any prior messages. */
  	report(-1);
---- orig/receiver.c	2004-07-19 17:06:10
+--- orig/receiver.c	2004-07-20 21:36:07
 +++ receiver.c	2004-07-19 16:44:39
 @@ -28,6 +28,7 @@ extern int max_delete;
  extern int csum_length;
@@ -344,7 +331,7 @@ You must run "make proto" before compiling.
  extern int am_server;
  extern int relative_paths;
  extern int keep_dirlinks;
-@@ -303,6 +304,30 @@ static int receive_data(int f_in,struct 
+@@ -318,6 +319,30 @@ static int receive_data(int f_in, char *
  }
  
  
@@ -374,8 +361,8 @@ You must run "make proto" before compiling.
 +
  static void discard_receive_data(int f_in, OFF_T length)
  {
- 	receive_data(f_in, NULL, -1, NULL, length);
-@@ -313,8 +338,10 @@ static void discard_receive_data(int f_i
+ 	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
+@@ -328,8 +353,10 @@ static void discard_receive_data(int f_i
   * main routine for receiver process.
   *
   * Receiver process runs on the same host as the generator process. */
@@ -387,7 +374,7 @@ You must run "make proto" before compiling.
  	int fd1,fd2;
  	STRUCT_STAT st;
  	char *fname, fbuf[MAXPATHLEN];
-@@ -341,6 +368,17 @@ int recv_files(int f_in, struct file_lis
+@@ -355,6 +382,17 @@ int recv_files(int f_in, struct file_lis
  
  		i = read_int(f_in);
  		if (i == -1) {
@@ -405,7 +392,7 @@ You must run "make proto" before compiling.
  			if (phase)
  				break;
  
-@@ -383,7 +421,26 @@ int recv_files(int f_in, struct file_lis
+@@ -397,7 +435,26 @@ int recv_files(int f_in, struct file_lis
  		if (verbose > 2)
  			rprintf(FINFO,"recv_files(%s)\n",fname);
  
@@ -433,7 +420,7 @@ You must run "make proto" before compiling.
  
  		if (server_exclude_list.head
  		    && check_exclude(&server_exclude_list, fname,
-@@ -400,14 +457,6 @@ int recv_files(int f_in, struct file_lis
+@@ -414,14 +471,6 @@ int recv_files(int f_in, struct file_lis
  		/* open the file */
  		fd1 = do_open(fnamecmp, O_RDONLY, 0);
  

@@ -367,7 +367,7 @@ the file's name.
 +}
 +
 +#endif
---- orig/options.c	2004-07-16 20:07:22
+--- orig/options.c	2004-07-20 21:36:07
 +++ options.c	2004-07-03 20:20:15
 @@ -125,6 +125,7 @@ char *log_format = NULL;
  char *password_file = NULL;
@@ -434,8 +434,8 @@ the file's name.
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
  		if (remote_filesfrom_file) {
  			args[ac++] = "--files-from";
---- orig/receiver.c	2004-07-19 17:06:10
-+++ receiver.c	2004-07-19 17:07:31
+--- orig/receiver.c	2004-07-20 21:36:07
++++ receiver.c	2004-07-20 21:44:05
 @@ -37,6 +37,7 @@ extern int cvs_exclude;
  extern int io_error;
  extern char *tmpdir;
@@ -444,22 +444,24 @@ the file's name.
  extern int make_backups;
  extern int do_progress;
  extern char *backup_dir;
-@@ -200,10 +201,11 @@ static int get_tmpname(char *fnametmp, c
+@@ -200,12 +201,13 @@ static int get_tmpname(char *fnametmp, c
  
  
- static int receive_data(int f_in,struct map_struct *mapbuf,int fd,char *fname,
--			OFF_T total_size)
-+			OFF_T total_size,char *md4)
+ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+-			char *fname, int fd, OFF_T total_size)
++			char *fname, int fd, OFF_T total_size, char *md4)
  {
- 	int i;
+ 	static char file_sum1[MD4_SUM_LENGTH];
+ 	static char file_sum2[MD4_SUM_LENGTH];
+ 	struct map_struct *mapbuf;
  	struct sum_struct sum;
 +	struct mdfour mdfour_data;
  	unsigned int len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -214,6 +216,9 @@ static int receive_data(int f_in,struct 
- 
- 	read_sum_head(f_in, &sum);
+@@ -224,6 +226,9 @@ static int receive_data(int f_in, char *
+ 	} else
+ 		mapbuf = NULL;
  
 +	if (md4)
 +		mdfour_begin(&mdfour_data);
@@ -467,7 +469,7 @@ the file's name.
  	sum_init(checksum_seed);
  
  	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -230,6 +235,8 @@ static int receive_data(int f_in,struct 
+@@ -240,6 +245,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data,i);
@@ -476,7 +478,7 @@ the file's name.
  
  			if (fd != -1 && write_file(fd,data,i) != i) {
  				rsyserr(FERROR, errno, "write failed on %s",
-@@ -257,6 +264,8 @@ static int receive_data(int f_in,struct 
+@@ -267,6 +274,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map,len);
@@ -485,34 +487,35 @@ the file's name.
  		}
  
  		if (!inplace || offset != offset2) {
-@@ -293,6 +302,8 @@ static int receive_data(int f_in,struct 
+@@ -305,6 +314,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_end(file_sum1);
 +	if (md4)
 +		mdfour_result(&mdfour_data, (unsigned char*)md4);
  
- 	read_buf(f_in,file_sum2,MD4_SUM_LENGTH);
- 	if (verbose > 2)
-@@ -305,7 +316,7 @@ static int receive_data(int f_in,struct 
+ 	if (mapbuf)
+ 		unmap_file(mapbuf);
+@@ -320,7 +331,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
--	receive_data(f_in, NULL, -1, NULL, length);
-+	receive_data(f_in, NULL, -1, NULL, length, NULL);
+-	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
++	receive_data(f_in, NULL, -1, 0, NULL, -1, length, NULL);
  }
  
  
-@@ -510,7 +521,11 @@ int recv_files(int f_in, struct file_lis
+@@ -508,8 +519,12 @@ int recv_files(int f_in, struct file_lis
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
--		recv_ok = receive_data(f_in,mapbuf,fd2,fname,file->length);
 +#ifdef HAVE_LINK
 +		if (link_by_hash_dir)
 +			file->u.sum = (char*)malloc(MD4_SUM_LENGTH);
 +#endif
-+		recv_ok = receive_data(f_in,mapbuf,fd2,fname,file->length,file->u.sum);
+ 		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
+-				       fname, fd2, file->length);
++				       fname, fd2, file->length, file->u.sum);
  
  		log_recv(file, &initial_stats);
  
@@ -539,9 +542,9 @@ the file's name.
  	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
  	if (ret < 0) {
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
---- orig/rsync.h	2004-07-16 20:07:23
+--- orig/rsync.h	2004-07-20 21:36:08
 +++ rsync.h	2004-07-03 20:20:15
-@@ -524,6 +524,14 @@ struct stats {
+@@ -522,6 +522,14 @@ struct stats {
  	int current_file_index;
  };
  
