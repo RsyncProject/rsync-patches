@@ -3,7 +3,7 @@ to be simpler and more efficient by Wayne Davison.
 
 Do we need configure support for mktime()?
 
---- orig/io.c	2004-06-23 01:13:56
+--- orig/io.c	2004-07-15 02:21:10
 +++ io.c	2004-07-03 20:23:22
 @@ -44,6 +44,7 @@ static int io_multiplexing_in;
  static int multiplex_in_fd = -1;
@@ -13,7 +13,7 @@ Do we need configure support for mktime()?
  static int no_flush;
  
  extern int bwlimit;
-@@ -128,16 +129,21 @@ static void check_timeout(void)
+@@ -134,16 +135,21 @@ static void check_timeout(void)
  {
  	time_t t;
  
@@ -39,8 +39,8 @@ Do we need configure support for mktime()?
  	if (last_io && io_timeout && (t-last_io) >= io_timeout) {
  		if (!am_server && !am_daemon) {
  			rprintf(FERROR, "io timeout after %d seconds - exiting\n",
---- orig/options.c	2004-06-20 19:30:00
-+++ options.c	2004-07-03 20:23:22
+--- orig/options.c	2004-07-15 16:51:50
++++ options.c	2004-07-15 17:06:09
 @@ -95,6 +95,7 @@ int modify_window = 0;
  int blocking_io = -1;
  int checksum_seed = 0;
@@ -49,16 +49,16 @@ Do we need configure support for mktime()?
  
  
  /** Network address family. **/
-@@ -292,6 +293,8 @@ void usage(enum logcode F)
+@@ -291,6 +292,8 @@ void usage(enum logcode F)
    rprintf(F,"     --log-format=FORMAT     log file transfers using specified format\n");
    rprintf(F,"     --password-file=FILE    get password from FILE\n");
    rprintf(F,"     --bwlimit=KBPS          limit I/O bandwidth, KBytes per second\n");
 +  rprintf(F,"     --stop-at=y-m-dTh:m     Stop rsync at year-month-dayThour:minute\n");
 +  rprintf(F,"     --time-limit=MINS       Stop rsync after MINS minutes have elapsed\n");
-   rprintf(F,"     --write-batch=PREFIX    write batch fileset starting with PREFIX\n");
-   rprintf(F,"     --read-batch=PREFIX     read batch fileset starting with PREFIX\n");
+   rprintf(F,"     --write-batch=FILE      write a batch to FILE\n");
+   rprintf(F,"     --read-batch=FILE       read a batch from FILE\n");
    rprintf(F,"     --checksum-seed=NUM     set block/file checksum seed\n");
-@@ -311,6 +314,7 @@ enum {OPT_VERSION = 1000, OPT_SENDER, OP
+@@ -310,6 +313,7 @@ enum {OPT_VERSION = 1000, OPT_SENDER, OP
        OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
@@ -66,7 +66,7 @@ Do we need configure support for mktime()?
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -383,6 +387,8 @@ static struct poptOption long_options[] 
+@@ -382,6 +386,8 @@ static struct poptOption long_options[] 
    {"port",             0,  POPT_ARG_INT,    &rsync_port, 0, 0, 0 },
    {"log-format",       0,  POPT_ARG_STRING, &log_format, 0, 0, 0 },
    {"bwlimit",          0,  POPT_ARG_INT,    &bwlimit, 0, 0, 0 },
@@ -75,7 +75,7 @@ Do we need configure support for mktime()?
    {"address",          0,  POPT_ARG_STRING, &bind_address, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
    {"hard-links",      'H', POPT_ARG_NONE,   &preserve_hard_links, 0, 0, 0 },
-@@ -596,6 +602,36 @@ int parse_arguments(int *argc, const cha
+@@ -593,6 +599,36 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -112,7 +112,7 @@ Do we need configure support for mktime()?
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -903,6 +939,15 @@ void server_options(char **args,int *arg
+@@ -895,6 +931,15 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  
@@ -128,16 +128,16 @@ Do we need configure support for mktime()?
  	if (backup_dir) {
  		args[ac++] = "--backup-dir";
  		args[ac++] = backup_dir;
---- orig/rsync.yo	2004-06-17 06:32:00
-+++ rsync.yo	2004-07-03 20:23:22
+--- orig/rsync.yo	2004-07-15 02:21:11
++++ rsync.yo	2004-07-15 02:44:40
 @@ -347,6 +347,8 @@ verb(
       --log-format=FORMAT     log file transfers using specified format
       --password-file=FILE    get password from FILE
       --bwlimit=KBPS          limit I/O bandwidth, KBytes per second
 +     --stop-at=y-m-dTh:m     Stop rsync at year-month-dayThour:minute
 +     --time-limit=MINS       Stop rsync after MINS minutes have elapsed
-      --write-batch=PREFIX    write batch fileset starting with PREFIX
-      --read-batch=PREFIX     read batch fileset starting with PREFIX
+      --write-batch=FILE      write a batch to FILE 
+      --read-batch=FILE       read a batch from FILE
       --checksum-seed=NUM     set block/file checksum seed
 @@ -897,6 +899,19 @@ transfer was too fast, it will wait befo
  result is an average transfer rate equaling the specified limit. A value
@@ -156,9 +156,9 @@ Do we need configure support for mktime()?
 +dit(bf(--time-limit=MINS)) This option allows you to specify the maximum
 +number of minutes rsync will run for.
 +
- dit(bf(--write-batch=PREFIX)) Generate a set of files that can be
- transferred as a batch update. Each filename in the set starts with
- PREFIX. See the "BATCH MODE" section for details.
+ dit(bf(--write-batch=FILE)) Record a file that can later be applied to
+ anonther identical destination with --read-batch. See the "BATCH MODE"
+ section for details.
 --- orig/util.c	2004-06-09 21:54:47
 +++ util.c	2004-07-03 20:23:22
 @@ -125,6 +125,132 @@ void overflow(char *str)

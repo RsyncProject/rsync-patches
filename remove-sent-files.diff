@@ -4,9 +4,9 @@ command before "make":
     make proto
 
 
---- orig/io.c	2004-06-23 01:13:56
+--- orig/io.c	2004-07-15 02:21:10
 +++ io.c	2004-07-03 20:17:10
-@@ -225,6 +225,14 @@ static void read_msg_fd(void)
+@@ -231,6 +231,14 @@ static void read_msg_fd(void)
  		read_loop(fd, buf, 4);
  		redo_list_add(IVAL(buf,0));
  		break;
@@ -21,7 +21,7 @@ command before "make":
  	case MSG_INFO:
  	case MSG_ERROR:
  	case MSG_LOG:
-@@ -634,6 +642,16 @@ static int readfd_unbuffered(int fd, cha
+@@ -640,6 +648,16 @@ static int readfd_unbuffered(int fd, cha
  			read_loop(fd, buffer, remaining);
  			bufferIdx = 0;
  			break;
@@ -38,8 +38,8 @@ command before "make":
  		case MSG_INFO:
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
---- orig/main.c	2004-06-30 07:24:30
-+++ main.c	2004-07-03 20:17:10
+--- orig/main.c	2004-07-15 17:02:03
++++ main.c	2004-07-15 02:29:03
 @@ -42,6 +42,7 @@ extern int list_only;
  extern int local_server;
  extern int log_got_error;
@@ -48,16 +48,16 @@ command before "make":
  extern int orig_umask;
  extern int keep_dirlinks;
  extern int preserve_hard_links;
-@@ -585,6 +586,8 @@ void start_server(int f_in, int f_out, i
+@@ -598,6 +599,8 @@ void start_server(int f_in, int f_out, i
  
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
 +		if (need_messages_from_generator)
 +			io_start_multiplex_in(f_in);
- 		if (!read_batch) {
- 			recv_exclude_list(f_in);
- 			if (cvs_exclude)
-@@ -652,6 +655,9 @@ int client_run(int f_in, int f_out, pid_
+ 
+ 		recv_exclude_list(f_in);
+ 		if (cvs_exclude)
+@@ -677,6 +680,9 @@ int client_run(int f_in, int f_out, pid_
  		exit_cleanup(status);
  	}
  
@@ -67,7 +67,7 @@ command before "make":
  	if (argc == 0)
  		list_only = 1;
  
---- orig/options.c	2004-06-20 19:30:00
+--- orig/options.c	2004-07-15 16:51:50
 +++ options.c	2004-07-03 20:17:10
 @@ -87,6 +87,7 @@ int size_only = 0;
  int bwlimit = 0;
@@ -85,7 +85,7 @@ command before "make":
  unsigned int block_size = 0;
  
  
-@@ -258,6 +260,7 @@ void usage(enum logcode F)
+@@ -257,6 +259,7 @@ void usage(enum logcode F)
    rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
    rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
    rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
@@ -93,7 +93,7 @@ command before "make":
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
    rprintf(F,"     --partial               keep partially transferred files\n");
-@@ -308,8 +311,8 @@ void usage(enum logcode F)
+@@ -307,8 +310,8 @@ void usage(enum logcode F)
  }
  
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
@@ -104,7 +104,7 @@ command before "make":
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
        OPT_REFUSED_BASE = 9000};
  
-@@ -328,6 +331,7 @@ static struct poptOption long_options[] 
+@@ -327,6 +330,7 @@ static struct poptOption long_options[] 
    {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
    {"delete-after",     0,  POPT_ARG_NONE,   0,              OPT_DELETE_AFTER, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   0,              OPT_DELETE_EXCLUDED, 0, 0 },
@@ -112,7 +112,7 @@ command before "make":
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"exclude",          0,  POPT_ARG_STRING, 0,              OPT_EXCLUDE, 0, 0 },
-@@ -513,6 +517,11 @@ int parse_arguments(int *argc, const cha
+@@ -512,6 +516,11 @@ int parse_arguments(int *argc, const cha
  			delete_mode = 1;
  			break;
  
@@ -124,7 +124,7 @@ command before "make":
  		case OPT_EXCLUDE:
  			if (am_server || sanitize_paths)
  				return 0; /* Impossible... */
-@@ -989,6 +998,9 @@ void server_options(char **args,int *arg
+@@ -981,6 +990,9 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -134,7 +134,7 @@ command before "make":
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2004-07-02 18:23:01
+--- orig/receiver.c	2004-07-14 17:12:06
 +++ receiver.c	2004-07-03 20:17:10
 @@ -48,6 +48,7 @@ extern int ignore_errors;
  extern int orig_umask;
@@ -144,7 +144,7 @@ command before "make":
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -296,7 +297,7 @@ int recv_files(int f_in,struct file_list
+@@ -296,7 +297,7 @@ int recv_files(int f_in, struct file_lis
  	char *fname, fbuf[MAXPATHLEN];
  	char template[MAXPATHLEN];
  	char fnametmp[MAXPATHLEN];
@@ -153,7 +153,7 @@ command before "make":
  	char fnamecmpbuf[MAXPATHLEN];
  	struct map_struct *mapbuf;
  	struct file_struct *file;
-@@ -478,16 +479,20 @@ int recv_files(int f_in,struct file_list
+@@ -478,16 +479,20 @@ int recv_files(int f_in, struct file_lis
  
  		cleanup_disable();
  
@@ -178,7 +178,7 @@ command before "make":
  			}
  		}
  	}
---- orig/rsync.h	2004-05-16 07:58:12
+--- orig/rsync.h	2004-07-07 08:27:00
 +++ rsync.h	2004-07-03 20:17:10
 @@ -60,6 +60,7 @@
  #define FLAG_TOP_DIR (1<<0)
@@ -196,7 +196,7 @@ command before "make":
  	MSG_DONE=5,	/* current phase is done */
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
---- orig/rsync.yo	2004-06-17 06:32:00
+--- orig/rsync.yo	2004-07-15 02:21:11
 +++ rsync.yo	2004-07-03 20:17:10
 @@ -313,6 +313,7 @@ verb(
       --delete                delete files that don't exist on sender
@@ -218,7 +218,7 @@ command before "make":
  dit(bf(--ignore-errors)) Tells --delete to go ahead and delete files
  even when there are I/O errors.
  
---- orig/sender.c	2004-06-18 16:55:00
+--- orig/sender.c	2004-07-15 02:21:11
 +++ sender.c	2004-07-03 20:17:10
 @@ -27,6 +27,7 @@ extern int dry_run;
  extern int am_server;
@@ -258,7 +258,7 @@ command before "make":
  
  void send_files(struct file_list *flist, int f_out, int f_in)
  {
-@@ -129,6 +152,8 @@ void send_files(struct file_list *flist,
+@@ -123,6 +146,8 @@ void send_files(struct file_list *flist,
  	if (verbose > 2)
  		rprintf(FINFO, "send_files starting\n");
  
@@ -267,7 +267,7 @@ command before "make":
  	while (1) {
  		unsigned int offset;
  
-@@ -300,6 +325,9 @@ void send_files(struct file_list *flist,
+@@ -245,6 +270,9 @@ void send_files(struct file_list *flist,
  
  		if (verbose > 2)
  			rprintf(FINFO, "sender finished %s\n", fname);
