@@ -155,7 +155,7 @@ for the current dir because its name contained a slash.
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +179,115 @@ static void make_exclude(struct exclude_
+@@ -96,22 +179,116 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -179,6 +179,7 @@ for the current dir because its name contained a slash.
 +		struct exclude_struct *ent, *next;
 +		/* Truncate any inherited items from the local list. */
 +		listp->tail->next = NULL;
++		/* Now free everything that is left. */
 +		for (ent = listp->head; ent; ent = next) {
 +			next = ent->next;
 +			free_exclude(ent);
@@ -277,7 +278,7 @@ for the current dir because its name contained a slash.
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,7 +298,7 @@ static int check_one_exclude(char *name,
+@@ -122,7 +299,7 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -286,7 +287,7 @@ for the current dir because its name contained a slash.
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
-@@ -148,9 +324,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +325,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -298,7 +299,7 @@ for the current dir because its name contained a slash.
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +397,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +398,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -312,7 +313,7 @@ for the current dir because its name contained a slash.
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -253,11 +436,16 @@ static const char *get_exclude_tok(const
+@@ -253,11 +437,16 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -331,7 +332,7 @@ for the current dir because its name contained a slash.
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -306,11 +494,42 @@ void add_exclude(struct exclude_list_str
+@@ -306,11 +495,42 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -375,7 +376,7 @@ for the current dir because its name contained a slash.
  				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
  		}
  	}
-@@ -402,7 +621,11 @@ void send_exclude_list(int f)
+@@ -402,7 +622,11 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -388,7 +389,7 @@ for the current dir because its name contained a slash.
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +666,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +667,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -511,7 +512,7 @@ for the current dir because its name contained a slash.
  struct exclude_list_struct {
 --- rsync.yo	21 May 2004 09:44:32 -0000	1.170
 +++ rsync.yo	22 May 2004 06:02:57 -0000
-@@ -1090,6 +1090,72 @@ itemize(
+@@ -1090,6 +1090,74 @@ itemize(
    it would be excluded by the "*")
  )
  
@@ -525,10 +526,12 @@ for the current dir because its name contained a slash.
 +itemize(
 +  it() If the filename has no slashes in it, it is a per-directory merge;
 +  rsync scans every directory that it traverses for the named file, merging
-+  its contents (when it exists) file at the start of this per-directory
-+  sub-list (subdirectories inherit the contents of their parent directories
-+  by default, and each subdirectory's rules have precedence over the parent
-+  directory's rules).
++  its contents (when it exists) at the start of this per-directory sub-list
++  (subdirectories inherit the contents of their parent directories by
++  default, and each subdirectory's rules have precedence over the parent
++  directory's rules).  When a per-directory merge file adds another
++  per-directory merge file, it is only active in the subtree of the current
++  directory.
 +
 +  it() If a filename has a slash in it, it is a single-instance merge; the
 +  named file's contents will be merged into the current exclude file,
@@ -575,11 +578,11 @@ for the current dir because its name contained a slash.
 +this.)
 +
 +Note also that the parsing of any merge-file named ".cvsignore" is always
-+done in a CVS-compatible manner (even if -C wasn't specified) -- i.e. the
-+rules are always exclude rules (even when specified by an include option),
-+they are split on whitespace, no special prefixes or list-clearing tokens
-+are honored, and (for per-directory files) subdirectories don't inherit the
-+parent directory's rules.
++done in a CVS-compatible manner, even if -C wasn't specified (i.e. the
++rules are always exclude rules (even when specified by an include option);
++they are split on whitespace; no special prefixes, list-clearing tokens, or
++comment characters are honored; and, for per-directory files,
++subdirectories don't inherit the parent directory's rules).
 +
  manpagesection(BATCH MODE)
  
