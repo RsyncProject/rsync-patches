@@ -58,7 +58,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
---- orig/cleanup.c	2005-01-28 23:01:07
+--- orig/cleanup.c	2005-02-07 20:41:56
 +++ cleanup.c	2005-01-10 10:40:51
 @@ -25,6 +25,7 @@ extern int io_error;
  extern int keep_partial;
@@ -87,9 +87,9 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  #define RERR_SIGNAL     20      /* status returned when sent SIGUSR1, SIGINT */
  #define RERR_WAITCHILD  21      /* some error returned by waitpid() */
---- orig/flist.c	2005-02-03 02:04:20
-+++ flist.c	2005-01-21 19:10:03
-@@ -69,6 +69,7 @@ extern int delete_excluded;
+--- orig/flist.c	2005-02-12 18:39:09
++++ flist.c	2005-02-12 19:26:37
+@@ -68,6 +68,7 @@ extern int delete_excluded;
  extern int max_delete;
  extern int orig_umask;
  extern int list_only;
@@ -97,7 +97,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  extern struct filter_list_struct filter_list;
  extern struct filter_list_struct server_filter_list;
-@@ -348,7 +349,10 @@ void send_file_entry(struct file_struct 
+@@ -346,7 +347,10 @@ void send_file_entry(struct file_struct 
  
  	io_write_phase = "send_file_entry";
  
@@ -109,7 +109,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	flags = base_flags;
  
-@@ -564,6 +568,9 @@ static void receive_file_entry(struct fi
+@@ -562,6 +566,9 @@ static void receive_file_entry(struct fi
  
  	strlcpy(lastname, thisname, MAXPATHLEN);
  
@@ -119,27 +119,27 @@ Note that you'll need to run 'make proto' after applying this patch.
  	clean_fname(thisname, 0);
  
  	if (sanitize_paths)
-@@ -1081,6 +1088,9 @@ struct file_list *send_file_list(int f, 
+@@ -1076,6 +1083,9 @@ struct file_list *send_file_list(int f, 
  	start_write = stats.total_written;
  	gettimeofday(&start_tv, NULL);
  
 +	if (!am_server)
 +		init_fname_convert();
 +
- 	flist = flist_new(f == -1 ? WITHOUT_HLINK : WITH_HLINK,
- 			  "send_file_list");
+ 	flist = flist_new(WITH_HLINK, "send_file_list");
  
-@@ -1269,6 +1279,9 @@ struct file_list *send_file_list(int f, 
- 		stats.num_files = flist->count;
- 	}
+ 	io_start_buffering_out();
+@@ -1254,6 +1264,9 @@ struct file_list *send_file_list(int f, 
+ 	stats.flist_size = stats.total_written - start_write;
+ 	stats.num_files = flist->count;
  
 +	if (fname_convert_cmd && !am_server)
 +		cleanup_fname_convert();
 +
  	if (verbose > 3)
- 		output_flist(flist, f < 0 ? "delete" : who_am_i());
+ 		output_flist(flist, who_am_i());
  
-@@ -1290,6 +1303,9 @@ struct file_list *recv_file_list(int f)
+@@ -1275,6 +1288,9 @@ struct file_list *recv_file_list(int f)
  
  	start_read = stats.total_read;
  
@@ -149,7 +149,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	flist = flist_new(WITH_HLINK, "recv_file_list");
  	received_flist = flist;
  
-@@ -1343,6 +1359,9 @@ struct file_list *recv_file_list(int f)
+@@ -1328,6 +1344,9 @@ struct file_list *recv_file_list(int f)
  			io_error |= read_int(f);
  	}
  
@@ -382,7 +382,7 @@ Note that you'll need to run 'make proto' after applying this patch.
 +	if (verbose > 2)
 +		rprintf(FINFO, "Converted filename: %s -> %s\n", src, dest);
 +}
---- orig/generator.c	2005-02-03 02:04:20
+--- orig/generator.c	2005-02-11 20:25:07
 +++ generator.c	2005-02-03 02:07:33
 @@ -235,7 +235,13 @@ static void generate_and_send_sums(int f
   * start sending checksums.
@@ -399,7 +399,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  static void recv_generator(char *fname, struct file_list *flist,
  			   struct file_struct *file, int ndx,
  			   int f_out, int f_out_name)
---- orig/log.c	2005-02-01 10:39:22
+--- orig/log.c	2005-02-07 20:41:56
 +++ log.c	2004-07-03 20:18:02
 @@ -57,6 +57,7 @@ struct {
  	{ RERR_STREAMIO   , "error in rsync protocol data stream" },
@@ -409,9 +409,9 @@ Note that you'll need to run 'make proto' after applying this patch.
  	{ RERR_SIGNAL     , "received SIGUSR1 or SIGINT" },
  	{ RERR_WAITCHILD  , "some error returned by waitpid()" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
---- orig/main.c	2005-01-30 10:07:21
+--- orig/main.c	2005-02-07 20:41:56
 +++ main.c	2004-07-22 00:31:47
-@@ -361,7 +361,7 @@ static pid_t do_cmd(char *cmd, char *mac
+@@ -358,7 +358,7 @@ static pid_t do_cmd(char *cmd, char *mac
  			whole_file = 1;
  		ret = local_child(argc, args, f_in, f_out, child_main);
  	} else
@@ -420,9 +420,9 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	if (dir)
  		free(dir);
---- orig/options.c	2005-02-01 10:39:22
+--- orig/options.c	2005-02-11 18:21:45
 +++ options.c	2005-01-28 19:29:38
-@@ -129,6 +129,7 @@ char *basis_dir[MAX_BASIS_DIRS+1];
+@@ -128,6 +128,7 @@ char *basis_dir[MAX_BASIS_DIRS+1];
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *log_format = NULL;
@@ -430,7 +430,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
-@@ -303,6 +304,7 @@ void usage(enum logcode F)
+@@ -305,6 +306,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -438,7 +438,7 @@ Note that you'll need to run 'make proto' after applying this patch.
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
    rprintf(F," -f, --filter=RULE           add a file-filtering RULE\n");
-@@ -408,6 +410,7 @@ static struct poptOption long_options[] 
+@@ -411,6 +413,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -446,7 +446,7 @@ Note that you'll need to run 'make proto' after applying this patch.
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
---- orig/pipe.c	2004-08-12 18:34:38
+--- orig/pipe.c	2005-02-07 20:41:56
 +++ pipe.c	2004-07-03 20:18:02
 @@ -23,7 +23,6 @@
  
@@ -514,9 +514,9 @@ Note that you'll need to run 'make proto' after applying this patch.
 +
 +	return result;
 +}
---- orig/util.c	2005-01-28 19:08:20
+--- orig/util.c	2005-02-11 10:53:15
 +++ util.c	2004-07-03 20:18:02
-@@ -1213,3 +1213,55 @@ void *_realloc_array(void *ptr, unsigned
+@@ -1224,3 +1224,55 @@ void *_realloc_array(void *ptr, unsigned
  		return malloc(size * num);
  	return realloc(ptr, size * num);
  }
