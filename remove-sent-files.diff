@@ -4,9 +4,9 @@ command before "make":
     make proto
 
 
---- io.c	15 May 2004 19:31:10 -0000	1.121
-+++ io.c	21 May 2004 08:50:06 -0000
-@@ -222,6 +222,14 @@ static void read_msg_fd(void)
+--- io.c	27 May 2004 22:09:31 -0000	1.122
++++ io.c	4 Jun 2004 05:21:59 -0000
+@@ -223,6 +223,14 @@ static void read_msg_fd(void)
  		read_loop(fd, buf, 4);
  		redo_list_add(IVAL(buf,0));
  		break;
@@ -21,7 +21,7 @@ command before "make":
  	case MSG_INFO:
  	case MSG_ERROR:
  	case MSG_LOG:
-@@ -636,6 +644,16 @@ static int read_unbuffered(int fd, char 
+@@ -637,6 +645,16 @@ static int read_unbuffered(int fd, char 
  			read_loop(fd, buffer, remaining);
  			bufferIdx = 0;
  			break;
@@ -39,7 +39,7 @@ command before "make":
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
 --- main.c	19 May 2004 22:19:19 -0000	1.195
-+++ main.c	21 May 2004 08:50:07 -0000
++++ main.c	4 Jun 2004 05:22:00 -0000
 @@ -42,6 +42,7 @@ extern int list_only;
  extern int local_server;
  extern int log_got_error;
@@ -67,17 +67,17 @@ command before "make":
  	if (argc == 0)
  		list_only = 1;
  
---- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	21 May 2004 08:50:07 -0000
-@@ -84,6 +84,7 @@ int copy_unsafe_links = 0;
- int size_only = 0;
+--- options.c	27 May 2004 21:51:53 -0000	1.153
++++ options.c	4 Jun 2004 05:22:00 -0000
+@@ -85,6 +85,7 @@ int size_only = 0;
  int bwlimit = 0;
+ size_t bwlimit_writemax = 0;
  int delete_after = 0;
 +int delete_sent_files = 0;
  int only_existing = 0;
  int opt_ignore_existing = 0;
  int max_delete = 0;
-@@ -91,6 +92,7 @@ int ignore_errors = 0;
+@@ -92,6 +93,7 @@ int ignore_errors = 0;
  int modify_window = 0;
  int blocking_io = -1;
  int checksum_seed = 0;
@@ -85,7 +85,7 @@ command before "make":
  unsigned int block_size = 0;
  
  
-@@ -254,6 +256,7 @@ void usage(enum logcode F)
+@@ -255,6 +257,7 @@ void usage(enum logcode F)
    rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
    rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
    rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
@@ -93,7 +93,7 @@ command before "make":
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
    rprintf(F,"     --partial               keep partially transferred files\n");
-@@ -303,8 +306,8 @@ void usage(enum logcode F)
+@@ -305,8 +308,8 @@ void usage(enum logcode F)
  }
  
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
@@ -104,7 +104,7 @@ command before "make":
        OPT_READ_BATCH, OPT_WRITE_BATCH,
        OPT_REFUSED_BASE = 9000};
  
-@@ -323,6 +326,7 @@ static struct poptOption long_options[] 
+@@ -325,6 +328,7 @@ static struct poptOption long_options[] 
    {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
    {"delete-after",     0,  POPT_ARG_NONE,   0,              OPT_DELETE_AFTER, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   0,              OPT_DELETE_EXCLUDED, 0, 0 },
@@ -112,7 +112,7 @@ command before "make":
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"exclude",          0,  POPT_ARG_STRING, 0,              OPT_EXCLUDE, 0, 0 },
-@@ -509,6 +513,11 @@ int parse_arguments(int *argc, const cha
+@@ -514,6 +518,11 @@ int parse_arguments(int *argc, const cha
  			delete_mode = 1;
  			break;
  
@@ -122,9 +122,9 @@ command before "make":
 +			break;
 +
  		case OPT_EXCLUDE:
- 			add_exclude(&exclude_list, poptGetOptArg(pc), 0);
- 			break;
-@@ -965,6 +974,9 @@ void server_options(char **args,int *arg
+ 			if (am_server || sanitize_paths)
+ 				return 0; /* Impossible... */
+@@ -983,6 +992,9 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -135,7 +135,7 @@ command before "make":
  	return;
  
 --- receiver.c	21 May 2004 08:27:04 -0000	1.79
-+++ receiver.c	21 May 2004 08:50:07 -0000
++++ receiver.c	4 Jun 2004 05:22:00 -0000
 @@ -47,6 +47,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
@@ -179,7 +179,7 @@ command before "make":
  		}
  	}
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	21 May 2004 08:50:07 -0000
++++ rsync.h	4 Jun 2004 05:22:00 -0000
 @@ -60,6 +60,7 @@
  #define FLAG_TOP_DIR (1<<0)
  #define FLAG_HLINK_EOL (1<<1)	/* generator only */
@@ -196,8 +196,8 @@ command before "make":
  	MSG_DONE=5,	/* current phase is done */
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
---- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	21 May 2004 08:50:08 -0000
+--- rsync.yo	21 May 2004 09:44:32 -0000	1.170
++++ rsync.yo	4 Jun 2004 05:22:01 -0000
 @@ -312,6 +312,7 @@ verb(
       --delete                delete files that don't exist on sender
       --delete-excluded       also delete excluded files on receiver
@@ -206,7 +206,7 @@ command before "make":
       --ignore-errors         delete even if there are I/O errors
       --max-delete=NUM        don't delete more than NUM files
       --partial               keep partially transferred files
-@@ -597,6 +598,11 @@ receiving side before transferring files
+@@ -598,6 +599,11 @@ receiving side before transferring files
  sufficient space on the receiving filesystem. If you want to delete
  after transferring, use the --delete-after switch. Implies --delete.
  
@@ -219,7 +219,7 @@ command before "make":
  even when there are I/O errors.
  
 --- sender.c	15 May 2004 19:31:10 -0000	1.40
-+++ sender.c	21 May 2004 08:50:08 -0000
++++ sender.c	4 Jun 2004 05:22:01 -0000
 @@ -27,6 +27,7 @@ extern int dry_run;
  extern int am_server;
  extern int am_daemon;
