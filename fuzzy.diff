@@ -14,10 +14,23 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -242,6 +243,76 @@ static void generate_and_send_sums(int f
+@@ -242,6 +243,89 @@ static void generate_and_send_sums(int f
  }
  
  
++/* Try to find a filename in the same dir as "fname" with a similar name.
++ *
++ * TODO:
++ *
++ * 1. We should be using a cache of names for the current dir, not
++ *    re-reading the destination directory for every file.
++ * 2. We must not return an rsync tempfile from the current transfer.
++ * 3. If the highest-rated name is not a normal file, we should fall-
++ *    back to the next highest-rated file.
++ * 4. We must not return a destination file that is being updated
++ *    during the current transfer, even if we already processed it
++ *    (since the receiver may not be done with it yet).
++ */
 +static int find_fuzzy(const char *fname, char *buf, STRUCT_STAT *st_ptr)
 +{
 +	DIR *d;
@@ -63,13 +76,13 @@ Be sure to run "make proto" before "make".
 +		dname_suf = find_filename_suffix(dname, &dname_suf_len);
 +
 +		dist = fuzzy_distance(dname, dname_len, basename, basename_len);
-+		/* Add some extra weight to how well the suffixes matched. */
++		/* Add some extra weight to how well the suffixes match. */
 +		dist += fuzzy_distance(dname_suf, dname_suf_len, suf, suf_len) * 10;
 +		if (verbose > 4) {
 +			rprintf(FINFO, "fuzzy distance for %s = %d (%d)\n",
 +				dname, (int)(dist>>16), (int)(dist&0xFFFF));
 +		}
-+		if (dist < lowest_dist) {
++		if (dist <= lowest_dist) {
 +			strlcpy(bestname, dname, sizeof bestname);
 +			lowest_dist = dist;
 +		}
@@ -91,7 +104,7 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -496,6 +567,15 @@ static void recv_generator(char *fname, 
+@@ -496,6 +580,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -107,7 +120,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -524,6 +604,8 @@ static void recv_generator(char *fname, 
+@@ -524,6 +617,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -116,7 +129,7 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -598,8 +680,24 @@ notify_others:
+@@ -598,8 +693,24 @@ notify_others:
  	write_int(f_out, i);
  	if (protocol_version >= 29 && inplace && !read_batch)
  		write_byte(f_out, fnamecmp_type);
@@ -259,14 +272,17 @@ Be sure to run "make proto" before "make".
   -P                          equivalent to --partial --progress
   -z, --compress              compress file data
   -C, --cvs-exclude           auto ignore files in the same way CVS does
-@@ -878,6 +879,11 @@ Note that rsync versions prior to 2.6.1 
+@@ -878,6 +879,14 @@ Note that rsync versions prior to 2.6.1 
  (or implied by -a).  You can work-around this bug by avoiding the -o option
  when sending to an old rsync.
  
 +dit(bf(--fuzzy)) This option tells rsync that it should look around for a
 +basis file for any destination file that is missing.  The current algorithm
 +looks for a similarly-named file in the same directory as the destination
-+file, and, if found, uses that to try to speed up the transfer.
++file, and, if found, uses that to try to speed up the transfer.  Note that
++the use of the --delete option might get rid of any potential fuzzy-match
++files, so either use --delete-after or filename exclusions if you need to
++prevent this.
 +
  dit(bf(-z, --compress)) With this option, rsync compresses any data from
  the files that it sends to the destination machine.  This
