@@ -37,7 +37,7 @@ All warnings apply; I don't do C programming all that often, so I
 can't say if I've left any cleanup/compatibility errors in the code.
 
 
---- orig/Makefile.in	2004-10-14 17:11:40
+--- orig/Makefile.in	2004-11-03 11:56:03
 +++ Makefile.in	2004-10-08 20:17:06
 @@ -39,7 +39,7 @@ OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
@@ -46,7 +46,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
 -OBJS=$(OBJS1) $(OBJS2) $(OBJS3) $(DAEMON_OBJ) $(LIBOBJ) $(ZLIBOBJ) @BUILD_POPT@
 +OBJS=$(OBJS1) $(OBJS2) $(OBJS3) $(DAEMON_OBJ) $(LIBOBJ) $(ZLIBOBJ) @BUILD_POPT@ @SSL_OBJS@
  
- TLS_OBJ = tls.o syscall.o lib/compat.o lib/permstring.o
+ TLS_OBJ = tls.o syscall.o lib/compat.o lib/snprintf.o lib/permstring.o
  
 --- orig/cleanup.c	2004-10-14 17:11:40
 +++ cleanup.c	2004-07-03 20:22:28
@@ -223,7 +223,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  AC_MSG_CHECKING([whether to call shutdown on all sockets])
  case $host_os in
  	*cygwin* ) AC_MSG_RESULT(yes)
---- orig/main.c	2004-10-08 20:16:26
+--- orig/main.c	2004-11-03 20:30:45
 +++ main.c	2004-10-08 20:15:28
 @@ -56,6 +56,9 @@ extern int write_batch;
  extern int batch_fd;
@@ -235,7 +235,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  extern pid_t cleanup_child_pid;
  extern char *files_from;
  extern char *remote_filesfrom_file;
-@@ -777,33 +780,48 @@ static int start_client(int argc, char *
+@@ -790,33 +793,48 @@ static int start_client(int argc, char *
  	if ((rc = copy_argv(argv)))
  		return rc;
  
@@ -308,7 +308,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		p = find_colon(argv[0]);
  		if (p) { /* source is remote */
  			if (remote_filesfrom_file
-@@ -835,12 +853,26 @@ static int start_client(int argc, char *
+@@ -848,12 +866,26 @@ static int start_client(int argc, char *
  			argv++;
  		} else { /* source is local */
  			am_sender = 1;
@@ -338,9 +338,9 @@ can't say if I've left any cleanup/compatibility errors in the code.
  				p = strchr(host,'/');
  				if (p) {
  					*p = '\0';
---- orig/options.c	2004-10-14 17:11:40
-+++ options.c	2004-10-14 17:27:53
-@@ -135,6 +135,14 @@ int quiet = 0;
+--- orig/options.c	2004-11-11 22:13:09
++++ options.c	2004-11-11 22:21:10
+@@ -136,6 +136,14 @@ int quiet = 0;
  int always_checksum = 0;
  int list_only = 0;
  
@@ -355,7 +355,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  #define MAX_BATCH_NAME_LEN 256	/* Must be less than MAXPATHLEN-13 */
  char *batch_name = NULL;
  
-@@ -154,6 +162,7 @@ static void print_rsync_version(enum log
+@@ -156,6 +164,7 @@ static void print_rsync_version(enum log
  	char const *hardlinks = "no ";
  	char const *links = "no ";
  	char const *ipv6 = "no ";
@@ -363,7 +363,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	STRUCT_STAT *dumstat;
  
  #ifdef HAVE_SOCKETPAIR
-@@ -176,6 +185,10 @@ static void print_rsync_version(enum log
+@@ -178,6 +187,10 @@ static void print_rsync_version(enum log
  	ipv6 = "";
  #endif
  
@@ -374,7 +374,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	rprintf(f, "%s  version %s  protocol version %d\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
  	rprintf(f,
-@@ -189,10 +202,10 @@ static void print_rsync_version(enum log
+@@ -191,10 +204,10 @@ static void print_rsync_version(enum log
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
  	 * macros. */
@@ -387,7 +387,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  #ifdef MAINTAINER_MODE
  	rprintf(f, "              panic action: \"%s\"\n",
  		get_panic_action());
-@@ -302,6 +315,13 @@ void usage(enum logcode F)
+@@ -305,6 +318,13 @@ void usage(enum logcode F)
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
  #endif
@@ -401,16 +401,16 @@ can't say if I've left any cleanup/compatibility errors in the code.
    rprintf(F," -h, --help                  show this help screen\n");
  
    rprintf(F,"\nUse \"rsync --daemon --help\" to see the daemon-mode command-line options.\n");
-@@ -312,7 +332,7 @@ void usage(enum logcode F)
+@@ -315,7 +335,7 @@ void usage(enum logcode F)
  enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
--      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
-+      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_USE_SSL,
+-      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
++      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE, OPT_USE_SSL,
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -396,6 +416,13 @@ static struct poptOption long_options[] 
+@@ -400,6 +420,13 @@ static struct poptOption long_options[] 
    {"ipv4",            '4', POPT_ARG_VAL,    &default_af_hint, AF_INET, 0, 0 },
    {"ipv6",            '6', POPT_ARG_VAL,    &default_af_hint, AF_INET6, 0, 0 },
  #endif
@@ -424,7 +424,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    /* All these options switch us into daemon-mode option-parsing. */
    {"address",          0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"config",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
-@@ -683,6 +710,12 @@ int parse_arguments(int *argc, const cha
+@@ -716,6 +743,12 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -437,7 +437,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -864,6 +897,17 @@ int parse_arguments(int *argc, const cha
+@@ -897,6 +930,17 @@ int parse_arguments(int *argc, const cha
  	if (do_progress && !verbose)
  		verbose = 1;
  
@@ -455,7 +455,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (bwlimit) {
  		bwlimit_writemax = (size_t)bwlimit * 128;
  		if (bwlimit_writemax < 512)
---- orig/rsync.h	2004-10-09 03:21:56
+--- orig/rsync.h	2004-11-03 20:30:45
 +++ rsync.h	2004-10-08 21:01:33
 @@ -32,6 +32,7 @@
  
@@ -465,7 +465,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  
  #define BACKUP_SUFFIX "~"
  
-@@ -333,6 +334,11 @@ enum msgcode {
+@@ -338,6 +339,11 @@ enum msgcode {
  #define uint64 unsigned off_t
  #endif
  
