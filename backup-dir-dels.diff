@@ -13,8 +13,8 @@ suffix.
 
 Marc St-Onge
 
---- orig/backup.c	2005-02-14 02:45:09
-+++ backup.c	2004-09-22 02:36:06
+--- orig/backup.c	2005-02-22 02:10:16
++++ backup.c	2005-02-22 02:11:15
 @@ -22,11 +22,17 @@
  
  extern int verbose;
@@ -42,7 +42,7 @@ Marc St-Onge
  /* make a complete pathname for backup file */
  char *get_backup_name(char *fname)
  {
-@@ -52,10 +60,27 @@ char *get_backup_name(char *fname)
+@@ -52,11 +60,28 @@ char *get_backup_name(char *fname)
  	return NULL;
  }
  
@@ -65,13 +65,14 @@ Marc St-Onge
  /* simple backup creates a backup with a suffix in the same directory */
  static int make_simple_backup(char *fname)
  {
+ 	int rename_errno;
 -	char *fnamebak = get_backup_name(fname);
 +	char *fnamebak = deleting ? get_delete_name(fname)
 +				  : get_backup_name(fname);
  
  	if (!fnamebak)
  		return 0;
-@@ -83,7 +108,8 @@ path
+@@ -97,7 +122,8 @@ path
  static int make_bak_dir(char *fullpath)
  {
  	STRUCT_STAT st;
@@ -81,7 +82,7 @@ Marc St-Onge
  	char *end = rel + strlen(rel);
  	char *p = end;
  
-@@ -170,7 +196,8 @@ static int keep_backup(char *fname)
+@@ -184,7 +210,8 @@ static int keep_backup(char *fname)
  	if (!(file = make_file(fname, NULL, NO_FILTERS)))
  		return 1; /* the file could have disappeared */
  
@@ -91,7 +92,7 @@ Marc St-Onge
  		return 0;
  
  	/* Check to see if this is a device file, or link */
-@@ -263,3 +290,13 @@ int make_backup(char *fname)
+@@ -277,3 +304,13 @@ int make_backup(char *fname)
  		return keep_backup(fname);
  	return make_simple_backup(fname);
  }
@@ -105,8 +106,8 @@ Marc St-Onge
 +	deleting = 0;
 +	return ret;
 +}
---- orig/flist.c	2005-02-21 10:51:51
-+++ flist.c	2005-02-21 11:00:19
+--- orig/flist.c	2005-02-22 02:10:16
++++ flist.c	2005-02-22 02:12:20
 @@ -67,6 +67,9 @@ extern char *log_format;
  extern char *backup_dir;
  extern char *backup_suffix;
@@ -133,17 +134,18 @@ Marc St-Onge
  }
  
  
-@@ -1850,8 +1857,8 @@ int delete_file(char *fname, int mode, i
- 	if (max_delete && deletion_count >= max_delete)
- 		return -1;
- 
--	if (make_backups && !backup_dir && !is_backup_file(fname))
+@@ -1815,9 +1822,9 @@ int delete_file(char *fname, int mode, i
+ 	if (dry_run && zap_dir) {
+ 		ok = 0;
+ 		errno = ENOTEMPTY;
+-	} else if (make_backups && !backup_dir && !is_backup_file(fname)
++	} else if (make_backups && !backup_dir_rm && !is_backup_file(fname)
+ 	    && !zap_dir)
 -		ok = make_backup(fname);
-+	if (make_backups && !backup_dir_rm && !is_backup_file(fname))
 +		ok = safe_delete(fname);
  	else
  		ok = do_rmdir(fname) == 0;
- 	if (!ok && errno != ENOENT) {
+ 	if (ok) {
 --- orig/options.c	2005-02-21 10:51:52
 +++ options.c	2005-02-21 11:02:45
 @@ -126,10 +126,14 @@ int no_detach
