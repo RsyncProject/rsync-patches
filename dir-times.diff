@@ -1,5 +1,5 @@
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	13 May 2004 07:11:12 -0000
++++ options.c	13 May 2004 18:59:46 -0000
 @@ -46,6 +46,7 @@ int preserve_devices = 0;
  int preserve_uid = 0;
  int preserve_gid = 0;
@@ -35,22 +35,30 @@
  	if (preserve_perms)
  		argstr[x++] = 'p';
  	if (recurse)
---- rsync.c	13 May 2004 07:08:25 -0000	1.136
-+++ rsync.c	13 May 2004 07:11:13 -0000
-@@ -141,14 +141,16 @@ int set_perms(char *fname,struct file_st
+--- rsync.c	13 May 2004 18:51:22 -0000	1.138
++++ rsync.c	13 May 2004 18:59:47 -0000
+@@ -25,6 +25,7 @@
+ extern int verbose;
+ extern int dry_run;
+ extern int preserve_times;
++extern int preserve_dir_times;
+ extern int am_root;
+ extern int am_sender;
+ extern int am_generator;
+@@ -138,14 +139,16 @@ int set_perms(char *fname,struct file_st
  		st = &st2;
  	}
  
 -	if (!preserve_times || S_ISLNK(st->st_mode))
--		flags |= PERMS_SKIP_TIME;
+-		flags |= PERMS_SKIP_MTIME;
 +	if (S_ISDIR(st->st_mode)) {
 +		if (!preserve_dir_times)
-+			flags |= PERMS_SKIP_TIME;
++			flags |= PERMS_SKIP_MTIME;
 +	} else {
 +		if (!preserve_times || S_ISLNK(st->st_mode))
-+			flags |= PERMS_SKIP_TIME;
++			flags |= PERMS_SKIP_MTIME;
 +	}
- 	if (!(flags & PERMS_SKIP_TIME)
+ 	if (!(flags & PERMS_SKIP_MTIME)
  	    && cmp_modtime(st->st_mtime, file->modtime) != 0) {
 -		/* don't complain about not setting times on directories
 -		 * because some filesystems can't do it */
@@ -61,7 +69,7 @@
  				full_fname(fname), strerror(errno));
  			return 0;
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	13 May 2004 07:11:14 -0000
++++ rsync.yo	13 May 2004 18:59:47 -0000
 @@ -298,7 +298,8 @@ verb(
   -o, --owner                 preserve owner (root only)
   -g, --group                 preserve group
@@ -98,7 +106,7 @@
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
 --- testsuite/chgrp.test	5 Feb 2004 01:37:08 -0000	1.10
-+++ testsuite/chgrp.test	13 May 2004 07:11:15 -0000
++++ testsuite/chgrp.test	13 May 2004 18:59:47 -0000
 @@ -29,7 +29,7 @@ do
  done
  sleep 2
@@ -109,7 +117,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/chown.test	4 Feb 2004 18:24:41 -0000	1.4
-+++ testsuite/chown.test	13 May 2004 07:11:15 -0000
++++ testsuite/chown.test	13 May 2004 18:59:47 -0000
 @@ -31,7 +31,7 @@ chown 5001 "$name2" || test_skipped "Can
  chgrp 5002 "$name1" || test_skipped "Can't chgrp (probably need root)"
  chgrp 5003 "$name2" || test_skipped "Can't chgrp (probably need root)"
@@ -120,7 +128,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/daemon-gzip-download.test	4 Feb 2004 18:24:41 -0000	1.6
-+++ testsuite/daemon-gzip-download.test	13 May 2004 07:11:15 -0000
++++ testsuite/daemon-gzip-download.test	13 May 2004 18:59:47 -0000
 @@ -27,7 +27,7 @@ RSYNC_CONNECT_PROG="$RSYNC --config=$con
  export RSYNC_CONNECT_PROG
  
@@ -131,7 +139,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/daemon-gzip-upload.test	4 Feb 2004 18:24:41 -0000	1.6
-+++ testsuite/daemon-gzip-upload.test	13 May 2004 07:11:15 -0000
++++ testsuite/daemon-gzip-upload.test	13 May 2004 18:59:47 -0000
 @@ -21,7 +21,7 @@ RSYNC_CONNECT_PROG="$RSYNC --config=$con
  export RSYNC_CONNECT_PROG
  
@@ -142,7 +150,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/devices.test	9 Apr 2004 00:36:45 -0000	1.7
-+++ testsuite/devices.test	13 May 2004 07:11:15 -0000
++++ testsuite/devices.test	13 May 2004 18:59:47 -0000
 @@ -32,7 +32,7 @@ mknod "$fromdir/block" b 42 69 || test_s
  mknod "$fromdir/block2" b 42 73 || test_skipped "Can't create block device node unless root"
  mknod "$fromdir/block3" b 105 73 || test_skipped "Can't create block device node unless root"
@@ -153,7 +161,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/duplicates.test	4 Feb 2004 18:24:41 -0000	1.9
-+++ testsuite/duplicates.test	13 May 2004 07:11:15 -0000
++++ testsuite/duplicates.test	13 May 2004 18:59:47 -0000
 @@ -36,7 +36,7 @@ ln -s "$name1" "$name2" || fail "can't c
  
  outfile="$scratchdir/rsync.out"
@@ -164,7 +172,7 @@
  
  # Make sure each file was only copied once...
 --- testsuite/exclude.test	14 Apr 2004 20:50:32 -0000	1.5
-+++ testsuite/exclude.test	13 May 2004 07:11:15 -0000
++++ testsuite/exclude.test	13 May 2004 18:59:47 -0000
 @@ -67,7 +67,7 @@ EOF
  
  # Create the chk dir with what we expect to be excluded
@@ -204,7 +212,7 @@
  
  # The script would have aborted on error, so getting here means we've won.
 --- testsuite/hands.test	4 Feb 2004 18:24:41 -0000	1.12
-+++ testsuite/hands.test	13 May 2004 07:11:15 -0000
++++ testsuite/hands.test	13 May 2004 18:59:47 -0000
 @@ -11,19 +11,19 @@ hands_setup
  
  # Main script starts here
@@ -231,7 +239,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/hardlinks.test	4 Feb 2004 18:24:41 -0000	1.4
-+++ testsuite/hardlinks.test	13 May 2004 07:11:15 -0000
++++ testsuite/hardlinks.test	13 May 2004 18:59:47 -0000
 @@ -31,7 +31,7 @@ ln "$name1" "$name2" || fail "Can't crea
  ln "$name2" "$name3" || fail "Can't create hardlink"
  cp "$name2" "$name4" || fail "Can't copy file"
@@ -242,7 +250,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/longdir.test	4 Feb 2004 18:24:41 -0000	1.9
-+++ testsuite/longdir.test	13 May 2004 07:11:15 -0000
++++ testsuite/longdir.test	13 May 2004 18:59:47 -0000
 @@ -18,7 +18,7 @@ makepath $LONGDIR || test_skipped "unabl
  touch $LONGDIR/1 || test_skipped "unable to create files in long directory"
  date > ${LONGDIR}/1
@@ -253,7 +261,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/merge.test	30 Apr 2004 17:24:49 -0000	1.5
-+++ testsuite/merge.test	13 May 2004 07:11:15 -0000
++++ testsuite/merge.test	13 May 2004 18:59:47 -0000
 @@ -43,9 +43,9 @@ cp -p "$from2dir"/sub1/uno "$from3dir"/s
  cp -p "$from3dir"/sub2/subby "$chkdir"/sub2
  
@@ -267,7 +275,7 @@
  # The script would have aborted on error, so getting here means we've won.
  exit 0
 --- testsuite/ssh-basic.test	19 Feb 2003 16:22:50 -0000	1.6
-+++ testsuite/ssh-basic.test	13 May 2004 07:11:15 -0000
++++ testsuite/ssh-basic.test	13 May 2004 18:59:47 -0000
 @@ -28,7 +28,7 @@ fi
  # nothing to do.
  hands_setup
@@ -284,7 +292,7 @@
 -runtest "ssh: renamed file" 'checkit "$RSYNC --delete -avH -e ssh --rsync-path=$RSYNC ${FROM}/ localhost:${TO}" ${FROM}/ ${TO}'
 +runtest "ssh: renamed file" 'checkit "$RSYNC --delete -advH -e ssh --rsync-path=$RSYNC ${FROM}/ localhost:${TO}" ${FROM}/ ${TO}'
 --- testsuite/unsafe-links.test	15 Jan 2003 16:14:07 -0000	1.6
-+++ testsuite/unsafe-links.test	13 May 2004 07:11:15 -0000
++++ testsuite/unsafe-links.test	13 May 2004 18:59:47 -0000
 @@ -35,33 +35,33 @@ ln -s ../../unsafe/unsafefile "from/safe
  set -x
  
