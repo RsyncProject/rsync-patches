@@ -4,8 +4,30 @@ command before "make":
     make proto
 
 
+--- orig/generator.c	2005-02-15 19:27:04
++++ generator.c	2005-02-15 20:09:21
+@@ -38,6 +38,7 @@ extern int preserve_gid;
+ extern int preserve_times;
+ extern int omit_dir_times;
+ extern int delete_during;
++extern int delete_sent_files;
+ extern int update_only;
+ extern int opt_ignore_existing;
+ extern int inplace;
+@@ -524,6 +525,11 @@ static void recv_generator(char *fname, 
+ 				    itemize_changes ? "" : safe_fname(fname),
+ 				    safe_fname(file->u.link));
+ 			}
++			if (delete_sent_files) {
++				char numbuf[4];
++				SIVAL(numbuf, 0, ndx);
++				io_multiplex_write(MSG_SUCCESS, numbuf, 4);
++			}
+ 		}
+ #endif
+ 		return;
 --- orig/io.c	2005-02-03 02:04:20
-+++ io.c	2005-01-10 10:49:17
++++ io.c	2005-02-15 20:09:22
 @@ -244,6 +244,14 @@ static void read_msg_fd(void)
  		read_loop(fd, buf, 4);
  		redo_list_add(IVAL(buf,0));
@@ -39,7 +61,7 @@ command before "make":
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
 --- orig/main.c	2005-02-15 19:27:04
-+++ main.c	2005-02-05 01:24:16
++++ main.c	2005-02-15 20:09:22
 @@ -33,12 +33,14 @@ extern int verbose;
  extern int itemize_changes;
  extern int blocking_io;
@@ -88,7 +110,7 @@ command before "make":
  		list_only |= 1;
  
 --- orig/options.c	2005-02-15 19:27:05
-+++ options.c	2005-02-14 17:48:01
++++ options.c	2005-02-15 20:09:23
 @@ -59,6 +59,7 @@ int delete_during = 0;
  int delete_before = 0;
  int delete_after = 0;
@@ -147,7 +169,7 @@ command before "make":
  	return;
  
 --- orig/receiver.c	2005-02-15 19:27:05
-+++ receiver.c	2004-08-13 08:38:51
++++ receiver.c	2005-02-15 20:09:23
 @@ -42,6 +42,7 @@ extern int basis_dir_cnt;
  extern int make_backups;
  extern int do_progress;
@@ -192,7 +214,7 @@ command before "make":
  		}
  	}
 --- orig/rsync.h	2005-02-15 19:27:05
-+++ rsync.h	2005-02-03 02:04:59
++++ rsync.h	2005-02-15 20:09:24
 @@ -62,6 +62,7 @@
  #define FLAG_MOUNT_POINT (1<<2)	/* sender only */
  #define FLAG_NO_FUZZY (1<<2)	/* generator only */
@@ -210,7 +232,7 @@ command before "make":
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
 --- orig/rsync.yo	2005-02-15 19:27:05
-+++ rsync.yo	2005-02-03 02:05:29
++++ rsync.yo	2005-02-15 20:09:25
 @@ -338,6 +338,7 @@ to the detailed description below for a 
       --delete-during         receiver deletes during xfer, not before
       --delete-after          receiver deletes after transfer, not before
@@ -225,14 +247,14 @@ command before "make":
  
 +dit(bf(--delete-sent-files)) This tells rsync to remove the source files
 +on the sending side that are successfully transferred to the receiving
-+side.  Directories, symlinks, and devices are not removed, nor are files
-+that were not transferred from the sender to the receiver.
++side.  Directories and devices are not removed, nor are files/symlinks
++whose content was not updated (just changing attributes does not count).
 +
  dit(bf(--ignore-errors)) Tells bf(--delete) to go ahead and delete files
  even when there are I/O errors.
  
 --- orig/sender.c	2005-02-15 19:27:05
-+++ sender.c	2004-07-26 16:49:19
++++ sender.c	2005-02-15 20:09:25
 @@ -27,6 +27,7 @@ extern int io_error;
  extern int dry_run;
  extern int am_server;
@@ -241,7 +263,7 @@ command before "make":
  extern int protocol_version;
  extern int updating_basis_file;
  extern int make_backups;
-@@ -95,7 +96,29 @@ static struct sum_struct *receive_sums(i
+@@ -95,7 +96,30 @@ static struct sum_struct *receive_sums(i
  	return s;
  }
  
@@ -257,7 +279,8 @@ command before "make":
 +		return;
 +
 +	file = the_flist->files[i];
-+	if (!(file->flags & FLAG_SENT))
++	/* The generator can tell us about symlinks we didn't send. */
++	if (!(file->flags & FLAG_SENT) && !S_ISLNK(file->mode))
 +		return; /* We didn't send it -- impossible! */
 +	if (file->dir.root) {
 +		offset = stringjoin(fname, sizeof fname,
@@ -271,7 +294,7 @@ command before "make":
  
  void send_files(struct file_list *flist, int f_out, int f_in)
  {
-@@ -114,6 +137,8 @@ void send_files(struct file_list *flist,
+@@ -114,6 +138,8 @@ void send_files(struct file_list *flist,
  	if (verbose > 2)
  		rprintf(FINFO, "send_files starting\n");
  
@@ -280,7 +303,7 @@ command before "make":
  	while (1) {
  		unsigned int offset;
  
-@@ -256,6 +281,9 @@ void send_files(struct file_list *flist,
+@@ -256,6 +282,9 @@ void send_files(struct file_list *flist,
  			rprintf(FINFO, "sender finished %s\n",
  				safe_fname(fname));
  		}
