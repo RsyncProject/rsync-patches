@@ -5,7 +5,7 @@ command before "make":
 
 
 --- batch.c	15 May 2004 19:31:10 -0000	1.32
-+++ batch.c	9 Jun 2004 15:37:30 -0000
++++ batch.c	9 Jun 2004 21:57:00 -0000
 @@ -335,6 +335,8 @@ void show_flist(int index, struct file_s
  		rprintf(FINFO, "flist->flags=%#x\n", fptr[i]->flags);
  		rprintf(FINFO, "flist->modtime=%#lx\n",
@@ -15,8 +15,8 @@ command before "make":
  		rprintf(FINFO, "flist->length=%.0f\n",
  			(double) fptr[i]->length);
  		rprintf(FINFO, "flist->mode=%#o\n", (int) fptr[i]->mode);
---- flist.c	7 Jun 2004 19:59:20 -0000	1.227
-+++ flist.c	9 Jun 2004 15:37:30 -0000
+--- flist.c	9 Jun 2004 19:23:56 -0000	1.228
++++ flist.c	9 Jun 2004 21:57:00 -0000
 @@ -57,6 +57,7 @@ extern int relative_paths;
  extern int implied_dirs;
  extern int copy_links;
@@ -25,7 +25,7 @@ command before "make":
  extern int protocol_version;
  extern int sanitize_paths;
  
-@@ -139,16 +140,16 @@ static void list_file_entry(struct file_
+@@ -140,17 +141,17 @@ static void list_file_entry(struct file_
  
  #if SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -37,16 +37,17 @@ command before "make":
 +			timestring(f->atime), f_name(f), f->u.link);
  	} else
  #endif
+ 	{
 -		rprintf(FINFO, "%s %11.0f %s %s\n",
 +		rprintf(FINFO, "%s %11.0f %s %s %s\n",
  			perms,
  			(double)f->length, timestring(f->modtime),
 -			f_name(f));
 +			timestring(f->atime), f_name(f));
+ 	}
  }
  
- 
-@@ -321,6 +322,7 @@ void send_file_entry(struct file_struct 
+@@ -324,6 +325,7 @@ void send_file_entry(struct file_struct 
  {
  	unsigned short flags;
  	static time_t modtime;
@@ -54,7 +55,7 @@ command before "make":
  	static mode_t mode;
  	static uint64 dev;
  	static dev_t rdev;
-@@ -336,7 +338,7 @@ void send_file_entry(struct file_struct 
+@@ -339,7 +341,7 @@ void send_file_entry(struct file_struct 
  
  	if (!file) {
  		write_byte(f, 0);
@@ -63,7 +64,7 @@ command before "make":
  		dev = 0, rdev = makedev(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -385,6 +387,12 @@ void send_file_entry(struct file_struct 
+@@ -388,6 +390,12 @@ void send_file_entry(struct file_struct 
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -76,7 +77,7 @@ command before "make":
  
  #if SUPPORT_HARD_LINKS
  	if (file->link_u.idev) {
-@@ -440,6 +448,8 @@ void send_file_entry(struct file_struct 
+@@ -443,6 +451,8 @@ void send_file_entry(struct file_struct 
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -85,7 +86,7 @@ command before "make":
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -513,6 +523,7 @@ void receive_file_entry(struct file_stru
+@@ -516,6 +526,7 @@ void receive_file_entry(struct file_stru
      struct file_list *flist, int f)
  {
  	static time_t modtime;
@@ -93,7 +94,7 @@ command before "make":
  	static mode_t mode;
  	static uint64 dev;
  	static dev_t rdev;
-@@ -529,7 +540,7 @@ void receive_file_entry(struct file_stru
+@@ -532,7 +543,7 @@ void receive_file_entry(struct file_stru
  	struct file_struct *file;
  
  	if (!fptr) {
@@ -102,7 +103,7 @@ command before "make":
  		dev = 0, rdev = makedev(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -584,6 +595,8 @@ void receive_file_entry(struct file_stru
+@@ -587,6 +598,8 @@ void receive_file_entry(struct file_stru
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -111,7 +112,7 @@ command before "make":
  
  	if (preserve_uid && !(flags & XMIT_SAME_UID))
  		uid = (uid_t)read_int(f);
-@@ -634,6 +647,7 @@ void receive_file_entry(struct file_stru
+@@ -637,6 +650,7 @@ void receive_file_entry(struct file_stru
  
  	file->flags = flags & XMIT_TOP_DIR ? FLAG_TOP_DIR : 0;
  	file->modtime = modtime;
@@ -119,7 +120,7 @@ command before "make":
  	file->length = file_length;
  	file->mode = mode;
  	file->uid = uid;
-@@ -851,6 +865,7 @@ skip_excludes:
+@@ -857,6 +871,7 @@ skip_excludes:
  
  	file->flags = flags;
  	file->modtime = st.st_mtime;
@@ -128,7 +129,7 @@ command before "make":
  	file->mode = st.st_mode;
  	file->uid = st.st_uid;
 --- generator.c	5 Jun 2004 16:16:30 -0000	1.86
-+++ generator.c	9 Jun 2004 15:37:30 -0000
++++ generator.c	9 Jun 2004 21:57:00 -0000
 @@ -101,7 +101,7 @@ static int skip_file(char *fname, struct
  		return 0;
  	}
@@ -148,7 +149,7 @@ command before "make":
  			rprintf(FINFO,"%s is newer\n",fname);
  		return;
 --- options.c	7 Jun 2004 22:05:22 -0000	1.156
-+++ options.c	9 Jun 2004 15:37:31 -0000
++++ options.c	9 Jun 2004 21:57:01 -0000
 @@ -48,6 +48,7 @@ int preserve_devices = 0;
  int preserve_uid = 0;
  int preserve_gid = 0;
@@ -183,7 +184,7 @@ command before "make":
  		argstr[x++] = 'p';
  	if (recurse)
 --- rsync.c	21 May 2004 08:43:03 -0000	1.140
-+++ rsync.c	9 Jun 2004 15:37:31 -0000
++++ rsync.c	9 Jun 2004 21:57:01 -0000
 @@ -25,6 +25,7 @@
  extern int verbose;
  extern int dry_run;
@@ -229,7 +230,7 @@ command before "make":
  
  	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	9 Jun 2004 15:37:31 -0000
++++ rsync.h	9 Jun 2004 21:57:01 -0000
 @@ -54,6 +54,7 @@
  #define XMIT_HAS_IDEV_DATA (1<<9)
  #define XMIT_SAME_DEV (1<<10)
@@ -255,7 +256,7 @@ command before "make":
  	gid_t gid;
  	mode_t mode;
 --- rsync.yo	5 Jun 2004 16:16:30 -0000	1.171
-+++ rsync.yo	9 Jun 2004 15:37:32 -0000
++++ rsync.yo	9 Jun 2004 21:57:02 -0000
 @@ -300,6 +300,7 @@ verb(
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
@@ -277,7 +278,7 @@ command before "make":
  instead it will just report the actions it would have taken.
  
 --- tls.c	15 May 2004 19:09:42 -0000	1.20
-+++ tls.c	9 Jun 2004 15:37:32 -0000
++++ tls.c	9 Jun 2004 21:57:02 -0000
 @@ -39,6 +39,7 @@
  
  
@@ -413,8 +414,8 @@ command before "make":
  
  	return 0;
  }
---- util.c	5 Jun 2004 20:26:56 -0000	1.148
-+++ util.c	9 Jun 2004 15:37:32 -0000
+--- util.c	9 Jun 2004 21:51:07 -0000	1.149
++++ util.c	9 Jun 2004 21:57:02 -0000
 @@ -127,31 +127,39 @@ void overflow(char *str)
  
  
@@ -461,7 +462,7 @@ command before "make":
  		t[0].tv_usec = 0;
  		t[1].tv_sec = modtime;
  		t[1].tv_usec = 0;
-@@ -1065,8 +1073,8 @@ int msleep(int t)
+@@ -1078,8 +1086,8 @@ int msleep(int t)
  
  
  /**
@@ -472,7 +473,7 @@ command before "make":
   * --modify-window).
   *
   * @retval 0 if the times should be treated as the same
-@@ -1075,7 +1083,7 @@ int msleep(int t)
+@@ -1088,7 +1096,7 @@ int msleep(int t)
   *
   * @retval -1 if the 2nd is later
   **/
@@ -482,7 +483,7 @@ command before "make":
  	if (file2 > file1) {
  		if (file2 - file1 <= modify_window)
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ testsuite/copy-atimes.test	9 Jun 2004 15:37:32 -0000
++++ testsuite/copy-atimes.test	9 Jun 2004 21:57:02 -0000
 @@ -0,0 +1,19 @@
 +#! /bin/sh
 +
@@ -504,7 +505,7 @@ command before "make":
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
 --- testsuite/rsync.fns	18 May 2004 00:41:55 -0000	1.60
-+++ testsuite/rsync.fns	9 Jun 2004 15:37:32 -0000
++++ testsuite/rsync.fns	9 Jun 2004 21:57:02 -0000
 @@ -50,7 +50,7 @@ printmsg() {
  
  
