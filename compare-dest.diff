@@ -9,8 +9,8 @@ they are suppled).
 
 Before compiling, be sure to run "make proto".
 
---- orig/generator.c	2004-07-28 10:14:15
-+++ generator.c	2004-07-28 10:19:57
+--- orig/generator.c	2004-07-29 16:46:28
++++ generator.c	2004-07-29 16:42:25
 @@ -43,7 +43,7 @@ extern int io_timeout;
  extern int protocol_version;
  extern int always_checksum;
@@ -20,26 +20,7 @@ Before compiling, be sure to run "make proto".
  extern int link_dest;
  extern int whole_file;
  extern int local_server;
-@@ -80,13 +80,12 @@ static int skip_file(char *fname, struct
- 	if (always_checksum && S_ISREG(st->st_mode)) {
- 		char sum[MD4_SUM_LENGTH];
- 		char fnamecmpdest[MAXPATHLEN];
-+		int i;
- 
--		if (compare_dest != NULL) {
--			if (access(fname, 0) != 0) {
--				pathjoin(fnamecmpdest, sizeof fnamecmpdest,
--					 compare_dest, fname);
--				fname = fnamecmpdest;
--			}
-+		for (i = 0; compare_dest[i] != NULL && access(fname, 0) < 0; i++) {
-+			pathjoin(fnamecmpdest, sizeof fnamecmpdest,
-+					compare_dest[i], fname);
-+			fname = fnamecmpdest;
- 		}
- 		file_checksum(fname,sum,st->st_size);
- 		return memcmp(sum, file->u.sum, protocol_version < 21 ? 2
-@@ -422,11 +421,18 @@ static void recv_generator(char *fname, 
+@@ -413,11 +413,19 @@ static void recv_generator(char *fname, 
  
  	fnamecmp = fname;
  
@@ -51,7 +32,8 @@ Before compiling, be sure to run "make proto".
 -		    && S_ISREG(st.st_mode)) {
 +		int i = 0;
 +		do {
-+			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest[i], fname);
++			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
++				 compare_dest[i], fname);
 +			if (link_stat(fnamecmpbuf, &st, 0) == 0
 +			    && S_ISREG(st.st_mode)) {
 +				statret = 0;
@@ -62,7 +44,7 @@ Before compiling, be sure to run "make proto".
  #if HAVE_LINK
  			if (link_dest && !dry_run) {
  				if (do_link(fnamecmpbuf, fname) < 0) {
-@@ -442,7 +448,6 @@ static void recv_generator(char *fname, 
+@@ -433,7 +441,6 @@ static void recv_generator(char *fname, 
  			} else
  #endif
  				fnamecmp = fnamecmpbuf;
