@@ -1,5 +1,5 @@
 --- Makefile.in	10 Feb 2004 17:06:11 -0000	1.98
-+++ Makefile.in	10 Mar 2004 08:00:58 -0000
++++ Makefile.in	20 Mar 2004 17:56:44 -0000
 @@ -34,7 +34,7 @@ ZLIBOBJ=zlib/deflate.o zlib/infblock.o z
  OBJS1=rsync.o generator.o receiver.o cleanup.o sender.o exclude.o util.o \
  	main.o checksum.o match.o syscall.o log.o backup.o
@@ -10,102 +10,44 @@
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- chmod.c	2004-02-13 17:08:33.000000000 -0800
-+++ chmod.c	2004-03-09 23:59:27.000000000 -0800
-@@ -0,0 +1,162 @@
++++ chmod.c	2004-03-20 10:04:19.000000000 -0800
+@@ -0,0 +1,184 @@
 +#include "rsync.h"
 +
++#define FLAG_X_KEEP (1<<0)
++#define FLAG_DIRS_ONLY (1<<1)
++#define FLAG_FILES_ONLY (1<<2)
++
 +struct chmod_mode_struct {
-+	int ModeAND;
-+	int ModeOR;
-+	char Xkeep;
 +	struct chmod_mode_struct *next;
++	int ModeAND, ModeOR;
++	char flags;
 +};
 +
 +#define CHMOD_ADD 1
 +#define CHMOD_SUB 2
 +#define CHMOD_EQ  3
 +
++#define STATE_ERROR 0
++#define STATE_1ST_HALF 1
++#define STATE_2ND_HALF 2
++
 +/* Parse a chmod-style argument, and break it down into one or more AND/OR
-+ * pairs in a linked list.
-+ * We use a state machine to walk through the options - states 1 and 3
-+ * before/including the operation (+, - or =), state 2 after the operation and
-+ * state 4 if we hit an error. */
++ * pairs in a linked list.  We use a state machine to walk through the
++ * options. */
 +struct chmod_mode_struct *parse_chmod(char *modestr)
 +{
-+	int state = 1;
-+	int where = 0, what = 0, op = 0, topbits = 0, topoct = 0, Xkeep = 0;
++	int state = STATE_1ST_HALF;
++	int where = 0, what = 0, op = 0, topbits = 0, topoct = 0, flags = 0;
 +	struct chmod_mode_struct *first_mode = NULL, *curr_mode = NULL,
 +	    *prev_mode = NULL;
 +
-+	while (*modestr) {
-+		if (state != 2) {
-+			switch (*modestr) {
-+			case 'u':
-+				where |= 0100;
-+				topbits |= 04000;
-+				break;
-+			case 'g':
-+				where |= 0010;
-+				topbits |= 02000;
-+				break;
-+			case 'o':
-+				where |= 0001;
-+				break;
-+			case 'a':
-+				where |= 0111;
-+				break;
-+			case '+':
-+				op = CHMOD_ADD;
-+				state = 2;
-+				break;
-+			case '-':
-+				op = CHMOD_SUB;
-+				state = 2;
-+				break;
-+			case '=':
-+				op = CHMOD_EQ;
-+				state = 2;
-+				break;
-+			case ',':
-+				break;
-+			default:
-+				state = 4;	/* Invalid Mode! */
-+				break;
-+			}
-+		} else {
-+			switch (*modestr) {
-+			case 'r':
-+				what |= 4;
-+				break;
-+			case 'w':
-+				what |= 2;
-+				break;
-+			case 'X':
-+				Xkeep = 1;
-+				/* FALL THROUGH */
-+			case 'x':
-+				what |= 1;
-+				break;
-+			case 's':
-+				if (topbits)
-+					topoct |= topbits;
-+				else
-+					topoct = 04000;
-+				break;
-+			case 't':
-+				topoct |= 01000;
-+				break;
-+			default:
-+				state = 4;	/* Invalid Mode! */
-+				break;
-+			}
-+		}
-+
-+		if (state == 4)
-+			break;
-+
-+		modestr++;
++	while (state != STATE_ERROR) {
 +		if (!*modestr || *modestr == ',') {
++			if (!op) {
++				state = STATE_ERROR;
++				break;
++			}
 +			prev_mode = curr_mode;
 +			curr_mode = new_array(struct chmod_mode_struct, 1);
 +			if (prev_mode)
@@ -129,13 +71,90 @@
 +				break;
 +			}
 +
-+			curr_mode->Xkeep = Xkeep;
-+			state = 3;
-+			where = what = topoct = topbits = Xkeep = 0;
++			curr_mode->flags = flags;
++
++			if (!*modestr)
++				break;
++			modestr++;
++
++			state = STATE_1ST_HALF;
++			where = what = op = topoct = topbits = flags = 0;
 +		}
++
++		if (state != STATE_2ND_HALF) {
++			switch (*modestr) {
++			case 'D':
++				if (flags & FLAG_FILES_ONLY)
++					state = STATE_ERROR;
++			  	flags |= FLAG_DIRS_ONLY;
++				break;
++			case 'F':
++				if (flags & FLAG_DIRS_ONLY)
++					state = STATE_ERROR;
++			  	flags |= FLAG_FILES_ONLY;
++				break;
++			case 'u':
++				where |= 0100;
++				topbits |= 04000;
++				break;
++			case 'g':
++				where |= 0010;
++				topbits |= 02000;
++				break;
++			case 'o':
++				where |= 0001;
++				break;
++			case 'a':
++				where |= 0111;
++				break;
++			case '+':
++				op = CHMOD_ADD;
++				state = STATE_2ND_HALF;
++				break;
++			case '-':
++				op = CHMOD_SUB;
++				state = STATE_2ND_HALF;
++				break;
++			case '=':
++				op = CHMOD_EQ;
++				state = STATE_2ND_HALF;
++				break;
++			default:
++				state = STATE_ERROR;
++				break;
++			}
++		} else {
++			switch (*modestr) {
++			case 'r':
++				what |= 4;
++				break;
++			case 'w':
++				what |= 2;
++				break;
++			case 'X':
++			  	flags |= FLAG_X_KEEP;
++				/* FALL THROUGH */
++			case 'x':
++				what |= 1;
++				break;
++			case 's':
++				if (topbits)
++					topoct |= topbits;
++				else
++					topoct = 04000;
++				break;
++			case 't':
++				topoct |= 01000;
++				break;
++			default:
++				state = STATE_ERROR;
++				break;
++			}
++		}
++		modestr++;
 +	}
 +
-+	if (state == 4) {
++	if (state == STATE_ERROR) {
 +		free_chmod_mode(first_mode);
 +		first_mode = NULL;
 +	}
@@ -145,21 +164,24 @@
 +
 +/* Takes an existing file permission and a list of AND/OR changes, and
 + * create a new permissions. */
-+int tweak_mode(int oldmode, struct chmod_mode_struct *chmod_modes)
++int tweak_mode(int mode, struct chmod_mode_struct *chmod_modes)
 +{
-+	int IsX = oldmode & 0111;
-+	int NonPerm = oldmode - (oldmode & 07777);
++	int IsX = mode & 0111;
++	int NonPerm = mode & ~07777;
 +
-+	while (chmod_modes) {
-+		oldmode &= chmod_modes->ModeAND;
-+		if (chmod_modes->Xkeep && !IsX)
-+			oldmode |= chmod_modes->ModeOR & (07777 - 0111);
++	for ( ; chmod_modes; chmod_modes = chmod_modes->next) {
++		if ((chmod_modes->flags & FLAG_DIRS_ONLY) && !S_ISDIR(NonPerm))
++			continue;
++		if ((chmod_modes->flags & FLAG_FILES_ONLY) && S_ISDIR(NonPerm))
++			continue;
++		mode &= chmod_modes->ModeAND;
++		if ((chmod_modes->flags & FLAG_X_KEEP) && !IsX && !S_ISDIR(NonPerm))
++			mode |= chmod_modes->ModeOR & ~0111;
 +		else
-+			oldmode |= chmod_modes->ModeOR;
-+		chmod_modes = chmod_modes->next;
++			mode |= chmod_modes->ModeOR;
 +	}
 +
-+	return oldmode + NonPerm;
++	return mode | NonPerm;
 +}
 +
 +/* Free the linked list created by parse_chmod. */
@@ -175,7 +197,7 @@
 +	return 0;
 +}
 --- flist.c	11 Feb 2004 02:48:58 -0000	1.205
-+++ flist.c	10 Mar 2004 08:00:59 -0000
++++ flist.c	20 Mar 2004 17:56:45 -0000
 @@ -33,6 +33,7 @@ extern int verbose;
  extern int do_progress;
  extern int am_root;
@@ -206,7 +228,7 @@
  	file->gid = st.st_gid;
  
 --- options.c	22 Feb 2004 08:56:43 -0000	1.139
-+++ options.c	10 Mar 2004 08:00:59 -0000
++++ options.c	20 Mar 2004 17:56:45 -0000
 @@ -119,6 +119,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
@@ -228,7 +250,7 @@
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F," -D, --devices               preserve devices (root only)\n");
    rprintf(F," -t, --times                 preserve times\n");
-+  rprintf(F,"     --chmod=CHMOD           change destination permissions\n");  
++  rprintf(F,"     --chmod=CHMOD           change destination permissions\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy whole files, no incremental checks\n");
@@ -267,19 +289,19 @@
  
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
 --- proto.h	17 Feb 2004 23:13:06 -0000	1.184
-+++ proto.h	10 Mar 2004 08:00:59 -0000
++++ proto.h	20 Mar 2004 17:56:45 -0000
 @@ -25,6 +25,9 @@ void file_checksum(char *fname,char *sum
  void sum_init(void);
  void sum_update(char *p, int len);
  void sum_end(char *sum);
 +struct chmod_mode_struct *parse_chmod(char *modestr);
-+int tweak_mode(int oldmode, struct chmod_mode_struct *chmod_modes);
++int tweak_mode(int mode, struct chmod_mode_struct *chmod_modes);
 +int free_chmod_mode(struct chmod_mode_struct *chmod_modes);
  void close_all(void);
  void _exit_cleanup(int code, const char *file, int line);
  void cleanup_disable(void);
 --- rsync.1	2 Feb 2004 18:23:09 -0000	1.163
-+++ rsync.1	10 Mar 2004 08:01:00 -0000
++++ rsync.1	20 Mar 2004 18:12:57 -0000
 @@ -336,6 +336,7 @@ to the detailed description below for a 
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
@@ -288,19 +310,26 @@
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy whole files, no incremental checks
-@@ -614,6 +615,10 @@ modified cannot be effective; in other w
+@@ -614,6 +615,17 @@ modified cannot be effective; in other w
  cause the next transfer to behave as if it used -I, and all files will have
  their checksums compared and show up in log messages even if they haven\&'t
  changed\&.
 +.IP 
 +.IP "\fB--chmod\fP" 
 +This options tells rsync to apply the listed "chmod" pattern
-+to the permission of the files on the destination\&.
++to the permission of the files on the destination\&.  In addition to the normal
++parsing rules specified in the chmod manpage, you can specify an item that
++should only apply to a directory by prefixing it with a \&'D\&', or specify an
++item that should only apply to a file by prefixing it with a \&'F\&'\&.  For example:
++.IP 
++.RS 
++--chmod=Dg+s,ug+w,Fo-w,+X
++.RE 
  .IP 
  .IP "\fB-n, --dry-run\fP" 
  This tells rsync to not do any file transfers,
 --- rsync.yo	2 Feb 2004 18:23:09 -0000	1.147
-+++ rsync.yo	10 Mar 2004 08:01:00 -0000
++++ rsync.yo	20 Mar 2004 18:12:58 -0000
 @@ -299,6 +299,7 @@ verb(
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
@@ -309,18 +338,23 @@
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy whole files, no incremental checks
-@@ -534,6 +535,9 @@ modified cannot be effective; in other w
+@@ -534,6 +535,14 @@ modified cannot be effective; in other w
  cause the next transfer to behave as if it used -I, and all files will have
  their checksums compared and show up in log messages even if they haven't
  changed.
 +
 +dit(bf(--chmod)) This options tells rsync to apply the listed "chmod" pattern
-+to the permission of the files on the destination.
++to the permission of the files on the destination.  In addition to the normal
++parsing rules specified in the chmod manpage, you can specify an item that
++should only apply to a directory by prefixing it with a 'D', or specify an
++item that should only apply to a file by prefixing it with a 'F'.  For example:
++
++quote(--chmod=Dg+s,ug+w,Fo-w,+X)
  
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
 --- testsuite/chmod.test	2004-02-13 17:08:33.000000000 -0800
-+++ testsuite/chmod.test	2004-03-10 00:05:23.000000000 -0800
++++ testsuite/chmod.test	2004-03-20 08:58:14.000000000 -0800
 @@ -0,0 +1,37 @@
 +#! /bin/sh
 +
