@@ -12,7 +12,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
 Be sure to run "make proto" before "make".
 
 --- orig/flist.c	2005-01-22 22:48:52
-+++ flist.c	2005-01-23 07:14:40
++++ flist.c	2005-01-23 08:02:39
 @@ -35,6 +35,7 @@ extern int am_root;
  extern int am_server;
  extern int am_daemon;
@@ -93,18 +93,40 @@ Be sure to run "make proto" before "make".
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
  		lastdir_len = dirname_len - 1;
-@@ -1129,7 +1152,9 @@ struct file_list *send_file_list(int f, 
+@@ -1064,14 +1087,13 @@ static void send_directory(int f, struct
+ }
+ 
+ 
+-/**
+- * This function is normally called by the sender, but the receiver also
+- * uses it to construct its own file list if --delete has been specified.
+- * The delete_files() function in receiver.c sets f to -1 so that we just
+- * construct the file list in memory without sending it over the wire.  It
+- * also has the side-effect of ignoring user-excludes if delete_excluded
+- * is set (so that the delete list includes user-excluded files).
+- **/
++/* This function is normally called by the sender, but the receiving side
++ * also uses it to construct one or more file lists if one of the --delete
++ * options have been specified.  The delete_in_dir() function sets f to -1
++ * so that we just construct the file list in memory without sending it
++ * over the wire.  It also has the side-effect of ignoring user-excludes if
++ * delete_excluded is set (so that the delete list includes user-excluded
++ * files). */
+ struct file_list *send_file_list(int f, int argc, char *argv[])
+ {
+ 	int l;
+@@ -1129,7 +1151,9 @@ struct file_list *send_file_list(int f, 
  				fname[l] = '\0';
  			}
  		}
 -		if (fname[l-1] == '.' && (l == 1 || fname[l-2] == '/')) {
-+		if (relative_paths < 0)
++		if (f == -1 && delete_during)
 +			; /* recurse is pre-set */
 +		else if (fname[l-1] == '.' && (l == 1 || fname[l-2] == '/')) {
  			if (!recurse && keep_dirs)
  				recurse = 1; /* allow one level */
  		} else if (recurse > 0)
-@@ -1644,3 +1669,75 @@ char *f_name(struct file_struct *f)
+@@ -1644,3 +1668,77 @@ char *f_name(struct file_struct *f)
  
  	return f_name_to(f, names[n]);
  }
@@ -115,7 +137,7 @@ Be sure to run "make proto" before "make".
 +	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
 +}
 +
-+void delete_in_dir(struct file_list *flist, char *fname, int do_subdirs)
++void delete_in_dir(struct file_list *flist, char *fname)
 +{
 +	static int deletion_count = 0;
 +	struct file_list *del_flist;
@@ -135,10 +157,12 @@ Be sure to run "make proto" before "make".
 +		return;
 +	}
 +
-+	recurse = do_subdirs ? -1 : 1;
-+	keep_dirs = 1;
-+	implied_dirs = 0;
-+	relative_paths = -1;
++	if (delete_during) {
++		recurse = 1; /* allow one level only */
++		keep_dirs = 1;
++		implied_dirs = 0;
++		relative_paths = 1;
++	}
 +
 +	argv[0] = fname;
 +	del_flist = send_file_list(-1, 1, argv);
@@ -181,7 +205,7 @@ Be sure to run "make proto" before "make".
 +	flist_free(del_flist);
 +}
 --- orig/generator.c	2005-01-20 23:05:34
-+++ generator.c	2005-01-21 10:21:39
++++ generator.c	2005-01-23 07:55:40
 @@ -34,6 +34,7 @@ extern int preserve_hard_links;
  extern int preserve_perms;
  extern int preserve_uid;
@@ -206,7 +230,7 @@ Be sure to run "make proto" before "make".
  		 * and modification-time repair. */
 +		if (delete_during && f_out != -1
 +		    && (file->flags & FLAG_DEL_START)) {
-+			delete_in_dir(flist, fname, 0);
++			delete_in_dir(flist, fname);
 +			statret = 1;
 +		}
  		if (set_perms(fname, file, statret ? NULL : &st, 0)
@@ -306,7 +330,7 @@ Be sure to run "make proto" before "make".
  
  		if (delete_after)
 --- orig/receiver.c	2005-01-23 07:27:24
-+++ receiver.c	2005-01-23 07:29:29
++++ receiver.c	2005-01-23 07:55:58
 @@ -23,7 +23,6 @@
  extern int verbose;
  extern int recurse;
@@ -401,7 +425,7 @@ Be sure to run "make proto" before "make".
 -			}
 -		}
 -		flist_free(local_file_list);
-+		delete_in_dir(flist, f_name_to(flist->files[j], fbuf), recurse);
++		delete_in_dir(flist, f_name_to(flist->files[j], fbuf));
  	}
  }
  
