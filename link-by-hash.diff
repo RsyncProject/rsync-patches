@@ -11,7 +11,7 @@ will only store one copy of the unique contents of each file, regardless of
 the file's name.
 
 
---- orig/Makefile.in	2004-08-09 21:07:09
+--- orig/Makefile.in	2004-08-13 07:18:58
 +++ Makefile.in	2004-07-03 20:20:15
 @@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
@@ -22,8 +22,8 @@ the file's name.
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
---- orig/hashlink.c	2004-07-02 21:41:54
-+++ hashlink.c	2004-07-02 21:41:54
+--- orig/hashlink.c	2004-08-13 18:04:59
++++ hashlink.c	2004-08-13 18:04:59
 @@ -0,0 +1,342 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
@@ -115,7 +115,7 @@ the file's name.
 +	/* Build a list of potential candidates and open
 +	 * them. */
 +	if ((d = opendir(hashname)) == NULL) {
-+		rsyserr(FERROR, errno, "opendir \"%s\"", hashname);
++		rsyserr(FERROR, errno, "opendir failed: \"%s\"", hashname);
 +		free(hashname);
 +		return NULL;
 +	}
@@ -134,7 +134,7 @@ the file's name.
 +		asprintf(&hashfile->name,"%s/%s",hashname,
 +			 di->d_name);
 +		if (do_stat(hashfile->name,&st) == -1) {
-+			rsyserr(FERROR, errno, "%s: %s", hashfile->name);
++			rsyserr(FERROR, errno, "stat failed: %s", hashfile->name);
 +			kill_hashfile(hashfile);
 +			continue;
 +		}
@@ -145,7 +145,7 @@ the file's name.
 +		hashfile->nlink = st.st_nlink;
 +		hashfile->fd = open(hashfile->name,O_RDONLY|O_BINARY);
 +		if (hashfile->fd == -1) {
-+			rsyserr(FERROR, errno, "%s", hashfile->name);
++			rsyserr(FERROR, errno, "open failed: %s", hashfile->name);
 +			kill_hashfile(hashfile);
 +			continue;
 +		}
@@ -214,7 +214,7 @@ the file's name.
 +	}
 +
 +	if (amt == -1) {
-+		rsyserr(FERROR, errno, "%s");
++		rsyserr(FERROR, errno, "read failed in compare_hashfiles()");
 +		kill_hashfiles(files);
 +		return NULL;
 +	}
@@ -266,7 +266,7 @@ the file's name.
 +		dirname = strdup(hashname);
 +		*strrchr(dirname,'/') = 0;
 +		if (do_mkdir(dirname, 0755) == -1 && errno != EEXIST) {
-+			rsyserr(FERROR, errno, "mkdir %s", dirname);
++			rsyserr(FERROR, errno, "mkdir failed: %s", dirname);
 +			free(hashname);
 +			free(dirname);
 +			return robust_rename(fnametmp,fname,0644);
@@ -274,7 +274,7 @@ the file's name.
 +		free(dirname);
 +
 +		if (do_mkdir(hashname, 0755) == -1 && errno != EEXIST) {
-+			rsyserr(FERROR, errno, "mkdir %s", hashname);
++			rsyserr(FERROR, errno, "mkdir failed: %s", hashname);
 +			free(hashname);
 +			return robust_rename(fnametmp,fname,0644);
 +		}
@@ -288,7 +288,7 @@ the file's name.
 +		int fd;
 +
 +		if (do_stat(fnametmp,&st) == -1) {
-+			rsyserr(FERROR, errno, "%s", fname);
++			rsyserr(FERROR, errno, "stat failed: %s", fname);
 +			return -1;
 +		}
 +		hashfiles = find_hashfiles(hashname, st.st_size, &last_fnbr);
@@ -301,7 +301,7 @@ the file's name.
 +			
 +			/* Search for one identical to us. */
 +			if ((fd = open(fnametmp,O_RDONLY|O_BINARY)) == -1) {
-+				rsyserr(FERROR, errno, "%s", fnametmp);
++				rsyserr(FERROR, errno, "open failed: %s", fnametmp);
 +				kill_hashfiles(hashfiles);
 +				return -1;
 +			}
@@ -367,8 +367,8 @@ the file's name.
 +}
 +
 +#endif
---- orig/options.c	2004-08-11 23:42:23
-+++ options.c	2004-07-03 20:20:15
+--- orig/options.c	2004-08-12 18:34:38
++++ options.c	2004-08-13 18:13:18
 @@ -126,6 +126,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
@@ -402,14 +402,17 @@ the file's name.
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -620,6 +623,19 @@ int parse_arguments(int *argc, const cha
+@@ -620,6 +623,22 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
 +                case OPT_LINK_BY_HASH:
 +#if HAVE_LINK
-+			link_by_hash_dir = (char *)poptGetOptArg(pc);
-+			checksum_seed = FIXED_CHECKSUM_SEED;
++			arg = poptGetOptArg(pc);
++			if (sanitize_paths)
++				arg = sanitize_path(NULL, arg, NULL, 0);
++			link_by_hash_dir = (char *)arg;
++			checksum_seed = 12345;
 +			break;
 +#else
 +			snprintf(err_buf, sizeof err_buf,
@@ -422,7 +425,7 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -1078,6 +1094,11 @@ void server_options(char **args,int *arg
+@@ -1078,6 +1097,11 @@ void server_options(char **args,int *arg
  		args[ac++] = compare_dest;
  	}
  
@@ -520,7 +523,7 @@ the file's name.
  		log_recv(file, &initial_stats);
  
 --- orig/rsync.c	2004-08-09 21:07:10
-+++ rsync.c	2004-07-16 20:16:53
++++ rsync.c	2004-08-13 18:14:34
 @@ -34,6 +34,7 @@ extern int force_delete;
  extern int recurse;
  extern int keep_dirlinks;
@@ -529,19 +532,20 @@ the file's name.
  extern char *backup_dir;
  extern int inplace;
  
-@@ -254,6 +255,12 @@ void finish_transfer(char *fname, char *
+@@ -254,7 +255,12 @@ void finish_transfer(char *fname, char *
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
+-	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
 +#ifdef HAVE_LINK
 +	if (link_by_hash_dir)
 +		ret = link_by_hash(fnametmp, fname, file);
 +	else
 +#endif
 +		ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
- 	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
  	if (ret < 0) {
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
+ 		    ret == -2 ? "copy" : "rename",
 --- orig/rsync.h	2004-08-03 15:41:32
 +++ rsync.h	2004-07-03 20:20:15
 @@ -525,6 +525,14 @@ struct stats {
