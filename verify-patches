@@ -114,8 +114,25 @@ foreach my $diff (@ARGV) {
 		    close IN;
 		    close OUT;
 		}
+		my $need_autoconf;
+		my $conf_opts;
+		open(IN, "../$diff") or die $!;
+		while (<IN>) {
+		    if (!defined $conf_opts) {
+			$conf_opts = '' if /^---/;
+			if (m#^\s*\./configure( .+)#) {
+			    $conf_opts = $1;
+			}
+		    }
+		    if (m#^--- orig/(configure\.in|/aclocal\.m4)#) {
+			$need_autoconf = 1;
+			last;
+		    }
+		}
+		close IN;
 		chdir('workdir') or die $!;
-		system "make gen; ./configure $CONF_OPTS; make";
+		system "autoconf; autoheader" if $need_autoconf;
+		system "make proto; ./configure $CONF_OPTS $conf_opts; make";
 		chdir('..') or die $!;
 		$default = '!make test';
 		next;
