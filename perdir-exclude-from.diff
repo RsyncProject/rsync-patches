@@ -1,6 +1,6 @@
---- exclude.c	17 Apr 2004 17:55:45 -0000	1.68
-+++ exclude.c	17 Apr 2004 18:13:35 -0000
-@@ -27,6 +27,7 @@
+--- exclude.c	22 Apr 2004 09:58:15 -0000	1.70
++++ exclude.c	22 Apr 2004 10:32:52 -0000
+@@ -27,15 +27,17 @@
  #include "rsync.h"
  
  extern int verbose;
@@ -8,14 +8,19 @@
  extern int eol_nulls;
  extern int list_only;
  extern int recurse;
-@@ -34,6 +35,7 @@ extern int recurse;
+ 
  extern char curr_dir[];
  
- struct exclude_list_struct exclude_list;
-+struct exclude_list_struct perdir_exclude_list;
- struct exclude_list_struct local_exclude_list;
- struct exclude_list_struct server_exclude_list;
+-struct exclude_list_struct exclude_list = { 0, 0, "" };
+-struct exclude_list_struct local_exclude_list = { 0, 0, "local-cvsignore " };
+-struct exclude_list_struct server_exclude_list = { 0, 0, "server " };
++struct exclude_list_struct exclude_list = { 0, 0, 0, "" };
++struct exclude_list_struct perdir_exclude_list = { 0, 0, 0, "perdir " };
++struct exclude_list_struct local_exclude_list = { 0, 0, 0, "local-cvsignore " };
++struct exclude_list_struct server_exclude_list = { 0, 0, 0, "server " };
  char *exclude_path_prefix = NULL;
+ 
+ /** Build an exclude structure given a exclude pattern */
 @@ -85,6 +87,8 @@ static void make_exclude(struct exclude_
  	for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
  		ret->slash_cnt++;
@@ -25,9 +30,9 @@
  	if (!listp->tail)
  		listp->head = listp->tail = ret;
  	else {
-@@ -106,6 +110,13 @@ void free_exclude_list(struct exclude_li
- 	if (verbose > 2)
- 		rprintf(FINFO, "[%s] clearing exclude list\n", who_am_i());
+@@ -108,12 +112,26 @@ void free_exclude_list(struct exclude_li
+ 			who_am_i(), listp->debug_type);
+ 	}
  
 +	if (listp->extra) {
 +		if (listp->tail)
@@ -39,21 +44,21 @@
  	for (ent = listp->head; ent; ent = next) {
  		next = ent->next;
  		free_exclude(ent);
-@@ -114,6 +125,13 @@ void free_exclude_list(struct exclude_li
- 	memset(listp, 0, sizeof listp[0]);
- }
+ 	}
  
+-	listp->head = listp->tail = NULL;
++	clear_exclude_list(listp, NULL);
++}
++
 +void clear_exclude_list(struct exclude_list_struct *listp,
 +			struct exclude_struct *extra)
 +{
 +	listp->head = listp->extra = extra;
 +	listp->tail = NULL;
-+}
-+
+ }
+ 
  static int check_one_exclude(char *name, struct exclude_struct *ex,
-                              int name_is_dir)
- {
-@@ -213,21 +231,24 @@ static void report_exclude_result(char c
+@@ -215,21 +233,25 @@ static void report_exclude_result(char c
  
  /*
   * Return true if file NAME is defined to be excluded by the specified
@@ -61,9 +66,9 @@
 + * exclude list.  Returns -1 for exclude, 0 for normal include, or 1
 + * for super include.
   */
- int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir,
--		  const char *type)
-+		  const char *type, int current_exclusion)
+-int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir)
++int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir,
++		  int current_exclusion)
  {
  	struct exclude_struct *ent;
  
@@ -71,7 +76,8 @@
 +		if (current_exclusion < 0 && ent->include < 2)
 +			continue;
  		if (check_one_exclude(name, ent, name_is_dir)) {
- 			report_exclude_result(name, ent, name_is_dir, type);
+ 			report_exclude_result(name, ent, name_is_dir,
+ 					      listp->debug_type);
 -			return !ent->include;
 +			return ent->include - 1;
  		}
@@ -82,7 +88,7 @@
  }
  
  
-@@ -253,10 +274,10 @@ static const char *get_exclude_tok(const
+@@ -255,10 +277,10 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -96,7 +102,7 @@
  		s += 2;
  	} else
  		*incl_ptr = xflags & XFLG_DEF_INCLUDE;
-@@ -387,8 +408,12 @@ void send_exclude_list(int f)
+@@ -390,8 +412,12 @@ void send_exclude_list(int f)
  
  		if (ent->include) {
  			write_int(f, l + 2);
@@ -111,8 +117,8 @@
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
---- flist.c	17 Apr 2004 17:14:12 -0000	1.214
-+++ flist.c	17 Apr 2004 18:13:36 -0000
+--- flist.c	22 Apr 2004 09:58:18 -0000	1.215
++++ flist.c	22 Apr 2004 10:32:52 -0000
 @@ -40,6 +40,7 @@ extern int ignore_errors;
  extern int numeric_ids;
  
@@ -129,40 +135,36 @@
  extern struct exclude_list_struct local_exclude_list;
  
  int io_error;
-@@ -211,6 +213,12 @@ int link_stat(const char *path, STRUCT_S
+@@ -211,6 +213,10 @@ int link_stat(const char *path, STRUCT_S
   */
  static int check_exclude_file(char *fname, int is_dir, int exclude_level)
  {
 +	static struct exclude_list_struct *elist[] = {
 +	    &exclude_list, &perdir_exclude_list, &local_exclude_list, NULL };
-+	static char *edesc[] = {
-+	    "pattern", "perdir-exclude", "local-ignore" };
 +	int i, rc;
 +
  #if 0 /* This currently never happens, so avoid a useless compare. */
  	if (exclude_level == NO_EXCLUDES)
  		return 0;
-@@ -228,18 +236,18 @@ static int check_exclude_file(char *fnam
+@@ -227,16 +233,18 @@ static int check_exclude_file(char *fnam
+ 		}
  	}
  	if (server_exclude_list.head
- 	 && check_exclude(&server_exclude_list, fname, is_dir,
--			  "server pattern"))
-+			  "server pattern", 0) < 0)
+-	 && check_exclude(&server_exclude_list, fname, is_dir))
++	 && check_exclude(&server_exclude_list, fname, is_dir, 0) < 0)
  		return 1;
  	if (exclude_level != ALL_EXCLUDES)
  		return 0;
--	if (exclude_list.head
--	    && check_exclude(&exclude_list, fname, is_dir, "pattern"))
+-	if (exclude_list.head && check_exclude(&exclude_list, fname, is_dir))
 -		return 1;
 -	if (local_exclude_list.head
--	    && check_exclude(&local_exclude_list, fname, is_dir,
--			     "local-cvsignore"))
+-	    && check_exclude(&local_exclude_list, fname, is_dir))
 -		return 1;
 -	return 0;
 +	for (i = 0, rc = 0; elist[i]; i++) {
 +		if (!elist[i]->head)
 +			continue;
-+		rc = check_exclude(elist[i], fname, is_dir, edesc[i], rc);
++		rc = check_exclude(elist[i], fname, is_dir, rc);
 +		if (rc > 0)
 +			return 0;
 +	}
@@ -170,11 +172,11 @@
  }
  
  /* used by the one_file_system code */
-@@ -947,8 +955,12 @@ void send_file_name(int f, struct file_l
+@@ -944,8 +952,12 @@ void send_file_name(int f, struct file_l
  	if (recursive && S_ISDIR(file->mode)
  	    && !(file->flags & FLAG_MOUNT_POINT)) {
  		struct exclude_list_struct last_list = local_exclude_list;
--		memset(&local_exclude_list, 0, sizeof local_exclude_list);
+-		local_exclude_list.head = local_exclude_list.tail = NULL;
 +		struct exclude_list_struct sub_list = perdir_exclude_list;
 +		clear_exclude_list(&local_exclude_list, NULL);
 +		clear_exclude_list(&perdir_exclude_list, sub_list.head);
@@ -184,7 +186,7 @@
  		free_exclude_list(&local_exclude_list);
  		local_exclude_list = last_list;
  	}
-@@ -994,6 +1006,18 @@ static void send_directory(int f, struct
+@@ -991,6 +1003,18 @@ static void send_directory(int f, struct
  			io_error |= IOERR_GENERAL;
  			rprintf(FINFO,
  				"cannot cvs-exclude in long-named directory %s\n",
@@ -204,7 +206,7 @@
  		}
  	}
 --- options.c	17 Apr 2004 17:07:23 -0000	1.147
-+++ options.c	17 Apr 2004 18:13:36 -0000
++++ options.c	22 Apr 2004 10:32:53 -0000
 @@ -70,6 +70,7 @@ int am_server = 0;
  int am_sender = 0;
  int am_generator = 0;
@@ -229,32 +231,32 @@
    {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
    {"links",           'l', POPT_ARG_NONE,   &preserve_links, 0, 0, 0 },
    {"copy-links",      'L', POPT_ARG_NONE,   &copy_links, 0, 0, 0 },
---- proto.h	14 Apr 2004 23:33:30 -0000	1.188
-+++ proto.h	17 Apr 2004 18:13:36 -0000
-@@ -52,8 +52,10 @@ int daemon_main(void);
+--- proto.h	22 Apr 2004 09:58:09 -0000	1.189
++++ proto.h	22 Apr 2004 10:32:53 -0000
+@@ -52,7 +52,10 @@ int daemon_main(void);
  void setup_protocol(int f_out,int f_in);
  int claim_connection(char *fname,int max_connections);
  void free_exclude_list(struct exclude_list_struct *listp);
+-int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir);
 +void clear_exclude_list(struct exclude_list_struct *listp,
 +			struct exclude_struct *extra);
- int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir,
--		  const char *type);
-+		  const char *type, int current_exclusion);
++int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir,
++		  int current_exclusion);
  void add_exclude(struct exclude_list_struct *listp, const char *pattern,
  		 int xflags);
  void add_exclude_file(struct exclude_list_struct *listp, const char *fname,
---- rsync.h	17 Apr 2004 17:14:16 -0000	1.197
-+++ rsync.h	17 Apr 2004 18:13:36 -0000
+--- rsync.h	22 Apr 2004 09:58:24 -0000	1.198
++++ rsync.h	22 Apr 2004 10:32:53 -0000
 @@ -502,6 +502,7 @@ struct exclude_struct {
  struct exclude_list_struct {
  	struct exclude_struct *head;
  	struct exclude_struct *tail;
 +	struct exclude_struct *extra;
+ 	char *debug_type;
  };
  
- struct stats {
---- rsync.yo	17 Apr 2004 18:12:33 -0000	1.158
-+++ rsync.yo	17 Apr 2004 18:13:37 -0000
+--- rsync.yo	17 Apr 2004 18:40:16 -0000	1.159
++++ rsync.yo	22 Apr 2004 10:32:54 -0000
 @@ -331,6 +331,7 @@ verb(
       --exclude-from=FILE     exclude patterns listed in FILE
       --include=PATTERN       don't exclude files matching PATTERN
@@ -302,14 +304,25 @@
  
    it() if the pattern is a single exclamation mark ! then the current
    include/exclude list is reset, removing all previously defined patterns.
---- util.c	17 Apr 2004 17:06:03 -0000	1.136
-+++ util.c	17 Apr 2004 18:13:37 -0000
-@@ -477,7 +477,7 @@ static int exclude_server_path(char *arg
+--- t_stub.c	22 Apr 2004 09:58:11 -0000	1.7
++++ t_stub.c	22 Apr 2004 10:32:54 -0000
+@@ -46,7 +46,7 @@ struct exclude_list_struct server_exclud
+ }
+ 
+  int check_exclude(UNUSED(struct exclude_list_struct *listp), UNUSED(char *name),
+-		   UNUSED(int name_is_dir))
++		   UNUSED(int name_is_dir), UNUSED(int current_exclusion))
+ {
+ 	/* This function doesn't really get called in this test context, so
+ 	 * just return 0. */
+--- util.c	22 Apr 2004 09:58:21 -0000	1.137
++++ util.c	22 Apr 2004 10:32:54 -0000
+@@ -476,7 +476,7 @@ static int exclude_server_path(char *arg
+ 	if (server_exclude_list.head) {
  		for (s = arg; (s = strchr(s, '/')) != NULL; ) {
  			*s = '\0';
- 			if (check_exclude(&server_exclude_list, arg, 1,
--			    "server pattern")) {
-+					  "server pattern", 0) < 0) {
+-			if (check_exclude(&server_exclude_list, arg, 1)) {
++			if (check_exclude(&server_exclude_list, arg, 1, 0) < 0) {
  				/* We must leave arg truncated! */
  				return 1;
  			}
