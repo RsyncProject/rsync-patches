@@ -33,7 +33,7 @@ that's how you can make rules local instead of inherited).
 ..wayne..
 
 --- orig/clientserver.c	2004-08-02 02:29:16
-+++ clientserver.c	2004-08-09 17:35:56
++++ clientserver.c	2004-08-10 15:44:15
 @@ -48,12 +48,14 @@ extern int no_detach;
  extern int default_af_hint;
  extern char *bind_address;
@@ -44,7 +44,7 @@ that's how you can make rules local instead of inherited).
  
  char *auth_user;
  
-+/* The length of the lp_path() string (when we're not chrooted). */
++/* Length of lp_path() string when in daemon mode & not chrooted, else 0. */
 +unsigned int module_dirlen = 0;
 +
  /**
@@ -88,20 +88,13 @@ that's how you can make rules local instead of inherited).
  
  	log_init();
  
---- orig/exclude.c	2004-08-05 23:16:37
-+++ exclude.c	2004-08-10 04:51:05
-@@ -27,16 +27,75 @@
- #include "rsync.h"
- 
- extern int verbose;
-+extern int am_sender;
+--- orig/exclude.c	2004-08-10 18:17:01
++++ exclude.c	2004-08-10 18:16:41
+@@ -30,13 +30,68 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
  extern int recurse;
 +extern int io_error;
-+extern int module_id;
-+extern int delete_mode;
-+extern int delete_excluded;
 +extern int sanitize_paths;
  
  extern char curr_dir[];
@@ -168,7 +161,7 @@ that's how you can make rules local instead of inherited).
  
  /** Build an exclude structure given an exclude pattern. */
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
-@@ -46,23 +105,50 @@ static void make_exclude(struct exclude_
+@@ -46,23 +101,50 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
@@ -225,7 +218,7 @@ that's how you can make rules local instead of inherited).
  	strlcpy(ret->pattern + ex_len, pat, pat_len + 1);
  	pat_len += ex_len;
  
-@@ -81,14 +167,40 @@ static void make_exclude(struct exclude_
+@@ -81,14 +163,40 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -270,7 +263,7 @@ that's how you can make rules local instead of inherited).
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +208,265 @@ static void make_exclude(struct exclude_
+@@ -96,22 +204,265 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -542,7 +535,7 @@ that's how you can make rules local instead of inherited).
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,18 +477,20 @@ static int check_one_exclude(char *name,
+@@ -125,13 +476,14 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -551,23 +544,16 @@ that's how you can make rules local instead of inherited).
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
- 	else if (ex->match_flags & MATCHFLG_ABS_PATH && *name != '/') {
- 		static char full_name[MAXPATHLEN];
--		int plus = curr_dir[1] == '\0'? 1 : 0;
--		pathjoin(full_name, sizeof full_name, curr_dir+plus, name);
-+		char *cd = curr_dir + module_dirlen;
-+		int plus = cd[1] == '\0'? 1 : 0;
-+		pathjoin(full_name, sizeof full_name, cd+plus, name);
+ 	else if (ex->match_flags & MATCHFLG_ABS_PATH && *name != '/'
+-	    && curr_dir[1]) {
+-		pathjoin(full_name, sizeof full_name, curr_dir + 1, name);
++	    && curr_dir_len > module_dirlen + 1) {
++		pathjoin(full_name, sizeof full_name,
++			 curr_dir + module_dirlen + 1, name);
  		name = full_name;
  	}
  
--	if (!name[0]) return 0;
-+	if (!name[0])
-+		return 0;
- 
- 	if (ex->match_flags & MATCHFLG_DIRECTORY && !name_is_dir)
- 		return 0;
-@@ -148,9 +505,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +500,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -579,7 +565,7 @@ that's how you can make rules local instead of inherited).
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +578,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +573,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -593,7 +579,7 @@ that's how you can make rules local instead of inherited).
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -253,11 +617,36 @@ static const char *get_exclude_tok(const
+@@ -253,11 +612,36 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -632,7 +618,7 @@ that's how you can make rules local instead of inherited).
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -273,6 +662,8 @@ static const char *get_exclude_tok(const
+@@ -273,6 +657,8 @@ static const char *get_exclude_tok(const
  
  	if (*p == '!' && len == 1 && !(xflags & XFLG_WORDS_ONLY))
  		mflags |= MATCHFLG_CLEAR_LIST;
@@ -641,7 +627,7 @@ that's how you can make rules local instead of inherited).
  
  	*len_ptr = len;
  	*flag_ptr = mflags;
-@@ -284,7 +675,7 @@ void add_exclude(struct exclude_list_str
+@@ -284,7 +670,7 @@ void add_exclude(struct exclude_list_str
  		 int xflags)
  {
  	unsigned int pat_len, mflags;
@@ -650,7 +636,7 @@ that's how you can make rules local instead of inherited).
  
  	if (!pattern)
  		return;
-@@ -292,9 +683,15 @@ void add_exclude(struct exclude_list_str
+@@ -292,9 +678,15 @@ void add_exclude(struct exclude_list_str
  	cp = pattern;
  	pat_len = 0;
  	while (1) {
@@ -666,7 +652,7 @@ that's how you can make rules local instead of inherited).
  
  		if (mflags & MATCHFLG_CLEAR_LIST) {
  			if (verbose > 2) {
-@@ -306,13 +703,24 @@ void add_exclude(struct exclude_list_str
+@@ -306,13 +698,24 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -697,7 +683,7 @@ that's how you can make rules local instead of inherited).
  	}
  }
  
-@@ -321,7 +729,7 @@ void add_exclude_file(struct exclude_lis
+@@ -321,7 +724,7 @@ void add_exclude_file(struct exclude_lis
  		      int xflags)
  {
  	FILE *fp;
@@ -706,7 +692,7 @@ that's how you can make rules local instead of inherited).
  	char *eob = line + sizeof line - 1;
  	int word_split = xflags & XFLG_WORD_SPLIT;
  
-@@ -342,6 +750,12 @@ void add_exclude_file(struct exclude_lis
+@@ -342,6 +745,12 @@ void add_exclude_file(struct exclude_lis
  		}
  		return;
  	}
@@ -719,7 +705,7 @@ that's how you can make rules local instead of inherited).
  
  	while (1) {
  		char *s = line;
-@@ -402,7 +816,21 @@ void send_exclude_list(int f)
+@@ -402,7 +811,21 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -742,7 +728,7 @@ that's how you can make rules local instead of inherited).
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +871,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +866,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -751,7 +737,7 @@ that's how you can make rules local instead of inherited).
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
 --- orig/flist.c	2004-08-05 21:57:29
-+++ flist.c	2004-08-09 18:21:55
++++ flist.c	2004-08-10 17:20:11
 @@ -39,10 +39,9 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -1009,7 +995,7 @@ that's how you can make rules local instead of inherited).
  
  struct exclude_list_struct {
 --- orig/rsync.yo	2004-08-03 15:34:32
-+++ rsync.yo	2004-08-10 05:19:45
++++ rsync.yo	2004-08-10 17:17:33
 @@ -335,6 +335,7 @@ verb(
       --include=PATTERN       don't exclude files matching PATTERN
       --include-from=FILE     don't exclude patterns listed in FILE
@@ -1134,7 +1120,7 @@ that's how you can make rules local instead of inherited).
  )
  
  The +/- rules are most useful in a list that was read from a file, allowing
-@@ -1134,10 +1156,111 @@ itemize(
+@@ -1134,8 +1156,160 @@ itemize(
    it() --include "*/" --include "*.c" --exclude "*" would include all 
    directories and C source files
    it() --include "foo/" --include "foo/bar.c" --exclude "*" would include
@@ -1156,7 +1142,11 @@ that's how you can make rules local instead of inherited).
 +
 +dit(bf(-p)) Make the file a per-directory merge-file.  Rsync will scan
 +every directory that it traverses for the named file, merging its contents
-+when the file exists.
++when the file exists.  These exclude files must exist on the sending side
++because it is the sending side that is being scanned for available files
++to send.  The files may also need to be transferred to the receiving side
++if you want them to affect what files don't get deleted (see PER-DIRECTORY
++EXCLUDES AND DELETE below).
 +
 +dit(bf(--)) End the scanning of options.  Useful if you want to specify a
 +filename that begins with a dash.
@@ -1185,8 +1175,8 @@ that's how you can make rules local instead of inherited).
 +    . -p .excl
 +    + *.[ch]
 +    *.o
- )
- 
++)
++
 +This will merge the contents of the /home/user/.global_excludes file at the
 +start of the list and also turns the ".excl" filename into a per-directory
 +exclude file.  All the merged rules default to being exclude rules because
@@ -1245,9 +1235,54 @@ that's how you can make rules local instead of inherited).
 +rules taken from the $HOME/.cvsignore file and from $CVSIGNORE are not
 +repositioned by this.)
 +
- manpagesection(BATCH MODE)
++manpagesection(PER-DIRECTORY EXCLUDES AND DELETE)
++
++Without a delete option, per-directory excludes are only relevant on the
++sending side, so you can feel free to exclude the merge files themselves
++without affecting the transfer:
++
++verb(
++  rsync -av --exclude='. -p .excl' --exclude=.excl host:src/dir /dest
++)
++
++However, if you want to do a delete on the receiving side AND you want some
++files to be excluded from being deleted, you'll need to be sure that the
++receiving side knows what files to exclude.  The easiest way is to include
++the per-directory merge files in the transfer and use --delete-after
++because this ensures that the receiving side gets all the same exclude
++rules as the sending side before it tries to delete anything:
++
++verb(
++  rsync -avE --delete-after host:src/dir /dest
++)
++
++However, if you the merge files are not a part of the transfer, you'll need
++to either use a global exclude rule (i.e. specified on the command line),
++or you'll need to maintain your own per-directory merge files on the
++receiving side.  An example of the first is this (assume that the remote
++.ctrl files exclude themselves):
++
++verb(
++  rsync -av --exclude='. -p .ctrl' --exclude-from=/my/extra.rules
++    --delete host:src/dir /dest
++)
++
++In the above example the extra.rules file can affect both sides of the
++transfer, but the rules are subservient to the rules merged from the .ctrl
++files because they were specified after the per-directory merge rule.
++
++In the final example, the remote side is excluding the .rsync-excludes
++files from the transfer, but we want to use our own .rsync-excludes files
++to control what gets deleted on the receiving side.  To do this we must
++specifically exclude the per-directory merge files (so that they don't get
++deleted) and then put rules into the local files to control what else
++should not get deleted.  Like this:
++
++verb(
++  rsync -avE --exclude=.rsync-excludes --delete host:src/dir /dest
+ )
  
- bf(Note:) Batch mode should be considered experimental in this version
+ manpagesection(BATCH MODE)
 --- orig/testsuite/exclude.test	2004-05-29 21:25:45
 +++ testsuite/exclude.test	2004-08-08 06:35:15
 @@ -23,19 +23,47 @@ export HOME CVSIGNORE
