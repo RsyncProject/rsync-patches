@@ -1,3 +1,5 @@
+Depends-On-Patch: partial-dir.diff
+
 Added a pipe from the generator to the receiver that communicates
 what basis file we used to generate the file data (if it was not
 the default name).  This optimizes away the basis-file search in
@@ -7,9 +9,9 @@ support for multiple --compare-dest options).
 
 You must run "make proto" before compiling.
 
---- orig/generator.c	2004-07-23 17:16:12
-+++ generator.c	2004-07-22 00:05:38
-@@ -258,9 +258,9 @@ static void generate_and_send_sums(int f
+--- orig/generator.c	2004-07-28 09:58:28
++++ generator.c	2004-07-28 10:14:15
+@@ -259,9 +259,9 @@ static void generate_and_send_sums(int f
   * out.  It might be wrong.
   */
  static void recv_generator(char *fname, struct file_struct *file, int i,
@@ -19,75 +21,51 @@ You must run "make proto" before compiling.
 -	int fd;
 +	int fd = -1;
  	STRUCT_STAT st;
- 	int statret;
+ 	int statret, stat_errno;
  	char *fnamecmp;
-@@ -420,8 +420,10 @@ static void recv_generator(char *fname, 
- 		statret = link_stat(fnamecmpbuf, &st, 0);
- 		if (!S_ISREG(st.st_mode))
- 			statret = -1;
--		if (statret == -1)
-+		if (statret == -1) {
- 			errno = saveerrno;
-+			*fnamecmpbuf = '\0';
-+		}
- #if HAVE_LINK
- 		else if (link_dest && !dry_run) {
- 			if (do_link(fnamecmpbuf, fname) != 0) {
-@@ -429,22 +431,22 @@ static void recv_generator(char *fname, 
- 					rsyserr(FINFO, errno, "link %s => %s",
- 						fnamecmpbuf, fname);
- 				}
--			}
--			fnamecmp = fnamecmpbuf;
-+				fnamecmp = fnamecmpbuf;
-+			} else
-+				*fnamecmpbuf = '\0';
- 		}
+@@ -437,13 +437,16 @@ static void recv_generator(char *fname, 
+ 							safe_fname(fname));
+ 					}
+ 					fnamecmp = fnamecmpbuf;
+-				}
++				} else
++					*fnamecmpbuf = '\0';
+ 			} else
  #endif
- 		else
- 			fnamecmp = fnamecmpbuf;
+ 				fnamecmp = fnamecmpbuf;
+ 			statret = 0;
+-		}
 -	}
++		} else
++			*fnamecmpbuf = '\0';
 +	} else
 +		*fnamecmpbuf = '\0';
  
+ 	if (statret == 0 && !S_ISREG(st.st_mode)) {
+ 		if (delete_file(fname) != 0)
+@@ -455,11 +458,9 @@ static void recv_generator(char *fname, 
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
--		if (errno == ENOENT) {
+-		if (stat_errno == ENOENT) {
 -			write_int(f_out,i);
 -			if (!dry_run && !read_batch)
 -				write_sum_head(f_out, NULL);
 -		} else if (verbose > 1) {
-+		if (errno == ENOENT)
++		if (stat_errno == ENOENT)
 +			goto notify_others;
 +		if (verbose > 1) {
- 			rsyserr(FERROR, errno,
- 				"recv_generator: failed to open %s",
+ 			rsyserr(FERROR, stat_errno,
+ 				"recv_generator: failed to stat %s",
  				full_fname(fname));
-@@ -453,26 +455,23 @@ static void recv_generator(char *fname, 
- 	}
- 
- 	if (!S_ISREG(st.st_mode)) {
--		if (delete_file(fname) != 0) {
-+		if (delete_file(fname) != 0)
- 			return;
--		}
- 
- 		/* now pretend the file didn't exist */
- 		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
- 			return;
--		write_int(f_out,i);
--		if (!dry_run && !read_batch)
--			write_sum_head(f_out, NULL);
--		return;
-+		statret = -1;
-+		goto notify_others;
+@@ -467,13 +468,13 @@ static void recv_generator(char *fname, 
+ 		return;
  	}
  
 -	if (opt_ignore_existing && fnamecmp == fname) {
 +	if (opt_ignore_existing && !*fnamecmpbuf) {
  		if (verbose > 1)
- 			rprintf(FINFO,"%s exists\n",fname);
+ 			rprintf(FINFO, "%s exists\n", safe_fname(fname));
  		return;
  	}
  
@@ -95,8 +73,8 @@ You must run "make proto" before compiling.
 +	if (update_only && !*fnamecmpbuf
  	    && cmp_modtime(st.st_mtime, file->modtime) > 0) {
  		if (verbose > 1)
- 			rprintf(FINFO,"%s is newer\n",fname);
-@@ -480,21 +479,17 @@ static void recv_generator(char *fname, 
+ 			rprintf(FINFO, "%s is newer\n", safe_fname(fname));
+@@ -481,21 +482,17 @@ static void recv_generator(char *fname, 
  	}
  
  	if (skip_file(fname, file, &st)) {
@@ -122,9 +100,9 @@ You must run "make proto" before compiling.
 +	if (read_batch)
 +		goto notify_others;
  
- 	/* open the file */
- 	fd = do_open(fnamecmp, O_RDONLY, 0);
-@@ -505,9 +500,8 @@ static void recv_generator(char *fname, 
+ 	if (partial_dir) {
+ 		STRUCT_STAT st2;
+@@ -516,9 +513,8 @@ static void recv_generator(char *fname, 
  		/* pretend the file didn't exist */
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
@@ -136,7 +114,7 @@ You must run "make proto" before compiling.
  	}
  
  	if (verbose > 3) {
-@@ -518,14 +512,41 @@ static void recv_generator(char *fname, 
+@@ -529,14 +525,41 @@ static void recv_generator(char *fname, 
  	if (verbose > 2)
  		rprintf(FINFO, "generating and sending sums for %d\n", i);
  
@@ -182,7 +160,7 @@ You must run "make proto" before compiling.
  {
  	int i;
  	int phase = 0;
-@@ -566,7 +587,7 @@ void generate_files(int f_out, struct fi
+@@ -577,7 +600,7 @@ void generate_files(int f_out, struct fi
  		}
  
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -191,7 +169,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -583,7 +604,7 @@ void generate_files(int f_out, struct fi
+@@ -594,7 +617,7 @@ void generate_files(int f_out, struct fi
  	while ((i = get_redo_num()) != -1) {
  		struct file_struct *file = flist->files[i];
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -200,7 +178,7 @@ You must run "make proto" before compiling.
  	}
  
  	phase++;
-@@ -602,7 +623,7 @@ void generate_files(int f_out, struct fi
+@@ -613,7 +636,7 @@ void generate_files(int f_out, struct fi
  		if (!file->basename || !S_ISDIR(file->mode))
  			continue;
  		recv_generator(local_name ? local_name : f_name(file),
@@ -209,7 +187,7 @@ You must run "make proto" before compiling.
  	}
  
  	if (verbose > 2)
---- orig/main.c	2004-07-23 17:16:13
+--- orig/main.c	2004-07-24 16:52:09
 +++ main.c	2004-07-22 00:10:43
 @@ -58,6 +58,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
@@ -283,9 +261,9 @@ You must run "make proto" before compiling.
  
  	get_redo_num(); /* Read final MSG_DONE and any prior messages. */
  	report(-1);
---- orig/receiver.c	2004-07-23 17:16:13
-+++ receiver.c	2004-07-22 00:20:50
-@@ -320,6 +320,30 @@ static int receive_data(int f_in, char *
+--- orig/receiver.c	2004-07-27 23:26:20
++++ receiver.c	2004-07-23 21:59:07
+@@ -325,6 +325,30 @@ static int receive_data(int f_in, char *
  }
  
  
@@ -316,7 +294,7 @@ You must run "make proto" before compiling.
  static void discard_receive_data(int f_in, OFF_T length)
  {
  	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
-@@ -330,7 +354,8 @@ static void discard_receive_data(int f_i
+@@ -335,7 +359,8 @@ static void discard_receive_data(int f_i
   * main routine for receiver process.
   *
   * Receiver process runs on the same host as the generator process. */
@@ -326,7 +304,7 @@ You must run "make proto" before compiling.
  {
  	int next_gen_i = -1;
  	int fd1,fd2;
-@@ -359,8 +384,15 @@ int recv_files(int f_in, struct file_lis
+@@ -364,8 +389,15 @@ int recv_files(int f_in, struct file_lis
  		i = read_int(f_in);
  		if (i == -1) {
  			if (read_batch) {
@@ -344,12 +322,8 @@ You must run "make proto" before compiling.
  				next_gen_i = -1;
  			}
  
-@@ -406,10 +438,12 @@ int recv_files(int f_in, struct file_lis
- 		if (verbose > 2)
- 			rprintf(FINFO,"recv_files(%s)\n",fname);
+@@ -413,6 +445,10 @@ int recv_files(int f_in, struct file_lis
  
--		fnamecmp = fname;
--
  		if (read_batch) {
  			while (i > next_gen_i) {
 +				if (f_in_name >= 0 && next_gen_i >= 0) {
@@ -359,7 +333,7 @@ You must run "make proto" before compiling.
  				next_gen_i = read_int(batch_gen_fd);
  				if (next_gen_i == -1)
  					next_gen_i = flist->count;
-@@ -420,8 +454,14 @@ int recv_files(int f_in, struct file_lis
+@@ -423,8 +459,14 @@ int recv_files(int f_in, struct file_lis
  				discard_receive_data(f_in, file->length);
  				continue;
  			}
@@ -374,9 +348,24 @@ You must run "make proto" before compiling.
  		if (server_exclude_list.head
  		    && check_exclude(&server_exclude_list, fname,
  				     S_ISDIR(file->mode)) < 0) {
-@@ -437,14 +477,6 @@ int recv_files(int f_in, struct file_lis
+@@ -437,13 +479,7 @@ int recv_files(int f_in, struct file_lis
+ 			continue;
+ 		}
+ 
+-		if (partial_dir) {
+-			if ((partialptr = partial_dir_fname(fname)) != NULL)
+-				fnamecmp = partialptr;
+-			else
+-				fnamecmp = fname;
+-		} else
+-			fnamecmp = partialptr = fname;
++		partialptr = partial_dir ? partial_dir_fname(fname) : fname;
+ 
  		/* open the file */
  		fd1 = do_open(fnamecmp, O_RDONLY, 0);
+@@ -453,14 +489,6 @@ int recv_files(int f_in, struct file_lis
+ 			fd1 = do_open(fnamecmp, O_RDONLY, 0);
+ 		}
  
 -		if (fd1 == -1 && compare_dest != NULL) {
 -			/* try the file at compare_dest instead */

@@ -1,3 +1,4 @@
+Depends-On-Patch: partial-dir.diff
 Depends-On-Patch: g2r-basis-filename.diff
 
 This patch allows multiple --compare-dest or --link-dest options to be
@@ -9,18 +10,18 @@ they are suppled).
 
 Before compiling, be sure to run "make proto".
 
---- orig/generator.c	2004-07-22 00:05:38
-+++ generator.c	2004-07-19 08:32:53
-@@ -42,7 +42,7 @@ extern int size_only;
- extern int io_timeout;
+--- orig/generator.c	2004-07-28 10:14:15
++++ generator.c	2004-07-28 10:19:57
+@@ -43,7 +43,7 @@ extern int io_timeout;
  extern int protocol_version;
  extern int always_checksum;
+ extern char *partial_dir;
 -extern char *compare_dest;
 +extern char *compare_dest[];
  extern int link_dest;
  extern int whole_file;
  extern int local_server;
-@@ -79,13 +79,12 @@ static int skip_file(char *fname, struct
+@@ -80,13 +80,12 @@ static int skip_file(char *fname, struct
  	if (always_checksum && S_ISREG(st->st_mode)) {
  		char sum[MD4_SUM_LENGTH];
  		char fnamecmpdest[MAXPATHLEN];
@@ -39,30 +40,37 @@ Before compiling, be sure to run "make proto".
  		}
  		file_checksum(fname,sum,st->st_size);
  		return memcmp(sum, file->u.sum, protocol_version < 21 ? 2
-@@ -413,13 +412,18 @@ static void recv_generator(char *fname, 
+@@ -422,11 +421,18 @@ static void recv_generator(char *fname, 
  
  	fnamecmp = fname;
  
 -	if (statret == -1 && compare_dest != NULL) {
 +	if (statret == -1 && compare_dest[0] != NULL) {
  		/* try the file at compare_dest instead */
- 		int saveerrno = errno;
 -		pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest, fname);
--		statret = link_stat(fnamecmpbuf, &st, 0);
--		if (!S_ISREG(st.st_mode))
--			statret = -1;
+-		if (link_stat(fnamecmpbuf, &st, 0) == 0
+-		    && S_ISREG(st.st_mode)) {
 +		int i;
 +		for (i = 0; compare_dest[i] != NULL; i++) {
 +			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest[i], fname);
-+			if ((statret = link_stat(fnamecmpbuf, &st, 0)) == 0) {
-+				if (S_ISREG(st.st_mode))
-+					break;
-+				statret = -1;
++			if (link_stat(fnamecmpbuf, &st, 0) == 0
++			    && S_ISREG(st.st_mode)) {
++				statret = 0;
++				break;
 +			}
 +		}
- 		if (statret == -1) {
- 			errno = saveerrno;
++		if (statret == 0) {
+ #if HAVE_LINK
+ 			if (link_dest && !dry_run) {
+ 				if (do_link(fnamecmpbuf, fname) < 0) {
+@@ -442,7 +448,6 @@ static void recv_generator(char *fname, 
+ 			} else
+ #endif
+ 				fnamecmp = fnamecmpbuf;
+-			statret = 0;
+ 		} else
  			*fnamecmpbuf = '\0';
+ 	} else
 --- orig/main.c	2004-07-22 00:10:43
 +++ main.c	2004-07-22 00:30:38
 @@ -58,7 +58,7 @@ extern int filesfrom_fd;
@@ -83,19 +91,24 @@ Before compiling, be sure to run "make proto".
  
  	if (preserve_hard_links)
  		init_hard_links(flist);
---- orig/options.c	2004-07-23 17:16:13
-+++ options.c	2004-07-03 17:33:30
-@@ -118,7 +118,8 @@ unsigned int backup_dir_remainder;
+--- orig/options.c	2004-07-26 16:43:48
++++ options.c	2004-07-23 22:04:42
+@@ -114,12 +114,13 @@ int write_batch = 0;
+ int read_batch = 0;
+ int backup_dir_len = 0;
+ int backup_suffix_len;
++int num_comp_dest = 0;
+ unsigned int backup_dir_remainder;
  
  char *backup_suffix = NULL;
  char *tmpdir = NULL;
+ char *partial_dir = NULL;
 -char *compare_dest = NULL;
 +char *compare_dest[MAX_COMP_DEST+1];
-+int num_comp_dest = 0;
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *log_format = NULL;
-@@ -139,6 +140,7 @@ char *batch_name = NULL;
+@@ -140,6 +141,7 @@ char *batch_name = NULL;
  
  static int daemon_opt;   /* sets am_daemon after option error-reporting */
  static int modify_window_set;
@@ -103,7 +116,7 @@ Before compiling, be sure to run "make proto".
  
  /** Local address to bind.  As a character string because it's
   * interpreted by the IPv6 layer: should be a numeric IP4 or IP6
-@@ -315,7 +317,7 @@ void usage(enum logcode F)
+@@ -317,7 +319,7 @@ void usage(enum logcode F)
  }
  
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
@@ -112,7 +125,7 @@ Before compiling, be sure to run "make proto".
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
        OPT_REFUSED_BASE = 9000};
-@@ -374,8 +376,8 @@ static struct poptOption long_options[] 
+@@ -376,8 +378,8 @@ static struct poptOption long_options[] 
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, OPT_TIMEOUT, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
@@ -123,7 +136,7 @@ Before compiling, be sure to run "make proto".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -591,8 +593,36 @@ int parse_arguments(int *argc, const cha
+@@ -594,8 +596,36 @@ int parse_arguments(int *argc, const cha
  				select_timeout = io_timeout;
  			break;
  
@@ -160,7 +173,7 @@ Before compiling, be sure to run "make proto".
  			link_dest = 1;
  			break;
  #else
-@@ -690,6 +720,11 @@ int parse_arguments(int *argc, const cha
+@@ -693,6 +723,11 @@ int parse_arguments(int *argc, const cha
  		exit_cleanup(RERR_SYNTAX);
  	}
  
@@ -172,16 +185,16 @@ Before compiling, be sure to run "make proto".
  	if (archive_mode) {
  		if (!files_from)
  			recurse = 1;
-@@ -718,8 +753,6 @@ int parse_arguments(int *argc, const cha
- 			(*argv)[i] = alloc_sanitize_path((*argv)[i], NULL);
- 		if (tmpdir)
+@@ -723,8 +758,6 @@ int parse_arguments(int *argc, const cha
  			tmpdir = alloc_sanitize_path(tmpdir, curr_dir);
+ 		if (partial_dir)
+ 			partial_dir = alloc_sanitize_path(partial_dir, curr_dir);
 -		if (compare_dest)
 -			compare_dest = alloc_sanitize_path(compare_dest, curr_dir);
  		if (backup_dir)
  			backup_dir = alloc_sanitize_path(backup_dir, curr_dir);
  		if (files_from)
-@@ -825,8 +858,8 @@ int parse_arguments(int *argc, const cha
+@@ -836,8 +869,8 @@ int parse_arguments(int *argc, const cha
   **/
  void server_options(char **args,int *argc)
  {
@@ -191,7 +204,7 @@ Before compiling, be sure to run "make proto".
  	char *arg;
  
  	int i, x;
-@@ -1004,13 +1037,16 @@ void server_options(char **args,int *arg
+@@ -1018,13 +1051,16 @@ void server_options(char **args,int *arg
  		args[ac++] = tmpdir;
  	}
  
@@ -211,17 +224,17 @@ Before compiling, be sure to run "make proto".
  	}
  
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
---- orig/receiver.c	2004-07-22 00:20:50
-+++ receiver.c	2004-07-03 20:14:37
-@@ -38,7 +38,6 @@ extern int preserve_perms;
- extern int cvs_exclude;
+--- orig/receiver.c	2004-07-23 21:59:07
++++ receiver.c	2004-07-23 22:05:04
+@@ -39,7 +39,6 @@ extern int cvs_exclude;
  extern int io_error;
  extern char *tmpdir;
+ extern char *partial_dir;
 -extern char *compare_dest;
  extern int make_backups;
  extern int do_progress;
  extern char *backup_dir;
---- orig/rsync.h	2004-07-23 17:16:13
+--- orig/rsync.h	2004-07-27 23:23:54
 +++ rsync.h	2004-07-03 17:33:30
 @@ -98,6 +98,8 @@
  
