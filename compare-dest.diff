@@ -2,10 +2,13 @@ This patch allows multiple --compare-dest or --link-dest options to be
 used, making the transfer of some files more optimal.  Note that the
 algorithm does NOT search for the best match -- it stops at the first
 match and uses that as the basis file for the transfer, so be sure to
-order your arguments appropriately.
+order your arguments appropriately (the args are searched in the order
+they are suppled).
 
---- generator.c	23 Jun 2004 16:51:21 -0000	1.89
-+++ generator.c	23 Jun 2004 17:29:39 -0000
+Before compiling, be sure to run "make proto".
+
+--- generator.c	29 Jun 2004 19:19:00 -0000	1.92
++++ generator.c	30 Jun 2004 06:50:26 -0000
 @@ -42,7 +42,7 @@ extern int size_only;
  extern int io_timeout;
  extern int protocol_version;
@@ -34,7 +37,16 @@ order your arguments appropriately.
  		}
  		file_checksum(fname,sum,st->st_size);
  		return memcmp(sum, file->u.sum, protocol_version < 21 ? 2
-@@ -423,13 +422,18 @@ void recv_generator(char *fname, struct 
+@@ -267,7 +266,7 @@ static void generate_and_send_sums(struc
+  * out.  It might be wrong.
+  */
+ static void recv_generator(char *fname, struct file_struct *file, int i,
+-			   int f_out)
++			   int f_out, int f_nameout)
+ {
+ 	int fd;
+ 	STRUCT_STAT st;
+@@ -424,15 +423,22 @@ static void recv_generator(char *fname, 
  
  	fnamecmp = fname;
  
@@ -46,6 +58,7 @@ order your arguments appropriately.
 -		statret = link_stat(fnamecmpbuf, &st, 0);
 -		if (!S_ISREG(st.st_mode))
 -			statret = -1;
+-		if (statret == -1)
 +		int i;
 +		for (i = 0; compare_dest[i] != NULL; i++) {
 +			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest[i], fname);
@@ -55,11 +68,210 @@ order your arguments appropriately.
 +				statret = -1;
 +			}
 +		}
- 		if (statret == -1)
++		if (statret < 0) {
  			errno = saveerrno;
++			*fnamecmpbuf = '\0';
++		}
  #if HAVE_LINK
+ 		else if (link_dest && !dry_run) {
+ 			if (do_link(fnamecmpbuf, fname) != 0) {
+@@ -440,18 +446,22 @@ static void recv_generator(char *fname, 
+ 					rsyserr(FINFO, errno, "link %s => %s",
+ 						fnamecmpbuf, fname);
+ 				}
+-			}
+-			fnamecmp = fnamecmpbuf;
++				fnamecmp = fnamecmpbuf;
++			} else
++				*fnamecmpbuf = '\0';
+ 		}
+ #endif
+ 		else
+ 			fnamecmp = fnamecmpbuf;
+-	}
++	} else
++		*fnamecmpbuf = '\0';
+ 
+ 	if (statret == -1) {
+ 		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
+ 			return;
+ 		if (errno == ENOENT) {
++			if (f_nameout >= 0)
++				write(f_nameout, "", 1);
+ 			write_int(f_out,i);
+ 			if (!dry_run)
+ 				write_sum_head(f_out, NULL);
+@@ -471,19 +481,21 @@ static void recv_generator(char *fname, 
+ 		/* now pretend the file didn't exist */
+ 		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
+ 			return;
++		if (f_nameout >= 0)
++			write(f_nameout, "", 1);
+ 		write_int(f_out,i);
+ 		if (!dry_run)
+ 			write_sum_head(f_out, NULL);
+ 		return;
+ 	}
+ 
+-	if (opt_ignore_existing && fnamecmp == fname) {
++	if (opt_ignore_existing && !*fnamecmpbuf) {
+ 		if (verbose > 1)
+ 			rprintf(FINFO,"%s exists\n",fname);
+ 		return;
+ 	}
+ 
+-	if (update_only && fnamecmp == fname
++	if (update_only && !*fnamecmpbuf
+ 	    && cmp_modtime(st.st_mtime, file->modtime) > 0) {
+ 		if (verbose > 1)
+ 			rprintf(FINFO,"%s is newer\n",fname);
+@@ -491,17 +503,21 @@ static void recv_generator(char *fname, 
+ 	}
+ 
+ 	if (skip_file(fname, file, &st)) {
+-		if (fnamecmp == fname)
++		if (!*fnamecmpbuf)
+ 			set_perms(fname, file, &st, PERMS_REPORT);
+ 		return;
+ 	}
+ 
+ 	if (dry_run) {
++		if (f_nameout >= 0)
++			write(f_nameout, "", 1);
+ 		write_int(f_out,i);
+ 		return;
+ 	}
+ 
+ 	if (disable_deltas_p()) {
++		if (f_nameout >= 0)
++			write(f_nameout, "", 1);
+ 		write_int(f_out,i);
+ 		write_sum_head(f_out, NULL);
+ 		return;
+@@ -516,6 +532,8 @@ static void recv_generator(char *fname, 
+ 		/* pretend the file didn't exist */
+ 		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
+ 			return;
++		if (f_nameout >= 0)
++			write(f_nameout, "", 1);
+ 		write_int(f_out,i);
+ 		write_sum_head(f_out, NULL);
+ 		return;
+@@ -534,6 +552,8 @@ static void recv_generator(char *fname, 
+ 	if (verbose > 2)
+ 		rprintf(FINFO, "generating and sending sums for %d\n", i);
+ 
++	if (f_nameout >= 0)
++		write(f_nameout, fnamecmpbuf, strlen(fnamecmpbuf) + 1);
+ 	write_int(f_out,i);
+ 	generate_and_send_sums(mapbuf, st.st_size, f_out);
+ 
+@@ -543,10 +563,11 @@ static void recv_generator(char *fname, 
+ }
+ 
+ 
+-void generate_files(int f, struct file_list *flist, char *local_name)
++void generate_files(int f, struct file_list *flist, char *local_name,
++		    int f_nameout)
+ {
+ 	int i;
+-	int phase=0;
++	int phase = 0;
+ 	char fbuf[MAXPATHLEN];
+ 
+ 	if (verbose > 2) {
+@@ -584,7 +605,7 @@ void generate_files(int f, struct file_l
+ 		}
+ 
+ 		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
+-			       file, i, f);
++			       file, i, f, f_nameout);
+ 	}
+ 
+ 	phase++;
+@@ -601,7 +622,7 @@ void generate_files(int f, struct file_l
+ 	while ((i = get_redo_num()) != -1) {
+ 		struct file_struct *file = flist->files[i];
+ 		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
+-			       file, i, f);
++			       file, i, f, f_nameout);
+ 	}
+ 
+ 	phase++;
+@@ -620,7 +641,7 @@ void generate_files(int f, struct file_l
+ 		if (!file->basename || !S_ISDIR(file->mode))
+ 			continue;
+ 		recv_generator(local_name ? local_name : f_name(file),
+-			       file, i, -1);
++			       file, i, -1, -1);
+ 	}
+ 
+ 	if (verbose > 2)
+--- main.c	28 Jun 2004 17:45:40 -0000	1.201
++++ main.c	30 Jun 2004 06:50:27 -0000
+@@ -428,8 +428,8 @@ static void do_server_sender(int f_in, i
+ static int do_recv(int f_in,int f_out,struct file_list *flist,char *local_name)
+ {
+ 	int pid;
+-	int status=0;
+-	int error_pipe[2];
++	int status = 0;
++	int error_pipe[2], name_pipe[2];
+ 
+ 	if (preserve_hard_links)
+ 		init_hard_links(flist);
+@@ -441,17 +441,19 @@ static int do_recv(int f_in,int f_out,st
+ 		}
+ 	}
+ 
+-	if (fd_pair(error_pipe) < 0) {
+-		rprintf(FERROR,"error pipe failed in do_recv\n");
++	if (fd_pair(error_pipe) < 0 || fd_pair(name_pipe) < 0) {
++		rprintf(FERROR, "fd_pair() failed in do_recv\n");
+ 		exit_cleanup(RERR_SOCKETIO);
+ 	}
+ 
+ 	io_flush(NORMAL_FLUSH);
+ 
+-	if ((pid=do_fork()) == 0) {
++	if ((pid = do_fork()) == 0) {
+ 		close(error_pipe[0]);
++		close(name_pipe[1]);
+ 		if (f_in != f_out)
+ 			close(f_out);
++		set_blocking(name_pipe[0]);
+ 
+ 		/* we can't let two processes write to the socket at one time */
+ 		io_multiplexing_close();
+@@ -459,7 +461,7 @@ static int do_recv(int f_in,int f_out,st
+ 		/* set place to send errors */
+ 		set_msg_fd_out(error_pipe[1]);
+ 
+-		recv_files(f_in,flist,local_name);
++		recv_files(f_in, flist, local_name, name_pipe[0]);
+ 		io_flush(FULL_FLUSH);
+ 		report(f_in);
+ 
+@@ -475,14 +477,16 @@ static int do_recv(int f_in,int f_out,st
+ 	am_generator = 1;
+ 
+ 	close(error_pipe[1]);
++	close(name_pipe[0]);
+ 	if (f_in != f_out)
+ 		close(f_in);
++	set_blocking(name_pipe[1]);
+ 
+ 	io_start_buffering_out(f_out);
+ 
+ 	set_msg_fd_in(error_pipe[0]);
+ 
+-	generate_files(f_out, flist, local_name);
++	generate_files(f_out, flist, local_name, name_pipe[1]);
+ 
+ 	get_redo_num(); /* Read final MSG_DONE and any prior messages. */
+ 	report(-1);
 --- options.c	20 Jun 2004 19:47:05 -0000	1.157
-+++ options.c	23 Jun 2004 17:29:39 -0000
++++ options.c	30 Jun 2004 06:50:27 -0000
 @@ -117,7 +117,8 @@ unsigned int backup_dir_remainder;
  
  char *backup_suffix = NULL;
@@ -186,41 +398,74 @@ order your arguments appropriately.
  	}
  
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
---- receiver.c	14 Jun 2004 15:09:36 -0000	1.82
-+++ receiver.c	23 Jun 2004 17:29:39 -0000
-@@ -36,7 +36,7 @@ extern int preserve_perms;
+--- receiver.c	29 Jun 2004 15:12:01 -0000	1.83
++++ receiver.c	30 Jun 2004 06:50:27 -0000
+@@ -36,7 +36,6 @@ extern int preserve_perms;
  extern int cvs_exclude;
  extern int io_error;
  extern char *tmpdir;
 -extern char *compare_dest;
-+extern char *compare_dest[];
  extern int make_backups;
  extern int do_progress;
  extern char *backup_dir;
-@@ -306,7 +306,7 @@ int recv_files(int f_in,struct file_list
+@@ -293,14 +292,15 @@ static int receive_data(int f_in,struct 
+  * main routine for receiver process.
+  *
+  * Receiver process runs on the same host as the generator process. */
+-int recv_files(int f_in,struct file_list *flist,char *local_name)
++int recv_files(int f_in, struct file_list *flist, char *local_name,
++	       int f_name)
+ {
+ 	int fd1,fd2;
+ 	STRUCT_STAT st;
+ 	char *fname, fbuf[MAXPATHLEN];
+ 	char template[MAXPATHLEN];
+ 	char fnametmp[MAXPATHLEN];
+-	char *fnamecmp;
++	char *fnamecmp, *cp;
+ 	char fnamecmpbuf[MAXPATHLEN];
+ 	struct map_struct *mapbuf;
  	struct file_struct *file;
- 	struct stats initial_stats;
- 	int save_make_backups = make_backups;
--	int i, recv_ok, phase = 0;
-+	int i, j, recv_ok, phase = 0;
+@@ -364,19 +364,19 @@ int recv_files(int f_in,struct file_list
+ 		if (verbose > 2)
+ 			rprintf(FINFO,"recv_files(%s)\n",fname);
  
- 	if (verbose > 2) {
- 		rprintf(FINFO,"recv_files(%d) starting\n",flist->count);
-@@ -369,10 +369,10 @@ int recv_files(int f_in,struct file_list
+-		fnamecmp = fname;
++		for (cp = fnamecmpbuf; ; cp++) {
++			if (read(f_name, cp, 1) <= 0) {
++				rsyserr(FERROR, errno, "fname-pipe read failed");
++				exit_cleanup(RERR_PROTOCOL);
++			}
++			if (!*cp)
++				break;
++		}
++		fnamecmp = *fnamecmpbuf ? fnamecmpbuf : fname;
+ 
  		/* open the file */
  		fd1 = do_open(fnamecmp, O_RDONLY, 0);
  
 -		if (fd1 == -1 && compare_dest != NULL) {
-+		for (j = 0; fd1 == -1 && compare_dest[j] != NULL; j++) {
- 			/* try the file at compare_dest instead */
- 			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
+-			/* try the file at compare_dest instead */
+-			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
 -				 compare_dest, fname);
-+				 compare_dest[j], fname);
- 			fnamecmp = fnamecmpbuf;
- 			fd1 = do_open(fnamecmp, O_RDONLY, 0);
+-			fnamecmp = fnamecmpbuf;
+-			fd1 = do_open(fnamecmp, O_RDONLY, 0);
+-		}
+-
+ 		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
+ 			rsyserr(FERROR, errno, "fstat %s failed",
+ 				full_fname(fnamecmp));
+@@ -385,7 +385,7 @@ int recv_files(int f_in,struct file_list
+ 			continue;
  		}
+ 
+-		if (fd1 != -1 && S_ISDIR(st.st_mode) && fnamecmp == fname) {
++		if (fd1 != -1 && S_ISDIR(st.st_mode) && !*fnamecmpbuf) {
+ 			/* this special handling for directories
+ 			 * wouldn't be necessary if robust_rename()
+ 			 * and the underlying robust_unlink could cope
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	23 Jun 2004 17:29:40 -0000
++++ rsync.h	30 Jun 2004 06:50:27 -0000
 @@ -98,6 +98,8 @@
  
  #define MAX_ARGS 1000
