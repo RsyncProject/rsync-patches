@@ -1,5 +1,3 @@
-Depends-On-Patch: g2r-basis-filename.diff
-
 This patch allows multiple --compare-dest or --link-dest options to be
 used, making the transfer of some files more optimal.  Note that the
 algorithm does NOT search for the best match -- it stops at the first
@@ -9,8 +7,8 @@ they are suppled).
 
 Before compiling, be sure to run "make proto".
 
---- orig/generator.c	2004-10-09 04:06:49
-+++ generator.c	2004-10-09 03:35:50
+--- orig/generator.c	2004-11-03 20:30:45
++++ generator.c	2004-11-03 22:47:23
 @@ -45,7 +45,7 @@ extern int io_timeout;
  extern int protocol_version;
  extern int always_checksum;
@@ -22,7 +20,7 @@ Before compiling, be sure to run "make proto".
  extern int local_server;
 @@ -424,11 +424,19 @@ static void recv_generator(char *fname, 
  	fnamecmp = fname;
- 	fnamecmp_type = G2R_FNAME;
+ 	fnamecmp_type = FNAMECMP_FNAME;
  
 -	if (statret == -1 && compare_dest != NULL) {
 +	if (statret == -1 && compare_dest[0] != NULL) {
@@ -48,21 +46,21 @@ Before compiling, be sure to run "make proto".
  							safe_fname(fname));
  					}
  					fnamecmp = fnamecmpbuf;
--					fnamecmp_type = 0;
-+					fnamecmp_type = i;
+-					fnamecmp_type = FNAMECMP_CMPDEST;
++					fnamecmp_type = FNAMECMP_CMPDEST + i;
  				}
  			} else
  #endif
  			{
  				fnamecmp = fnamecmpbuf;
--				fnamecmp_type = 0;
-+				fnamecmp_type = i;
+-				fnamecmp_type = FNAMECMP_CMPDEST;
++				fnamecmp_type = FNAMECMP_CMPDEST + i;
  			}
 -			statret = 0;
  		}
  	}
  
---- orig/main.c	2004-10-09 03:25:43
+--- orig/main.c	2004-11-03 20:30:45
 +++ main.c	2004-07-30 07:23:54
 @@ -59,7 +59,7 @@ extern int filesfrom_fd;
  extern pid_t cleanup_child_pid;
@@ -237,9 +235,9 @@ Before compiling, be sure to run "make proto".
  	}
  
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
---- orig/receiver.c	2004-09-07 21:57:20
-+++ receiver.c	2004-07-30 07:31:12
-@@ -38,7 +38,7 @@ extern int cvs_exclude;
+--- orig/receiver.c	2004-11-03 20:30:45
++++ receiver.c	2004-11-03 22:50:43
+@@ -39,7 +39,7 @@ extern int cvs_exclude;
  extern int io_error;
  extern char *tmpdir;
  extern char *partial_dir;
@@ -248,18 +246,18 @@ Before compiling, be sure to run "make proto".
  extern int make_backups;
  extern int do_progress;
  extern char *backup_dir;
-@@ -438,7 +438,8 @@ int recv_files(int f_in, struct file_lis
+@@ -439,7 +439,8 @@ int recv_files(int f_in, struct file_lis
  		partialptr = partial_dir ? partial_dir_fname(fname) : fname;
  
  		if (f_in_name >= 0) {
 -			switch (read_byte(f_in_name)) {
 +			uchar j;
 +			switch (j = read_byte(f_in_name)) {
- 			case G2R_FNAME:
+ 			case FNAMECMP_FNAME:
  				fnamecmp = fname;
  				break;
-@@ -450,7 +451,7 @@ int recv_files(int f_in, struct file_lis
- 				break;
+@@ -452,7 +453,7 @@ int recv_files(int f_in, struct file_lis
+ 			case FNAMECMP_CMPDEST:
  			default:
  				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
 -					 compare_dest, fname);
@@ -267,7 +265,7 @@ Before compiling, be sure to run "make proto".
  				fnamecmp = fnamecmpbuf;
  				break;
  			}
---- orig/rsync.h	2004-09-07 21:52:22
+--- orig/rsync.h	2004-11-03 20:30:45
 +++ rsync.h	2004-07-30 07:23:54
 @@ -98,6 +98,8 @@
  
