@@ -1,0 +1,560 @@
+This patch adds the ability to use ". INSERT" files in excludes and
+includes.  If you specify a name without slashes, that filename will be
+looked for in every directory and its rules will effect that directory
+and its subdirectories.  Insert rules found inside a per-directory
+include file are always just read in (they don't create any new per-dir
+include/exclude files).
+
+For example:
+
+  rsync -av --exclude='. .excl' from/ to
+
+The above will look for a file named ".excl" in every directory of the
+sender and will exclude (by default) files based on the rules found
+therein.  If a file contains this:
+
+  + *.c
+  . another.file
+  - *.o
+
+Then the file "another.file" will also be read (from that one dir) and
+its rules inserted in between the surrounding lines.
+
+Additionally, you can affect where the -C option's inclusion of the
+.cvsignore file gets inserted into your rules by mentioning it as an
+insertion.  For instance, specifying this:
+
+  rsync -avC --include=foo --exclude='. .cvsignore' --include='*.c' a/ b
+
+This will insert all the .cvsignore rules in the middle of your rules
+rather than at the end.  This allows their dir-specific rules to
+supersede your general rules instead of being subservient to them.
+
+..wayne..
+
+--- exclude.c	22 Apr 2004 22:17:15 -0000	1.71
++++ exclude.c	22 Apr 2004 23:45:51 -0000
+@@ -30,31 +30,60 @@ extern int verbose;
+ extern int eol_nulls;
+ extern int list_only;
+ extern int recurse;
++extern int io_error;
++extern int sanitize_paths;
+ 
+ extern char curr_dir[];
+ 
+-struct exclude_list_struct exclude_list = { 0, 0, "" };
+-struct exclude_list_struct local_exclude_list = { 0, 0, "local-cvsignore " };
+-struct exclude_list_struct server_exclude_list = { 0, 0, "server " };
++struct exclude_list_struct exclude_list = { 0, 0, 0, 0, "" };
++struct exclude_list_struct server_exclude_list = { 0, 0, 0, 0, "server " };
+ char *exclude_path_prefix = NULL;
+ 
++static struct exclude_list_struct *local_exclude_lists;
++static int local_exclude_list_cnt;
++static char dirbuf[MAXPATHLEN];
++static unsigned int dirbuf_offset = 0;
++
++static void clear_exclude_list(struct exclude_list_struct *listp,
++			struct exclude_struct *extra)
++{
++	listp->head = listp->extra = extra;
++	listp->tail = NULL;
++}
++
+ /** Build an exclude structure given a exclude pattern */
+ static void make_exclude(struct exclude_list_struct *listp, const char *pattern,
+-			 int pat_len, int include)
++			 unsigned int pat_len, int mflags)
+ {
+ 	struct exclude_struct *ret;
+ 	const char *cp;
+-	int ex_len;
++	unsigned int ex_len;
++
++	if (mflags & MATCHFLG_INSERT_FILE) {
++		struct exclude_struct *ex;
++		/* If the local include file was already mentioned, don't
++		 * insert it again. */
++		for (ex = listp->head; ex; ex = ex->next) {
++			if ((ex->match_flags & MATCHFLG_INSERT_FILE)
++			    && strlen(ex->pattern) == pat_len
++			    && strncmp(ex->pattern, pattern, pat_len) == 0)
++				return;
++		}
++		if (pat_len == 10 && strncmp(pattern, ".cvsignore", 10) == 0) {
++			mflags |= MATCHFLG_CVSIGNORE;
++			mflags &= ~MATCHFLG_INCLUDE;
++		} else
++			mflags &= ~MATCHFLG_CVSIGNORE;
++	}
+ 
+ 	ret = new(struct exclude_struct);
+ 	if (!ret)
+ 		out_of_memory("make_exclude");
+ 
+ 	memset(ret, 0, sizeof ret[0]);
+-	ret->include = include;
+ 
+ 	if (exclude_path_prefix)
+-		ret->match_flags |= MATCHFLG_ABS_PATH;
++		mflags |= MATCHFLG_ABS_PATH;
+ 	if (exclude_path_prefix && *pattern == '/')
+ 		ex_len = strlen(exclude_path_prefix);
+ 	else
+@@ -68,29 +97,49 @@ static void make_exclude(struct exclude_
+ 	pat_len += ex_len;
+ 
+ 	if (strpbrk(ret->pattern, "*[?")) {
+-		ret->match_flags |= MATCHFLG_WILD;
++		mflags |= MATCHFLG_WILD;
+ 		if ((cp = strstr(ret->pattern, "**")) != NULL) {
+-			ret->match_flags |= MATCHFLG_WILD2;
++			mflags |= MATCHFLG_WILD2;
+ 			/* If the pattern starts with **, note that. */
+ 			if (cp == ret->pattern)
+-				ret->match_flags |= MATCHFLG_WILD2_PREFIX;
++				mflags |= MATCHFLG_WILD2_PREFIX;
+ 		}
+ 	}
+ 
+ 	if (pat_len > 1 && ret->pattern[pat_len-1] == '/') {
+ 		ret->pattern[pat_len-1] = 0;
+-		ret->directory = 1;
++		mflags |= MATCHFLG_DIRECTORY;
+ 	}
+ 
+ 	for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
+ 		ret->slash_cnt++;
+ 
++	ret->next = listp->extra;
++
+ 	if (!listp->tail)
+ 		listp->head = listp->tail = ret;
+ 	else {
+ 		listp->tail->next = ret;
+ 		listp->tail = ret;
+ 	}
++
++	if (mflags & MATCHFLG_INSERT_FILE) {
++		struct exclude_list_struct *lp;
++		int ndx = local_exclude_list_cnt++;
++		local_exclude_lists = realloc_array(local_exclude_lists,
++		    struct exclude_list_struct, local_exclude_list_cnt);
++		if (!local_exclude_lists)
++			out_of_memory("make_exclude");
++		lp = &local_exclude_lists[ndx];
++		clear_exclude_list(lp, NULL);
++		if (asprintf(&lp->debug_type, "local %s ",
++		    ret->pattern) < 0)
++			out_of_memory("make_exclude");
++		lp->parent = ret;
++		ret->slash_cnt = ndx;
++	}
++
++	ret->match_flags = mflags;
+ }
+ 
+ static void free_exclude(struct exclude_struct *ex)
+@@ -99,7 +148,7 @@ static void free_exclude(struct exclude_
+ 	free(ex);
+ }
+ 
+-void free_exclude_list(struct exclude_list_struct *listp)
++static void free_exclude_list(struct exclude_list_struct *listp)
+ {
+ 	struct exclude_struct *ent, *next;
+ 
+@@ -108,12 +157,72 @@ void free_exclude_list(struct exclude_li
+ 			who_am_i(), listp->debug_type);
+ 	}
+ 
++	if (listp->extra) {
++		if (listp->tail)
++			listp->tail->next = NULL;
++		else
++			listp->head = NULL;
++	}
++
+ 	for (ent = listp->head; ent; ent = next) {
+ 		next = ent->next;
+ 		free_exclude(ent);
+ 	}
+ 
+-	listp->head = listp->tail = NULL;
++	clear_exclude_list(listp, NULL);
++}
++
++void *push_local_excludes(char *fname, unsigned int offset)
++{
++	int i;
++	struct exclude_list_struct *mem = new_array(struct exclude_list_struct,
++						    local_exclude_list_cnt);
++	if (!mem)
++		out_of_memory("push_local_excludes");
++
++	memcpy(mem, local_exclude_lists,
++	    sizeof (struct exclude_list_struct) * local_exclude_list_cnt);
++
++	memcpy(dirbuf, fname, offset);
++	dirbuf_offset = offset;
++
++	for (i = 0; i < local_exclude_list_cnt; i++) {
++		struct exclude_list_struct *listp = &local_exclude_lists[i];
++		struct exclude_struct *extra;
++		char *file = listp->parent->pattern;
++		int flags;
++		if (listp->parent->match_flags & MATCHFLG_CVSIGNORE) {
++			flags = XFLG_WORD_SPLIT | XFLG_NO_PREFIXES;
++			extra = NULL;
++		} else {
++			flags = 0;
++			extra = listp->head; /* subdirs inherit our rules */
++		}
++		clear_exclude_list(listp, extra);
++		if (strlcpy(fname +  offset, file, MAXPATHLEN - offset)
++		    < MAXPATHLEN - offset) {
++			add_exclude_file(listp, fname, flags);
++		} else {
++			io_error |= IOERR_GENERAL;
++			rprintf(FINFO,
++			    "cannot add local excludes in long-named directory %s\n",
++			    full_fname(fname));
++		}
++	}
++
++	return (void *) mem;
++}
++
++void pop_local_excludes(void *mem)
++{
++	int i;
++	for (i = 0; i < local_exclude_list_cnt; i++) {
++		struct exclude_list_struct *listp = &local_exclude_lists[i];
++		free_exclude_list(listp);
++	}
++	memcpy(local_exclude_lists, mem,
++	    sizeof (struct exclude_list_struct) * local_exclude_list_cnt);
++	free(mem);
+ }
+ 
+ static int check_one_exclude(char *name, struct exclude_struct *ex,
+@@ -139,7 +248,8 @@ static int check_one_exclude(char *name,
+ 
+ 	if (!name[0]) return 0;
+ 
+-	if (ex->directory && !name_is_dir) return 0;
++	if ((ex->match_flags & MATCHFLG_DIRECTORY) && !name_is_dir)
++		return 0;
+ 
+ 	if (*pattern == '/') {
+ 		match_start = 1;
+@@ -206,9 +316,11 @@ static void report_exclude_result(char c
+ 
+ 	if (verbose >= 2) {
+ 		rprintf(FINFO, "[%s] %scluding %s %s because of %spattern %s%s\n",
+-			who_am_i(), ent->include ? "in" : "ex",
++			who_am_i(),
++			ent->match_flags & MATCHFLG_INCLUDE ? "in" : "ex",
+ 			name_is_dir ? "directory" : "file", name, type,
+-			ent->pattern, ent->directory ? "/" : "");
++			ent->pattern,
++			ent->match_flags & MATCHFLG_DIRECTORY ? "/" : "");
+ 	}
+ }
+ 
+@@ -223,10 +335,18 @@ int check_exclude(struct exclude_list_st
+ 	struct exclude_struct *ent;
+ 
+ 	for (ent = listp->head; ent; ent = ent->next) {
++		if (ent->match_flags & MATCHFLG_INSERT_FILE) {
++			struct exclude_list_struct *lp
++			    = &local_exclude_lists[ent->slash_cnt];
++			int rc = check_exclude(lp, name, name_is_dir);
++			if (rc)
++				return rc;
++			continue;
++		}
+ 		if (check_one_exclude(name, ent, name_is_dir)) {
+ 			report_exclude_result(name, ent, name_is_dir,
+ 					      listp->debug_type);
+-			return ent->include ? 1 : -1;
++			return (ent->match_flags & MATCHFLG_INCLUDE) ? 1 : -1;
+ 		}
+ 	}
+ 
+@@ -242,11 +362,11 @@ int check_exclude(struct exclude_list_st
+  * *incl_ptr value will be 1 for an include, 0 for an exclude, and -1 for
+  * the list-clearing "!" token.
+  */
+-static const char *get_exclude_tok(const char *p, int *len_ptr, int *incl_ptr,
++static const char *get_exclude_tok(const char *p, int *len_ptr, int *flag_ptr,
+ 				   int xflags)
+ {
+ 	const unsigned char *s = (const unsigned char *)p;
+-	int len;
++	int len, mflags = 0;
+ 
+ 	if (xflags & XFLG_WORD_SPLIT) {
+ 		/* Skip over any initial whitespace. */
+@@ -256,13 +376,19 @@ static const char *get_exclude_tok(const
+ 		p = (const char *)s;
+ 	}
+ 
+-	/* Is this a '+' or '-' followed by a space (not whitespace)? */
++	/* Is this a +/-/. followed by a space (not whitespace)? */
+ 	if (!(xflags & XFLG_NO_PREFIXES)
+-	    && (*s == '-' || *s == '+') && s[1] == ' ') {
+-		*incl_ptr = *s == '+';
++	    && (*s == '-' || *s == '+' || *s == '.') && s[1] == ' ') {
++		if (*s == '+')
++			mflags |= MATCHFLG_INCLUDE;
++		else if (*s == '.') {
++			mflags |= MATCHFLG_INSERT_FILE;
++			if (xflags & XFLG_DEF_INCLUDE)
++				mflags |= MATCHFLG_INCLUDE;
++		}
+ 		s += 2;
+-	} else
+-		*incl_ptr = xflags & XFLG_DEF_INCLUDE;
++	} else if (xflags & XFLG_DEF_INCLUDE)
++		mflags |= MATCHFLG_INCLUDE;
+ 
+ 	if (xflags & XFLG_WORD_SPLIT) {
+ 		const unsigned char *cp = s;
+@@ -274,9 +400,10 @@ static const char *get_exclude_tok(const
+ 		len = strlen(s);
+ 
+ 	if (*p == '!' && len == 1 && !(xflags & XFLG_NO_PREFIXES))
+-		*incl_ptr = -1;
++		mflags |= MATCHFLG_CLEAR_LIST;
+ 
+ 	*len_ptr = len;
++	*flag_ptr = mflags;
+ 	return (const char *)s;
+ }
+ 
+@@ -284,7 +411,7 @@ static const char *get_exclude_tok(const
+ void add_exclude(struct exclude_list_struct *listp, const char *pattern,
+ 		 int xflags)
+ {
+-	int pat_len, incl;
++	int pat_len, mflags;
+ 	const char *cp;
+ 
+ 	if (!pattern)
+@@ -293,22 +420,44 @@ void add_exclude(struct exclude_list_str
+ 	cp = pattern;
+ 	pat_len = 0;
+ 	while (1) {
+-		cp = get_exclude_tok(cp + pat_len, &pat_len, &incl, xflags);
++		cp = get_exclude_tok(cp + pat_len, &pat_len, &mflags, xflags);
+ 		if (!pat_len)
+ 			break;
+ 		/* If we got the special "!" token, clear the list. */
+-		if (incl < 0)
++		if (mflags & MATCHFLG_CLEAR_LIST) {
+ 			free_exclude_list(listp);
+-		else {
+-			make_exclude(listp, cp, pat_len, incl);
+-
+-			if (verbose > 2) {
+-				rprintf(FINFO, "[%s] add_exclude(%.*s, %s%s)\n",
+-					who_am_i(), pat_len, cp,
+-					listp->debug_type,
+-					incl ? "include" : "exclude");
++			continue;
++		}
++		if (mflags & MATCHFLG_INSERT_FILE) {
++			char name[MAXPATHLEN];
++			if ((unsigned) pat_len >= sizeof name)
++				continue; // XXX complain?
++			strlcpy(name, cp, pat_len+1);
++			if (listp->parent || strchr(name, '/') != NULL) {
++				if (sanitize_paths)
++					sanitize_path(name, curr_dir);
++				if (*name == '/')
++					cp = name;
++				else {
++					if (strlcpy(dirbuf + dirbuf_offset,
++					    name, MAXPATHLEN - dirbuf_offset)
++					    >= MAXPATHLEN - dirbuf_offset)
++						continue; // XXX complain?
++					cp = dirbuf;
++				}
++				add_exclude_file(listp, cp,
++				    xflags | XFLG_FATAL_ERRORS);
++				continue;
+ 			}
+ 		}
++		make_exclude(listp, cp, pat_len, mflags);
++
++		if (verbose > 2) {
++			rprintf(FINFO, "[%s] add_exclude(%.*s, %s%s%sclude)\n",
++				who_am_i(), pat_len, cp, listp->debug_type,
++				mflags & MATCHFLG_INSERT_FILE ? "FILE " : "",
++				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
++		}
+ 	}
+ }
+ 
+@@ -384,15 +533,19 @@ void send_exclude_list(int f)
+ 		l = strlcpy(p, ent->pattern, sizeof p);
+ 		if (l == 0 || l >= MAXPATHLEN)
+ 			continue;
+-		if (ent->directory) {
++		if (ent->match_flags & MATCHFLG_DIRECTORY) {
+ 			p[l++] = '/';
+ 			p[l] = '\0';
+ 		}
+ 
+-		if (ent->include) {
++		if (ent->match_flags & MATCHFLG_INCLUDE) {
+ 			write_int(f, l + 2);
+ 			write_buf(f, "+ ", 2);
+-		} else if ((*p == '-' || *p == '+') && p[1] == ' ') {
++		} else if (ent->match_flags & MATCHFLG_INSERT_FILE) {
++			write_int(f, l + 2);
++			write_buf(f, ". ", 2);
++		} else if ((*p == '-' || *p == '+' || *p == '.')
++		    && p[1] == ' ') {
+ 			write_int(f, l + 2);
+ 			write_buf(f, "- ", 2);
+ 		} else
+@@ -433,6 +586,7 @@ void add_cvs_excludes(void)
+ 	char fname[MAXPATHLEN];
+ 	char *p;
+ 
++	add_exclude(&exclude_list, ". .cvsignore", 0);
+ 	add_exclude(&exclude_list, default_cvsignore,
+ 		    XFLG_WORD_SPLIT | XFLG_NO_PREFIXES);
+ 
+--- flist.c	22 Apr 2004 22:17:15 -0000	1.216
++++ flist.c	22 Apr 2004 23:45:51 -0000
+@@ -39,8 +39,6 @@ extern int module_id;
+ extern int ignore_errors;
+ extern int numeric_ids;
+ 
+-extern int cvs_exclude;
+-
+ extern int recurse;
+ extern char curr_dir[MAXPATHLEN];
+ extern char *files_from;
+@@ -66,7 +64,6 @@ extern int write_batch;
+ 
+ extern struct exclude_list_struct exclude_list;
+ extern struct exclude_list_struct server_exclude_list;
+-extern struct exclude_list_struct local_exclude_list;
+ 
+ int io_error;
+ 
+@@ -211,8 +208,6 @@ int link_stat(const char *path, STRUCT_S
+  */
+ static int check_exclude_file(char *fname, int is_dir, int exclude_level)
+ {
+-	int rc;
+-
+ #if 0 /* This currently never happens, so avoid a useless compare. */
+ 	if (exclude_level == NO_EXCLUDES)
+ 		return 0;
+@@ -234,10 +229,7 @@ static int check_exclude_file(char *fnam
+ 	if (exclude_level != ALL_EXCLUDES)
+ 		return 0;
+ 	if (exclude_list.head
+-	    && (rc = check_exclude(&exclude_list, fname, is_dir)) != 0)
+-		return rc < 0;
+-	if (local_exclude_list.head
+-	    && check_exclude(&local_exclude_list, fname, is_dir) < 0)
++	    && check_exclude(&exclude_list, fname, is_dir) < 0)
+ 		return 1;
+ 	return 0;
+ }
+@@ -946,11 +938,7 @@ void send_file_name(int f, struct file_l
+ 
+ 	if (recursive && S_ISDIR(file->mode)
+ 	    && !(file->flags & FLAG_MOUNT_POINT)) {
+-		struct exclude_list_struct last_list = local_exclude_list;
+-		local_exclude_list.head = local_exclude_list.tail = NULL;
+ 		send_directory(f, flist, f_name_to(file, fbuf));
+-		free_exclude_list(&local_exclude_list);
+-		local_exclude_list = last_list;
+ 	}
+ }
+ 
+@@ -961,6 +949,7 @@ static void send_directory(int f, struct
+ 	struct dirent *di;
+ 	char fname[MAXPATHLEN];
+ 	unsigned int offset;
++	void *save_excludes;
+ 	char *p;
+ 
+ 	d = opendir(dir);
+@@ -985,18 +974,7 @@ static void send_directory(int f, struct
+ 		offset++;
+ 	}
+ 
+-	if (cvs_exclude) {
+-		if (strlcpy(p, ".cvsignore", MAXPATHLEN - offset)
+-		    < MAXPATHLEN - offset) {
+-			add_exclude_file(&local_exclude_list, fname,
+-					 XFLG_WORD_SPLIT | XFLG_NO_PREFIXES);
+-		} else {
+-			io_error |= IOERR_GENERAL;
+-			rprintf(FINFO,
+-				"cannot cvs-exclude in long-named directory %s\n",
+-				full_fname(fname));
+-		}
+-	}
++	save_excludes = push_local_excludes(fname, offset);
+ 
+ 	for (errno = 0, di = readdir(d); di; errno = 0, di = readdir(d)) {
+ 		char *dname = d_name(di);
+@@ -1017,6 +995,8 @@ static void send_directory(int f, struct
+ 		rprintf(FERROR, "readdir(%s): (%d) %s\n",
+ 			dir, errno, strerror(errno));
+ 	}
++
++	pop_local_excludes(save_excludes);
+ 
+ 	closedir(d);
+ }
+--- proto.h	22 Apr 2004 09:58:09 -0000	1.189
++++ proto.h	22 Apr 2004 23:45:51 -0000
+@@ -51,7 +51,8 @@ int start_daemon(int f_in, int f_out);
+ int daemon_main(void);
+ void setup_protocol(int f_out,int f_in);
+ int claim_connection(char *fname,int max_connections);
+-void free_exclude_list(struct exclude_list_struct *listp);
++void *push_local_excludes(char *fname, unsigned int offset);
++void pop_local_excludes(void *mem);
+ int check_exclude(struct exclude_list_struct *listp, char *name, int name_is_dir);
+ void add_exclude(struct exclude_list_struct *listp, const char *pattern,
+ 		 int xflags);
+--- rsync.h	22 Apr 2004 09:58:24 -0000	1.198
++++ rsync.h	22 Apr 2004 23:45:52 -0000
+@@ -490,18 +490,21 @@ struct map_struct {
+ #define MATCHFLG_WILD2		(1<<1) /* pattern has '**' */
+ #define MATCHFLG_WILD2_PREFIX	(1<<2) /* pattern starts with '**' */
+ #define MATCHFLG_ABS_PATH	(1<<3) /* path-match on absolute path */
++#define MATCHFLG_INCLUDE	(1<<4) /* this is an include, not an exclude */
++#define MATCHFLG_CLEAR_LIST 	(1<<5) /* this item is the "!" token */
++#define MATCHFLG_DIRECTORY	(1<<6) /* this matches only directories */
++#define MATCHFLG_INSERT_FILE	(1<<7) /* specifies a file to insert */
++#define MATCHFLG_CVSIGNORE	(1<<8) /* parse this as a .cvsignore file */
+ struct exclude_struct {
+ 	struct exclude_struct *next;
+ 	char *pattern;
+ 	int match_flags;
+-	int include;
+-	int directory;
+ 	int slash_cnt;
+ };
+ 
+ struct exclude_list_struct {
+-	struct exclude_struct *head;
+-	struct exclude_struct *tail;
++	struct exclude_struct *head, *tail;
++	struct exclude_struct *extra, *parent;
+ 	char *debug_type;
+ };
+ 
