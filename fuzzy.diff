@@ -1,8 +1,11 @@
-Updated for current CVS version by Wayne Davison.  Passes *MOST* of the
-test suite, but otherwise UNTESTED.
+Wayne Davison wrote:
+
+I greatly simplified the changes to generator.c, making the patch
+easier to maintain and fixing the failing test in the testsuite.
+Very lightly tested (by me).
 
 --- Makefile.in	15 May 2004 00:48:11 -0000	1.101
-+++ Makefile.in	29 Jun 2004 15:14:48 -0000
++++ Makefile.in	29 Jun 2004 17:46:12 -0000
 @@ -32,7 +32,7 @@ ZLIBOBJ=zlib/deflate.o zlib/infblock.o z
  	zlib/inflate.o zlib/inftrees.o zlib/infutil.o zlib/trees.o \
  	zlib/zutil.o zlib/adler32.o
@@ -13,8 +16,8 @@ test suite, but otherwise UNTESTED.
  	fileio.o batch.o clientname.o
  OBJS3=progress.o pipe.o
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ alternate.c	29 Jun 2004 15:14:48 -0000
-@@ -0,0 +1,114 @@
++++ alternate.c	29 Jun 2004 17:46:12 -0000
+@@ -0,0 +1,105 @@
 +#include "rsync.h"
 +
 +extern char *compare_dest;
@@ -22,7 +25,7 @@ test suite, but otherwise UNTESTED.
 +
 +/* Alternate methods for opening files, if local doesn't exist */
 +/* Sanity check that we are about to open regular file */
-+int do_open_regular(char *fname)
++static int do_open_regular(char *fname)
 +{
 +	STRUCT_STAT st;
 +
@@ -62,7 +65,8 @@ test suite, but otherwise UNTESTED.
 +	return score;
 +}
 +
-+int open_alternate_base_fuzzy(const char *fname)
++int check_alternate_base_fuzzy(char **fname_ptr, char *buf,
++			       STRUCT_STAT *st_ptr)
 +{
 +	DIR *d;
 +	struct dirent *di;
@@ -72,7 +76,7 @@ test suite, but otherwise UNTESTED.
 +	unsigned int bestscore = 0;
 +	const char *ext;
 +
-+	strlcpy(mangled_name, fname, sizeof mangled_name);
++	strlcpy(mangled_name, *fname_ptr, sizeof mangled_name);
 +
 +	split_names(mangled_name, &dirname, &basename);
 +	if (!(d = opendir(dirname))) {
@@ -95,11 +99,11 @@ test suite, but otherwise UNTESTED.
 +
 +		score = measure_name(dname, basename, ext);
 +		if (verbose > 4) {
-+			rprintf(FINFO,"fuzzy score for %s = %u\n",
-+				dname, score);
++			rprintf(FINFO, "[%s] fuzzy score for %s = %u\n",
++				who_am_i(), dname, score);
 +		}
 +		if (score > bestscore) {
-+			strcpy(bestname, dname);
++			strlcpy(bestname, dname, sizeof bestname);
 +			bestscore = score;
 +		}
 +	}
@@ -107,30 +111,20 @@ test suite, but otherwise UNTESTED.
 +
 +	/* Found a candidate. */
 +	if (bestscore != 0) {
-+		char fuzzyname[MAXPATHLEN];
-+
-+		pathjoin(fuzzyname,sizeof fuzzyname, dirname, bestname);
++		pathjoin(buf, MAXPATHLEN, dirname, bestname);
 +		if (verbose > 2) {
-+			rprintf(FINFO, "fuzzy match %s->%s\n",
-+				fname, fuzzyname);
++			rprintf(FINFO, "[%s] fuzzy match %s->%s\n",
++				who_am_i(), *fname_ptr, buf);
 +		}
-+		return do_open_regular(fuzzyname);
++		*fname_ptr = buf;
++		if (st_ptr)
++			return link_stat(buf, st_ptr, 0);
++		return do_open_regular(buf);
 +	}
 +	return -1;
 +}
-+
-+int open_alternate_base_comparedir(const char *fname)
-+{
-+	char fnamebuf[MAXPATHLEN];
-+
-+	/* try the file at compare_dest instead */
-+	pathjoin(fnamebuf, sizeof fnamebuf, compare_dest, fname);
-+
-+	/* FIXME: now follows symlinks... */
-+	return do_open_regular(fnamebuf);
-+}
---- generator.c	23 Jun 2004 21:21:19 -0000	1.90
-+++ generator.c	29 Jun 2004 15:14:48 -0000
+--- generator.c	29 Jun 2004 16:22:54 -0000	1.91
++++ generator.c	29 Jun 2004 17:46:12 -0000
 @@ -41,6 +41,7 @@ extern int ignore_times;
  extern int size_only;
  extern int io_timeout;
@@ -139,217 +133,42 @@ test suite, but otherwise UNTESTED.
  extern int always_checksum;
  extern char *compare_dest;
  extern int link_dest;
-@@ -256,7 +257,61 @@ static void generate_and_send_sums(struc
- 	}
- }
- 
-+/* Returns -1 for can't open (null file), -2 for skip */
-+static int open_base_file(struct file_struct *file, char *fname, int statret,
-+			  STRUCT_STAT *st)
-+{
-+	int fd = -1;
- 
-+	if (statret == 0) {
-+		if (S_ISREG(st->st_mode)) {
-+			if (update_only
-+			    && cmp_modtime(st->st_mtime, file->modtime) > 0) {
-+				if (verbose > 1)
-+					rprintf(FINFO, "%s is newer\n", fname);
-+				return -2;
-+			}
-+			if (skip_file(fname, file, st)) {
-+				set_perms(fname, file, st, PERMS_REPORT);
-+				return -2;
-+			}
-+		 	fd = do_open(fname, O_RDONLY, 0);
-+			if (fd == -1) {
-+				rsyserr(FERROR, errno, "failed to open %s, continuing",
-+				    full_fname(fname));
-+				return -1;
-+			}
-+			return fd;
-+		} else {
-+			/* Try to use symlink contents */
-+			if (S_ISLNK(st->st_mode)) {
-+				fd = do_open_regular(fname);
-+				/* Don't delete yet; receiver will need it */
-+			} else {
-+				if (delete_file(fname) != 0) {
-+					if (fd != -1)
-+						close(fd);
-+					return -2;
-+				}
-+			}
-+		}
-+	}
-+
-+	if (fd == -1 && compare_dest != NULL)
-+		fd = open_alternate_base_comparedir(fname);
-+
-+	if (fd == -1 && fuzzy)
-+		fd = open_alternate_base_fuzzy(fname);
-+
-+	/* Update stat to understand size */
-+	if (fd != -1) {
-+		if (do_fstat(fd, st) != 0) {
-+			rsyserr(FERROR, errno, "fstat %s", full_fname(fname));
-+		}
-+	}
-+
-+	return fd;
-+}
- 
- /**
-  * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -272,8 +327,6 @@ void recv_generator(char *fname, struct 
+@@ -271,7 +272,7 @@ void recv_generator(char *fname, struct 
+ 	int fd;
  	STRUCT_STAT st;
  	struct map_struct *mapbuf;
- 	int statret;
--	char *fnamecmp;
--	char fnamecmpbuf[MAXPATHLEN];
+-	int statret;
++	int statret, fuzzy_file = 0;
+ 	char *fnamecmp;
+ 	char fnamecmpbuf[MAXPATHLEN];
  
- 	if (list_only)
- 		return;
-@@ -413,109 +466,39 @@ void recv_generator(char *fname, struct 
- 	}
- #endif
- 
--	if (preserve_hard_links && hard_link_check(file, HL_CHECK_MASTER))
--		return;
--
--	if (!S_ISREG(file->mode)) {
--		rprintf(FINFO, "skipping non-regular file \"%s\"\n",fname);
--		return;
--	}
--
--	fnamecmp = fname;
--
--	if (statret == -1 && compare_dest != NULL) {
--		/* try the file at compare_dest instead */
--		int saveerrno = errno;
--		pathjoin(fnamecmpbuf, sizeof fnamecmpbuf, compare_dest, fname);
--		statret = link_stat(fnamecmpbuf, &st, 0);
--		if (!S_ISREG(st.st_mode))
--			statret = -1;
--		if (statret == -1)
--			errno = saveerrno;
--#if HAVE_LINK
--		else if (link_dest && !dry_run) {
--			if (do_link(fnamecmpbuf, fname) != 0) {
--				if (verbose > 0) {
--					rsyserr(FINFO, errno, "link %s => %s",
--						fnamecmpbuf, fname);
--				}
--			}
--			fnamecmp = fnamecmpbuf;
--		}
--#endif
--		else
--			fnamecmp = fnamecmpbuf;
--	}
--
--	if (statret == -1) {
--		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
--			return;
--		if (errno == ENOENT) {
--			write_int(f_out,i);
--			if (!dry_run)
--				write_sum_head(f_out, NULL);
--		} else if (verbose > 1) {
-+	/* Failed to stat for some reason besides "not found". */
-+	if (statret == -1 && errno != ENOENT) {
-+		if (verbose > 1) {
- 			rsyserr(FERROR, errno,
--				"recv_generator: failed to open %s",
-+				"recv_generator failed to stat %s",
- 				full_fname(fname));
- 		}
- 		return;
+@@ -447,6 +448,15 @@ void recv_generator(char *fname, struct 
+ 			fnamecmp = fnamecmpbuf;
  	}
  
--	if (!S_ISREG(st.st_mode)) {
--		if (delete_file(fname) != 0) {
--			return;
--		}
-+	if ((fd = open_base_file(file, fname, statret, &st)) == -2)
-+		return;
- 
--		/* now pretend the file didn't exist */
-+	if ((disable_deltas_p() || dry_run) && fd != -1) {
-+		close(fd);
-+		fd = -1;
++	if (statret == -1 && fuzzy) {
++		statret = check_alternate_base_fuzzy(&fnamecmp, fnamecmpbuf,
++						     &st);
++		if (!S_ISREG(st.st_mode))
++			statret = -1;
++		else
++			fuzzy_file = 1;
 +	}
 +
-+	if (fd == -1) {
-+		/* the file didn't exist, or we can pretend it doesn't */
+ 	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
--		write_int(f_out,i);
-+ 		write_int(f_out, i);
- 		if (!dry_run)
- 			write_sum_head(f_out, NULL);
--		return;
--	}
--
--	if (opt_ignore_existing && fnamecmp == fname) {
--		if (verbose > 1)
--			rprintf(FINFO,"%s exists\n",fname);
--		return;
--	}
-+ 		return;
-+ 	}
+@@ -489,7 +499,7 @@ void recv_generator(char *fname, struct 
+ 		return;
+ 	}
  
--	if (update_only && cmp_modtime(st.st_mtime,file->modtime)>0 && fnamecmp == fname) {
--		if (verbose > 1)
--			rprintf(FINFO,"%s is newer\n",fname);
--		return;
--	}
--
 -	if (skip_file(fname, file, &st)) {
--		if (fnamecmp == fname)
--			set_perms(fname, file, &st, PERMS_REPORT);
--		return;
--	}
--
--	if (dry_run) {
--		write_int(f_out,i);
--		return;
--	}
--
--	if (disable_deltas_p()) {
--		write_int(f_out,i);
--		write_sum_head(f_out, NULL);
-+	if (preserve_hard_links && hard_link_check(file, HL_CHECK_MASTER))
++	if (!fuzzy_file && skip_file(fname, file, &st)) {
+ 		if (fnamecmp == fname)
+ 			set_perms(fname, file, &st, PERMS_REPORT);
  		return;
--	}
- 
--	/* open the file */
--	fd = do_open(fnamecmp, O_RDONLY, 0);
--
--	if (fd == -1) {
--		rsyserr(FERROR, errno, "failed to open %s, continuing",
--			full_fname(fnamecmp));
--		/* pretend the file didn't exist */
--		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
--			return;
--		write_int(f_out,i);
--		write_sum_head(f_out, NULL);
-+	if (!S_ISREG(file->mode)) {
-+		rprintf(FINFO, "skipping non-regular file \"%s\"\n",fname);
- 		return;
- 	}
- 
-@@ -525,7 +508,7 @@ void recv_generator(char *fname, struct 
- 		mapbuf = NULL;
- 
- 	if (verbose > 3) {
--		rprintf(FINFO,"gen mapped %s of size %.0f\n", fnamecmp,
-+		rprintf(FINFO, "gen mapped %s of size %.0f\n", fname,
- 			(double)st.st_size);
- 	}
- 
 --- options.c	20 Jun 2004 19:47:05 -0000	1.157
-+++ options.c	29 Jun 2004 15:14:48 -0000
++++ options.c	29 Jun 2004 17:46:13 -0000
 @@ -94,6 +94,7 @@ int ignore_errors = 0;
  int modify_window = 0;
  int blocking_io = -1;
@@ -385,7 +204,7 @@ test suite, but otherwise UNTESTED.
  	return;
  
 --- receiver.c	29 Jun 2004 15:12:01 -0000	1.83
-+++ receiver.c	29 Jun 2004 15:14:48 -0000
++++ receiver.c	29 Jun 2004 17:46:13 -0000
 @@ -48,6 +48,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
@@ -394,71 +213,20 @@ test suite, but otherwise UNTESTED.
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -300,8 +301,6 @@ int recv_files(int f_in,struct file_list
- 	char *fname, fbuf[MAXPATHLEN];
- 	char template[MAXPATHLEN];
- 	char fnametmp[MAXPATHLEN];
--	char *fnamecmp;
--	char fnamecmpbuf[MAXPATHLEN];
- 	struct map_struct *mapbuf;
- 	struct file_struct *file;
- 	struct stats initial_stats;
-@@ -364,35 +363,31 @@ int recv_files(int f_in,struct file_list
- 		if (verbose > 2)
- 			rprintf(FINFO,"recv_files(%s)\n",fname);
- 
--		fnamecmp = fname;
--
- 		/* open the file */
--		fd1 = do_open(fnamecmp, O_RDONLY, 0);
-+		fd1 = do_open(fname, O_RDONLY, 0);
- 
--		if (fd1 == -1 && compare_dest != NULL) {
--			/* try the file at compare_dest instead */
--			pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
--				 compare_dest, fname);
--			fnamecmp = fnamecmpbuf;
--			fd1 = do_open(fnamecmp, O_RDONLY, 0);
--		}
-+		if (fd1 == -1 && compare_dest != NULL)
-+			fd1 = open_alternate_base_comparedir(fname);
-+
-+		if (fd1 == -1 && fuzzy)
-+			fd1 = open_alternate_base_fuzzy(fname);
- 
- 		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
- 			rsyserr(FERROR, errno, "fstat %s failed",
--				full_fname(fnamecmp));
-+				full_fname(fname));
- 			receive_data(f_in,NULL,-1,NULL,file->length);
- 			close(fd1);
- 			continue;
+@@ -377,6 +378,11 @@ int recv_files(int f_in,struct file_list
+ 			fd1 = do_open(fnamecmp, O_RDONLY, 0);
  		}
  
--		if (fd1 != -1 && S_ISDIR(st.st_mode) && fnamecmp == fname) {
-+		if (fd1 != -1 && S_ISDIR(st.st_mode)) {
- 			/* this special handling for directories
- 			 * wouldn't be necessary if robust_rename()
- 			 * and the underlying robust_unlink could cope
- 			 * with directories
- 			 */
- 			rprintf(FERROR,"recv_files: %s is a directory\n",
--				full_fname(fnamecmp));
-+				full_fname(fname));
- 			receive_data(f_in, NULL, -1, NULL, file->length);
- 			close(fd1);
- 			continue;
-@@ -415,7 +410,7 @@ int recv_files(int f_in,struct file_list
- 			mapbuf = map_file(fd1,st.st_size);
- 			if (verbose > 2) {
- 				rprintf(FINFO, "recv mapped %s of size %.0f\n",
--					fnamecmp, (double)st.st_size);
-+					fname, (double)st.st_size);
- 			}
- 		} else
- 			mapbuf = NULL;
++		if (fd1 == -1 && fuzzy) {
++			fd1 = check_alternate_base_fuzzy(&fnamecmp, fnamecmpbuf,
++							 NULL);
++		}
++
+ 		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
+ 			rsyserr(FERROR, errno, "fstat %s failed",
+ 				full_fname(fnamecmp));
 --- rsync.yo	5 Jun 2004 16:16:30 -0000	1.171
-+++ rsync.yo	29 Jun 2004 15:14:49 -0000
++++ rsync.yo	29 Jun 2004 17:46:14 -0000
 @@ -325,6 +325,7 @@ verb(
   -T  --temp-dir=DIR          create temporary files in directory DIR
       --compare-dest=DIR      also compare received files relative to DIR
