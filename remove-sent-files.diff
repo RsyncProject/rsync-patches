@@ -38,9 +38,9 @@ command before "make":
  		case MSG_INFO:
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
---- orig/main.c	2005-01-17 23:11:45
+--- orig/main.c	2005-01-23 07:27:24
 +++ main.c	2004-08-13 08:24:23
-@@ -42,6 +42,7 @@ extern int list_only;
+@@ -43,6 +43,7 @@ extern int list_only;
  extern int local_server;
  extern int log_got_error;
  extern int module_id;
@@ -48,7 +48,7 @@ command before "make":
  extern int orig_umask;
  extern int copy_links;
  extern int keep_dirlinks;
-@@ -648,6 +649,8 @@ void start_server(int f_in, int f_out, i
+@@ -649,6 +650,8 @@ void start_server(int f_in, int f_out, i
  
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
@@ -57,7 +57,7 @@ command before "make":
  
  		recv_exclude_list(f_in);
  		if (cvs_exclude)
-@@ -730,6 +733,9 @@ int client_run(int f_in, int f_out, pid_
+@@ -731,6 +734,9 @@ int client_run(int f_in, int f_out, pid_
  		exit_cleanup(status);
  	}
  
@@ -65,40 +65,45 @@ command before "make":
 +		io_start_multiplex_out();
 +
  	if (argc == 0)
- 		list_only = 1;
+ 		list_only |= 1;
  
---- orig/options.c	2005-01-20 23:05:34
-+++ options.c	2005-01-10 10:46:47
-@@ -89,8 +89,10 @@ int daemon_bwlimit = 0;
- int bwlimit = 0;
- size_t bwlimit_writemax = 0;
+--- orig/options.c	2005-01-23 01:45:43
++++ options.c	2005-01-23 07:30:51
+@@ -57,6 +57,7 @@ int delete_mode = 0;
+ int delete_before = 0;
  int delete_after = 0;
+ int delete_excluded = 0;
 +int delete_sent_files = 0;
+ int one_file_system = 0;
+ int protocol_version = PROTOCOL_VERSION;
+ int sparse_files = 0;
+@@ -92,6 +93,7 @@ int bwlimit = 0;
+ size_t bwlimit_writemax = 0;
  int only_existing = 0;
  int opt_ignore_existing = 0;
 +int need_messages_from_generator = 0;
  int max_delete = 0;
  OFF_T max_size = 0;
  int ignore_errors = 0;
-@@ -274,6 +276,7 @@ void usage(enum logcode F)
+@@ -276,6 +278,7 @@ void usage(enum logcode F)
    rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
-   rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
    rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
+   rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
 +  rprintf(F,"     --delete-sent-files     updated/sent files are removed from sending side\n");
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
+   rprintf(F,"     --force                 force deletion of directories even if not empty\n");
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
-   rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
-@@ -342,6 +345,7 @@ static struct poptOption long_options[] 
-   {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
-   {"delete-after",     0,  POPT_ARG_NONE,   0, OPT_DELETE_AFTER, 0, 0 },
-   {"delete-excluded",  0,  POPT_ARG_NONE,   0, OPT_DELETE_EXCLUDED, 0, 0 },
+@@ -343,6 +346,7 @@ static struct poptOption long_options[] 
+   {"delete",           0,  POPT_ARG_NONE,   &delete_before, 0, 0, 0 },
+   {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, 0, 0, 0 },
+   {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
 +  {"delete-sent-files",0,  POPT_ARG_NONE,   &delete_sent_files, 0, 0, 0 },
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"exclude",          0,  POPT_ARG_STRING, 0, OPT_EXCLUDE, 0, 0 },
 @@ -858,6 +862,9 @@ int parse_arguments(int *argc, const cha
- 	if (relative_paths < 0)
- 		relative_paths = files_from? 1 : 0;
+ 	if (delete_excluded && !delete_mode)
+ 		delete_mode = delete_before = 1;
  
 +	if (delete_sent_files)
 +		need_messages_from_generator = 1;
@@ -106,7 +111,7 @@ command before "make":
  	*argv = poptGetArgs(pc);
  	*argc = count_args(*argv);
  
-@@ -1241,6 +1248,9 @@ void server_options(char **args,int *arg
+@@ -1244,6 +1251,9 @@ void server_options(char **args,int *arg
  	if (!implied_dirs && !am_sender)
  		args[ac++] = "--no-implied-dirs";
  
@@ -116,7 +121,7 @@ command before "make":
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2005-01-21 00:35:26
+--- orig/receiver.c	2005-01-23 07:27:24
 +++ receiver.c	2004-08-13 08:38:51
 @@ -47,6 +47,7 @@ extern char *backup_dir;
  extern char *backup_suffix;
@@ -179,19 +184,19 @@ command before "make":
  	MSG_DONE=5,	/* current phase is done */
  	MSG_REDO=4,	/* reprocess indicated flist index */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, MSG_LOG=FLOG, /* remote logging */
---- orig/rsync.yo	2005-01-20 19:47:08
-+++ rsync.yo	2004-07-03 20:17:10
+--- orig/rsync.yo	2005-01-22 22:48:52
++++ rsync.yo	2005-01-23 07:31:03
 @@ -343,6 +343,7 @@ verb(
       --delete                delete files that don't exist on sender
-      --delete-excluded       also delete excluded files on receiver
       --delete-after          receiver deletes after transfer, not before
+      --delete-excluded       also delete excluded files on receiver
 +     --delete-sent-files     updated/sent files are removed from sender
       --ignore-errors         delete even if there are I/O errors
+      --force                 force deletion of dirs even if not empty
       --max-delete=NUM        don't delete more than NUM files
-      --max-size=SIZE         don't transfer any file larger than SIZE
-@@ -695,6 +696,11 @@ One reason to use --delete-after is to a
- the transfer (while the receiving side is scanned for deletions) as this
- delay might cause the transfer to timeout.  
+@@ -695,6 +696,11 @@ receiving side that are not on the sendi
+ delete any files on the receiving side that are excluded (see --exclude).
+ Implies --delete.
  
 +dit(bf(--delete-sent-files)) This tells rsync to remove the source files
 +on the sending side that are successfully transferred to the receiving
