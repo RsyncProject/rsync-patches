@@ -1,5 +1,5 @@
 --- generator.c	18 May 2004 08:50:17 -0000	1.85
-+++ generator.c	5 Jun 2004 15:33:38 -0000
++++ generator.c	5 Jun 2004 15:56:04 -0000
 @@ -26,6 +26,7 @@
  extern int verbose;
  extern int dry_run;
@@ -24,8 +24,42 @@
  	if (statret == 0 &&
  	    !preserve_perms &&
  	    (S_ISDIR(st.st_mode) == S_ISDIR(file->mode))) {
+@@ -329,18 +339,23 @@ void recv_generator(char *fname, struct 
+ 			}
+ 			statret = -1;
+ 		}
+-		if (statret != 0 && do_mkdir(fname,file->mode) != 0 && errno != EEXIST) {
+-			if (!(relative_paths && errno == ENOENT
+-			    && create_directory_path(fname, orig_umask) == 0
+-			    && do_mkdir(fname, file->mode) == 0)) {
+-				rsyserr(FERROR, errno,
+-					"recv_generator: mkdir %s failed",
+-					full_fname(fname));
++		if (statret != 0) {
++			if (do_mkdir(fname,file->mode) != 0 && errno != EEXIST) {
++				if (!(relative_paths && errno == ENOENT
++				    && create_directory_path(fname, orig_umask) == 0
++				    && do_mkdir(fname, file->mode) == 0)) {
++					rsyserr(FERROR, errno,
++						"recv_generator: mkdir %s failed",
++						full_fname(fname));
++				}
+ 			}
++			statret = link_stat(fname, &st);
++			if (statret != 0)
++				return;
+ 		}
+-		/* f_out is set to -1 when doing final directory
+-		   permission and modification time repair */
+-		if (set_perms(fname,file,NULL,0) && verbose && (f_out != -1))
++		/* f_out is set to -1 when doing final directory-permission
++		 * and modification-time repair. */
++		if (set_perms(fname, file, &st, 0) && verbose && (f_out != -1))
+ 			rprintf(FINFO,"%s/\n",fname);
+ 		return;
+ 	}
 --- options.c	27 May 2004 21:51:53 -0000	1.153
-+++ options.c	5 Jun 2004 15:33:38 -0000
++++ options.c	5 Jun 2004 15:56:04 -0000
 @@ -38,6 +38,7 @@ int make_backups = 0;
  int whole_file = -1;
  
@@ -60,7 +94,7 @@
  	if (whole_file > 0)
  		argstr[x++] = 'W';
 --- rsync.yo	21 May 2004 09:44:32 -0000	1.170
-+++ rsync.yo	5 Jun 2004 15:33:39 -0000
++++ rsync.yo	5 Jun 2004 15:56:05 -0000
 @@ -289,6 +289,7 @@ verb(
       --backup-dir            make backups into this directory
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
