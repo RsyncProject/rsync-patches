@@ -7,12 +7,11 @@ This patch adds the ability to merge rules into your excludes/includes
 using a ". FILE" idiom.  If you specify a name with a preceding -p
 option, that filename will be looked for in every subdirectory that
 rsync visits, and the rules found in that subdirectory's file will
-affect either just that dir or, if -i is specified, that dir and its
-subdirs.
+affect that dir and its subdirs.
 
 For example:
 
-  rsync -av --exclude='. -pi .excl' from/ to
+  rsync -av --exclude='. -p .excl' from/ to
 
 The above will look for a file named ".excl" in every directory of the
 hierarchy that rsync visits, and it will exclude (by default) names
@@ -25,17 +24,65 @@ this:
   *.o
 
 Then the file ".excl2" will also be read in from the current dir and all
-its subdirs (due to the -p option) with each file's rules only affecting
-the file's current directory.  The file ".excl3" would just be read in
-for the current dir (because it was not specified with the -p option),
-but its rules would be inherited by all its subdirectories (because it
-is being read into a per-dir file that has the -i option set).
+its subdirs (due to the -p option).  The file ".excl3" would just be
+read in from the current dir (because it was not specified with the -p
+option).
 
 ..wayne..
 
+--- orig/clientserver.c	2004-08-02 02:29:16
++++ clientserver.c	2004-08-09 02:25:28
+@@ -48,9 +48,10 @@ extern int no_detach;
+ extern int default_af_hint;
+ extern char *bind_address;
+ extern struct exclude_list_struct server_exclude_list;
+-extern char *exclude_path_prefix;
+ extern char *config_file;
+ extern char *files_from;
++extern char dirbuf[MAXPATHLEN];
++extern unsigned int dirbuf_offset;
+ 
+ char *auth_user;
+ 
+@@ -300,26 +301,27 @@ static int rsync_module(int f_in, int f_
+ 	/* TODO: Perhaps take a list of gids, and make them into the
+ 	 * supplementary groups. */
+ 
+-	exclude_path_prefix = use_chroot? "" : lp_path(i);
+-	if (*exclude_path_prefix == '/' && !exclude_path_prefix[1])
+-		exclude_path_prefix = "";
++	if (use_chroot)
++		set_current_subdir("", 0);
++	else
++		set_current_subdir(lp_path(i), strlen(lp_path(i)));
+ 
+ 	p = lp_include_from(i);
+ 	add_exclude_file(&server_exclude_list, p,
+-			 XFLG_FATAL_ERRORS | XFLG_DEF_INCLUDE);
++			 XFLG_FATAL_ERRORS | XFLG_DEF_INCLUDE | XFLG_ABS_PATH);
+ 
+ 	p = lp_include(i);
+ 	add_exclude(&server_exclude_list, p,
+-		    XFLG_WORD_SPLIT | XFLG_DEF_INCLUDE);
++		    XFLG_WORD_SPLIT | XFLG_DEF_INCLUDE | XFLG_ABS_PATH);
+ 
+ 	p = lp_exclude_from(i);
+ 	add_exclude_file(&server_exclude_list, p,
+-			 XFLG_FATAL_ERRORS);
++			 XFLG_FATAL_ERRORS | XFLG_ABS_PATH);
+ 
+ 	p = lp_exclude(i);
+-	add_exclude(&server_exclude_list, p, XFLG_WORD_SPLIT);
++	add_exclude(&server_exclude_list, p, XFLG_WORD_SPLIT | XFLG_ABS_PATH);
+ 
+-	exclude_path_prefix = NULL;
++	set_current_subdir("", 0);
+ 
+ 	log_init();
+ 
 --- orig/exclude.c	2004-08-05 23:16:37
-+++ exclude.c	2004-08-07 08:32:01
-@@ -27,17 +27,82 @@
++++ exclude.c	2004-08-09 03:19:40
+@@ -27,16 +27,80 @@
  #include "rsync.h"
  
  extern int verbose;
@@ -55,8 +102,8 @@ is being read into a per-dir file that has the -i option set).
  struct exclude_list_struct exclude_list = { 0, 0, "" };
 -struct exclude_list_struct local_exclude_list = { 0, 0, "per-dir .cvsignore " };
  struct exclude_list_struct server_exclude_list = { 0, 0, "server " };
- char *exclude_path_prefix = NULL;
- 
+-char *exclude_path_prefix = NULL;
++
 +struct mergelist_save_struct {
 +    struct exclude_list_struct *array;
 +    int count;
@@ -76,6 +123,7 @@ is being read into a per-dir file that has the -i option set).
 + * point in the hierarchy it first makes an appearance. */
 +static char dirbuf[MAXPATHLEN];
 +static unsigned int dirbuf_offset = 0;
++static BOOL parent_dirscan = 0;
 +
 +/* This array contains a list of all the currently active per-dir merge
 + * files.  This makes it easier to save the appropriate values when we
@@ -83,7 +131,6 @@ is being read into a per-dir file that has the -i option set).
 +static struct exclude_struct **mergelist_parents;
 +static int mergelist_cnt = 0;
 +static int mergelist_size = 0;
-+static int initialized_mergelist_cnt = -1;
 +
 +/* Each exclude_list_struct describes a singly-linked list by keeping track
 + * of both the head and tail pointers.  The list is slightly unusual in that
@@ -115,11 +162,10 @@ is being read into a per-dir file that has the -i option set).
 + * the list for a new local dir, we just save off the exclude_list_struct
 + * values (so we can pop back to them later) and set the tail to NULL.
 + */
-+
+ 
  /** Build an exclude structure given an exclude pattern. */
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
- 			 unsigned int pat_len, unsigned int mflags)
-@@ -46,6 +111,31 @@ static void make_exclude(struct exclude_
+@@ -46,23 +110,56 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
@@ -143,7 +189,7 @@ is being read into a per-dir file that has the -i option set).
 +		if ((pat_len == 10 || (pat_len > 10 && pat[pat_len-11] == '/'))
 +		    && strncmp(pat+pat_len-10, ".cvsignore", 10) == 0) {
 +			mflags |= MATCHFLG_CVSIGNORE;
-+			mflags &= ~(MATCHFLG_INCLUDE | MATCHFLG_INHERIT);
++			mflags &= ~MATCHFLG_INCLUDE;
 +		} else
 +			mflags &= ~MATCHFLG_CVSIGNORE;
 +	}
@@ -151,7 +197,39 @@ is being read into a per-dir file that has the -i option set).
  	ret = new(struct exclude_struct);
  	if (!ret)
  		out_of_memory("make_exclude");
-@@ -81,14 +171,40 @@ static void make_exclude(struct exclude_
+ 
+ 	memset(ret, 0, sizeof ret[0]);
+ 
+-	if (exclude_path_prefix)
+-		mflags |= MATCHFLG_ABS_PATH;
+-	if (exclude_path_prefix && *pat == '/')
+-		ex_len = strlen(exclude_path_prefix);
+-	else
++	if (mflags & MATCHFLG_ABS_PATH) {
++		if (*pat != '/') {
++			mflags &= ~MATCHFLG_ABS_PATH;
++			ex_len = 0;
++		} else {
++			ex_len = *dirbuf == '/' ? dirbuf_offset - 1
++			       : curr_dir_len + dirbuf_offset - !curr_dir[1];
++		}
++	} else
+ 		ex_len = 0;
+ 	ret->pattern = new_array(char, ex_len + pat_len + 1);
+ 	if (!ret->pattern)
+ 		out_of_memory("make_exclude");
+-	if (ex_len)
+-		memcpy(ret->pattern, exclude_path_prefix, ex_len);
++	if (ex_len) {
++		if (*dirbuf == '/')
++			strlcpy(ret->pattern, dirbuf, ex_len + 1);
++		else
++			pathjoin(ret->pattern, ex_len + 1, curr_dir, dirbuf);
++	}
+ 	strlcpy(ret->pattern + ex_len, pat, pat_len + 1);
+ 	pat_len += ex_len;
+ 
+@@ -81,14 +178,40 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -196,7 +274,7 @@ is being read into a per-dir file that has the -i option set).
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +212,255 @@ static void make_exclude(struct exclude_
+@@ -96,22 +219,265 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -231,7 +309,7 @@ is being read into a per-dir file that has the -i option set).
  }
  
 +/* This returns an expanded (absolute) filename for the merge-file name if
-+ * the name has any slashes in it OR if the dirbuf value is absolute;
++ * the name has any slashes in it OR if the parent_dirscan var is non-zero;
 + * otherwise it returns the original merge_file name.  If the len_ptr value
 + * is non-NULL the merge_file name is not null terminated and the length
 + * value is contained therein (and will be updated with the new length). We
@@ -243,7 +321,7 @@ is being read into a per-dir file that has the -i option set).
 +	unsigned int fn_len, cd_len;
 +
 +	cd_len = *dirbuf == '/' ? 0 : curr_dir_len + 1;
-+	if (cd_len && *merge_file != '/') {
++	if (!parent_dirscan && *merge_file != '/') {
 +		/* Return the name unchanged it doesn't have any slashes. */
 +		if (len_ptr) {
 +			const char *p = merge_file + *len_ptr;
@@ -296,14 +374,27 @@ is being read into a per-dir file that has the -i option set).
 +	return buf;
 +}
 +
++/* Sets the dirbuf and dirbuf_offset values */
++void set_current_subdir(const char *dir, unsigned int dirlen)
++{
++	memcpy(dirbuf, dir, dirlen);
++	dirbuf[dirlen] = '\0';
++	dirbuf_offset = clean_fname(dirbuf);
++	if (dirbuf_offset == 1 && *dirbuf == '.')
++		dirbuf_offset = 0;
++	else
++		dirbuf[dirbuf_offset++] = '/';
++	dirbuf[dirbuf_offset] = '\0';
++}
++
 +/* This routine takes a per-dir merge file entry and finishes its setup.
 + * If the name has a path portion then we check to see if it refers to a
 + * parent directory of the first transfer dir.  If it does, we scan all the
 + * dirs from that point through the parent dir of the transfer dir looking
 + * for the per-dir merge file in each one. */
-+static void prep_merge_file(struct exclude_struct *ex,
-+			    struct exclude_list_struct *lp, int flags,
-+			    char *dir, unsigned int dirlen)
++static void setup_merge_file(struct exclude_struct *ex,
++			     struct exclude_list_struct *lp, int flags,
++			     const char *dir, unsigned int dirlen)
 +{
 +	char buf[MAXPATHLEN];
 +	char *x, *y, *pat = ex->pattern;
@@ -315,7 +406,10 @@ is being read into a per-dir file that has the -i option set).
 +	y = strrchr(x, '/');
 +	*y = '\0';
 +	ex->pattern = strdup(y+1);
-+	pathjoin(dirbuf, MAXPATHLEN, sanitize_paths ? "/" : curr_dir, dir);
++	if (*dirbuf != '/') {
++		pathjoin(dirbuf, MAXPATHLEN, sanitize_paths ? "/" : curr_dir,
++			 dir);
++	}
 +	if (!*x)
 +		x = "/";
 +	if (*x == '/')
@@ -336,41 +430,36 @@ is being read into a per-dir file that has the -i option set).
 +	if (*x)
 +		y += strlen(y); /* nope -- skip the scan */
 +
++	parent_dirscan = 1;
 +	while (*y) {
 +		char save[MAXPATHLEN];
 +		strlcpy(save, y, MAXPATHLEN);
 +		*y = '\0';
 +		dirbuf_offset = y - dirbuf;
 +		strlcpy(x, ex->pattern, MAXPATHLEN - (x - buf));
-+		if (!(ex->match_flags & MATCHFLG_INHERIT))
-+			lp->head = NULL;
++		add_exclude_file(lp, buf, flags | XFLG_ABS_PATH);
++		if (ex->match_flags & MATCHFLG_CVSIGNORE)
++			lp->head = NULL; /* CVS doesn't inherit rules. */
 +		lp->tail = NULL;
-+		add_exclude_file(lp, buf, flags);
 +		strlcpy(y, save, MAXPATHLEN);
 +		while ((*x++ = *y++) != '/') {}
 +	}
++	parent_dirscan = 0;
 +	free(pat);
-+
-+	memcpy(dirbuf, dir, dirlen + 1);
-+	dirbuf_offset = dirlen;
++	set_current_subdir(dir, dirlen);
 +}
 +
 +/* Each time rsync changes to a new directory it call this function to
 + * handle all the per-dir merge files.  The "dir" value is the current path
 + * relative to curr_dir (with a mandatory trailing slash).  We copy it into
 + * dirbuf so that the routines this calls can append a file name. */
-+void *push_local_excludes(char *dir, unsigned int dirlen)
++void *push_local_excludes(const char *dir, unsigned int dirlen)
 +{
 +	struct mergelist_save_struct *push;
 +	struct exclude_list_struct *ap;
 +	int i;
 +
-+	if (dirlen == 2 && *dir == '.') { /* dir[dirlen-1] is always '/' */
-+		dir += 2;
-+		dirlen = 0;
-+	}
-+	memcpy(dirbuf, dir, dirlen + 1);
-+	dirbuf_offset = dirlen;
++	set_current_subdir(dir, dirlen);
 +
 +	if (!(push = new_array(struct mergelist_save_struct, 1)))
 +		out_of_memory("push_local_excludes");
@@ -397,24 +486,23 @@ is being read into a per-dir file that has the -i option set).
 +				who_am_i(), lp->debug_type);
 +		}
 +
-+		if (ex->match_flags & MATCHFLG_CVSIGNORE)
++		if (ex->match_flags & MATCHFLG_CVSIGNORE) {
++			lp->head = NULL; /* CVS doesn't inherit rules. */
 +			flags = XFLG_WORD_SPLIT | XFLG_WORDS_ONLY;
-+		else {
++		} else {
 +			flags = ex->match_flags & MATCHFLG_INCLUDE
 +			    ? XFLG_DEF_INCLUDE : 0;
 +		}
++		lp->tail = NULL; /* Switch any local rules to inherited. */
 +
-+		if (initialized_mergelist_cnt < i) {
-+			prep_merge_file(ex, lp, flags, dir, dirlen);
-+			initialized_mergelist_cnt = i;
++		if (ex->match_flags & MATCHFLG_FINISH_SETUP) {
++			ex->match_flags &= ~MATCHFLG_FINISH_SETUP;
++			setup_merge_file(ex, lp, flags, dir, dirlen);
 +		}
 +
-+		if (!(ex->match_flags & MATCHFLG_INHERIT))
-+			lp->head = NULL;
-+		lp->tail = NULL;
-+		if (strlcpy(dirbuf +  dirbuf_offset, ex->pattern,
++		if (strlcpy(dirbuf + dirbuf_offset, ex->pattern,
 +		    MAXPATHLEN - dirbuf_offset) < MAXPATHLEN - dirbuf_offset)
-+			add_exclude_file(lp, dirbuf, flags);
++			add_exclude_file(lp, dirbuf, flags | XFLG_ABS_PATH);
 +		else {
 +			io_error |= IOERR_GENERAL;
 +			rprintf(FINFO,
@@ -445,7 +533,7 @@ is being read into a per-dir file that has the -i option set).
 +		clear_exclude_list(lp);
 +	}
 +
-+	mergelist_cnt = initialized_mergelist_cnt = pop->count;
++	mergelist_cnt = pop->count;
 +	for (i = 0, ap = pop->array; i < mergelist_cnt; i++) {
 +		memcpy(mergelist_parents[i]->u.mergelist, ap++,
 +		       sizeof (struct exclude_list_struct));
@@ -458,7 +546,7 @@ is being read into a per-dir file that has the -i option set).
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,7 +471,7 @@ static int check_one_exclude(char *name,
+@@ -122,7 +488,7 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -467,7 +555,7 @@ is being read into a per-dir file that has the -i option set).
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
-@@ -133,7 +482,8 @@ static int check_one_exclude(char *name,
+@@ -133,7 +499,8 @@ static int check_one_exclude(char *name,
  		name = full_name;
  	}
  
@@ -477,7 +565,7 @@ is being read into a per-dir file that has the -i option set).
  
  	if (ex->match_flags & MATCHFLG_DIRECTORY && !name_is_dir)
  		return 0;
-@@ -148,9 +498,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +515,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -489,7 +577,7 @@ is being read into a per-dir file that has the -i option set).
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +571,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +588,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -503,7 +591,7 @@ is being read into a per-dir file that has the -i option set).
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -253,11 +610,38 @@ static const char *get_exclude_tok(const
+@@ -253,11 +627,36 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -522,11 +610,9 @@ is being read into a per-dir file that has the -i option set).
 +				s += 2;
 +				do {
 +					switch (*++s) {
-+					case 'i':
-+						mflags |= MATCHFLG_INHERIT;
-+						break;
 +					case 'p':
-+						mflags |= MATCHFLG_PERDIR_MERGE;
++						mflags |= MATCHFLG_PERDIR_MERGE
++							| MATCHFLG_FINISH_SETUP;
 +						break;
 +					case '-':
 +						if (s[1] == ' ')
@@ -544,7 +630,16 @@ is being read into a per-dir file that has the -i option set).
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -292,9 +676,15 @@ void add_exclude(struct exclude_list_str
+@@ -273,6 +672,8 @@ static const char *get_exclude_tok(const
+ 
+ 	if (*p == '!' && len == 1 && !(xflags & XFLG_WORDS_ONLY))
+ 		mflags |= MATCHFLG_CLEAR_LIST;
++	if (xflags & XFLG_ABS_PATH)
++		mflags |= MATCHFLG_ABS_PATH;
+ 
+ 	*len_ptr = len;
+ 	*flag_ptr = mflags;
+@@ -292,9 +693,15 @@ void add_exclude(struct exclude_list_str
  	cp = pattern;
  	pat_len = 0;
  	while (1) {
@@ -560,7 +655,7 @@ is being read into a per-dir file that has the -i option set).
  
  		if (mflags & MATCHFLG_CLEAR_LIST) {
  			if (verbose > 2) {
-@@ -306,13 +696,23 @@ void add_exclude(struct exclude_list_str
+@@ -306,13 +713,23 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -572,7 +667,7 @@ is being read into a per-dir file that has the -i option set).
 -				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
 +		if (mflags & MATCHFLG_MERGE_FILE) {
 +			if (mflags & MATCHFLG_PERDIR_MERGE) {
-+				if (*dirbuf == '/') {
++				if (parent_dirscan) {
 +					if (!(cp = parse_merge_name(cp, &pat_len)))
 +						continue;
 +					make_exclude(listp, cp, pat_len, mflags);
@@ -590,7 +685,7 @@ is being read into a per-dir file that has the -i option set).
  	}
  }
  
-@@ -321,7 +721,7 @@ void add_exclude_file(struct exclude_lis
+@@ -321,7 +738,7 @@ void add_exclude_file(struct exclude_lis
  		      int xflags)
  {
  	FILE *fp;
@@ -599,7 +694,7 @@ is being read into a per-dir file that has the -i option set).
  	char *eob = line + sizeof line - 1;
  	int word_split = xflags & XFLG_WORD_SPLIT;
  
-@@ -343,6 +743,11 @@ void add_exclude_file(struct exclude_lis
+@@ -343,6 +760,11 @@ void add_exclude_file(struct exclude_lis
  		return;
  	}
  
@@ -611,7 +706,7 @@ is being read into a per-dir file that has the -i option set).
  	while (1) {
  		char *s = line;
  		int ch, overflow = 0;
-@@ -402,7 +807,21 @@ void send_exclude_list(int f)
+@@ -402,7 +824,21 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -623,8 +718,8 @@ is being read into a per-dir file that has the -i option set).
 +			if (ent->match_flags & MATCHFLG_PERDIR_MERGE) {
 +				*op++ = '-';
 +				*op++ = 'p';
-+				if (ent->match_flags & MATCHFLG_INHERIT)
-+					*op++ = 'i';
++				if (*p == '-')
++					*op++ = '-';
 +				*op++ = ' ';
 +			}
 +			write_int(f, l + (op - buf));
@@ -634,7 +729,7 @@ is being read into a per-dir file that has the -i option set).
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +862,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +879,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -643,7 +738,7 @@ is being read into a per-dir file that has the -i option set).
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
 --- orig/flist.c	2004-08-05 21:57:29
-+++ flist.c	2004-08-07 07:44:29
++++ flist.c	2004-08-09 02:45:42
 @@ -39,10 +39,9 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -709,7 +804,7 @@ is being read into a per-dir file that has the -i option set).
  	char *p;
  
  	d = opendir(dir);
-@@ -996,18 +982,8 @@ static void send_directory(int f, struct
+@@ -996,18 +982,7 @@ static void send_directory(int f, struct
  		offset++;
  	}
  
@@ -725,12 +820,11 @@ is being read into a per-dir file that has the -i option set).
 -				full_fname(fname));
 -		}
 -	}
-+	fname[offset] = '\0';
 +	save_excludes = push_local_excludes(fname, offset);
  
  	for (errno = 0, di = readdir(d); di; errno = 0, di = readdir(d)) {
  		char *dname = d_name(di);
-@@ -1028,6 +1004,8 @@ static void send_directory(int f, struct
+@@ -1028,6 +1003,8 @@ static void send_directory(int f, struct
  		rsyserr(FERROR, errno, "readdir(%s)", dir);
  	}
  
@@ -739,55 +833,53 @@ is being read into a per-dir file that has the -i option set).
  	closedir(d);
  }
  
-@@ -1047,6 +1025,7 @@ struct file_list *send_file_list(int f, 
+@@ -1047,6 +1024,7 @@ struct file_list *send_file_list(int f, 
  	char *p, *dir, olddir[sizeof curr_dir];
  	char lastpath[MAXPATHLEN] = "";
  	struct file_list *flist;
-+	void *first_push = NULL;
++	BOOL did_first_push = 0;
  	int64 start_write;
  	int use_ff_fd = 0;
  
-@@ -1067,6 +1046,14 @@ struct file_list *send_file_list(int f, 
+@@ -1067,6 +1045,10 @@ struct file_list *send_file_list(int f, 
  				exit_cleanup(RERR_FILESELECT);
  			}
  			use_ff_fd = 1;
 +			if (curr_dir_len < MAXPATHLEN - 1) {
-+				char buf[MAXPATHLEN];
-+				strcpy(buf, curr_dir);
-+				buf[curr_dir_len] = '/';
-+				buf[curr_dir_len+1] = '\0';
-+				first_push = push_local_excludes(buf,
-+				    curr_dir_len+1);
++				push_local_excludes(curr_dir, curr_dir_len);
++				did_first_push = 1;
 +			}
  		}
  	}
  
-@@ -1097,6 +1084,22 @@ struct file_list *send_file_list(int f, 
+@@ -1097,6 +1079,16 @@ struct file_list *send_file_list(int f, 
  			}
  		}
  
-+		if (!first_push) {
-+			char ch;
++		if (!did_first_push) {
 +			if ((p = strrchr(fname, '/')) != NULL) {
 +				dir = fname;
 +				p++;
-+			} else {
-+				dir = "./";
-+				p = dir + 2;
-+			}
-+			if ((ch = *p) != '\0')
-+				*p = '\0';
-+			first_push = push_local_excludes(dir, p - dir);
-+			if (ch)
-+				*p = ch;
++			} else
++				dir = p = "";
++			push_local_excludes(dir, p - dir);
++			did_first_push = 1;
 +		}
 +
  		if (link_stat(fname, &st, keep_dirlinks) != 0) {
  			if (f != -1) {
  				io_error |= IOERR_GENERAL;
 --- orig/options.c	2004-08-05 21:57:29
-+++ options.c	2004-08-05 21:57:19
-@@ -389,6 +389,7 @@ static struct poptOption long_options[] 
++++ options.c	2004-08-09 03:33:31
+@@ -287,6 +287,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
+   rprintf(F,"     --include-from=FILE     don't exclude patterns listed in FILE\n");
+   rprintf(F,"     --files-from=FILE       read FILE for list of source-file names\n");
++  rprintf(F," -E                          same as --exclude='. -p /.rsync-excludes'\n");
+   rprintf(F," -0, --from0                 all *-from file lists are delimited by nulls\n");
+   rprintf(F,"     --version               print version number\n");
+   rprintf(F,"     --daemon                run as an rsync daemon\n");
+@@ -389,6 +390,7 @@ static struct poptOption long_options[] 
    {"ignore-errors",    0,  POPT_ARG_NONE,   &ignore_errors, 0, 0, 0 },
    {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
    {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
@@ -795,28 +887,36 @@ is being read into a per-dir file that has the -i option set).
    {0,                 'P', POPT_ARG_NONE,   0,              'P', 0, 0 },
    {"config",           0,  POPT_ARG_STRING, &config_file, 0, 0, 0 },
    {"port",             0,  POPT_ARG_INT,    &rsync_port, 0, 0, 0 },
-@@ -589,6 +590,11 @@ int parse_arguments(int *argc, const cha
+@@ -589,6 +591,11 @@ int parse_arguments(int *argc, const cha
  			am_sender = 1;
  			break;
  
 +		case 'E':
 +			add_exclude(&exclude_list,
-+				    ". -ip /.rsync-excludes", 0);
++				    ". -p /.rsync-excludes", 0);
 +			break;
 +
  		case 'P':
  			do_progress = 1;
  			keep_partial = 1;
 --- orig/rsync.h	2004-08-03 15:41:32
-+++ rsync.h	2004-08-06 06:23:10
-@@ -499,11 +499,18 @@ struct map_struct {
++++ rsync.h	2004-08-08 06:07:01
+@@ -108,6 +108,7 @@
+ #define XFLG_DEF_INCLUDE	(1<<1)
+ #define XFLG_WORDS_ONLY 	(1<<2)
+ #define XFLG_WORD_SPLIT 	(1<<3)
++#define XFLG_ABS_PATH	 	(1<<4)
+ 
+ #define PERMS_REPORT		(1<<0)
+ #define PERMS_SKIP_MTIME	(1<<1)
+@@ -499,11 +500,18 @@ struct map_struct {
  #define MATCHFLG_INCLUDE	(1<<4) /* this is an include, not an exclude */
  #define MATCHFLG_DIRECTORY	(1<<5) /* this matches only directories */
  #define MATCHFLG_CLEAR_LIST 	(1<<6) /* this item is the "!" token */
 +#define MATCHFLG_MERGE_FILE	(1<<7) /* specifies a file to merge */
 +#define MATCHFLG_CVSIGNORE	(1<<8) /* parse this as a .cvsignore file */
-+#define MATCHFLG_PERDIR_MERGE	(1<<9) /* content is inherited by subdirs */
-+#define MATCHFLG_INHERIT	(1<<10)/* content is inherited by subdirs */
++#define MATCHFLG_PERDIR_MERGE	(1<<9) /* merge-file is searched per-dir */
++#define MATCHFLG_FINISH_SETUP	(1<<10)/* per-dir merge file needs setup */
  struct exclude_struct {
  	struct exclude_struct *next;
  	char *pattern;
@@ -830,12 +930,12 @@ is being read into a per-dir file that has the -i option set).
  
  struct exclude_list_struct {
 --- orig/rsync.yo	2004-08-03 15:34:32
-+++ rsync.yo	2004-08-06 17:05:29
++++ rsync.yo	2004-08-09 03:10:29
 @@ -335,6 +335,7 @@ verb(
       --include=PATTERN       don't exclude files matching PATTERN
       --include-from=FILE     don't exclude patterns listed in FILE
       --files-from=FILE       read FILE for list of source-file names
-+ -E                          same as --exclude='. -pi /.rsync-excludes'
++ -E                          same as --exclude='. -p /.rsync-excludes'
   -0  --from0                 all file lists are delimited by nulls
       --version               print version number
       --daemon                run as an rsync daemon
@@ -851,7 +951,7 @@ is being read into a per-dir file that has the -i option set).
    it() if the pattern is a single exclamation mark ! then the current
    include/exclude list is reset, removing all previously defined patterns.
  )
-@@ -1138,6 +1144,106 @@ itemize(
+@@ -1138,6 +1144,104 @@ itemize(
    it would be excluded by the "*")
  )
  
@@ -863,20 +963,23 @@ is being read into a per-dir file that has the -i option set).
 +
 +startdit()
 +
-+dit(bf(-i)) All subdirectories of the current directory inherit the rules we
-+read in from this file.  Only affects a per-directory merge file.  The
-+rules read in are prefixed to the inherited rules from a parent directory,
-+which gives the newest rules a higher priority than the inherited rules.
-+
-+Note also that you can eliminate all the inherited rules for a directory
-+and its subdirectories by putting the list-clearing token ! at the start of
-+a per-directory file.  This only clears the rules in the current sub-list,
-+not all the rules.
-+
 +dit(bf(-p)) Make the file a per-directory merge-file.  Rsync will scan
 +every directory that it traverses for the named file, merging its contents
-+when the file exists.  Without this option rsync just merges the rules into
-+the parent file, giving them the same attributes as the parent.
++when the file exists.  (Without this option rsync just merges the rules into
++the parent file.)
++
++Rules are inherited in all subdirectories of the directory where the
++per-dir merge file was found.  Each subdirectory's rules are prefixed to
++the inherited rules from a parent directory, which gives the newest rules a
++higher priority than the inherited rules.  If you don't want a rule to be
++inherited, anchor it with a leading slash.  Anchored rules in a
++per-directory merge file are relative to the current directory, so a rule
++"/foo" would only exclude the file "foo" in the current directory.
++
++Note also that you can eliminate all the inherited rules for a directory
++and its subdirectories by putting the list-clearing token (!) at the start
++of a per-directory file.  This only clears the rules in the current
++sub-list, not all the rules.
 +
 +dit(bf(--)) End the scanning of options.  Useful if you want to specify a
 +filename that begins with a dash.
@@ -889,20 +992,15 @@ is being read into a per-dir file that has the -i option set).
 +verb(
 +    . /home/user/.global_excludes
 +    *.gz
-+    . -pi .excl
++    . -p .excl
 +    + *.[ch]
 +    *.o
 +)
 +
 +This will merge the contents of the /home/user/.global_excludes file at the
 +start of the list and also turns the ".excl" filename into a per-directory
-+exclude file.  The rules read in from the .global_excludes file affect all
-+the directories because it is is being merged into an --exclude-from
-+option.  The rules merged from each directory's .excl file are inherited
-+by each directory's subdirectories because the -i option was specified
-+(without -i the rules would only affect the directory where they were read
-+in).  All the merged rules default to being exclude rules because an
-+exclude statement was used to specify them.
++exclude file.  All the merged rules default to being exclude rules because
++an exclude statement was used to specify them.
 +
 +Note also that the parsing of any merge-file named ".cvsignore" is always
 +done in a CVS-compatible manner, even if -C wasn't specified.  This means
@@ -934,7 +1032,7 @@ is being read into a per-dir file that has the -i option set).
 +this command:
 +
 +verb(
-+  --exclude='. -pi /.rsync-excludes'
++  --exclude='. -p /.rsync-excludes'
 +)
 +
 +That exclude tells rsync to scan for the file .rsync-excludes in all
@@ -947,7 +1045,7 @@ is being read into a per-dir file that has the -i option set).
 +verb(
 +  rsync -avE /src/path/ /dest/dir
 +  rsync -av --exclude='. -p ../../.rsync-excludes' /src/path/ /dest/dir
-+  rsync -av --exclude='. -pi .rsync-excludes' /src/path/ /dest/dir
++  rsync -av --exclude='. -p .rsync-excludes' /src/path/ /dest/dir
 +)
 +
 +The first two commands above will look for .rsync-excludes in "/" and
@@ -959,7 +1057,7 @@ is being read into a per-dir file that has the -i option set).
  
  bf(Note:) Batch mode should be considered experimental in this version
 --- orig/testsuite/exclude.test	2004-05-29 21:25:45
-+++ testsuite/exclude.test	2004-08-06 09:02:29
++++ testsuite/exclude.test	2004-08-08 06:35:15
 @@ -23,19 +23,47 @@ export HOME CVSIGNORE
  makepath "$fromdir/foo/down/to/you"
  makepath "$fromdir/bar/down/to/foo/too"
@@ -979,7 +1077,7 @@ is being read into a per-dir file that has the -i option set).
 +EOF
 +cat >"$fromdir/bar/.excl" <<EOF
 +home-cvs-exclude
-+. -pi .excl2
++. -p .excl2
 ++ to
 +EOF
  echo cvsout >"$fromdir/bar/down/to/home-cvs-exclude"
@@ -1028,7 +1126,7 @@ is being read into a per-dir file that has the -i option set).
 +# Now, test if rsync excludes the same files, this time with a merge-exclude
 +# file.
 +
-+checkit "$RSYNC -avv --exclude='. -pi .excl' --exclude-from=\"$excl\" \
++checkit "$RSYNC -avv --exclude='. -p .excl' --exclude-from=\"$excl\" \
 +    --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
 +
  # The script would have aborted on error, so getting here means we've won.
