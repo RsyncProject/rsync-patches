@@ -5,7 +5,7 @@ Lightly tested.
 Be sure to run "make proto" before "make".
 
 --- orig/generator.c	2005-01-17 23:11:45
-+++ generator.c	2005-01-18 10:55:29
++++ generator.c	2005-01-18 19:25:55
 @@ -44,6 +44,7 @@ extern int size_only;
  extern OFF_T max_size;
  extern int io_timeout;
@@ -14,7 +14,7 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -242,6 +243,81 @@ static void generate_and_send_sums(int f
+@@ -242,6 +243,76 @@ static void generate_and_send_sums(int f
  }
  
  
@@ -24,9 +24,9 @@ Be sure to run "make proto" before "make".
 +	struct dirent *di;
 +	char *basename, *dirname, *slash;
 +	char bestname[MAXPATHLEN];
-+	int extlen, basename_len;
++	int suf_len, basename_len;
 +	uint32 lowest_dist = 0x7FFFFFFF;
-+	const char *ext;
++	const char *suf;
 +
 +	strlcpy(buf, fname, MAXPATHLEN);
 +	if ((slash = strrchr(buf, '/')) != NULL) {
@@ -46,33 +46,28 @@ Be sure to run "make proto" before "make".
 +	if (slash)
 +		*slash = '/';
 +
-+	/* Get final extension, eg. .gz; never full basename though. */
-+	for (ext = basename; *ext == '.'; ext++) {}
-+	if (!(ext = strrchr(ext, '.')))
-+		ext = basename + basename_len; /* ext = "" */
-+	extlen = strlen(ext);
++	suf_len = basename_len;
++	suf = find_filename_suffix(basename, &suf_len);
 +
 +	bestname[0] = '\0';
 +	while ((di = readdir(d)) != NULL) {
-+		const char *dname = d_name(di);
++		const char *dname_suf, *dname = d_name(di);
 +		uint32 dist;
-+		int dname_len;
++		int dname_len, dname_suf_len;
 +
 +		if (dname[0] == '.' && (dname[1] == '\0'
 +		    || (dname[1] == '.' && dname[2] == '\0')))
 +			continue;
 +
-+		dname_len = strlen(dname);
-+
-+		/* Extensions must match */
-+		if (dname_len <= extlen
-+		    || strcmp(dname + dname_len - extlen, ext) != 0)
-+			continue;
++		dname_len = dname_suf_len = strlen(dname);
++		dname_suf = find_filename_suffix(dname, &dname_suf_len);
 +
 +		dist = fuzzy_distance(dname, dname_len, basename, basename_len);
-+		if (verbose > 1) {
-+			rprintf(FINFO, "fuzzy distance for %s = %lx\n",
-+				dname, (unsigned long)dist);
++		/* Add some extra weight to how well the suffixes matched. */
++		dist += fuzzy_distance(dname_suf, dname_suf_len, suf, suf_len) * 10;
++		if (verbose > 4) {
++			rprintf(FINFO, "fuzzy distance for %s = %d (%d)\n",
++				dname, (int)(dist>>16), (int)(dist&0xFFFF));
 +		}
 +		if (dist < lowest_dist) {
 +			strlcpy(bestname, dname, sizeof bestname);
@@ -96,7 +91,7 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -496,6 +572,15 @@ static void recv_generator(char *fname, 
+@@ -496,6 +567,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -112,7 +107,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -524,6 +609,8 @@ static void recv_generator(char *fname, 
+@@ -524,6 +604,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -121,7 +116,7 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -598,8 +685,24 @@ notify_others:
+@@ -598,8 +680,24 @@ notify_others:
  	write_int(f_out, i);
  	if (protocol_version >= 29 && inplace && !read_batch)
  		write_byte(f_out, fnamecmp_type);
@@ -277,11 +272,64 @@ Be sure to run "make proto" before "make".
  the files that it sends to the destination machine.  This
  option is useful on slow connections.  The compression method used is the
 --- orig/util.c	2004-09-07 21:45:30
-+++ util.c	2005-01-18 11:18:46
-@@ -1217,3 +1217,50 @@ void *_realloc_array(void *ptr, unsigned
++++ util.c	2005-01-18 19:25:47
+@@ -1217,3 +1217,108 @@ void *_realloc_array(void *ptr, unsigned
  		return malloc(size * num);
  	return realloc(ptr, size * num);
  }
++
++/* Take a filename and filename length and return the most significant
++ * filename suffix we can find.  This ignores suffixes such as "~",
++ * ".bak", ".orig", ".~1~", etc. */
++const char *find_filename_suffix(const char *fn, int *len_ptr)
++{
++	const char *suf, *s;
++	int s_len, fn_len = *len_ptr;
++	BOOL had_tilde;
++
++	/* One or more dots at the start aren't a suffix. */
++	while (fn_len && *fn == '.') fn++, fn_len--;
++
++	/* Ignore the ~ in a "foo~" filename. */
++	if (fn_len > 1 && fn[fn_len-1] == '~')
++		fn_len--, had_tilde = True;
++	else
++		had_tilde = False;
++
++	/* Assume we don't find an suffix. */
++	suf = "";
++	*len_ptr = 0;
++
++	/* Find the last significant suffix. */
++	for (s = fn + fn_len - 1; fn_len > 1; ) {
++		while (*s != '.' && s != fn) s--;
++		if (s == fn)
++			break;
++		s_len = fn_len - (s - fn);
++		fn_len = s - fn;
++		if (s_len == 3) {
++			if (strcmp(s+1, "bak") == 0
++			 || strcmp(s+1, "old") == 0)
++				continue;
++		} else if (s_len == 4) {
++			if (strcmp(s+1, "orig") == 0)
++				continue;
++		} else if (s_len > 2 && had_tilde
++		    && s[1] == '~' && isdigit(s[2]))
++			continue;
++		*len_ptr = s_len;
++		suf = s;
++		/* Determine if the suffix is all digits. */
++		for (s++, s_len--; s_len > 0; s++, s_len--) {
++			if (!isdigit(*s))
++				return suf;
++		}
++		/* An all-digit suffix may not be that signficant. */
++		continue;
++	}
++
++	return suf;
++}
 +
 +/* This is an implementation of the Levenshtein distance algorithm.  It
 + * was implemented to avoid needing a two-dimensional matrix (to save
@@ -298,10 +346,15 @@ Be sure to run "make proto" before "make".
 +	int32 cost;
 +	int i1, i2;
 +
-+	if (!len1)
-+		return (int32)len2 * UNIT;
-+	if (!len2)
-+		return (int32)len1 * UNIT;
++	if (!len1 || !len2) {
++		if (!len1) {
++			s1 = s2;
++			len1 = len2;
++		}
++		for (i1 = 0, cost = 0; i1 < len1; i1++)
++			cost += s1[i1];
++		return (int32)len1 * UNIT + cost;
++	}
 +
 +	for (i2 = 0; i2 < len2; i2++)
 +		a[i2] = (i2+1) * UNIT;
