@@ -1,0 +1,75 @@
+This tries to keep symlink loops from happening when using
+the --copy-links option (on the sender) and when using the
+--keep-dirlinks option with --delete (on the receiver).  It
+would be nice to improve this so that duplicates get turned
+back into symlinks, but the code needs to know which one is
+the real dir (if it is present in the list) because that one
+entry can't be turned into a symlink.
+
+--- flist.c	12 Aug 2004 18:20:07 -0000	1.236
++++ flist.c	31 Aug 2004 20:44:33 -0000
+@@ -724,6 +724,43 @@ void receive_file_entry(struct file_stru
+ }
+ 
+ 
++static BOOL saw_dir(dev_t dev, ino_t ino)
++{
++	static struct dirinfo { dev_t dev; ino_t ino; } *dirarray;
++	static int dirarray_cnt, dirarray_size;
++	int low, high;
++
++	if (dirarray_cnt == dirarray_size) {
++		dirarray = realloc_array(dirarray, struct dirinfo,
++					 dirarray_size += 4096);
++	}
++
++	for (low = 0, high = dirarray_cnt - 1; low <= high; ) {
++		int mid = (low + high) / 2;
++		if (ino == dirarray[mid].ino) {
++			if (dev == dirarray[mid].dev)
++				return True;
++			if (dev > dirarray[mid].dev)
++				low = mid + 1;
++			else
++				high = mid - 1;
++		} else if (ino > dirarray[mid].ino)
++			low = mid + 1;
++		else
++			high = mid - 1;
++	}
++
++	if (low < dirarray_cnt) {
++		memmove(dirarray + low + 1, dirarray + low,
++			(dirarray_cnt - low) * sizeof dirarray[0]);
++	}
++	dirarray[low].dev = dev;
++	dirarray[low].ino = ino;
++	dirarray_cnt++;
++
++	return False;
++}
++
+ /**
+  * Create a file_struct for a named file by reading its stat()
+  * information and performing extensive checks against global
+@@ -802,9 +839,17 @@ struct file_struct *make_file(char *fnam
+ 	if (exclude_level == NO_EXCLUDES)
+ 		goto skip_excludes;
+ 
+-	if (S_ISDIR(st.st_mode) && !recurse && !files_from) {
+-		rprintf(FINFO, "skipping directory %s\n", thisname);
+-		return NULL;
++	if (S_ISDIR(st.st_mode)) {
++		if (!recurse && !files_from) {
++			rprintf(FINFO, "skipping directory %s\n", thisname);
++			return NULL;
++		}
++		if ((keep_dirlinks || copy_links)
++		    && saw_dir(st.st_dev, st.st_ino)) {
++			rprintf(FINFO, "skipping duplicate directory %s\n",
++				thisname);
++			return NULL;
++		}
+ 	}
+ 
+ 	/* We only care about directories because we need to avoid recursing
