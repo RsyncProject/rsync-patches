@@ -944,9 +944,9 @@ local instead of inherited (see also the 'n' modifier).
 -		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
 +	add_exclude(&exclude_list, getenv("CVSIGNORE"), cvs_flags);
  }
---- orig/flist.c	2005-01-24 00:18:21
-+++ flist.c	2004-08-12 18:59:28
-@@ -40,11 +40,10 @@ extern int module_id;
+--- orig/flist.c	2005-01-24 01:43:09
++++ flist.c	2005-01-24 02:06:07
+@@ -41,11 +41,10 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
  
@@ -956,10 +956,10 @@ local instead of inherited (see also the 'n' modifier).
  extern int xfer_dirs;
  extern char curr_dir[MAXPATHLEN];
 +extern unsigned int curr_dir_len;
+ extern char *backup_dir;
+ extern char *backup_suffix;
  extern int filesfrom_fd;
- 
- extern int one_file_system;
-@@ -67,7 +66,6 @@ extern int list_only;
+@@ -73,7 +72,6 @@ extern int list_only;
  
  extern struct exclude_list_struct exclude_list;
  extern struct exclude_list_struct server_exclude_list;
@@ -967,7 +967,7 @@ local instead of inherited (see also the 'n' modifier).
  
  int io_error;
  
-@@ -223,8 +221,6 @@ int link_stat(const char *path, STRUCT_S
+@@ -229,8 +227,6 @@ int link_stat(const char *path, STRUCT_S
   */
  static int check_exclude_file(char *fname, int is_dir, int exclude_level)
  {
@@ -976,7 +976,7 @@ local instead of inherited (see also the 'n' modifier).
  #if 0 /* This currently never happens, so avoid a useless compare. */
  	if (exclude_level == NO_EXCLUDES)
  		return 0;
-@@ -246,10 +242,7 @@ static int check_exclude_file(char *fnam
+@@ -252,10 +248,7 @@ static int check_exclude_file(char *fnam
  	if (exclude_level != ALL_EXCLUDES)
  		return 0;
  	if (exclude_list.head
@@ -988,7 +988,7 @@ local instead of inherited (see also the 'n' modifier).
  		return 1;
  	return 0;
  }
-@@ -983,15 +976,7 @@ void send_file_name(int f, struct file_l
+@@ -1006,15 +999,7 @@ void send_file_name(int f, struct file_l
  
  	if (recursive && S_ISDIR(file->mode)
  	    && !(file->flags & FLAG_MOUNT_POINT)) {
@@ -1004,7 +1004,7 @@ local instead of inherited (see also the 'n' modifier).
  	}
  }
  
-@@ -1004,6 +989,7 @@ static void send_directory(int f, struct
+@@ -1027,6 +1012,7 @@ static void send_directory(int f, struct
  	struct dirent *di;
  	char fname[MAXPATHLEN];
  	unsigned int offset;
@@ -1012,7 +1012,7 @@ local instead of inherited (see also the 'n' modifier).
  	char *p;
  
  	d = opendir(dir);
-@@ -1027,18 +1013,7 @@ static void send_directory(int f, struct
+@@ -1050,18 +1036,7 @@ static void send_directory(int f, struct
  		offset++;
  	}
  
@@ -1032,7 +1032,7 @@ local instead of inherited (see also the 'n' modifier).
  
  	for (errno = 0, di = readdir(d); di; errno = 0, di = readdir(d)) {
  		char *dname = d_name(di);
-@@ -1060,6 +1035,8 @@ static void send_directory(int f, struct
+@@ -1083,6 +1058,8 @@ static void send_directory(int f, struct
  		rsyserr(FERROR, errno, "readdir(%s)", dir);
  	}
  
@@ -1041,7 +1041,7 @@ local instead of inherited (see also the 'n' modifier).
  	closedir(d);
  }
  
-@@ -1079,6 +1056,7 @@ struct file_list *send_file_list(int f, 
+@@ -1102,6 +1079,7 @@ struct file_list *send_file_list(int f, 
  	char *p, *dir, olddir[sizeof curr_dir];
  	char lastpath[MAXPATHLEN] = "";
  	struct file_list *flist;
@@ -1049,7 +1049,7 @@ local instead of inherited (see also the 'n' modifier).
  	int64 start_write;
  	int use_ff_fd = 0;
  
-@@ -1099,6 +1077,10 @@ struct file_list *send_file_list(int f, 
+@@ -1122,6 +1100,10 @@ struct file_list *send_file_list(int f, 
  				exit_cleanup(RERR_FILESELECT);
  			}
  			use_ff_fd = 1;
@@ -1060,7 +1060,7 @@ local instead of inherited (see also the 'n' modifier).
  		}
  	}
  
-@@ -1135,6 +1117,15 @@ struct file_list *send_file_list(int f, 
+@@ -1160,6 +1142,15 @@ struct file_list *send_file_list(int f, 
  		} else if (recurse > 0)
  			recurse = 0;
  
@@ -1110,9 +1110,9 @@ local instead of inherited (see also the 'n' modifier).
  FN_LOCAL_STRING(lp_exclude, exclude)
  FN_LOCAL_STRING(lp_exclude_from, exclude_from)
  FN_LOCAL_STRING(lp_include, include)
---- orig/options.c	2005-01-24 00:18:21
+--- orig/options.c	2005-01-24 01:43:10
 +++ options.c	2005-01-23 07:33:55
-@@ -146,6 +146,7 @@ int list_only = 0;
+@@ -148,6 +148,7 @@ int list_only = 0;
  char *batch_name = NULL;
  
  static int daemon_opt;   /* sets am_daemon after option error-reporting */
@@ -1120,7 +1120,7 @@ local instead of inherited (see also the 'n' modifier).
  static int modify_window_set;
  static char *dest_option = NULL;
  static char *max_size_arg;
-@@ -294,6 +295,9 @@ void usage(enum logcode F)
+@@ -298,6 +299,9 @@ void usage(enum logcode F)
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
@@ -1130,7 +1130,7 @@ local instead of inherited (see also the 'n' modifier).
    rprintf(F,"     --exclude=PATTERN       exclude files matching PATTERN\n");
    rprintf(F,"     --exclude-from=FILE     exclude patterns listed in FILE\n");
    rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
-@@ -324,7 +328,7 @@ void usage(enum logcode F)
+@@ -328,7 +332,7 @@ void usage(enum logcode F)
  }
  
  enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
@@ -1139,7 +1139,7 @@ local instead of inherited (see also the 'n' modifier).
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
        OPT_REFUSED_BASE = 9000};
-@@ -346,6 +350,7 @@ static struct poptOption long_options[] 
+@@ -351,6 +355,7 @@ static struct poptOption long_options[] 
    {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
@@ -1147,7 +1147,7 @@ local instead of inherited (see also the 'n' modifier).
    {"exclude",          0,  POPT_ARG_STRING, 0, OPT_EXCLUDE, 0, 0 },
    {"include",          0,  POPT_ARG_STRING, 0, OPT_INCLUDE, 0, 0 },
    {"exclude-from",     0,  POPT_ARG_STRING, 0, OPT_EXCLUDE_FROM, 0, 0 },
-@@ -398,6 +403,7 @@ static struct poptOption long_options[] 
+@@ -404,6 +409,7 @@ static struct poptOption long_options[] 
    {"ignore-errors",    0,  POPT_ARG_NONE,   &ignore_errors, 0, 0, 0 },
    {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
    {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
@@ -1155,7 +1155,7 @@ local instead of inherited (see also the 'n' modifier).
    {0,                 'P', POPT_ARG_NONE,   0, 'P', 0, 0 },
    {"port",             0,  POPT_ARG_INT,    &rsync_port, 0, 0, 0 },
    {"log-format",       0,  POPT_ARG_STRING, &log_format, 0, 0, 0 },
-@@ -619,10 +625,15 @@ int parse_arguments(int *argc, const cha
+@@ -625,10 +631,15 @@ int parse_arguments(int *argc, const cha
  			modify_window_set = 1;
  			break;
  
@@ -1172,7 +1172,7 @@ local instead of inherited (see also the 'n' modifier).
  		case OPT_INCLUDE:
  			add_exclude(&exclude_list, poptGetOptArg(pc),
  				    XFLG_DEF_INCLUDE);
-@@ -640,8 +651,8 @@ int parse_arguments(int *argc, const cha
+@@ -646,8 +657,8 @@ int parse_arguments(int *argc, const cha
  					goto options_rejected;
  			}
  			add_exclude_file(&exclude_list, arg, XFLG_FATAL_ERRORS
@@ -1183,7 +1183,7 @@ local instead of inherited (see also the 'n' modifier).
  			break;
  
  		case 'h':
-@@ -665,6 +676,19 @@ int parse_arguments(int *argc, const cha
+@@ -671,6 +682,19 @@ int parse_arguments(int *argc, const cha
  			am_sender = 1;
  			break;
  
@@ -1203,7 +1203,7 @@ local instead of inherited (see also the 'n' modifier).
  		case 'P':
  			do_progress = 1;
  			keep_partial = 1;
-@@ -971,7 +995,7 @@ int parse_arguments(int *argc, const cha
+@@ -977,7 +1001,7 @@ int parse_arguments(int *argc, const cha
  				partial_dir = NULL;
  			else if (*partial_dir != '/') {
  				add_exclude(&exclude_list, partial_dir,
@@ -1250,9 +1250,9 @@ local instead of inherited (see also the 'n' modifier).
  };
  
  struct exclude_list_struct {
---- orig/rsync.yo	2005-01-24 00:18:21
+--- orig/rsync.yo	2005-01-24 01:43:10
 +++ rsync.yo	2005-01-21 19:56:38
-@@ -362,6 +362,9 @@ verb(
+@@ -364,6 +364,9 @@ verb(
   -P                          equivalent to --partial --progress
   -z, --compress              compress file data
   -C, --cvs-exclude           auto ignore files in the same way CVS does
@@ -1262,7 +1262,7 @@ local instead of inherited (see also the 'n' modifier).
       --exclude=PATTERN       exclude files matching PATTERN
       --exclude-from=FILE     exclude patterns listed in FILE
       --include=PATTERN       don't exclude files matching PATTERN
-@@ -764,14 +767,41 @@ Finally, any file is ignored if it is in
+@@ -781,14 +784,41 @@ Finally, any file is ignored if it is in
  .cvsignore file and matches one of the patterns listed therein.
  See the bf(cvs(1)) manual for more information.
  
@@ -1309,7 +1309,7 @@ local instead of inherited (see also the 'n' modifier).
  
  dit(bf(--exclude-from=FILE)) This option is similar to the --exclude
  option, but instead it adds all exclude patterns listed in the file
-@@ -779,11 +809,11 @@ FILE to the exclude list.  Blank lines i
+@@ -796,11 +826,11 @@ FILE to the exclude list.  Blank lines i
  ';' or '#' are ignored.
  If em(FILE) is bf(-) the list will be read from standard input.
  
@@ -1325,7 +1325,7 @@ local instead of inherited (see also the 'n' modifier).
  
  dit(bf(--include-from=FILE)) This specifies a list of include patterns
  from a file.
-@@ -828,7 +858,8 @@ was located on the remote "src" host.
+@@ -845,7 +875,8 @@ was located on the remote "src" host.
  
  dit(bf(-0, --from0)) This tells rsync that the filenames it reads from a
  file are terminated by a null ('\0') character, not a NL, CR, or CR+LF.
@@ -1335,7 +1335,7 @@ local instead of inherited (see also the 'n' modifier).
  It does not affect --cvs-exclude (since all names read from a .cvsignore
  file are split on whitespace).
  
-@@ -967,8 +998,8 @@ If the partial-dir value is not an absol
+@@ -984,8 +1015,8 @@ If the partial-dir value is not an absol
  will prevent partial-dir files from being transferred and also prevent the
  untimely deletion of partial-dir items on the receiving side.  An example:
  the above --partial-dir option would add an "--exclude=.rsync-partial/"
@@ -1346,7 +1346,7 @@ local instead of inherited (see also the 'n' modifier).
  rule for this directory exclusion somewhere higher up in the list so that
  it has a high enough priority to be effective (e.g., if your rules specify
  a trailing --exclude=* rule, the auto-added rule will be ineffective).
-@@ -1125,30 +1156,322 @@ page describing the options available fo
+@@ -1142,30 +1173,322 @@ page describing the options available fo
  
  enddit()
  
@@ -1685,7 +1685,7 @@ local instead of inherited (see also the 'n' modifier).
  
  Let's say that we want to match two source files, one with an absolute
  path of "/home/me/foo/bar", and one with a path of "/home/you/bar/baz".
-@@ -1180,115 +1503,59 @@ verb(
+@@ -1197,115 +1520,59 @@ verb(
     Target file: /dest/you/bar/baz
  )
  
@@ -1839,7 +1839,7 @@ local instead of inherited (see also the 'n' modifier).
  )
  
  manpagesection(BATCH MODE)
-@@ -1457,7 +1724,7 @@ it. The most common cause is incorrectly
+@@ -1474,7 +1741,7 @@ it. The most common cause is incorrectly
  scripts (such as .cshrc or .profile) that contain output statements
  for non-interactive logins.
  
