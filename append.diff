@@ -1,7 +1,7 @@
 This patch adds the --append option, which works like a "resume" mode in
 an ftp client, appending new data onto the end of the files it updates.
 
---- orig/generator.c	2005-03-03 02:58:55
+--- orig/generator.c	2005-03-05 00:25:24
 +++ generator.c	2005-03-03 02:59:17
 @@ -51,6 +51,7 @@ extern int remove_sent_files;
  extern int update_only;
@@ -11,7 +11,7 @@ an ftp client, appending new data onto the end of the files it updates.
  extern int make_backups;
  extern int csum_length;
  extern int ignore_times;
-@@ -450,35 +451,42 @@ static void generate_and_send_sums(int f
+@@ -459,35 +460,42 @@ static void generate_and_send_sums(int f
  	OFF_T offset = 0;
  
  	sum_sizes_sqroot(&sum, len);
@@ -61,7 +61,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	}
  
  	if (mapbuf)
-@@ -923,6 +931,9 @@ static void recv_generator(char *fname, 
+@@ -950,6 +958,9 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -71,16 +71,16 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
-@@ -1102,7 +1113,7 @@ void generate_files(int f_out, struct fi
+@@ -1126,7 +1137,7 @@ void generate_files(int f_out, struct fi
  	if (delete_before && !local_name && flist->count > 0)
- 		do_delete_pass(flist, allowed_lull);
+ 		do_delete_pass(flist);
  
 -	if (whole_file < 0)
 +	if (append_mode || whole_file < 0)
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1147,6 +1158,8 @@ void generate_files(int f_out, struct fi
+@@ -1173,6 +1184,8 @@ void generate_files(int f_out, struct fi
  	only_existing = max_size = opt_ignore_existing = 0;
  	update_only = always_checksum = size_only = 0;
  	ignore_times = 1;
@@ -199,7 +199,7 @@ an ftp client, appending new data onto the end of the files it updates.
  		args[ac++] = "--inplace";
  
  	if (tmpdir) {
---- orig/receiver.c	2005-02-26 19:27:54
+--- orig/receiver.c	2005-03-05 00:25:25
 +++ receiver.c	2005-02-11 20:26:32
 @@ -44,6 +44,7 @@ extern int remove_sent_files;
  extern int module_id;
@@ -238,7 +238,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	while ((i = recv_token(f_in, &data)) != 0) {
  		if (do_progress)
  			show_progress(offset, total_size);
-@@ -399,6 +422,7 @@ int recv_files(int f_in, struct file_lis
+@@ -383,6 +406,7 @@ int recv_files(int f_in, struct file_lis
  			send_msg(MSG_DONE, "", 0);
  			if (keep_partial && !partial_dir)
  				make_backups = 0; /* prevents double backup */
@@ -246,7 +246,7 @@ an ftp client, appending new data onto the end of the files it updates.
  			continue;
  		}
  
---- orig/rsync.yo	2005-03-03 02:23:27
+--- orig/rsync.yo	2005-03-04 16:13:54
 +++ rsync.yo	2005-02-11 20:36:38
 @@ -308,6 +308,7 @@ to the detailed description below for a 
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
@@ -271,7 +271,7 @@ an ftp client, appending new data onto the end of the files it updates.
  dit(bf(-d, --dirs)) Tell the sending side to include any directories that
  are encountered.  Unlike bf(--recursive), a directory's contents are not copied
  unless the directory was specified on the command-line as either "." or a
---- orig/sender.c	2005-02-26 03:22:59
+--- orig/sender.c	2005-03-05 00:25:25
 +++ sender.c	2005-02-20 00:17:01
 @@ -28,6 +28,7 @@ extern int log_format_has_i;
  extern int daemon_log_format_has_i;
@@ -281,7 +281,7 @@ an ftp client, appending new data onto the end of the files it updates.
  extern int protocol_version;
  extern int remove_sent_files;
  extern int updating_basis_file;
-@@ -67,6 +68,13 @@ static struct sum_struct *receive_sums(i
+@@ -68,6 +69,13 @@ static struct sum_struct *receive_sums(i
  			(double)s->count, (long)s->blength, (long)s->remainder);
  	}
  
@@ -295,7 +295,7 @@ an ftp client, appending new data onto the end of the files it updates.
  	if (s->count == 0)
  		return(s);
  
-@@ -161,6 +169,7 @@ void send_files(struct file_list *flist,
+@@ -211,6 +219,7 @@ void send_files(struct file_list *flist,
  				/* For inplace: redo phase turns off the backup
  				 * flag so that we do a regular inplace send. */
  				make_backups = 0;
