@@ -4,7 +4,7 @@ command before "make":
     make proto
 
 
---- orig/generator.c	2005-02-16 15:35:52
+--- orig/generator.c	2005-02-19 09:27:48
 +++ generator.c	2005-02-15 21:33:51
 @@ -38,6 +38,7 @@ extern int preserve_gid;
  extern int preserve_times;
@@ -14,7 +14,7 @@ command before "make":
  extern int update_only;
  extern int opt_ignore_existing;
  extern int inplace;
-@@ -510,6 +511,11 @@ static void recv_generator(char *fname, 
+@@ -518,6 +519,11 @@ static void recv_generator(char *fname, 
  				rprintf(FINFO, "%s -> %s\n", safe_fname(fname),
  					safe_fname(file->u.link));
  			}
@@ -26,14 +26,14 @@ command before "make":
  		}
  #endif
  		return;
---- orig/io.c	2005-02-03 02:04:20
+--- orig/io.c	2005-02-19 09:27:48
 +++ io.c	2005-02-15 21:33:51
-@@ -244,6 +244,14 @@ static void read_msg_fd(void)
- 		read_loop(fd, buf, 4);
- 		redo_list_add(IVAL(buf,0));
+@@ -256,6 +256,14 @@ static void read_msg_fd(void)
+ 		read_loop(fd, buf, len);
+ 		io_multiplex_write(MSG_DELETED, buf, len);
  		break;
 +	case MSG_SUCCESS:
-+		if (len != 4) {
++		if (len != 4 || !am_generator) {
 +			rprintf(FERROR, "invalid message %d:%d\n", tag, len);
 +			exit_cleanup(RERR_STREAMIO);
 +		}
@@ -43,9 +43,9 @@ command before "make":
  	case MSG_INFO:
  	case MSG_ERROR:
  	case MSG_LOG:
-@@ -677,6 +685,16 @@ static int readfd_unbuffered(int fd, cha
- 			read_loop(fd, iobuf_in, remaining);
- 			iobuf_in_ndx = 0;
+@@ -704,6 +712,16 @@ static int readfd_unbuffered(int fd, cha
+ 				log_delete(line, S_IFREG);
+ 			remaining = 0;
  			break;
 +		case MSG_SUCCESS:
 +			if (remaining != 4) {
@@ -60,10 +60,10 @@ command before "make":
  		case MSG_INFO:
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
---- orig/main.c	2005-02-15 19:27:04
+--- orig/main.c	2005-02-16 17:08:13
 +++ main.c	2005-02-15 21:33:51
-@@ -33,12 +33,14 @@ extern int verbose;
- extern int itemize_changes;
+@@ -32,12 +32,14 @@ extern int am_daemon;
+ extern int verbose;
  extern int blocking_io;
  extern int delete_before;
 +extern int remove_sent_files;
@@ -77,7 +77,7 @@ command before "make":
  extern int orig_umask;
  extern int copy_links;
  extern int keep_dirlinks;
-@@ -442,6 +444,12 @@ static void do_server_sender(int f_in, i
+@@ -441,6 +443,12 @@ static void do_server_sender(int f_in, i
  		exit_cleanup(RERR_SYNTAX);
  		return;
  	}
@@ -90,7 +90,7 @@ command before "make":
  
  	if (!relative_paths && !push_dir(dir)) {
  		rsyserr(FERROR, errno, "push_dir#3 %s failed",
-@@ -673,6 +681,8 @@ void start_server(int f_in, int f_out, i
+@@ -672,6 +680,8 @@ void start_server(int f_in, int f_out, i
  
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
@@ -99,7 +99,7 @@ command before "make":
  
  		recv_filter_list(f_in);
  		do_server_sender(f_in, f_out, argc, argv);
-@@ -750,6 +760,9 @@ int client_run(int f_in, int f_out, pid_
+@@ -749,6 +759,9 @@ int client_run(int f_in, int f_out, pid_
  		exit_cleanup(status);
  	}
  
@@ -109,7 +109,7 @@ command before "make":
  	if (argc == 0)
  		list_only |= 1;
  
---- orig/options.c	2005-02-16 15:35:53
+--- orig/options.c	2005-02-19 09:27:48
 +++ options.c	2005-02-15 21:33:52
 @@ -59,6 +59,7 @@ int delete_during = 0;
  int delete_before = 0;
@@ -127,7 +127,7 @@ command before "make":
  int max_delete = 0;
  OFF_T max_size = 0;
  int ignore_errors = 0;
-@@ -286,6 +288,7 @@ void usage(enum logcode F)
+@@ -287,6 +289,7 @@ void usage(enum logcode F)
    rprintf(F,"     --rsync-path=PATH       specify path to rsync on the remote machine\n");
    rprintf(F,"     --existing              only update files that already exist on receiver\n");
    rprintf(F,"     --ignore-existing       ignore files that already exist on receiving side\n");
@@ -135,7 +135,7 @@ command before "make":
    rprintf(F,"     --del                   an alias for --delete-during\n");
    rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
    rprintf(F,"     --delete-before         receiver deletes before transfer (default)\n");
-@@ -369,6 +372,7 @@ static struct poptOption long_options[] 
+@@ -370,6 +373,7 @@ static struct poptOption long_options[] 
    {"delete-during",    0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
    {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, 0, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
@@ -143,7 +143,7 @@ command before "make":
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"filter",          'f', POPT_ARG_STRING, 0, OPT_FILTER, 0, 0 },
-@@ -969,6 +973,17 @@ int parse_arguments(int *argc, const cha
+@@ -967,6 +971,17 @@ int parse_arguments(int *argc, const cha
  		return 0;
  	}
  
@@ -161,7 +161,7 @@ command before "make":
  	*argv = poptGetArgs(pc);
  	*argc = count_args(*argv);
  
-@@ -1411,6 +1426,9 @@ void server_options(char **args,int *arg
+@@ -1424,6 +1439,9 @@ void server_options(char **args,int *arg
  	if (fuzzy_basis && am_sender)
  		args[ac++] = "--fuzzy";
  
@@ -171,7 +171,7 @@ command before "make":
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2005-02-16 15:35:53
+--- orig/receiver.c	2005-02-19 09:27:48
 +++ receiver.c	2005-02-15 21:33:52
 @@ -43,6 +43,7 @@ extern int basis_dir_cnt;
  extern int make_backups;
@@ -190,7 +190,7 @@ command before "make":
  	char fnamecmpbuf[MAXPATHLEN];
  	uchar *delayed_bits = NULL;
  	struct file_struct *file;
-@@ -588,7 +589,12 @@ int recv_files(int f_in, struct file_lis
+@@ -591,7 +592,12 @@ int recv_files(int f_in, struct file_lis
  
  		cleanup_disable();
  
@@ -204,7 +204,7 @@ command before "make":
  			int msgtype = csum_length == SUM_LENGTH || read_batch ?
  				FERROR : FINFO;
  			if (msgtype == FERROR || verbose) {
-@@ -612,9 +618,8 @@ int recv_files(int f_in, struct file_lis
+@@ -615,9 +621,8 @@ int recv_files(int f_in, struct file_lis
  					keptstr, redostr);
  			}
  			if (csum_length != SUM_LENGTH) {
@@ -216,7 +216,7 @@ command before "make":
  			}
  		}
  	}
---- orig/rsync.yo	2005-02-16 15:35:54
+--- orig/rsync.yo	2005-02-19 09:27:49
 +++ rsync.yo	2005-02-15 21:33:55
 @@ -332,6 +332,7 @@ to the detailed description below for a 
       --rsync-path=PATH       specify path to rsync on the remote machine
@@ -226,7 +226,7 @@ command before "make":
       --del                   an alias for --delete-during
       --delete                delete files that don't exist on sender
       --delete-before         receiver deletes before transfer (default)
-@@ -665,6 +666,11 @@ dit(bf(--ignore-existing))
+@@ -674,6 +675,11 @@ dit(bf(--ignore-existing))
  This tells rsync not to update files that already exist on
  the destination.
  
@@ -238,9 +238,9 @@ command before "make":
  dit(bf(--delete)) This tells rsync to delete extraneous files from the
  receiving side (ones that aren't on the sending side), but only for the
  directories that are being synchronized.  You must have asked rsync to
---- orig/rsyncd.conf.yo	2005-02-16 15:35:54
+--- orig/rsyncd.conf.yo	2005-02-19 09:27:49
 +++ rsyncd.conf.yo	2005-02-15 21:33:55
-@@ -443,6 +443,10 @@ quote(tt(    refuse options = c delete))
+@@ -459,6 +459,10 @@ quote(tt(    refuse options = c delete))
  
  The reason the above refuses all delete options is that the options imply
  bf(--delete), and implied options are refused just like explicit options.
@@ -251,7 +251,7 @@ command before "make":
  
  When an option is refused, the server prints an error message and exits.
  To prevent all compression, you can use "dont compress = *" (see below)
---- orig/sender.c	2005-02-16 15:35:54
+--- orig/sender.c	2005-02-19 09:27:49
 +++ sender.c	2005-02-15 21:33:55
 @@ -28,6 +28,7 @@ extern int io_error;
  extern int dry_run;
@@ -303,7 +303,7 @@ command before "make":
  	while (1) {
  		unsigned int offset;
  
-@@ -281,6 +309,9 @@ void send_files(struct file_list *flist,
+@@ -282,6 +310,9 @@ void send_files(struct file_list *flist,
  			rprintf(FINFO, "sender finished %s\n",
  				safe_fname(fname));
  		}
