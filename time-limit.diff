@@ -4,7 +4,7 @@ to be simpler and more efficient by Wayne Davison.
 Do we need configure support for mktime()?
 
 --- io.c	15 May 2004 19:31:10 -0000	1.121
-+++ io.c	17 May 2004 21:26:50 -0000
++++ io.c	22 May 2004 19:33:07 -0000
 @@ -44,6 +44,7 @@ static int io_multiplexing_in;
  static int multiplex_in_fd = -1;
  static int multiplex_out_fd = -1;
@@ -13,7 +13,7 @@ Do we need configure support for mktime()?
  static int no_flush;
  
  extern int bwlimit;
-@@ -125,15 +126,20 @@ static void check_timeout(void)
+@@ -125,16 +126,21 @@ static void check_timeout(void)
  {
  	time_t t;
  
@@ -33,13 +33,14 @@ Do we need configure support for mktime()?
 +		last_io = t;
  		return;
  	}
--
--	t = time(NULL);
  
+-	t = time(NULL);
+-
  	if (last_io && io_timeout && (t-last_io) >= io_timeout) {
  		if (!am_server && !am_daemon) {
---- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	17 May 2004 21:26:50 -0000
+ 			rprintf(FERROR, "io timeout after %d seconds - exiting\n",
+--- options.c	22 May 2004 06:09:22 -0000	1.151
++++ options.c	22 May 2004 19:33:07 -0000
 @@ -92,6 +92,7 @@ int modify_window = 0;
  int blocking_io = -1;
  int checksum_seed = 0;
@@ -56,8 +57,8 @@ Do we need configure support for mktime()?
 +  rprintf(F,"     --time-limit=MINS       Stop rsync after MINS minutes have elapsed\n");
    rprintf(F,"     --write-batch=PREFIX    write batch fileset starting with PREFIX\n");
    rprintf(F,"     --read-batch=PREFIX     read batch fileset starting with PREFIX\n");
- #ifdef INET6
-@@ -305,7 +308,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --checksum-seed=NUM     set block/file checksum seed\n");
+@@ -306,7 +309,7 @@ void usage(enum logcode F)
  enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
@@ -66,7 +67,7 @@ Do we need configure support for mktime()?
        OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -377,6 +380,8 @@ static struct poptOption long_options[] 
+@@ -378,6 +381,8 @@ static struct poptOption long_options[] 
    {"port",             0,  POPT_ARG_INT,    &rsync_port, 0, 0, 0 },
    {"log-format",       0,  POPT_ARG_STRING, &log_format, 0, 0, 0 },
    {"bwlimit",          0,  POPT_ARG_INT,    &bwlimit, 0, 0, 0 },
@@ -75,7 +76,7 @@ Do we need configure support for mktime()?
    {"address",          0,  POPT_ARG_STRING, &bind_address, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
    {"hard-links",      'H', POPT_ARG_NONE,   &preserve_hard_links, 0, 0, 0 },
-@@ -584,6 +589,36 @@ int parse_arguments(int *argc, const cha
+@@ -587,6 +592,36 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -112,24 +113,24 @@ Do we need configure support for mktime()?
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off (opt-BASE is its index). */
-@@ -881,6 +916,15 @@ void server_options(char **args,int *arg
+@@ -886,6 +921,15 @@ void server_options(char **args,int *arg
+ 		args[ac++] = arg;
+ 	}
  
- 	if (bwlimit) {
- 		if (asprintf(&arg, "--bwlimit=%d", bwlimit) < 0)
-+			goto oom;
-+		args[ac++] = arg;
-+	}
-+
 +	if (stop_at_utime) {
 +		long mins = (stop_at_utime - time(NULL)) / 60;
 +		if (mins <= 0)
 +			mins = 1;
 +		if (asprintf(&arg, "--time-limit=%ld", mins) < 0)
- 			goto oom;
- 		args[ac++] = arg;
- 	}
---- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	17 May 2004 21:26:52 -0000
++			goto oom;
++		args[ac++] = arg;
++	}
++
+ 	if (backup_dir) {
+ 		args[ac++] = "--backup-dir";
+ 		args[ac++] = backup_dir;
+--- rsync.yo	21 May 2004 09:44:32 -0000	1.170
++++ rsync.yo	22 May 2004 19:33:08 -0000
 @@ -346,6 +346,8 @@ verb(
       --log-format=FORMAT     log file transfers using specified format
       --password-file=FILE    get password from FILE
@@ -138,12 +139,11 @@ Do we need configure support for mktime()?
 +     --time-limit=MINS       Stop rsync after MINS minutes have elapsed
       --write-batch=PREFIX    write batch fileset starting with PREFIX
       --read-batch=PREFIX     read batch fileset starting with PREFIX
-  -4  --ipv4                  prefer IPv4
-@@ -890,6 +892,18 @@ of rsync transfers, blocks of data are s
- transfer was too fast, it will wait before sending the next data block. The
+      --checksum-seed=NUM     set block/file checksum seed
+@@ -892,6 +894,18 @@ transfer was too fast, it will wait befo
  result is an average transfer rate equaling the specified limit. A value
  of zero specifies no limit.
-+
+ 
 +dit(bf(--stop-at=y-m-dTh:m)) This option allows you to specify at what
 +time to stop rsync, in year-month-dayThour:minute numeric format (e.g.
 +2004-12-3lT23:59).  You can specify a 2 or 4-digit year.  You can also
@@ -155,12 +155,13 @@ Do we need configure support for mktime()?
 +
 +dit(bf(--time-limit=MINS)) This option allows you to specify the maximum
 +number of minutes rsync will run for.
- 
++
  dit(bf(--write-batch=PREFIX)) Generate a set of files that can be
  transferred as a batch update. Each filename in the set starts with
---- util.c	15 May 2004 19:31:10 -0000	1.143
-+++ util.c	17 May 2004 21:26:52 -0000
-@@ -122,6 +122,132 @@ void overflow(char *str)
+ PREFIX. See the "BATCH MODE" section for details.
+--- util.c	21 May 2004 08:40:25 -0000	1.144
++++ util.c	22 May 2004 19:33:08 -0000
+@@ -125,6 +125,132 @@ void overflow(char *str)
  	exit_cleanup(RERR_MALLOC);
  }
  
