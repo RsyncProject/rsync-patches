@@ -1,7 +1,26 @@
 Patch from Mark Curtis to implement the --inplace option.
+Improved by Wayne Davison.
 
+Run these commands after applying the patch:
+
+    autoconf
+    autoheader
+    ./configure
+    make proto
+
+--- configure.in	30 Apr 2004 18:03:33 -0000	1.196
++++ configure.in	2 Jul 2004 21:10:25 -0000
+@@ -442,7 +442,7 @@ dnl AC_FUNC_MEMCMP
+ AC_FUNC_UTIME_NULL
+ AC_FUNC_ALLOCA
+ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup strerror chown chmod mknod mkfifo \
+-    fchmod fstat strchr readlink link utime utimes strftime mtrace \
++    fchmod fstat strchr readlink link utime utimes strftime mtrace ftruncate \
+     memmove lchown vsnprintf snprintf asprintf setsid glob strpbrk \
+     strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid)
+ 
 --- match.c	21 May 2004 08:27:04 -0000	1.62
-+++ match.c	30 Jun 2004 00:09:37 -0000
++++ match.c	2 Jul 2004 21:20:10 -0000
 @@ -23,6 +23,7 @@ extern int verbose;
  extern int am_server;
  extern int do_progress;
@@ -10,19 +29,111 @@ Patch from Mark Curtis to implement the --inplace option.
  
  typedef unsigned short tag;
  
-@@ -200,6 +201,10 @@ static void hash_search(int f,struct sum
- 			if (l != s->sums[i].len)
+@@ -52,9 +53,27 @@ static size_t *tag_table;
+ #define gettag2(s1,s2) (((s1) + (s2)) & 0xFFFF)
+ #define gettag(sum) gettag2((sum)&0xFFFF,(sum)>>16)
+ 
++static struct sum_buf *current_sums;
++static int current_s2length;
++
+ static int compare_targets(struct target *t1,struct target *t2)
+ {
+-	return (int)t1->t - (int)t2->t;
++	struct sum_buf *s1, *s2;
++	int diff;
++
++	if (t1->t != t2->t)
++		return t1->t < t2->t ? -1 : 1;
++
++	s1 = &current_sums[t1->i];
++	s2 = &current_sums[t2->i];
++
++	if (s1->sum1 != s2->sum1)
++		return s1->sum1 < s2->sum1 ? -1 : 1;
++
++	if ((diff = memcmp(s1->sum2, s2->sum2, current_s2length)) != 0)
++		return diff;
++
++	return s1->offset - s2->offset;
+ }
+ 
+ 
+@@ -74,6 +93,8 @@ static void build_hash_table(struct sum_
+ 		targets[i].t = gettag(s->sums[i].sum1);
+ 	}
+ 
++	current_sums = s->sums;
++	current_s2length = s->s2length;
+ 	qsort(targets,s->count,sizeof(targets[0]),(int (*)())compare_targets);
+ 
+ 	for (i = 0; i < TABLESIZE; i++)
+@@ -192,12 +213,24 @@ static void hash_search(int f,struct sum
+ 			unsigned int l;
+ 			size_t i = targets[j].i;
+ 
+-			if (sum != s->sums[i].sum1)
++			if (sum != s->sums[i].sum1) {
++				if (done_csum2)
++					break;
+ 				continue;
++			}
+ 
+ 			/* also make sure the two blocks are the same length */
+ 			l = MIN((OFF_T)s->blength, len-offset);
+-			if (l != s->sums[i].len)
++			if (l != s->sums[i].len) {
++				if (done_csum2)
++					break;
++				continue;
++			}
++
++			/* inplace: ensure chunk's offset is either >= our
++			 * offset or that the data didn't move. */
++			if (inplace && s->sums[i].offset < offset
++			    && s->sums[i].i >= 0)
  				continue;
  
-+			/* if inplace, make sure the offset is greater than where we are */
-+			if (inplace && offset > s->sums[i].offset)
-+				continue;
-+
  			if (verbose > 3)
- 				rprintf(FINFO,"potential match at %.0f target=%.0f %.0f sum=%08x\n",
- 					(double)offset,(double)j,(double)i,sum);
+@@ -215,15 +248,34 @@ static void hash_search(int f,struct sum
+ 				continue;
+ 			}
+ 
+-			/* we've found a match, but now check to see
+-			 * if last_i can hint at a better match */
++			/* We've found a match, but now check to see if last_i
++			 * can hint at a better match.  If inplace is enabled,
++			 * the best possible match is one with an identical
++			 * offset, so we prefer that over a last_i+1 match. */
++			if (inplace && s->sums[i].offset == offset) {
++				s->sums[i].i = -1;
++				j = s->count;
++			} else if (i == last_i + 1)
++				j = s->count;
+ 			for (j++; j < s->count && targets[j].t == t; j++) {
+ 				size_t i2 = targets[j].i;
+-				if (i2 == last_i + 1) {
++				if (i2 == last_i + 1
++				    || (inplace && s->sums[i2].offset == offset)) {
+ 					if (sum != s->sums[i2].sum1)
+ 						break;
+ 					if (memcmp(sum2,s->sums[i2].sum2,s->s2length) != 0)
+ 						break;
++					if (inplace) {
++						if (s->sums[i2].offset < offset
++						    && s->sums[i2].i >= 0)
++							continue;
++						i = i2;
++						if (s->sums[i2].offset == offset) {
++							s->sums[i2].i = -1;
++							break;
++						}
++						continue;
++					}
+ 					/* we've found an adjacent match - the RLL coder
+ 					 * will be happy */
+ 					i = i2;
 --- options.c	20 Jun 2004 19:47:05 -0000	1.157
-+++ options.c	30 Jun 2004 00:09:38 -0000
++++ options.c	2 Jul 2004 21:20:10 -0000
 @@ -94,6 +94,7 @@ int ignore_errors = 0;
  int modify_window = 0;
  int blocking_io = -1;
@@ -31,15 +142,45 @@ Patch from Mark Curtis to implement the --inplace option.
  unsigned int block_size = 0;
  
  
-@@ -234,6 +235,7 @@ void usage(enum logcode F)
+@@ -149,6 +150,7 @@ char *bind_address;
+ static void print_rsync_version(enum logcode f)
+ {
+ 	char const *got_socketpair = "no ";
++	char const *have_inplace = "no ";
+ 	char const *hardlinks = "no ";
+ 	char const *links = "no ";
+ 	char const *ipv6 = "no ";
+@@ -158,6 +160,10 @@ static void print_rsync_version(enum log
+ 	got_socketpair = "";
+ #endif
+ 
++#if HAVE_FTRUNCATE
++	have_inplace = "";
++#endif
++
+ #if SUPPORT_HARD_LINKS
+ 	hardlinks = "";
+ #endif
+@@ -183,8 +189,8 @@ static void print_rsync_version(enum log
+ 	/* Note that this field may not have type ino_t.  It depends
+ 	 * on the complicated interaction between largefile feature
+ 	 * macros. */
+-	rprintf(f, "              %sIPv6, %d-bit system inums, %d-bit internal inums\n",
+-		ipv6,
++	rprintf(f, "              %sinplace, %sIPv6, %d-bit system inums, %d-bit internal inums\n",
++		have_inplace, ipv6,
+ 		(int) (sizeof dumstat->st_ino * 8),
+ 		(int) (sizeof (uint64) * 8));
+ #ifdef MAINTAINER_MODE
+@@ -234,6 +240,7 @@ void usage(enum logcode F)
    rprintf(F,"     --backup-dir            make backups into this directory\n");
    rprintf(F,"     --suffix=SUFFIX         backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
    rprintf(F," -u, --update                update only (don't overwrite newer files)\n");
-+  rprintf(F,"     --inplace               update the destination file inplace *SEE MAN PAGE*\n");
++  rprintf(F,"     --inplace               update the destination file inplace (see man page)\n");
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -l, --links                 copy symlinks as symlinks\n");
    rprintf(F," -L, --copy-links            copy the referent of all symlinks\n");
-@@ -341,6 +343,7 @@ static struct poptOption long_options[] 
+@@ -341,6 +348,7 @@ static struct poptOption long_options[] 
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
    {"cvs-exclude",     'C', POPT_ARG_NONE,   &cvs_exclude, 0, 0, 0 },
    {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
@@ -47,17 +188,26 @@ Patch from Mark Curtis to implement the --inplace option.
    {"keep-dirlinks",   'K', POPT_ARG_NONE,   &keep_dirlinks, 0, 0, 0 },
    {"links",           'l', POPT_ARG_NONE,   &preserve_links, 0, 0, 0 },
    {"copy-links",      'L', POPT_ARG_NONE,   &copy_links, 0, 0, 0 },
-@@ -739,6 +742,9 @@ int parse_arguments(int *argc, const cha
+@@ -739,6 +747,18 @@ int parse_arguments(int *argc, const cha
  			bwlimit_writemax = 512;
  	}
  
-+	if (inplace && keep_partial)
-+		keep_partial = 0;
++	if (inplace) {
++#if HAVE_FTRUNCATE
++		if (keep_partial)
++			keep_partial = 0;
++#else
++		snprintf(err_buf, sizeof err_buf,
++			 "inplace is not supported on this %s\n",
++			 am_server ? "server" : "client");
++		return 0;
++#endif
++	}
 +
  	if (files_from) {
  		char *colon;
  		if (*argc != 2 && !(am_server && am_sender && *argc == 1)) {
-@@ -963,6 +969,9 @@ void server_options(char **args,int *arg
+@@ -963,6 +983,9 @@ void server_options(char **args,int *arg
  	if (opt_ignore_existing && am_sender)
  		args[ac++] = "--ignore-existing";
  
@@ -67,8 +217,8 @@ Patch from Mark Curtis to implement the --inplace option.
  	if (tmpdir) {
  		args[ac++] = "--temp-dir";
  		args[ac++] = tmpdir;
---- receiver.c	29 Jun 2004 15:12:01 -0000	1.83
-+++ receiver.c	30 Jun 2004 00:09:38 -0000
+--- receiver.c	2 Jul 2004 18:23:57 -0000	1.86
++++ receiver.c	2 Jul 2004 21:20:10 -0000
 @@ -48,6 +48,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
@@ -77,16 +227,16 @@ Patch from Mark Curtis to implement the --inplace option.
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -257,16 +258,28 @@ static int receive_data(int f_in,struct 
+@@ -255,16 +256,30 @@ static int receive_data(int f_in,struct 
  			sum_update(map,len);
  		}
  
--		if (fd != -1 && write_file(fd,map,len) != (int) len) {
+-		if (fd != -1 && write_file(fd, map, len) != (int)len) {
 -			rsyserr(FERROR, errno, "write failed on %s",
 -				full_fname(fname));
 -			exit_cleanup(RERR_FILEIO);
 +		if (!inplace || offset != offset2) {
-+			if (fd != -1 && write_file(fd,map,len) != (int) len) {
++			if (fd != -1 && write_file(fd, map, len) != (int)len) {
 +				rsyserr(FERROR, errno, "write failed on %s",
 +					full_fname(fname));
 +				exit_cleanup(RERR_FILEIO);
@@ -104,19 +254,23 @@ Patch from Mark Curtis to implement the --inplace option.
  
  	flush_write_file(fd);
  
++#ifdef HAVE_FTRUNCATE
 +	if (inplace)
 +		ftruncate(fd, offset);
++#endif
 +
  	if (do_progress)
  		end_progress(total_size);
  
-@@ -420,37 +433,50 @@ int recv_files(int f_in,struct file_list
+@@ -414,44 +429,59 @@ int recv_files(int f_in,struct file_list
  		} else
  			mapbuf = NULL;
  
 -		if (!get_tmpname(fnametmp,fname)) {
--			if (mapbuf) unmap_file(mapbuf);
--			if (fd1 != -1) close(fd1);
+-			if (mapbuf)
+-				unmap_file(mapbuf);
+-			if (fd1 != -1)
+-				close(fd1);
 -			continue;
 -		}
 +		/* We now check to see if we are writing file "inplace" */
@@ -124,16 +278,20 @@ Patch from Mark Curtis to implement the --inplace option.
 +			fd2 = do_open(fnamecmp, O_WRONLY|O_CREAT, 0);
 +			if (fd2 == -1) {
 +				rsyserr(FERROR, errno, "open %s failed",
-+					full_fname(fnametmp));
++					full_fname(fnamecmp));
 +				receive_data(f_in,mapbuf,-1,NULL,file->length);
-+				if (mapbuf) unmap_file(mapbuf);
-+				if (fd1 != -1) close(fd1);
++				if (mapbuf)
++					unmap_file(mapbuf);
++				if (fd1 != -1)
++					close(fd1);
 +				continue;
 +			}
 +		} else {
 +			if (!get_tmpname(fnametmp,fname)) {
-+				if (mapbuf) unmap_file(mapbuf);
-+				if (fd1 != -1) close(fd1);
++				if (mapbuf)
++					unmap_file(mapbuf);
++				if (fd1 != -1)
++					close(fd1);
 +				continue;
 +			}
  
@@ -166,10 +324,14 @@ Patch from Mark Curtis to implement the --inplace option.
 -			rsyserr(FERROR, errno, "mkstemp %s failed",
 -				full_fname(fnametmp));
 -			receive_data(f_in,mapbuf,-1,NULL,file->length);
--			if (mapbuf) unmap_file(mapbuf);
--			if (fd1 != -1) close(fd1);
+-			if (mapbuf)
+-				unmap_file(mapbuf);
+-			if (fd1 != -1)
+-				close(fd1);
 -			continue;
-+
+-		}
+ 
+-		cleanup_set(fnametmp, fname, file, mapbuf, fd1, fd2);
 +			/* in most cases parent directories will already exist
 +			 * because their information should have been previously
 +			 * transferred, but that may not be the case with -R */
@@ -182,15 +344,20 @@ Patch from Mark Curtis to implement the --inplace option.
 +				rsyserr(FERROR, errno, "mkstemp %s failed",
 +					full_fname(fnametmp));
 +				receive_data(f_in,mapbuf,-1,NULL,file->length);
-+				if (mapbuf) unmap_file(mapbuf);
-+				if (fd1 != -1) close(fd1);
++				if (mapbuf)
++					unmap_file(mapbuf);
++				if (fd1 != -1)
++					close(fd1);
 +				continue;
 +			}
- 		}
++
++			cleanup_set(fnametmp, fname, file, mapbuf, fd1, fd2);
++		}
  
- 		cleanup_set(fnametmp, fname, file, mapbuf, fd1, fd2);
---- rsync.c	11 Jun 2004 07:40:45 -0000	1.141
-+++ rsync.c	30 Jun 2004 00:09:38 -0000
+ 		if (!am_server && verbose)
+ 			rprintf(FINFO, "%s\n", fname);
+--- rsync.c	2 Jul 2004 18:13:53 -0000	1.142
++++ rsync.c	2 Jul 2004 21:20:11 -0000
 @@ -34,6 +34,7 @@ extern int force_delete;
  extern int recurse;
  extern int make_backups;
@@ -199,20 +366,22 @@ Patch from Mark Curtis to implement the --inplace option.
  
  
  /*
-@@ -239,6 +240,11 @@ void finish_transfer(char *fname, char *
+@@ -239,6 +240,13 @@ void finish_transfer(char *fname, char *
  	if (make_backups && !make_backup(fname))
  		return;
  
 +	if (inplace) {
-+		set_perms(fname,file,NULL,0);
++		if (verbose > 2)
++			rprintf(FINFO, "finishing %s\n", fname);
++		set_perms(fname, file, NULL, 0);
 +		return;
 +	}
 +
  	/* move tmp file over real file */
- 	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
- 	if (ret < 0) {
+ 	if (verbose > 2)
+ 		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
 --- rsync.yo	5 Jun 2004 16:16:30 -0000	1.171
-+++ rsync.yo	30 Jun 2004 00:09:39 -0000
++++ rsync.yo	2 Jul 2004 21:20:12 -0000
 @@ -289,6 +289,7 @@ verb(
       --backup-dir            make backups into this directory
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
