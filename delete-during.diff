@@ -9,8 +9,8 @@ the old functionality (and indeed, the support for popt aliases that is now
 in CVS will let the user easily choose which method they'd like --delete to
 invoke, either personally or site-wide, without having to recompile rsync).
 
---- orig/flist.c	2005-01-20 23:57:44
-+++ flist.c	2005-01-20 23:42:36
+--- orig/flist.c	2005-01-21 00:35:26
++++ flist.c	2005-01-21 02:08:54
 @@ -35,6 +35,7 @@ extern int am_root;
  extern int am_server;
  extern int am_daemon;
@@ -43,7 +43,55 @@ invoke, either personally or site-wide, without having to recompile rsync).
  extern int orig_umask;
  extern int list_only;
  
-@@ -1044,7 +1050,8 @@ static void send_directory(int f, struct
+@@ -534,6 +540,8 @@ void receive_file_entry(struct file_stru
+ 	static gid_t gid;
+ 	static char lastname[MAXPATHLEN], *lastdir;
+ 	static int lastdir_depth, lastdir_len = -1;
++	static unsigned int del_heir_name_len = -1;
++	static int in_del_hier = 0;
+ 	char thisname[MAXPATHLEN];
+ 	unsigned int l1 = 0, l2 = 0;
+ 	int alloc_len, basename_len, dirname_len, linkname_len, sum_len;
+@@ -547,7 +555,8 @@ void receive_file_entry(struct file_stru
+ 		rdev_major = 0;
+ 		uid = 0, gid = 0;
+ 		*lastname = '\0';
+-		lastdir_len = -1;
++		del_heir_name_len = lastdir_len = -1;
++		in_del_hier = 0;
+ 		return;
+ 	}
+ 
+@@ -645,13 +654,27 @@ void receive_file_entry(struct file_stru
+ 	memset(bp, 0, file_struct_len);
+ 	bp += file_struct_len;
+ 
+-	file->flags = flags & XMIT_DEL_START ? FLAG_DEL_START : 0;
++	file->flags = 0;
+ 	file->modtime = modtime;
+ 	file->length = file_length;
+ 	file->mode = mode;
+ 	file->uid = uid;
+ 	file->gid = gid;
+ 
++	if (S_ISDIR(mode)) {
++		if (flags & XMIT_DEL_START) {
++			in_del_hier = 1;
++			del_heir_name_len = l1 + l2;
++			file->flags |= FLAG_DEL_START;
++		} else if (delete_during && in_del_hier) {
++			if (!relative_paths || (l1 >= del_heir_name_len
++			    && thisname[del_heir_name_len] == '/'))
++				file->flags |= FLAG_DEL_START;
++			else
++				in_del_hier = 0;
++		}
++	}
++
+ 	if (dirname_len) {
+ 		file->dirname = lastdir = bp;
+ 		lastdir_len = dirname_len - 1;
+@@ -1044,7 +1067,8 @@ static void send_directory(int f, struct
  		    || (dname[1] == '.' && dname[2] == '\0')))
  			continue;
  		if (strlcpy(p, dname, MAXPATHLEN - offset) < MAXPATHLEN - offset) {
@@ -53,7 +101,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  		} else {
  			io_error |= IOERR_GENERAL;
  			rprintf(FINFO,
-@@ -1102,6 +1109,7 @@ struct file_list *send_file_list(int f, 
+@@ -1102,6 +1126,7 @@ struct file_list *send_file_list(int f, 
  	while (1) {
  		char fname2[MAXPATHLEN];
  		char *fname = fname2;
@@ -61,7 +109,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  
  		if (use_ff_fd) {
  			if (read_filesfrom_line(filesfrom_fd, fname) == 0)
-@@ -1143,7 +1151,7 @@ struct file_list *send_file_list(int f, 
+@@ -1143,7 +1168,7 @@ struct file_list *send_file_list(int f, 
  		dir = NULL;
  		olddir[0] = '\0';
  
@@ -70,17 +118,17 @@ invoke, either personally or site-wide, without having to recompile rsync).
  			p = strrchr(fname, '/');
  			if (p) {
  				*p = 0;
-@@ -1212,7 +1220,8 @@ struct file_list *send_file_list(int f, 
+@@ -1212,7 +1237,8 @@ struct file_list *send_file_list(int f, 
  		if (one_file_system)
  			set_filesystem(fname);
  
--		send_file_name(f, flist, fname, recurse, XMIT_TOP_DIR);
+-		send_file_name(f, flist, fname, recurse, XMIT_DEL_START);
 +		do_subdirs = recurse >= 1 ? recurse-- : recurse;
-+		send_file_name(f, flist, fname, do_subdirs, XMIT_TOP_DIR);
++		send_file_name(f, flist, fname, do_subdirs, XMIT_DEL_START);
  
  		if (olddir[0]) {
  			flist_dir = NULL;
-@@ -1634,3 +1643,91 @@ char *f_name(struct file_struct *f)
+@@ -1634,3 +1660,91 @@ char *f_name(struct file_struct *f)
  
  	return f_name_to(f, names[n]);
  }
@@ -165,7 +213,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
 +		add_cvs_excludes();
 +
 +	for (j = 0; j < flist->count; j++) {
-+		if (!(flist->files[j]->flags & FLAG_TOP_DIR)
++		if (!(flist->files[j]->flags & FLAG_DEL_START)
 +		    || !S_ISDIR(flist->files[j]->mode))
 +			continue;
 +
@@ -173,7 +221,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
 +	}
 +}
 --- orig/generator.c	2005-01-20 23:05:34
-+++ generator.c	2005-01-20 23:08:38
++++ generator.c	2005-01-21 01:59:39
 @@ -34,6 +34,8 @@ extern int preserve_hard_links;
  extern int preserve_perms;
  extern int preserve_uid;
@@ -193,16 +241,19 @@ invoke, either personally or site-wide, without having to recompile rsync).
  			   int f_out, int f_out_name)
  {
  	int fd = -1, f_copy = -1;
-@@ -308,6 +311,8 @@ static void recv_generator(char *fname, 
+@@ -308,6 +311,11 @@ static void recv_generator(char *fname, 
  		}
  		/* f_out is set to -1 when doing final directory-permission
  		 * and modification-time repair. */
-+		if (delete_during && f_out != -1)
++		if (delete_during && f_out != -1
++		    && (file->flags & FLAG_DEL_START)) {
 +			delete_in_dir(flist, fname, 0);
++			statret = 1;
++		}
  		if (set_perms(fname, file, statret ? NULL : &st, 0)
  		    && verbose && f_out != -1)
  			rprintf(FINFO, "%s/\n", safe_fname(fname));
-@@ -618,6 +623,9 @@ void generate_files(int f_out, struct fi
+@@ -618,6 +626,9 @@ void generate_files(int f_out, struct fi
  			: "delta transmission enabled\n");
  	}
  
@@ -212,7 +263,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  	/* we expect to just sit around now, so don't exit on a
  	   timeout. If we really get a timeout then the other process should
  	   exit */
-@@ -641,7 +649,7 @@ void generate_files(int f_out, struct fi
+@@ -641,7 +652,7 @@ void generate_files(int f_out, struct fi
  		}
  
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -221,7 +272,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  	}
  
  	phase++;
-@@ -658,7 +666,7 @@ void generate_files(int f_out, struct fi
+@@ -658,7 +669,7 @@ void generate_files(int f_out, struct fi
  	while ((i = get_redo_num()) != -1) {
  		struct file_struct *file = flist->files[i];
  		recv_generator(local_name ? local_name : f_name_to(file, fbuf),
@@ -230,7 +281,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  	}
  
  	phase++;
-@@ -680,7 +688,7 @@ void generate_files(int f_out, struct fi
+@@ -680,7 +691,7 @@ void generate_files(int f_out, struct fi
  		if (!file->basename || !S_ISDIR(file->mode))
  			continue;
  		recv_generator(local_name ? local_name : f_name(file),
@@ -364,7 +415,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
  			args[ac++] = "--delete";
  
  		if (delete_after)
---- orig/receiver.c	2005-01-20 23:52:09
+--- orig/receiver.c	2005-01-21 00:35:26
 +++ receiver.c	2005-01-18 22:47:38
 @@ -23,7 +23,6 @@
  extern int verbose;
@@ -421,7 +472,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
 -	}
 -
 -	for (j = 0; j < flist->count; j++) {
--		if (!(flist->files[j]->flags & FLAG_TOP_DIR)
+-		if (!(flist->files[j]->flags & FLAG_DEL_START)
 -		    || !S_ISDIR(flist->files[j]->mode))
 -			continue;
 -
