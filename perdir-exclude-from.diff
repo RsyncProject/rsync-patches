@@ -1,6 +1,6 @@
 --- exclude.c	14 Apr 2004 23:33:40 -0000	1.67
-+++ exclude.c	15 Apr 2004 18:09:37 -0000
-@@ -27,10 +27,13 @@
++++ exclude.c	15 Apr 2004 21:02:10 -0000
+@@ -27,8 +27,10 @@
  #include "rsync.h"
  
  extern int verbose;
@@ -10,22 +10,31 @@
 +struct exclude_list_struct subdir_exclude_list;
  struct exclude_list_struct local_exclude_list;
  struct exclude_list_struct server_exclude_list;
-+struct exclude_struct *preserve_exclude_sublist;
  char *exclude_path_prefix = NULL;
+@@ -80,6 +82,8 @@ static void make_exclude(struct exclude_
+ 	for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
+ 		ret->slash_cnt++;
  
- /** Build an exclude structure given a exclude pattern */
-@@ -102,6 +105,10 @@ void free_exclude_list(struct exclude_li
++	ret->next = listp->extra;
++
+ 	if (!listp->tail)
+ 		listp->head = listp->tail = ret;
+ 	else {
+@@ -101,6 +105,13 @@ void free_exclude_list(struct exclude_li
+ 	if (verbose > 2)
  		rprintf(FINFO, "[%s] clearing exclude list\n", who_am_i());
  
++	if (listp->extra) {
++		if (listp->tail)
++			listp->tail->next = NULL;
++		else
++			listp->head = NULL;
++	}
++
  	for (ent = listp->head; ent; ent = next) {
-+		if (ent == preserve_exclude_sublist) {
-+			preserve_exclude_sublist = NULL;
-+			break;
-+		}
  		next = ent->next;
  		free_exclude(ent);
- 	}
-@@ -209,21 +216,24 @@ static void report_exclude_result(char c
+@@ -209,21 +220,24 @@ static void report_exclude_result(char c
  
  /*
   * Return true if file NAME is defined to be excluded by the specified
@@ -54,7 +63,7 @@
  }
  
  
-@@ -249,10 +259,10 @@ static const char *get_exclude_tok(const
+@@ -249,10 +263,10 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -68,7 +77,7 @@
  		s += 2;
  	} else
  		*incl_ptr = xflags & XFLG_DEF_INCLUDE;
-@@ -382,8 +392,12 @@ void send_exclude_list(int f)
+@@ -382,8 +396,12 @@ void send_exclude_list(int f)
  
  		if (ent->include) {
  			write_int(f, l + 2);
@@ -84,7 +93,7 @@
  			write_buf(f, "- ", 2);
  		} else
 --- flist.c	14 Apr 2004 23:33:34 -0000	1.213
-+++ flist.c	15 Apr 2004 18:09:38 -0000
++++ flist.c	15 Apr 2004 21:02:10 -0000
 @@ -40,6 +40,7 @@ extern int ignore_errors;
  extern int numeric_ids;
  
@@ -93,30 +102,28 @@
  
  extern int recurse;
  extern char curr_dir[MAXPATHLEN];
-@@ -66,7 +67,9 @@ extern int write_batch;
+@@ -66,6 +67,7 @@ extern int write_batch;
  
  extern struct exclude_list_struct exclude_list;
  extern struct exclude_list_struct server_exclude_list;
 +extern struct exclude_list_struct subdir_exclude_list;
  extern struct exclude_list_struct local_exclude_list;
-+extern struct exclude_struct *preserve_exclude_sublist;
  
  int io_error;
- 
-@@ -211,6 +214,12 @@ int link_stat(const char *path, STRUCT_S
+@@ -211,6 +213,12 @@ int link_stat(const char *path, STRUCT_S
   */
  static int check_exclude_file(char *fname, int is_dir, int exclude_level)
  {
-+	int i, rc;
-+	struct exclude_list_struct *elist[] = {
++	static struct exclude_list_struct *elist[] = {
 +	    &exclude_list, &subdir_exclude_list, &local_exclude_list, NULL };
-+	char *edesc[] = {
++	static char *edesc[] = {
 +	    "pattern", "subdir-exclude", "local-ignore" };
++	int i, rc;
 +
  #if 0 /* This currently never happens, so avoid a useless compare. */
  	if (exclude_level == NO_EXCLUDES)
  		return 0;
-@@ -228,18 +237,18 @@ static int check_exclude_file(char *fnam
+@@ -228,18 +236,18 @@ static int check_exclude_file(char *fnam
  	}
  	if (server_exclude_list.head
  	 && check_exclude(&server_exclude_list, fname, is_dir,
@@ -144,22 +151,22 @@
  }
  
  /* used by the one_file_system code */
-@@ -957,8 +966,14 @@ void send_file_name(int f, struct file_l
+@@ -957,8 +965,14 @@ void send_file_name(int f, struct file_l
  	if (recursive && S_ISDIR(file->mode)
  	    && !(file->flags & FLAG_MOUNT_POINT)) {
  		struct exclude_list_struct last_list = local_exclude_list;
 +		struct exclude_list_struct sub_list = subdir_exclude_list;
  		memset(&local_exclude_list, 0, sizeof local_exclude_list);
-+		preserve_exclude_sublist = sub_list.head;
++		memset(&subdir_exclude_list, 0, sizeof subdir_exclude_list);
++		subdir_exclude_list.head = subdir_exclude_list.extra
++		    = sub_list.head;
  		send_directory(f, flist, f_name_to(file, fbuf));
-+		preserve_exclude_sublist = sub_list.head;
 +		free_exclude_list(&subdir_exclude_list);
 +		subdir_exclude_list = sub_list;
-+		preserve_exclude_sublist = NULL;
  		free_exclude_list(&local_exclude_list);
  		local_exclude_list = last_list;
  	}
-@@ -1004,6 +1019,27 @@ static void send_directory(int f, struct
+@@ -1004,6 +1018,18 @@ static void send_directory(int f, struct
  			io_error |= IOERR_GENERAL;
  			rprintf(FINFO,
  				"cannot cvs-exclude in long-named directory %s\n",
@@ -169,18 +176,9 @@
 +
 +	if (subdir_exclude_filename) {
 +		if (strlcpy(p, subdir_exclude_filename, MAXPATHLEN - offset)
-+		    < MAXPATHLEN - offset) {
-+			struct exclude_struct *t = subdir_exclude_list.tail;
++		    < MAXPATHLEN - offset)
 +			add_exclude_file(&subdir_exclude_list, fname, 0);
-+			/* Move this file's rules prior to the older rules. */
-+			if (preserve_exclude_sublist && t) {
-+				subdir_exclude_list.tail->next
-+				    = subdir_exclude_list.head;
-+				subdir_exclude_list.head = t->next;
-+				subdir_exclude_list.tail = t;
-+				t->next = NULL;
-+			}
-+		} else {
++		else {
 +			io_error |= IOERR_GENERAL;
 +			rprintf(FINFO,
 +				"cannot subdir-exclude in long-named directory %s\n",
@@ -188,7 +186,7 @@
  		}
  	}
 --- options.c	14 Apr 2004 23:33:34 -0000	1.146
-+++ options.c	15 Apr 2004 18:09:38 -0000
++++ options.c	15 Apr 2004 21:02:10 -0000
 @@ -70,6 +70,7 @@ int am_server = 0;
  int am_sender = 0;
  int am_generator = 0;
@@ -214,7 +212,7 @@
    {"links",           'l', POPT_ARG_NONE,   &preserve_links, 0, 0, 0 },
    {"copy-links",      'L', POPT_ARG_NONE,   &copy_links, 0, 0, 0 },
 --- proto.h	14 Apr 2004 23:33:30 -0000	1.188
-+++ proto.h	15 Apr 2004 18:09:38 -0000
++++ proto.h	15 Apr 2004 21:02:11 -0000
 @@ -53,7 +53,7 @@ void setup_protocol(int f_out,int f_in);
  int claim_connection(char *fname,int max_connections);
  void free_exclude_list(struct exclude_list_struct *listp);
@@ -224,8 +222,18 @@
  void add_exclude(struct exclude_list_struct *listp, const char *pattern,
  		 int xflags);
  void add_exclude_file(struct exclude_list_struct *listp, const char *fname,
---- rsync.yo	13 Apr 2004 00:32:58 -0000	1.156
-+++ rsync.yo	15 Apr 2004 18:12:48 -0000
+--- rsync.h	14 Apr 2004 23:33:37 -0000	1.196
++++ rsync.h	15 Apr 2004 21:02:11 -0000
+@@ -504,6 +504,7 @@ struct exclude_struct {
+ struct exclude_list_struct {
+ 	struct exclude_struct *head;
+ 	struct exclude_struct *tail;
++	struct exclude_struct *extra;
+ };
+ 
+ struct stats {
+--- rsync.yo	15 Apr 2004 18:32:24 -0000	1.157
++++ rsync.yo	15 Apr 2004 21:02:11 -0000
 @@ -331,6 +331,7 @@ verb(
       --exclude-from=FILE     exclude patterns listed in FILE
       --include=PATTERN       don't exclude files matching PATTERN
@@ -264,7 +272,7 @@
    it() if the pattern is a single exclamation mark ! then the current
    include/exclude list is reset, removing all previously defined patterns.
 --- util.c	14 Apr 2004 23:33:34 -0000	1.135
-+++ util.c	15 Apr 2004 18:09:40 -0000
++++ util.c	15 Apr 2004 21:02:12 -0000
 @@ -477,7 +477,7 @@ static int exclude_server_path(char *arg
  		for (s = arg; (s = strchr(s, '/')) != NULL; ) {
  			*s = '\0';
