@@ -1,0 +1,92 @@
+--- backup.c	23 Feb 2004 07:03:03 -0000	1.27
++++ backup.c	6 Mar 2004 07:25:05 -0000
+@@ -130,8 +130,8 @@ failure:
+ /* robustly move a file, creating new directory structures if necessary */
+ static int robust_move(char *src, char *dst)
+ {
+-	if (robust_rename(src, dst, 0755) != 0 && (errno != ENOENT
+-	    || make_bak_dir(dst) < 0 || robust_rename(src, dst, 0755) != 0))
++	if (robust_rename(src, dst, 0755) < 0 && (errno != ENOENT
++	    || make_bak_dir(dst) < 0 || robust_rename(src, dst, 0755) < 0))
+ 		return -1;
+ 	return 0;
+ }
+--- rsync.c	25 Feb 2004 21:20:59 -0000	1.133
++++ rsync.c	6 Mar 2004 07:25:05 -0000
+@@ -235,15 +235,19 @@ void finish_transfer(char *fname, char *
+ 	if (make_backups && !make_backup(fname))
+ 		return;
+ 
++	/* Change permissions before putting the file into place. */
++	set_perms(fnametmp, file, NULL, 0);
++
+ 	/* move tmp file over real file */
+ 	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
+-	if (ret != 0) {
++	if (ret < 0) {
+ 		rprintf(FERROR, "%s %s -> \"%s\": %s\n",
+ 		    ret == -2 ? "copy" : "rename",
+ 		    full_fname(fnametmp), fname, strerror(errno));
+ 		do_unlink(fnametmp);
+-	} else {
+-		set_perms(fname,file,NULL,0);
++	} else if (ret == 1) {
++		/* The file got copied, so set the permissions again. */
++		set_perms(fname, file, NULL, 0);
+ 	}
+ }
+ 
+--- t_stub.c	11 Sep 2003 04:48:13 -0000	1.4
++++ t_stub.c	6 Mar 2004 07:25:05 -0000
+@@ -26,6 +26,7 @@
+  * functions, so that module test harnesses can run standalone.
+  **/
+ 
++int am_root = 0;
+ int modify_window = 0;
+ int module_id = -1;
+ struct exclude_struct **server_exclude_list;
+--- util.c	17 Feb 2004 23:13:10 -0000	1.132
++++ util.c	6 Mar 2004 07:25:06 -0000
+@@ -28,6 +28,7 @@
+ #include "rsync.h"
+ 
+ extern int verbose;
++extern int am_root;
+ 
+ int sanitize_paths = 0;
+ 
+@@ -262,6 +263,8 @@ int copy_file(char *source, char *dest, 
+ 		return -1;
+ 	}
+ 
++	if (!am_root && !(mode & S_IWRITE))
++		mode |= S_IWRITE;
+ 	ofd = do_open(dest, O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, mode);
+ 	if (ofd == -1) {
+ 		rprintf(FERROR,"open %s: %s\n",
+@@ -353,8 +356,8 @@ int robust_unlink(char *fname)
+ #endif
+ }
+ 
+-/* Returns 0 on success, -1 on most errors, and -2 if we got an error
+- * trying to copy the file across file systems. */
++/* Returns 0 on successful rename, 1 if we successfully copied the file
++ * across filesystems, -2 if copy_file() failed, and -1 on other errors. */
+ int robust_rename(char *from, char *to, int mode)
+ {
+ 	int tries = 4;
+@@ -371,10 +374,12 @@ int robust_rename(char *from, char *to, 
+ 			break;
+ #endif
+ 		case EXDEV:
++			if (!am_root && !(mode & S_IREAD))
++				do_chmod(from, (mode & CHMOD_BITS) | S_IREAD);
+ 			if (copy_file(from, to, mode) != 0)
+ 				return -2;
+ 			do_unlink(from);
+-			return 0;
++			return 1;
+ 		default:
+ 			return -1;
+ 		}
