@@ -1,8 +1,8 @@
 Delay the renaming of all the temp files until the end of the transfer.
 
---- orig/options.c	2005-01-23 01:45:43
+--- orig/options.c	2005-01-24 01:43:10
 +++ options.c	2005-01-23 07:27:59
-@@ -99,6 +99,7 @@ int modify_window = 0;
+@@ -101,6 +101,7 @@ int modify_window = 0;
  int blocking_io = -1;
  int checksum_seed = 0;
  int inplace = 0;
@@ -10,15 +10,15 @@ Delay the renaming of all the temp files until the end of the transfer.
  long block_size = 0; /* "long" because popt can't set an int32. */
  
  
-@@ -273,6 +274,7 @@ void usage(enum logcode F)
+@@ -276,6 +277,7 @@ void usage(enum logcode F)
    rprintf(F,"     --rsync-path=PATH       specify path to rsync on the remote machine\n");
    rprintf(F,"     --existing              only update files that already exist\n");
    rprintf(F,"     --ignore-existing       ignore files that already exist on receiving side\n");
 +  rprintf(F,"     --delay-renames         renames transferred files into place at end\n");
    rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
-   rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
-   rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
-@@ -394,6 +396,7 @@ static struct poptOption long_options[] 
+   rprintf(F,"     --delete-before         receiver deletes before transfer, not during\n");
+   rprintf(F,"     --delete-after          receiver deletes after transfer, not during\n");
+@@ -401,6 +403,7 @@ static struct poptOption long_options[] 
    {"progress",         0,  POPT_ARG_NONE,   &do_progress, 0, 0, 0 },
    {"partial",          0,  POPT_ARG_NONE,   &keep_partial, 0, 0, 0 },
    {"partial-dir",      0,  POPT_ARG_STRING, &partial_dir, 0, 0, 0 },
@@ -26,7 +26,7 @@ Delay the renaming of all the temp files until the end of the transfer.
    {"ignore-errors",    0,  POPT_ARG_NONE,   &ignore_errors, 0, 0, 0 },
    {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
    {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
-@@ -948,11 +951,15 @@ int parse_arguments(int *argc, const cha
+@@ -955,11 +958,15 @@ int parse_arguments(int *argc, const cha
  			bwlimit_writemax = 512;
  	}
  
@@ -44,7 +44,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  			return 0;
  		}
  		keep_partial = 0;
-@@ -1187,6 +1194,8 @@ void server_options(char **args,int *arg
+@@ -1198,6 +1205,8 @@ void server_options(char **args,int *arg
  	if (partial_dir && am_sender) {
  		args[ac++] = "--partial-dir";
  		args[ac++] = partial_dir;
@@ -53,9 +53,9 @@ Delay the renaming of all the temp files until the end of the transfer.
  	} else if (keep_partial)
  		args[ac++] = "--partial";
  
---- orig/receiver.c	2005-01-23 07:27:24
+--- orig/receiver.c	2005-01-24 01:43:10
 +++ receiver.c	2005-01-10 10:16:54
-@@ -53,6 +53,7 @@ extern int orig_umask;
+@@ -48,6 +48,7 @@ extern int orig_umask;
  extern int keep_partial;
  extern int checksum_seed;
  extern int inplace;
@@ -63,7 +63,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  
  extern struct exclude_list_struct server_exclude_list;
  
-@@ -324,6 +325,7 @@ int recv_files(int f_in, struct file_lis
+@@ -272,6 +273,7 @@ int recv_files(int f_in, struct file_lis
  	char fnametmp[MAXPATHLEN];
  	char *fnamecmp, *partialptr;
  	char fnamecmpbuf[MAXPATHLEN];
@@ -71,7 +71,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  	struct file_struct *file;
  	struct stats initial_stats;
  	int save_make_backups = make_backups;
-@@ -337,6 +339,12 @@ int recv_files(int f_in, struct file_lis
+@@ -285,6 +287,12 @@ int recv_files(int f_in, struct file_lis
  		flist->hlink_pool = NULL;
  	}
  
@@ -84,7 +84,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  	while (1) {
  		cleanup_disable();
  
-@@ -551,7 +559,7 @@ int recv_files(int f_in, struct file_lis
+@@ -499,7 +507,7 @@ int recv_files(int f_in, struct file_lis
  			exit_cleanup(RERR_FILEIO);
  		}
  
@@ -93,7 +93,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  			finish_transfer(fname, fnametmp, file, recv_ok, 1);
  			if (partialptr != fname && fnamecmp == partialptr) {
  				do_unlink(partialptr);
-@@ -561,6 +569,8 @@ int recv_files(int f_in, struct file_lis
+@@ -509,6 +517,8 @@ int recv_files(int f_in, struct file_lis
  		    && handle_partial_dir(partialptr, PDIR_CREATE)) {
  			finish_transfer(partialptr, fnametmp, file, recv_ok,
  					!partial_dir);
@@ -102,7 +102,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  		} else {
  			partialptr = NULL;
  			do_unlink(fnametmp);
-@@ -600,6 +610,33 @@ int recv_files(int f_in, struct file_lis
+@@ -548,6 +558,33 @@ int recv_files(int f_in, struct file_lis
  	}
  	make_backups = save_make_backups;
  
@@ -136,17 +136,17 @@ Delay the renaming of all the temp files until the end of the transfer.
  	if (delete_after && recurse && !local_name && flist->count > 0)
  		delete_files(flist);
  
---- orig/rsync.yo	2005-01-22 22:48:52
+--- orig/rsync.yo	2005-01-24 01:43:10
 +++ rsync.yo	2005-01-23 07:28:13
-@@ -340,6 +340,7 @@ verb(
+@@ -342,6 +342,7 @@ verb(
       --rsync-path=PATH       specify path to rsync on the remote machine
       --existing              only update files that already exist
       --ignore-existing       ignore files that already exist on receiver
 +     --delay-renames         renames transferred files into place at end
       --delete                delete files that don't exist on sender
-      --delete-after          receiver deletes after transfer, not before
-      --delete-excluded       also delete excluded files on receiver
-@@ -546,9 +547,9 @@ or appended data, and also on systems th
+      --delete-before         receiver deletes before xfer, not during
+      --delete-after          receiver deletes after transfer, not during
+@@ -545,9 +546,9 @@ or appended data, and also on systems th
  bound.
  
  The option implies --partial (since an interrupted transfer does not delete
@@ -159,7 +159,7 @@ Delay the renaming of all the temp files until the end of the transfer.
  
  WARNING: The file's data will be in an inconsistent state during the
  transfer (and possibly afterward if the transfer gets interrupted), so you
-@@ -978,6 +979,17 @@ environment and then just use the -P opt
+@@ -1003,6 +1004,17 @@ environment and then just use the -P opt
  does not look for this environment value is when --inplace was also
  specified (since --inplace conflicts with --partial-dir).
  

@@ -87,17 +87,17 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  #define RERR_SIGNAL     20      /* status returned when sent SIGUSR1, SIGINT */
  #define RERR_WAITCHILD  21      /* some error returned by waitpid() */
---- orig/flist.c	2005-01-24 00:18:21
+--- orig/flist.c	2005-01-24 01:43:09
 +++ flist.c	2005-01-21 19:10:03
-@@ -64,6 +64,7 @@ extern int sanitize_paths;
- extern int delete_excluded;
+@@ -70,6 +70,7 @@ extern int delete_excluded;
+ extern int max_delete;
  extern int orig_umask;
  extern int list_only;
 +extern char *fname_convert_cmd;
  
  extern struct exclude_list_struct exclude_list;
  extern struct exclude_list_struct server_exclude_list;
-@@ -359,7 +360,10 @@ void send_file_entry(struct file_struct 
+@@ -365,7 +366,10 @@ void send_file_entry(struct file_struct 
  
  	io_write_phase = "send_file_entry";
  
@@ -109,7 +109,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	flags = base_flags;
  
-@@ -572,6 +576,9 @@ void receive_file_entry(struct file_stru
+@@ -581,6 +585,9 @@ void receive_file_entry(struct file_stru
  
  	strlcpy(lastname, thisname, MAXPATHLEN);
  
@@ -119,7 +119,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	clean_fname(thisname, 0);
  
  	if (sanitize_paths)
-@@ -1087,6 +1094,9 @@ struct file_list *send_file_list(int f, 
+@@ -1110,6 +1117,9 @@ struct file_list *send_file_list(int f, 
  
  	start_write = stats.total_written;
  
@@ -129,7 +129,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	flist = flist_new(f == -1 ? WITHOUT_HLINK : WITH_HLINK,
  			  "send_file_list");
  
-@@ -1262,6 +1272,9 @@ struct file_list *send_file_list(int f, 
+@@ -1287,6 +1297,9 @@ struct file_list *send_file_list(int f, 
  		stats.num_files = flist->count;
  	}
  
@@ -139,7 +139,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	if (verbose > 3)
  		output_flist(flist, f < 0 ? "delete" : who_am_i());
  
-@@ -1283,6 +1296,9 @@ struct file_list *recv_file_list(int f)
+@@ -1308,6 +1321,9 @@ struct file_list *recv_file_list(int f)
  
  	start_read = stats.total_read;
  
@@ -149,7 +149,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	flist = flist_new(WITH_HLINK, "recv_file_list");
  	received_flist = flist;
  
-@@ -1336,6 +1352,9 @@ struct file_list *recv_file_list(int f)
+@@ -1361,6 +1377,9 @@ struct file_list *recv_file_list(int f)
  			io_error |= read_int(f);
  	}
  
@@ -382,9 +382,9 @@ Note that you'll need to run 'make proto' after applying this patch.
 +	if (verbose > 2)
 +		rprintf(FINFO, "Converted filename: %s -> %s\n", src, dest);
 +}
---- orig/generator.c	2005-01-20 23:05:34
+--- orig/generator.c	2005-01-24 01:43:09
 +++ generator.c	2004-07-03 20:18:02
-@@ -232,6 +232,12 @@ static void generate_and_send_sums(int f
+@@ -233,6 +233,12 @@ static void generate_and_send_sums(int f
   *
   * @note This comment was added later by mbp who was trying to work it
   * out.  It might be wrong.
@@ -395,8 +395,8 @@ Note that you'll need to run 'make proto' after applying this patch.
 + * sender (unconverted). To solve the above, move all progress
 + * reporting to the sender.
   */
- static void recv_generator(char *fname, struct file_struct *file, int i,
- 			   int f_out, int f_out_name)
+ static void recv_generator(char *fname, struct file_list *flist,
+ 			   struct file_struct *file, int i,
 --- orig/log.c	2004-09-07 19:54:51
 +++ log.c	2004-07-03 20:18:02
 @@ -57,6 +57,7 @@ struct {
@@ -407,7 +407,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	{ RERR_SIGNAL     , "received SIGUSR1 or SIGINT" },
  	{ RERR_WAITCHILD  , "some error returned by waitpid()" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
---- orig/main.c	2005-01-23 07:27:24
+--- orig/main.c	2005-01-24 01:43:10
 +++ main.c	2004-07-22 00:31:47
 @@ -335,7 +335,7 @@ static pid_t do_cmd(char *cmd, char *mac
  			whole_file = 1;
@@ -418,9 +418,9 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	if (dir)
  		free(dir);
---- orig/options.c	2005-01-24 00:18:21
+--- orig/options.c	2005-01-24 01:43:10
 +++ options.c	2005-01-15 21:28:07
-@@ -127,6 +127,7 @@ char *basis_dir[MAX_BASIS_DIRS+1];
+@@ -129,6 +129,7 @@ char *basis_dir[MAX_BASIS_DIRS+1];
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *log_format = NULL;
@@ -428,7 +428,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
-@@ -292,6 +293,7 @@ void usage(enum logcode F)
+@@ -296,6 +297,7 @@ void usage(enum logcode F)
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
    rprintf(F," -P                          equivalent to --partial --progress\n");
@@ -436,7 +436,7 @@ Note that you'll need to run 'make proto' after applying this patch.
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
    rprintf(F,"     --exclude=PATTERN       exclude files matching PATTERN\n");
-@@ -389,6 +391,7 @@ static struct poptOption long_options[] 
+@@ -395,6 +397,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
