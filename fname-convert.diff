@@ -47,7 +47,7 @@ some utility functions.
 Note that you'll need to run 'make proto' after applying this patch.
 
 
---- orig/Makefile.in	2004-11-03 11:56:03
+--- orig/Makefile.in	2004-11-02 16:47:15
 +++ Makefile.in	2004-07-03 20:18:02
 @@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
@@ -58,7 +58,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
---- orig/cleanup.c	2005-02-07 20:41:56
+--- orig/cleanup.c	2005-03-05 18:58:38
 +++ cleanup.c	2005-01-10 10:40:51
 @@ -25,6 +25,7 @@ extern int io_error;
  extern int keep_partial;
@@ -77,7 +77,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	if (cleanup_fname)
  		do_unlink(cleanup_fname);
  	if (code)
---- orig/errcode.h	2003-12-15 08:04:14
+--- orig/errcode.h	2005-03-05 18:58:32
 +++ errcode.h	2004-07-02 21:38:59
 @@ -34,6 +34,7 @@
  #define RERR_STREAMIO   12      /* error in rsync protocol data stream */
@@ -87,7 +87,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  #define RERR_SIGNAL     20      /* status returned when sent SIGUSR1, SIGINT */
  #define RERR_WAITCHILD  21      /* some error returned by waitpid() */
---- orig/flist.c	2005-03-04 08:27:33
+--- orig/flist.c	2005-03-03 18:44:42
 +++ flist.c	2005-03-05 00:29:08
 @@ -57,6 +57,7 @@ extern int copy_unsafe_links;
  extern int protocol_version;
@@ -382,9 +382,9 @@ Note that you'll need to run 'make proto' after applying this patch.
 +	if (verbose > 2)
 +		rprintf(FINFO, "Converted filename: %s -> %s\n", src, dest);
 +}
---- orig/generator.c	2005-03-05 00:25:24
+--- orig/generator.c	2005-03-11 17:36:35.384170106
 +++ generator.c	2005-03-05 00:29:37
-@@ -572,7 +572,13 @@ void check_for_finished_hlinks(int itemi
+@@ -579,7 +579,13 @@ static int phase = 0;
   * start sending checksums.
   *
   * Note that f_out is set to -1 when doing final directory-permission and
@@ -398,8 +398,8 @@ Note that you'll need to run 'make proto' after applying this patch.
 + * reporting to the sender. */
  static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			   int itemizing, int maybe_PERMS_REPORT,
- 			   enum logcode code, int f_out, int f_out_name)
---- orig/log.c	2005-03-05 00:25:25
+ 			   enum logcode code, int f_out)
+--- orig/log.c	2005-03-09 18:53:58
 +++ log.c	2004-07-03 20:18:02
 @@ -63,6 +63,7 @@ struct {
  	{ RERR_STREAMIO   , "error in rsync protocol data stream" },
@@ -409,7 +409,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	{ RERR_SIGNAL     , "received SIGUSR1 or SIGINT" },
  	{ RERR_WAITCHILD  , "some error returned by waitpid()" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
---- orig/main.c	2005-03-05 00:25:25
+--- orig/main.c	2005-03-09 18:54:09
 +++ main.c	2004-07-22 00:31:47
 @@ -363,7 +363,7 @@ static pid_t do_cmd(char *cmd, char *mac
  			whole_file = 1;
@@ -420,7 +420,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	if (dir)
  		free(dir);
---- orig/options.c	2005-03-02 09:52:06
+--- orig/options.c	2005-03-11 17:36:35.507159655
 +++ options.c	2005-02-14 02:50:32
 @@ -137,6 +137,7 @@ char *basis_dir[MAX_BASIS_DIRS+1];
  char *config_file = NULL;
@@ -430,23 +430,23 @@ Note that you'll need to run 'make proto' after applying this patch.
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
-@@ -318,6 +319,7 @@ void usage(enum logcode F)
-   rprintf(F," -y, --fuzzy                 find similar file for basis if no dest file\n");
+@@ -320,6 +321,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
+   rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
 +  rprintf(F,"     --fname-convert=CMD     invoke CMD for filename conversion\n");
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
    rprintf(F," -f, --filter=RULE           add a file-filtering RULE\n");
-@@ -426,6 +428,7 @@ static struct poptOption long_options[] 
-   {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
+@@ -429,6 +431,7 @@ static struct poptOption long_options[] 
+   {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
 +  {"fname-convert",    0,  POPT_ARG_STRING, &fname_convert_cmd, 0, 0, 0 },
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
---- orig/pipe.c	2005-02-07 20:41:56
+--- orig/pipe.c	2005-02-07 20:36:43
 +++ pipe.c	2004-07-03 20:18:02
 @@ -23,7 +23,6 @@
  
@@ -477,7 +477,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	if (pid == -1) {
  		rsyserr(FERROR, errno, "fork");
  		exit_cleanup(RERR_IPC);
---- orig/syscall.c	2005-02-14 02:45:11
+--- orig/syscall.c	2005-02-14 00:58:10
 +++ syscall.c	2004-07-02 21:39:00
 @@ -259,3 +259,34 @@ char *d_name(struct dirent *di)
  	return di->d_name;
@@ -514,9 +514,9 @@ Note that you'll need to run 'make proto' after applying this patch.
 +
 +	return result;
 +}
---- orig/util.c	2005-02-23 02:57:27
+--- orig/util.c	2005-03-11 17:36:35.798134929
 +++ util.c	2004-07-03 20:18:02
-@@ -1327,3 +1327,55 @@ uint32 fuzzy_distance(const char *s1, in
+@@ -1328,3 +1328,55 @@ uint32 fuzzy_distance(const char *s1, in
  
  	return a[len2-1];
  }
