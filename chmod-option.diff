@@ -197,7 +197,7 @@
 +	return 0;
 +}
 --- flist.c	11 Feb 2004 02:48:58 -0000	1.205
-+++ flist.c	20 Mar 2004 17:56:45 -0000
++++ flist.c	20 Mar 2004 18:26:01 -0000
 @@ -33,6 +33,7 @@ extern int verbose;
  extern int do_progress;
  extern int am_root;
@@ -220,7 +220,7 @@
  	file->modtime = st.st_mtime;
  	file->length = st.st_size;
 -	file->mode = st.st_mode;
-+	if (chmod_modes && am_sender && S_ISREG(st.st_mode))
++	if (chmod_modes && am_sender && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)))
 +		file->mode = tweak_mode(st.st_mode, chmod_modes);
 +	else
 +		file->mode = st.st_mode;
@@ -354,8 +354,8 @@
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
 --- testsuite/chmod.test	2004-02-13 17:08:33.000000000 -0800
-+++ testsuite/chmod.test	2004-03-20 08:58:14.000000000 -0800
-@@ -0,0 +1,37 @@
++++ testsuite/chmod.test	Sat Mar 20 10:30:48 2004
+@@ -0,0 +1,43 @@
 +#! /bin/sh
 +
 +# Copyright (C) 2002 by Martin Pool <mbp@samba.org>
@@ -378,18 +378,24 @@
 +mkdir "$fromdir"
 +name1="$fromdir/name1"
 +name2="$fromdir/name2"
++dir1="$fromdir/dir1"
++dir2="$fromdir/dir2"
 +echo "This is the file" > "$name1"
 +echo "This is the other file" > "$name2"
++mkdir "$dir1" "$dir2"
 +
-+chmod 4700 "$name1" || test_skipped "Can't chown"
++chmod 4700 "$name1" || test_skipped "Can't chmod"
++chmod 700 "$dir1"
++chmod 770 "$dir2"
 +
 +# Copy the files we've created over to another directory
 +checkit "$RSYNC -avv \"$fromdir/\" \"$checkdir/\"" "$fromdir" "$checkdir"
 +
 +# And then manually make the changes which should occur 
-+chmod ug-s,a+rX $checkdir/*
++chmod ug-s,a+rX "$checkdir"/*
++chmod g+w "$checkdir" "$checkdir"/dir*
 +
-+checkit "$RSYNC -avv --chmod ug-s,a+rX \"$fromdir/\" \"$todir/\"" "$checkdir" "$todir"
++checkit "$RSYNC -avv --chmod ug-s,a+rX,Dg+w \"$fromdir/\" \"$todir/\"" "$checkdir" "$todir"
 +
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
