@@ -3,9 +3,9 @@ sender if --inplace was specified.  This allows the sender to know when
 the transfer can fully utilize the basis file (i.e., when the basis file
 is not the destination file).
 
---- orig/generator.c	2004-11-03 20:30:45
+--- orig/generator.c	2004-11-11 22:13:09
 +++ generator.c	2004-11-03 20:37:57
-@@ -563,6 +563,8 @@ prepare_to_open:
+@@ -568,6 +568,8 @@ prepare_to_open:
  
  notify_others:
  	write_int(f_out, i);
@@ -15,47 +15,55 @@ is not the destination file).
  		write_byte(f_out_name, fnamecmp_type);
  
 --- orig/match.c	2004-09-07 21:45:30
-+++ match.c	2004-11-03 20:38:34
-@@ -24,7 +24,8 @@ extern int am_server;
++++ match.c	2004-11-12 05:48:57
+@@ -23,8 +23,8 @@ extern int verbose;
+ extern int am_server;
  extern int do_progress;
  extern int checksum_seed;
- extern int inplace;
+-extern int inplace;
 -extern int make_backups;
 +
-+int alternate_basis;
++int updating_basis_file;
  
  typedef unsigned short tag;
  
-@@ -205,7 +206,7 @@ static void hash_search(int f,struct sum
+@@ -203,9 +203,9 @@ static void hash_search(int f,struct sum
+ 			if (l != s->sums[i].len)
+ 				continue;
  
- 			/* inplace: ensure chunk's offset is either >= our
+-			/* inplace: ensure chunk's offset is either >= our
++			/* in-place: ensure chunk's offset is either >= our
  			 * offset or that the data didn't move. */
 -			if (inplace && !make_backups && s->sums[i].offset < offset
-+			if (inplace && !alternate_basis && s->sums[i].offset < offset
++			if (updating_basis_file && s->sums[i].offset < offset
  			    && !(s->sums[i].flags & SUMFLG_SAME_OFFSET))
  				continue;
  
-@@ -227,7 +228,7 @@ static void hash_search(int f,struct sum
- 			/* If inplace is enabled, the best possible match is
+@@ -224,10 +224,10 @@ static void hash_search(int f,struct sum
+ 				continue;
+ 			}
+ 
+-			/* If inplace is enabled, the best possible match is
++			/* When updating in-place, the best possible match is
  			 * one with an identical offset, so we prefer that over
  			 * the following want_i optimization. */
 -			if (inplace && !make_backups) {
-+			if (inplace && !alternate_basis) {
++			if (updating_basis_file) {
  				do {
  					size_t i2 = targets[j].i;
  					if (s->sums[i2].offset != offset)
-@@ -250,7 +251,7 @@ static void hash_search(int f,struct sum
+@@ -250,7 +250,7 @@ static void hash_search(int f,struct sum
  			/* we've found a match, but now check to see
  			 * if want_i can hint at a better match. */
  			if (i != want_i && want_i < s->count
 -			    && (!inplace || make_backups || s->sums[want_i].offset >= offset
-+			    && (!inplace || alternate_basis || s->sums[want_i].offset >= offset
++			    && (!updating_basis_file || s->sums[want_i].offset >= offset
  			     || s->sums[want_i].flags & SUMFLG_SAME_OFFSET)
  			    && sum == s->sums[want_i].sum1
  			    && memcmp(sum2, s->sums[want_i].sum2, s->s2length) == 0) {
---- orig/options.c	2004-10-14 17:11:40
+--- orig/options.c	2004-11-11 22:13:09
 +++ options.c	2004-11-03 20:47:21
-@@ -884,10 +884,9 @@ int parse_arguments(int *argc, const cha
+@@ -917,10 +917,9 @@ int parse_arguments(int *argc, const cha
  			 am_server ? "server" : "client");
  		return 0;
  #endif
@@ -80,34 +88,26 @@ is not the destination file).
  /* We refuse to interoperate with versions that are not in this range.
   * Note that we assume we'll work with later versions: the onus is on
 --- orig/sender.c	2004-09-20 05:10:48
-+++ sender.c	2004-11-03 20:38:50
++++ sender.c	2004-11-12 05:51:25
 @@ -27,7 +27,9 @@ extern int dry_run;
  extern int am_server;
  extern int am_daemon;
  extern int protocol_version;
-+extern int alternate_basis;
++extern int updating_basis_file;
  extern int make_backups;
 +extern int inplace;
  extern struct stats stats;
  
  
-@@ -117,6 +119,7 @@ void send_files(struct file_list *flist,
- 	struct map_struct *mbuf = NULL;
- 	STRUCT_STAT st;
- 	char *fname2, fname[MAXPATHLEN];
-+	uchar fnamecmp_type = FNAMECMP_FNAME;
- 	int i;
- 	struct file_struct *file;
- 	int phase = 0;
-@@ -166,6 +169,11 @@ void send_files(struct file_list *flist,
+@@ -166,6 +168,11 @@ void send_files(struct file_list *flist,
  		} else
  			offset = 0;
  		fname2 = f_name_to(file, fname + offset);
-+		if (protocol_version >= 29 && inplace) {
-+			fnamecmp_type = read_byte(f_in);
-+			alternate_basis = fnamecmp_type != FNAMECMP_FNAME;
++		if (inplace && protocol_version >= 29) {
++			uchar fnamecmp_type = read_byte(f_in);
++			updating_basis_file = fnamecmp_type == FNAMECMP_FNAME;
 +		} else
-+			alternate_basis = make_backups;
++			updating_basis_file = inplace && !make_backups;
  
  		if (verbose > 2)
  			rprintf(FINFO, "send_files(%d, %s)\n", i, fname);
