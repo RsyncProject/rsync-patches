@@ -29,9 +29,9 @@ for the current dir because its name contained a slash.
 
 ..wayne..
 
---- exclude.c	16 May 2004 23:54:12 -0000	1.80
-+++ exclude.c	17 May 2004 16:16:23 -0000
-@@ -30,13 +30,54 @@ extern int verbose;
+--- exclude.c	21 May 2004 09:59:49 -0000	1.81
++++ exclude.c	21 May 2004 23:49:03 -0000
+@@ -30,13 +30,56 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
  extern int recurse;
@@ -44,9 +44,11 @@ for the current dir because its name contained a slash.
 -struct exclude_list_struct local_exclude_list = { 0, 0, "per-dir .cvsignore " };
  struct exclude_list_struct server_exclude_list = { 0, 0, "server " };
  char *exclude_path_prefix = NULL;
-+int merge_list_cnt = 0;
++struct exclude_struct **mergelist_parents;
++int mergelist_cnt = 0;
++int mergelist_size = 0;
 +
-+struct mergelist_save {
++struct mergelist_save_struct {
 +    struct exclude_list_struct *array;
 +    int count;
 +};
@@ -87,17 +89,17 @@ for the current dir because its name contained a slash.
  
  /** Build an exclude structure given an exclude pattern. */
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
-@@ -46,6 +87,24 @@ static void make_exclude(struct exclude_
+@@ -46,6 +89,24 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
 +	if (mflags & MATCHFLG_MERGE_FILE) {
-+		struct exclude_struct *ex;
++		int i;
 +		/* If the local include file was already mentioned, don't
 +		 * add it again. */
-+		for (ex = listp->head; ex; ex = ex->next) {
-+			if (ex->match_flags & MATCHFLG_MERGE_FILE
-+			    && strlen(ex->pattern) == pat_len
++		for (i = 0; i < mergelist_cnt; i++) {
++			struct exclude_struct *ex = mergelist_parents[i];
++			if (strlen(ex->pattern) == pat_len
 +			    && memcmp(ex->pattern, pat, pat_len) == 0)
 +				return;
 +		}
@@ -112,7 +114,7 @@ for the current dir because its name contained a slash.
  	ret = new(struct exclude_struct);
  	if (!ret)
  		out_of_memory("make_exclude");
-@@ -81,14 +140,28 @@ static void make_exclude(struct exclude_
+@@ -81,14 +142,36 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -126,8 +128,16 @@ for the current dir because its name contained a slash.
 +		lp->head = lp->tail = NULL;
 +		if (asprintf(&lp->debug_type, "per-dir %s ", ret->pattern) < 0)
 +			out_of_memory("make_exclude");
-+		ret->u.merge_list = lp;
-+		merge_list_cnt++;
++		ret->u.mergelist = lp;
++		if (mergelist_cnt == mergelist_size) {
++		    mergelist_size += 5;
++		    mergelist_parents = realloc_array(mergelist_parents,
++						      struct exclude_struct *,
++						      mergelist_size);
++		    if (!mergelist_parents)
++			    out_of_memory("make_exclude");
++		}
++		mergelist_parents[mergelist_cnt++] = ret;
 +	} else {
 +		for (cp = ret->pattern; (cp = strchr(cp, '/')) != NULL; cp++)
 +			ret->u.slash_cnt++;
@@ -145,13 +155,13 @@ for the current dir because its name contained a slash.
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +169,128 @@ static void make_exclude(struct exclude_
+@@ -96,22 +179,115 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
 +	if (ex->match_flags & MATCHFLG_MERGE_FILE) {
-+		free(ex->u.merge_list->debug_type);
-+		free(ex->u.merge_list);
++		free(ex->u.mergelist->debug_type);
++		free(ex->u.mergelist);
 +	}
  	free(ex->pattern);
  	free(ex);
@@ -178,35 +188,51 @@ for the current dir because its name contained a slash.
  	listp->head = listp->tail = NULL;
  }
  
-+static struct exclude_list_struct *
-+push_merge_files(struct exclude_struct *ent, struct exclude_list_struct *array)
++void *push_local_excludes(char *fname, unsigned int offset)
 +{
-+	struct exclude_list_struct *lp;
++	struct mergelist_save_struct *push;
++	struct exclude_list_struct *ap;
++	int i;
 +
-+	for (; ent; ent = ent->next) {
++	/* Make it easy to construct the full path for a merge-file that was
++	 * specified with a relative path by saving off the current dir. */
++	memcpy(dirbuf, fname, offset);
++	dirbuf_offset = offset;
++
++	if (!(push = new_array(struct mergelist_save_struct, 1)))
++		out_of_memory("push_local_excludes");
++
++	push->count = mergelist_cnt;
++	push->array = new_array(struct exclude_list_struct, mergelist_cnt);
++	if (!push->array)
++		out_of_memory("push_local_excludes");
++
++	for (i = 0, ap = push->array; i < mergelist_cnt; i++) {
++		memcpy(ap++, mergelist_parents[i]->u.mergelist,
++		       sizeof (struct exclude_list_struct));
++	}
++
++	/* Note: add_exclude_file() might increase mergelist_cnt, so keep
++	 * this loop separate from the above loop. */
++	for (i = 0; i < mergelist_cnt; i++) {
++		struct exclude_struct *ex = mergelist_parents[i];
++		struct exclude_list_struct *lp = ex->u.mergelist;
 +		int flags;
-+		if (!(ent->match_flags & MATCHFLG_MERGE_FILE))
-+			continue;
-+		lp = ent->u.merge_list;
 +
 +		if (verbose > 2) {
 +			rprintf(FINFO, "[%s] pushing %sexclude list\n",
 +				who_am_i(), lp->debug_type);
 +		}
 +
-+		memcpy(array++, lp, sizeof (struct exclude_list_struct));
-+
-+		array = push_merge_files(lp->head, array);
-+
-+		if (ent->match_flags & MATCHFLG_CVSIGNORE) {
++		if (ex->match_flags & MATCHFLG_CVSIGNORE) {
 +			lp->head = NULL; /* CVS doesn't inherit rules. */
 +			flags = XFLG_WORD_SPLIT | XFLG_WORDS_ONLY;
 +		} else {
-+			flags = ent->match_flags & MATCHFLG_INCLUDE
++			flags = ex->match_flags & MATCHFLG_INCLUDE
 +			    ? XFLG_DEF_INCLUDE : 0;
 +		}
 +		lp->tail = NULL; /* Switch any local rules to inherited. */
-+		if (strlcpy(dirbuf +  dirbuf_offset, ent->pattern,
++		if (strlcpy(dirbuf +  dirbuf_offset, ex->pattern,
 +		    MAXPATHLEN - dirbuf_offset) < MAXPATHLEN - dirbuf_offset)
 +			add_exclude_file(lp, dirbuf, flags);
 +		else {
@@ -217,40 +243,18 @@ for the current dir because its name contained a slash.
 +		}
 +	}
 +
-+	return array;
-+}
-+
-+void *push_local_excludes(char *fname, unsigned int offset)
-+{
-+	struct mergelist_save *push;
-+
-+	/* Make it easy to construct the full path for a merge-file that was
-+	 * specified with a relative path by saving off the current dir. */
-+	memcpy(dirbuf, fname, offset);
-+	dirbuf_offset = offset;
-+
-+	if (!(push = new_array(struct mergelist_save, 1)))
-+		out_of_memory("push_local_excludes");
-+
-+	push->count = merge_list_cnt;
-+	push->array = new_array(struct exclude_list_struct, merge_list_cnt);
-+	if (!push->array)
-+		out_of_memory("push_local_excludes");
-+
-+	push_merge_files(exclude_list.head, push->array);
-+
 +	return (void*)push;
 +}
 +
-+static struct exclude_list_struct *
-+pop_merge_files(struct exclude_struct *ent, struct exclude_list_struct *array)
++void pop_local_excludes(void *mem)
 +{
-+	struct exclude_list_struct *lp;
++	struct mergelist_save_struct *pop = (struct mergelist_save_struct*)mem;
++	struct exclude_list_struct *ap;
++	int i;
 +
-+	for (; ent; ent = ent->next) {
-+		if (!(ent->match_flags & MATCHFLG_MERGE_FILE))
-+			continue;
-+		lp = ent->u.merge_list;
++	for (i = 0; i < mergelist_cnt; i++) {
++		struct exclude_struct *ex = mergelist_parents[i];
++		struct exclude_list_struct *lp = ex->u.mergelist;
 +
 +		if (verbose > 2) {
 +			rprintf(FINFO, "[%s] popping %sexclude list\n",
@@ -258,20 +262,13 @@ for the current dir because its name contained a slash.
 +		}
 +
 +		clear_exclude_list(lp);
-+		memcpy(lp, array++, sizeof (struct exclude_list_struct));
-+
-+		array = pop_merge_files(lp->head, array);
 +	}
 +
-+	return array;
-+}
-+
-+void pop_local_excludes(void *mem)
-+{
-+	struct mergelist_save *pop = (struct mergelist_save*)mem;
-+
-+	pop_merge_files(exclude_list.head, pop->array);
-+	merge_list_cnt = pop->count;
++	mergelist_cnt = pop->count;
++	for (i = 0, ap = pop->array; i < mergelist_cnt; i++) {
++		memcpy(mergelist_parents[i]->u.mergelist, ap++,
++		       sizeof (struct exclude_list_struct));
++	}
 +
 +	free(pop->array);
 +	free(pop);
@@ -280,7 +277,7 @@ for the current dir because its name contained a slash.
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,7 +301,7 @@ static int check_one_exclude(char *name,
+@@ -122,7 +298,7 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -289,7 +286,7 @@ for the current dir because its name contained a slash.
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
-@@ -148,9 +327,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +324,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -301,12 +298,12 @@ for the current dir because its name contained a slash.
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +400,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +397,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
 +		if (ent->match_flags & MATCHFLG_MERGE_FILE) {
-+			int rc = check_exclude(ent->u.merge_list, name,
++			int rc = check_exclude(ent->u.mergelist, name,
 +					       name_is_dir);
 +			if (rc)
 +				return rc;
@@ -315,7 +312,7 @@ for the current dir because its name contained a slash.
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -254,11 +440,16 @@ static const char *get_exclude_tok(const
+@@ -254,11 +437,16 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -334,7 +331,7 @@ for the current dir because its name contained a slash.
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -307,11 +498,42 @@ void add_exclude(struct exclude_list_str
+@@ -307,11 +495,42 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -373,12 +370,12 @@ for the current dir because its name contained a slash.
  		if (verbose > 2) {
 -			rprintf(FINFO, "[%s] add_exclude(%.*s, %s%sclude)\n",
 +			rprintf(FINFO, "[%s] add_exclude(%.*s, %s%s%sclude)\n",
- 				who_am_i(), pat_len, cp, listp->debug_type,
+ 				who_am_i(), (int)pat_len, cp, listp->debug_type,
 +				mflags & MATCHFLG_MERGE_FILE ? "FILE " : "",
  				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
  		}
  	}
-@@ -403,7 +625,11 @@ void send_exclude_list(int f)
+@@ -403,7 +622,11 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -391,7 +388,7 @@ for the current dir because its name contained a slash.
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -444,6 +670,7 @@ void add_cvs_excludes(void)
+@@ -444,6 +667,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -399,8 +396,8 @@ for the current dir because its name contained a slash.
  	add_exclude(&exclude_list, default_cvsignore,
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
---- flist.c	16 May 2004 23:54:12 -0000	1.224
-+++ flist.c	17 May 2004 16:16:24 -0000
+--- flist.c	21 May 2004 23:22:14 -0000	1.225
++++ flist.c	21 May 2004 23:49:04 -0000
 @@ -39,8 +39,6 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -439,7 +436,7 @@ for the current dir because its name contained a slash.
  		return 1;
  	return 0;
  }
-@@ -946,15 +938,7 @@ void send_file_name(int f, struct file_l
+@@ -942,15 +934,7 @@ void send_file_name(int f, struct file_l
  
  	if (recursive && S_ISDIR(file->mode)
  	    && !(file->flags & FLAG_MOUNT_POINT)) {
@@ -455,7 +452,7 @@ for the current dir because its name contained a slash.
  	}
  }
  
-@@ -965,6 +949,7 @@ static void send_directory(int f, struct
+@@ -961,6 +945,7 @@ static void send_directory(int f, struct
  	struct dirent *di;
  	char fname[MAXPATHLEN];
  	unsigned int offset;
@@ -463,7 +460,7 @@ for the current dir because its name contained a slash.
  	char *p;
  
  	d = opendir(dir);
-@@ -988,18 +973,7 @@ static void send_directory(int f, struct
+@@ -984,18 +969,7 @@ static void send_directory(int f, struct
  		offset++;
  	}
  
@@ -483,17 +480,17 @@ for the current dir because its name contained a slash.
  
  	for (errno = 0, di = readdir(d); di; errno = 0, di = readdir(d)) {
  		char *dname = d_name(di);
-@@ -1019,6 +993,8 @@ static void send_directory(int f, struct
- 		io_error |= IOERR_GENERAL;
+@@ -1016,6 +990,8 @@ static void send_directory(int f, struct
  		rsyserr(FERROR, errno, "readdir(%s)", dir);
  	}
-+
-+	pop_local_excludes(save_excludes);
  
++	pop_local_excludes(save_excludes);
++
  	closedir(d);
  }
+ 
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	17 May 2004 16:16:25 -0000
++++ rsync.h	21 May 2004 23:49:05 -0000
 @@ -496,11 +496,16 @@ struct map_struct {
  #define MATCHFLG_INCLUDE	(1<<4) /* this is an include, not an exclude */
  #define MATCHFLG_DIRECTORY	(1<<5) /* this matches only directories */
@@ -507,14 +504,14 @@ for the current dir because its name contained a slash.
 -	int slash_cnt;
 +	union {
 +		int slash_cnt;
-+		struct exclude_list_struct *merge_list;
++		struct exclude_list_struct *mergelist;
 +	} u;
  };
  
  struct exclude_list_struct {
---- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	17 May 2004 16:16:26 -0000
-@@ -1075,6 +1075,72 @@ itemize(
+--- rsync.yo	21 May 2004 09:44:32 -0000	1.170
++++ rsync.yo	21 May 2004 23:49:05 -0000
+@@ -1090,6 +1090,72 @@ itemize(
    it would be excluded by the "*")
  )
  
