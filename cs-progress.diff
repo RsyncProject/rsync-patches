@@ -1,0 +1,106 @@
+From rsync-admin@lists.samba.org Thu Mar 14 01:33:43 2002
+Return-Path: <rsync-admin@lists.samba.org>
+Delivered-To: mbp@samba.org
+Received: from va.samba.org (localhost [127.0.0.1])
+	by lists.samba.org (Postfix) with ESMTP
+	id 25DCA4481; Thu, 14 Mar 2002 01:33:41 -0800 (PST)
+Delivered-To: rsync@samba.org
+Received: from cskk.homeip.net (c17877.carlnfd1.nsw.optusnet.com.au [210.49.140.231])
+	by lists.samba.org (Postfix) with ESMTP
+	id 49D8544F8; Thu, 14 Mar 2002 01:31:54 -0800 (PST)
+Received: (from cameron@localhost)
+	by cskk.homeip.net (8.11.6/8.11.6) id g2E9WGM22435;
+	Thu, 14 Mar 2002 20:32:16 +1100
+From: Cameron Simpson <cs@zip.com.au>
+To: rsync@samba.org
+Cc: mbp@samba.org
+Subject: PATCH: better progress reporting
+Message-ID: <20020314093215.GA18634@amadeus.home>
+Reply-To: cs@zip.com.au
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.3.27i
+Sender: rsync-admin@lists.samba.org
+Errors-To: rsync-admin@lists.samba.org
+X-BeenThere: rsync@lists.samba.org
+X-Mailman-Version: 2.0.8
+Precedence: bulk
+List-Help: <mailto:rsync-request@lists.samba.org?subject=help>
+List-Post: <mailto:rsync@lists.samba.org>
+List-Subscribe: <http://lists.samba.org/mailman/listinfo/rsync>,
+	<mailto:rsync-request@lists.samba.org?subject=subscribe>
+List-Id: rsync user list <rsync.lists.samba.org>
+List-Unsubscribe: <http://lists.samba.org/mailman/listinfo/rsync>,
+	<mailto:rsync-request@lists.samba.org?subject=unsubscribe>
+List-Archive: <http://lists.samba.org/pipermail/rsync/>
+Date: Thu, 14 Mar 2002 20:32:16 +1100
+Status: RO
+Content-Length: 2389
+Lines: 64
+
+I've been looking at the --progress reporting, which is somewhat
+improved these days.  But look at this output of this evening rawhide
+mirror update:
+
+	[...]
+	perl-DB_File-1.75-27.i386.rpm
+	       73430 100%  519.63kB/s    0:00:00
+	perl-DB_File-1.75-28.99.3.i386.rpm
+	       61783 100%  533.94kB/s    0:00:00
+	[...]
+
+Now, while it's good to have the ETA ticking down as something is fetched,
+it's irritating to have this history there on the screen afterwards with
+those unhelpful zeroes.
+
+Thus the appended patch to util.c in the current CVS head, which for the
+final progress report, puts to elapsed time for that file in the report
+instead of the time remaining.
+
+Applied (clean) to 2.5.4, it says this:
+
+	++ /home/cameron/tmp/rsy/rsync-2.5.4/rsync -rlHt -z -v -P --delete --include-from=.mirror-rsync '--exclude=xemacs*' '--exclude=kernel-source*' '--exclude=postgresql*' mirror.aarnet.edu.au::redhat/rawhide/i386/RedHat/RPMS/. ./redhat/rawhide/i386/RedHat/RPMS/.
+
+	receiving file list ... 
+	2429 files to consider
+	2305 files to consider
+	./
+	timeconfig-3.2.5-1.i386.rpm
+	      158253 100%  160.48kB/s    0:00:00
+	timidity++-2.10.4-2.i386.rpm
+	     9309389 100%  397.71kB/s    0:00:22
+	tix-8.2.0b1-67.i386.rpm
+	      456809 100%  437.78kB/s    0:00:01
+	tk-8.3.3-67.i386.rpm
+	     1371196 100%  433.77kB/s    0:00:03
+
+Martin, can this go in for 2.5.5 please?
+Any nay sayers?
+
+Cameron Simpson, DoD#743        cs@zip.com.au    http://www.zip.com.au/~cs/
+
+Index: util.c
+===================================================================
+RCS file: /cvsroot/rsync/util.c,v
+retrieving revision 1.107
+diff -u -w -r1.107 util.c
+--- util.c      23 Feb 2002 00:05:06 -0000      1.107
++++ util.c      14 Mar 2002 09:27:16 -0000
+@@ -866,7 +866,9 @@
+     unsigned long diff = msdiff(&start_time, now);
+     double        rate = diff ? (double) (ofs-start_ofs) * 1000.0 / diff / 1024.0 : 0;
+     const char    *units;
+-    double        remain = rate ? (double) (size-ofs) / rate / 1000.0: 0.0;
++    double        remain = is_last
++                        ? (double) diff / 1000.0
++                        : rate ? (double) (size-ofs) / rate / 1000.0 : 0.0;
+     int          remain_h, remain_m, remain_s;
+ 
+     if (rate > 1024*1024) {
+
+
+-- 
+To unsubscribe or change options: http://lists.samba.org/mailman/listinfo/rsync
+Before posting, read: http://www.tuxedo.org/~esr/faqs/smart-questions.html
+
