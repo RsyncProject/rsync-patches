@@ -82,8 +82,8 @@ Before compiling, be sure to run "make proto".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
---- orig/options.c	2004-10-08 20:16:26
-+++ options.c	2004-10-09 03:38:38
+--- orig/options.c	2004-10-14 17:11:40
++++ options.c	2004-10-14 17:13:57
 @@ -114,12 +114,13 @@ int write_batch = 0;
  int read_batch = 0;
  int backup_dir_len = 0;
@@ -107,27 +107,27 @@ Before compiling, be sure to run "make proto".
  
  /** Local address to bind.  As a character string because it's
   * interpreted by the IPv6 layer: should be a numeric IP4 or IP6
-@@ -317,7 +319,7 @@ void usage(enum logcode F)
+@@ -310,7 +312,7 @@ void usage(enum logcode F)
  }
  
- enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
 -      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
 +      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_COMPARE_DEST, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT,
        OPT_REFUSED_BASE = 9000};
-@@ -376,8 +378,8 @@ static struct poptOption long_options[] 
+@@ -369,8 +371,8 @@ static struct poptOption long_options[] 
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, OPT_TIMEOUT, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
 -  {"compare-dest",     0,  POPT_ARG_STRING, &compare_dest, 0, 0, 0 },
--  {"link-dest",        0,  POPT_ARG_STRING, &compare_dest,  OPT_LINK_DEST, 0, 0 },
-+  {"compare-dest",     0,  POPT_ARG_STRING, 0,              OPT_COMPARE_DEST, 0, 0 },
-+  {"link-dest",        0,  POPT_ARG_STRING, 0,              OPT_LINK_DEST, 0, 0 },
+-  {"link-dest",        0,  POPT_ARG_STRING, &compare_dest, OPT_LINK_DEST, 0, 0 },
++  {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
++  {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
-   {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
-@@ -605,8 +607,28 @@ int parse_arguments(int *argc, const cha
+   {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
+@@ -672,8 +674,28 @@ int parse_arguments(int *argc, const cha
  				select_timeout = io_timeout;
  			break;
  
@@ -156,7 +156,7 @@ Before compiling, be sure to run "make proto".
  			link_dest = 1;
  			break;
  #else
-@@ -699,6 +721,11 @@ int parse_arguments(int *argc, const cha
+@@ -765,6 +787,11 @@ int parse_arguments(int *argc, const cha
  		return 0;
  	}
  
@@ -168,7 +168,7 @@ Before compiling, be sure to run "make proto".
  	if (archive_mode) {
  		if (!files_from)
  			recurse = 1;
-@@ -729,8 +756,6 @@ int parse_arguments(int *argc, const cha
+@@ -792,8 +819,6 @@ int parse_arguments(int *argc, const cha
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0);
  		if (partial_dir)
  			partial_dir = sanitize_path(NULL, partial_dir, NULL, 0);
@@ -177,7 +177,7 @@ Before compiling, be sure to run "make proto".
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0);
  		if (files_from)
-@@ -738,6 +763,7 @@ int parse_arguments(int *argc, const cha
+@@ -801,6 +826,7 @@ int parse_arguments(int *argc, const cha
  	}
  	if (server_exclude_list.head && !am_sender) {
  		struct exclude_list_struct *elp = &server_exclude_list;
@@ -185,7 +185,7 @@ Before compiling, be sure to run "make proto".
  		if (tmpdir) {
  			clean_fname(tmpdir, 1);
  			if (check_exclude(elp, tmpdir, 1) < 0)
-@@ -748,9 +774,9 @@ int parse_arguments(int *argc, const cha
+@@ -811,9 +837,9 @@ int parse_arguments(int *argc, const cha
  			if (check_exclude(elp, partial_dir, 1) < 0)
  				goto options_rejected;
  		}
@@ -198,7 +198,7 @@ Before compiling, be sure to run "make proto".
  				goto options_rejected;
  		}
  		if (backup_dir) {
-@@ -827,7 +853,7 @@ int parse_arguments(int *argc, const cha
+@@ -884,7 +910,7 @@ int parse_arguments(int *argc, const cha
  			 am_server ? "server" : "client");
  		return 0;
  #endif
@@ -207,7 +207,7 @@ Before compiling, be sure to run "make proto".
  			snprintf(err_buf, sizeof err_buf,
  				 "--inplace does not yet work with %s\n",
  				 link_dest ? "--link-dest" : "--compare-dest");
-@@ -894,8 +920,8 @@ int parse_arguments(int *argc, const cha
+@@ -951,8 +977,8 @@ int parse_arguments(int *argc, const cha
   **/
  void server_options(char **args,int *argc)
  {
@@ -217,7 +217,7 @@ Before compiling, be sure to run "make proto".
  	char *arg;
  
  	int i, x;
-@@ -1078,13 +1104,16 @@ void server_options(char **args,int *arg
+@@ -1135,13 +1161,16 @@ void server_options(char **args,int *arg
  		args[ac++] = tmpdir;
  	}
  
