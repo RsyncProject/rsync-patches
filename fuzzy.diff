@@ -6,17 +6,17 @@ Very lightly tested.
 
 Be sure to run "make proto" before "make".
 
---- orig/generator.c	2004-07-28 10:14:15
-+++ generator.c	2004-07-28 10:23:12
+--- orig/generator.c	2004-07-30 07:18:03
++++ generator.c	2004-07-30 18:11:15
 @@ -41,6 +41,7 @@ extern int ignore_times;
  extern int size_only;
  extern int io_timeout;
  extern int protocol_version;
-+extern int fuzzy;
++extern int fuzzy_basis;
  extern int always_checksum;
  extern char *partial_dir;
  extern char *compare_dest;
-@@ -240,6 +241,94 @@ static void generate_and_send_sums(int f
+@@ -240,6 +241,93 @@ static void generate_and_send_sums(int f
  }
  
  
@@ -52,7 +52,7 @@ Be sure to run "make proto" before "make".
 +}
 +
 +
-+static int find_fuzzy(char **fname_ptr, char *buf, STRUCT_STAT *st_ptr)
++static int find_fuzzy(const char *fname, char *buf, STRUCT_STAT *st_ptr)
 +{
 +	DIR *d;
 +	struct dirent *di;
@@ -62,7 +62,7 @@ Be sure to run "make proto" before "make".
 +	unsigned int bestscore = 0;
 +	const char *ext;
 +
-+	strlcpy(mangled_name, *fname_ptr, sizeof mangled_name);
++	strlcpy(mangled_name, fname, sizeof mangled_name);
 +
 +	split_names(mangled_name, &dirname, &basename);
 +	if (!(d = opendir(dirname))) {
@@ -100,9 +100,8 @@ Be sure to run "make proto" before "make".
 +		pathjoin(buf, MAXPATHLEN, dirname, bestname);
 +		if (verbose > 2) {
 +			rprintf(FINFO, "[%s] fuzzy match %s->%s\n",
-+				who_am_i(), *fname_ptr, buf);
++				who_am_i(), fname, buf);
 +		}
-+		*fname_ptr = buf;
 +		return link_stat(buf, st_ptr, 0);
 +	}
 +	return -1;
@@ -111,46 +110,60 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -254,7 +343,7 @@ static void recv_generator(char *fname, 
- {
- 	int fd = -1;
- 	STRUCT_STAT st;
--	int statret, stat_errno;
-+	int statret, stat_errno, fuzzy_file = 0;
- 	char *fnamecmp;
- 	char fnamecmpbuf[MAXPATHLEN];
+@@ -448,6 +536,15 @@ static void recv_generator(char *fname, 
+ 		stat_errno = ENOENT;
+ 	}
  
-@@ -439,6 +528,14 @@ static void recv_generator(char *fname, 
- 	} else
- 		*fnamecmpbuf = '\0';
- 
-+	if (statret == -1 && fuzzy) {
-+		statret = find_fuzzy(&fnamecmp, fnamecmpbuf, &st);
-+		if (!S_ISREG(st.st_mode))
-+			statret = -1;
-+		else
-+			fuzzy_file = 1;
++	if (statret == -1 && fuzzy_basis) {
++		if (find_fuzzy(fname, fnamecmpbuf, &st) == 0
++		    && S_ISREG(st.st_mode)) {
++			statret = 0;
++			fnamecmp = fnamecmpbuf;
++			fnamecmp_type = G2R_FUZZY;
++		}
 +	}
 +
- 	if (statret == 0 && !S_ISREG(st.st_mode)) {
- 		if (delete_file(fname) != 0)
+ 	if (statret == -1) {
+ 		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -472,7 +569,7 @@ static void recv_generator(char *fname, 
+@@ -474,7 +571,7 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
 -	if (skip_file(fnamecmp, file, &st)) {
-+	if (!fuzzy_file && skip_file(fnamecmp, file, &st)) {
- 		if (!*fnamecmpbuf)
++	if (fnamecmp_type != G2R_FUZZY && skip_file(fnamecmp, file, &st)) {
+ 		if (fnamecmp_type == G2R_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
  		return;
+@@ -522,6 +619,21 @@ static void recv_generator(char *fname, 
+ notify_others:
+ 	if (f_out_name >= 0) {
+ 		write_byte(f_out_name, fnamecmp_type);
++		if (fnamecmp_type == G2R_FUZZY) {
++			uchar lenbuf[3], *lb = lenbuf;
++			int len = strlen(fnamecmpbuf);
++			if (len > 0x7F) {
++#if MAXPATHLEN > 0x7FFF
++				*lb++ = len / 0x10000 + 0x80;
++				*lb++ = len / 0x100;
++#else
++				*lb++ = len / 0x100 + 0x80;
++#endif
++			}
++			*lb = len;
++			write_buf(f_out_name, lenbuf, lb - lenbuf + 1);
++			write_buf(f_out_name, fnamecmpbuf, len);
++		}
+ 		io_flush(NORMAL_FLUSH); /* XXX make this more efficient! */
+ 	}
+ 
 --- orig/main.c	2004-07-22 00:10:43
 +++ main.c	2004-07-22 00:32:31
 @@ -47,6 +47,7 @@ extern int keep_dirlinks;
  extern int preserve_hard_links;
  extern int protocol_version;
  extern int recurse;
-+extern int fuzzy;
++extern int fuzzy_basis;
  extern int relative_paths;
  extern int rsync_port;
  extern int whole_file;
@@ -159,7 +172,7 @@ Be sure to run "make proto" before "make".
  	int status = 0;
  	int error_pipe[2], name_pipe[2];
 -	BOOL need_name_pipe = compare_dest && !dry_run;
-+	BOOL need_name_pipe = (compare_dest || fuzzy) && !dry_run;
++	BOOL need_name_pipe = (compare_dest || fuzzy_basis) && !dry_run;
  
  	if (preserve_hard_links)
  		init_hard_links(flist);
@@ -169,7 +182,7 @@ Be sure to run "make proto" before "make".
  int copy_unsafe_links = 0;
  int size_only = 0;
  int bwlimit = 0;
-+int fuzzy = 0;
++int fuzzy_basis = 0;
  size_t bwlimit_writemax = 0;
  int delete_after = 0;
  int only_existing = 0;
@@ -185,7 +198,7 @@ Be sure to run "make proto" before "make".
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, &compare_dest, 0, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, &compare_dest,  OPT_LINK_DEST, 0, 0 },
-+  {"fuzzy",            0,  POPT_ARG_NONE,   &fuzzy, 0, 0, 0 },
++  {"fuzzy",            0,  POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
@@ -193,22 +206,63 @@ Be sure to run "make proto" before "make".
  		}
  	}
  
-+	if (fuzzy && am_sender)
++	if (fuzzy_basis && am_sender)
 +		args[ac++] = "--fuzzy";
 +
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2004-07-23 21:59:07
-+++ receiver.c	2004-07-23 22:08:03
-@@ -39,7 +39,6 @@ extern int cvs_exclude;
- extern int io_error;
- extern char *tmpdir;
- extern char *partial_dir;
--extern char *compare_dest;
- extern int make_backups;
- extern int do_progress;
- extern char *backup_dir;
+--- orig/receiver.c	2004-07-30 07:17:48
++++ receiver.c	2004-07-30 18:21:38
+@@ -323,6 +323,27 @@ static int receive_data(int f_in, char *
+ }
+ 
+ 
++static void read_gen_name(int fd, char *buf)
++{
++	int len = read_byte(fd);
++	if (len & 0x80) {
++#if MAXPATHLEN > 32767
++		uchar lenbuf[2];
++		read_buf(fd, (char *)lenbuf, 2);
++		len = (len & ~0x80) * 0x10000 + lenbuf[0] * 0x100 + lenbuf[1];
++#else
++		len = (len & ~0x80) * 0x100 + read_byte(fd);
++#endif
++	}
++	if (len >= MAXPATHLEN) {
++		rprintf(FERROR, "bogus data on generator name pipe\n");
++		exit_cleanup(RERR_PROTOCOL);
++	}
++
++	read_sbuf(fd, buf, len);
++}
++
++
+ static void discard_receive_data(int f_in, OFF_T length)
+ {
+ 	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
+@@ -449,6 +470,10 @@ int recv_files(int f_in, struct file_lis
+ 			case G2R_PARTIAL_DIR:
+ 				fnamecmp = partialptr ? partialptr : fname;
+ 				break;
++			case G2R_FUZZY:
++				read_gen_name(f_in_name, fnamecmpbuf);
++				fnamecmp = fnamecmpbuf;
++				break;
+ 			default:
+ 				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
+ 					 compare_dest, fname);
+--- orig/rsync.h	2004-07-30 07:16:38
++++ rsync.h	2004-07-30 07:45:40
+@@ -120,6 +120,7 @@
+ 
+ #define G2R_FNAME	0x80
+ #define G2R_PARTIAL_DIR	0x81
++#define G2R_FUZZY	0x82
+ 
+ 
+ /* Log-message categories.  FLOG is only used on the daemon side to
 --- orig/rsync.yo	2004-07-29 16:08:04
 +++ rsync.yo	2004-07-03 19:27:25
 @@ -327,6 +327,7 @@ verb(
