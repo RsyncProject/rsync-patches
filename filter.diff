@@ -31,30 +31,37 @@ option).
 ..wayne..
 
 --- orig/clientserver.c	2004-08-02 02:29:16
-+++ clientserver.c	2004-08-09 02:25:28
-@@ -48,9 +48,10 @@ extern int no_detach;
++++ clientserver.c	2004-08-09 17:35:56
+@@ -48,12 +48,14 @@ extern int no_detach;
  extern int default_af_hint;
  extern char *bind_address;
  extern struct exclude_list_struct server_exclude_list;
 -extern char *exclude_path_prefix;
  extern char *config_file;
  extern char *files_from;
-+extern char dirbuf[MAXPATHLEN];
-+extern unsigned int dirbuf_offset;
  
  char *auth_user;
  
-@@ -300,26 +301,27 @@ static int rsync_module(int f_in, int f_
++/* The length of the lp_path() string (when we're not chrooted). */
++unsigned int module_dirlen = 0;
++
+ /**
+  * Run a client connected to an rsyncd.  The alternative to this
+  * function for remote-shell connections is do_cmd().
+@@ -300,26 +302,28 @@ static int rsync_module(int f_in, int f_
  	/* TODO: Perhaps take a list of gids, and make them into the
  	 * supplementary groups. */
  
 -	exclude_path_prefix = use_chroot? "" : lp_path(i);
 -	if (*exclude_path_prefix == '/' && !exclude_path_prefix[1])
 -		exclude_path_prefix = "";
-+	if (use_chroot)
-+		set_current_subdir("", 0);
-+	else
-+		set_current_subdir(lp_path(i), strlen(lp_path(i)));
++	if (use_chroot) {
++		module_dirlen = 0;
++		set_excludes_dir("/", 1);
++	} else {
++		module_dirlen = strlen(lp_path(i));
++		set_excludes_dir(lp_path(i), module_dirlen);
++	}
  
  	p = lp_include_from(i);
  	add_exclude_file(&server_exclude_list, p,
@@ -73,16 +80,15 @@ option).
  
  	p = lp_exclude(i);
 -	add_exclude(&server_exclude_list, p, XFLG_WORD_SPLIT);
-+	add_exclude(&server_exclude_list, p, XFLG_WORD_SPLIT | XFLG_ABS_PATH);
- 
+-
 -	exclude_path_prefix = NULL;
-+	set_current_subdir("", 0);
++	add_exclude(&server_exclude_list, p, XFLG_WORD_SPLIT | XFLG_ABS_PATH);
  
  	log_init();
  
 --- orig/exclude.c	2004-08-05 23:16:37
-+++ exclude.c	2004-08-09 03:19:40
-@@ -27,16 +27,80 @@
++++ exclude.c	2004-08-09 18:36:18
+@@ -27,16 +27,75 @@
  #include "rsync.h"
  
  extern int verbose;
@@ -98,6 +104,7 @@ option).
  
  extern char curr_dir[];
 +extern unsigned int curr_dir_len;
++extern unsigned int module_dirlen;
  
  struct exclude_list_struct exclude_list = { 0, 0, "" };
 -struct exclude_list_struct local_exclude_list = { 0, 0, "per-dir .cvsignore " };
@@ -111,19 +118,13 @@ option).
 +
 +/* The dirbuf is set by push_local_excludes() to the current subdirectory
 + * relative to curr_dir that is being processed.  The path always has a
-+ * trailing slash appended, and the variable dirbuf_offset contains the
-+ * length of this path prefix (i.e. it is an offset where you can copy a
-+ * filename to create a pathname that can be opened for reading/writing.
-+ *
-+ * The path is normally relative (e.g. "sub/dir/foo"), but it is set to an
-+ * absolute path when the push code is working on a parent-dir scan of dirs
-+ * that might be higher than the root of the transfer.  In that case, the
-+ * path is absolute, and any newly-created per-dir merge files will (at
-+ * least temporarily) get an absolute file name so that we know at what
-+ * point in the hierarchy it first makes an appearance. */
-+static char dirbuf[MAXPATHLEN];
-+static unsigned int dirbuf_offset = 0;
-+static BOOL parent_dirscan = 0;
++ * trailing slash appended, and the variable dirbuf_len contains the length
++ * of this path prefix.  The path is always absolute. */
++static char dirbuf[MAXPATHLEN+1];
++static unsigned int dirbuf_len = 0;
++
++/* This is True when we're scanning parent dirs for per-dir merge-files. */
++static BOOL parent_dirscan = False;
 +
 +/* This array contains a list of all the currently active per-dir merge
 + * files.  This makes it easier to save the appropriate values when we
@@ -165,7 +166,7 @@ option).
  
  /** Build an exclude structure given an exclude pattern. */
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
-@@ -46,23 +110,56 @@ static void make_exclude(struct exclude_
+@@ -46,23 +105,50 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
@@ -209,27 +210,20 @@ option).
 +		if (*pat != '/') {
 +			mflags &= ~MATCHFLG_ABS_PATH;
 +			ex_len = 0;
-+		} else {
-+			ex_len = *dirbuf == '/' ? dirbuf_offset - 1
-+			       : curr_dir_len + dirbuf_offset - !curr_dir[1];
-+		}
++		} else
++			ex_len = dirbuf_len - module_dirlen - 1;
 +	} else
  		ex_len = 0;
  	ret->pattern = new_array(char, ex_len + pat_len + 1);
  	if (!ret->pattern)
  		out_of_memory("make_exclude");
--	if (ex_len)
+ 	if (ex_len)
 -		memcpy(ret->pattern, exclude_path_prefix, ex_len);
-+	if (ex_len) {
-+		if (*dirbuf == '/')
-+			strlcpy(ret->pattern, dirbuf, ex_len + 1);
-+		else
-+			pathjoin(ret->pattern, ex_len + 1, curr_dir, dirbuf);
-+	}
++		strlcpy(ret->pattern, dirbuf + module_dirlen, ex_len + 1);
  	strlcpy(ret->pattern + ex_len, pat, pat_len + 1);
  	pat_len += ex_len;
  
-@@ -81,14 +178,40 @@ static void make_exclude(struct exclude_
+@@ -81,14 +167,40 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -274,7 +268,7 @@ option).
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +219,265 @@ static void make_exclude(struct exclude_
+@@ -96,22 +208,265 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -309,18 +303,19 @@ option).
  }
  
 +/* This returns an expanded (absolute) filename for the merge-file name if
-+ * the name has any slashes in it OR if the parent_dirscan var is non-zero;
++ * the name has any slashes in it OR if the parent_dirscan var is True;
 + * otherwise it returns the original merge_file name.  If the len_ptr value
-+ * is non-NULL the merge_file name is not null terminated and the length
-+ * value is contained therein (and will be updated with the new length). We
-+ * always return a name that is null terminated. */
-+static char *parse_merge_name(const char *merge_file, unsigned int *len_ptr)
++ * is non-NULL the merge_file name is limited by the referenced length
++ * value and will be updated with the length of the resulting name.  We
++ * always return a name that is null terminated, even if the merge_file
++ * name was not. */
++static char *parse_merge_name(const char *merge_file, unsigned int *len_ptr,
++			      unsigned int prefix_skip)
 +{
 +	static char buf[MAXPATHLEN];
 +	char *fn, tmpbuf[MAXPATHLEN];
-+	unsigned int fn_len, cd_len;
++	unsigned int fn_len;
 +
-+	cd_len = *dirbuf == '/' ? 0 : curr_dir_len + 1;
 +	if (!parent_dirscan && *merge_file != '/') {
 +		/* Return the name unchanged it doesn't have any slashes. */
 +		if (len_ptr) {
@@ -336,14 +331,15 @@ option).
 +
 +	fn = *merge_file == '/' ? buf : tmpbuf;
 +	if (sanitize_paths) {
++		const char *r = prefix_skip ? "/" : NULL;
 +		/* null-terminate the name if it isn't already */
 +		if (len_ptr && merge_file[*len_ptr]) {
 +			char *to = fn == buf ? tmpbuf : buf;
 +			strlcpy(to, merge_file, *len_ptr + 1);
 +			merge_file = to;
 +		}
-+		if (!sanitize_path(fn, merge_file, dirbuf)) {
-+			rprintf(FERROR, "merge filename overflows: %s\n",
++		if (!sanitize_path(fn, merge_file, r, dirbuf + module_dirlen)) {
++			rprintf(FERROR, "merge-file name overflows: %s\n",
 +				merge_file);
 +			return NULL;
 +		}
@@ -352,64 +348,64 @@ option).
 +		clean_fname(fn);
 +	}
 +	
-+	if (*fn == '/')
-+		return fn;
-+
 +	fn_len = strlen(fn);
-+	if (cd_len + dirbuf_offset + fn_len >= MAXPATHLEN) {
-+		rprintf(FERROR, "merge filename overflows: %s\n", fn);
++	if (fn == buf)
++		goto done;
++
++	if (dirbuf_len + fn_len >= MAXPATHLEN) {
++		rprintf(FERROR, "merge-file name overflows: %s\n", fn);
 +		return NULL;
 +	}
-+	if (cd_len) {
-+		memcpy(buf, curr_dir, curr_dir_len);
-+		buf[curr_dir_len] = '/';
-+	}
-+	if (dirbuf_offset)
-+		memcpy(buf + cd_len, dirbuf, dirbuf_offset);
-+	memcpy(buf + cd_len + dirbuf_offset, fn, fn_len + 1);
++	memcpy(buf, dirbuf + prefix_skip, dirbuf_len - prefix_skip);
++	memcpy(buf + dirbuf_len - prefix_skip, fn, fn_len + 1);
 +	fn_len = clean_fname(buf);
++
++    done:
 +	if (len_ptr)
 +		*len_ptr = fn_len;
-+
 +	return buf;
 +}
 +
-+/* Sets the dirbuf and dirbuf_offset values */
-+void set_current_subdir(const char *dir, unsigned int dirlen)
++/* Sets the dirbuf and dirbuf_len values. */
++void set_excludes_dir(const char *dir, unsigned int dirlen)
 +{
-+	memcpy(dirbuf, dir, dirlen);
-+	dirbuf[dirlen] = '\0';
-+	dirbuf_offset = clean_fname(dirbuf);
-+	if (dirbuf_offset == 1 && *dirbuf == '.')
-+		dirbuf_offset = 0;
-+	else
-+		dirbuf[dirbuf_offset++] = '/';
-+	dirbuf[dirbuf_offset] = '\0';
++	unsigned int len;
++	if (*dir != '/') {
++		memcpy(dirbuf, curr_dir, curr_dir_len);
++		dirbuf[curr_dir_len] = '/';
++		len = curr_dir_len + 1;
++		if (dirlen >= MAXPATHLEN - len)
++			dirlen = MAXPATHLEN - len - 1;
++	} else
++		len = 0;
++	memcpy(dirbuf + len, dir, dirlen);
++	dirbuf[dirlen + len] = '\0';
++	dirbuf_len = clean_fname(dirbuf);
++	if (dirbuf_len > 1 && dirbuf[dirbuf_len-1] == '.'
++	    && dirbuf[dirbuf_len-2] == '/')
++		dirbuf_len -= 2;
++	dirbuf[dirbuf_len++] = '/';
++	dirbuf[dirbuf_len] = '\0';
 +}
 +
-+/* This routine takes a per-dir merge file entry and finishes its setup.
++/* This routine takes a per-dir merge-file entry and finishes its setup.
 + * If the name has a path portion then we check to see if it refers to a
 + * parent directory of the first transfer dir.  If it does, we scan all the
 + * dirs from that point through the parent dir of the transfer dir looking
-+ * for the per-dir merge file in each one. */
-+static void setup_merge_file(struct exclude_struct *ex,
-+			     struct exclude_list_struct *lp, int flags,
-+			     const char *dir, unsigned int dirlen)
++ * for the per-dir merge-file in each one. */
++static BOOL setup_merge_file(struct exclude_struct *ex,
++			     struct exclude_list_struct *lp, int flags)
 +{
 +	char buf[MAXPATHLEN];
 +	char *x, *y, *pat = ex->pattern;
 +	unsigned int len;
 +
-+	if (!(x = parse_merge_name(pat, NULL)) || *x != '/')
-+		return;
++	if (!(x = parse_merge_name(pat, NULL, 0)) || *x != '/')
++		return 0;
 +
 +	y = strrchr(x, '/');
 +	*y = '\0';
 +	ex->pattern = strdup(y+1);
-+	if (*dirbuf != '/') {
-+		pathjoin(dirbuf, MAXPATHLEN, sanitize_paths ? "/" : curr_dir,
-+			 dir);
-+	}
 +	if (!*x)
 +		x = "/";
 +	if (*x == '/')
@@ -422,20 +418,17 @@ option).
 +		buf[len++] = '/';
 +		buf[len] = '\0';
 +	}
-+	x = buf;
-+	if (sanitize_paths)
-+		x += strlen(lp_path(module_id));
 +	/* This ensures that the specified dir is a parent of the transfer. */
-+	for (y = dirbuf; *x && *x == *y; x++, y++) {}
++	for (x = buf, y = dirbuf; *x && *x == *y; x++, y++) {}
 +	if (*x)
 +		y += strlen(y); /* nope -- skip the scan */
 +
-+	parent_dirscan = 1;
++	parent_dirscan = True;
 +	while (*y) {
 +		char save[MAXPATHLEN];
 +		strlcpy(save, y, MAXPATHLEN);
 +		*y = '\0';
-+		dirbuf_offset = y - dirbuf;
++		dirbuf_len = y - dirbuf;
 +		strlcpy(x, ex->pattern, MAXPATHLEN - (x - buf));
 +		add_exclude_file(lp, buf, flags | XFLG_ABS_PATH);
 +		if (ex->match_flags & MATCHFLG_CVSIGNORE)
@@ -444,22 +437,22 @@ option).
 +		strlcpy(y, save, MAXPATHLEN);
 +		while ((*x++ = *y++) != '/') {}
 +	}
-+	parent_dirscan = 0;
++	parent_dirscan = False;
 +	free(pat);
-+	set_current_subdir(dir, dirlen);
++	return 1;
 +}
 +
 +/* Each time rsync changes to a new directory it call this function to
-+ * handle all the per-dir merge files.  The "dir" value is the current path
-+ * relative to curr_dir (with a mandatory trailing slash).  We copy it into
-+ * dirbuf so that the routines this calls can append a file name. */
++ * handle all the per-dir merge-files.  The "dir" value is the current path
++ * relative to curr_dir (which might not be null-terminated).  We copy it
++ * into dirbuf so that we can easily append a file name on the end. */
 +void *push_local_excludes(const char *dir, unsigned int dirlen)
 +{
 +	struct mergelist_save_struct *push;
 +	struct exclude_list_struct *ap;
 +	int i;
 +
-+	set_current_subdir(dir, dirlen);
++	set_excludes_dir(dir, dirlen);
 +
 +	if (!(push = new_array(struct mergelist_save_struct, 1)))
 +		out_of_memory("push_local_excludes");
@@ -497,11 +490,12 @@ option).
 +
 +		if (ex->match_flags & MATCHFLG_FINISH_SETUP) {
 +			ex->match_flags &= ~MATCHFLG_FINISH_SETUP;
-+			setup_merge_file(ex, lp, flags, dir, dirlen);
++			if (setup_merge_file(ex, lp, flags))
++				set_excludes_dir(dir, dirlen);
 +		}
 +
-+		if (strlcpy(dirbuf + dirbuf_offset, ex->pattern,
-+		    MAXPATHLEN - dirbuf_offset) < MAXPATHLEN - dirbuf_offset)
++		if (strlcpy(dirbuf + dirbuf_len, ex->pattern,
++		    MAXPATHLEN - dirbuf_len) < MAXPATHLEN - dirbuf_len)
 +			add_exclude_file(lp, dirbuf, flags | XFLG_ABS_PATH);
 +		else {
 +			io_error |= IOERR_GENERAL;
@@ -509,7 +503,7 @@ option).
 +			    "cannot add local excludes in long-named directory %s\n",
 +			    full_fname(dirbuf));
 +		}
-+		dirbuf[dirbuf_offset] = '\0';
++		dirbuf[dirbuf_len] = '\0';
 +	}
 +
 +	return (void*)push;
@@ -546,7 +540,7 @@ option).
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,7 +488,7 @@ static int check_one_exclude(char *name,
+@@ -122,18 +477,20 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -555,7 +549,13 @@ option).
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
-@@ -133,7 +499,8 @@ static int check_one_exclude(char *name,
+ 	else if (ex->match_flags & MATCHFLG_ABS_PATH && *name != '/') {
+ 		static char full_name[MAXPATHLEN];
+-		int plus = curr_dir[1] == '\0'? 1 : 0;
+-		pathjoin(full_name, sizeof full_name, curr_dir+plus, name);
++		char *cd = curr_dir + module_dirlen;
++		int plus = cd[1] == '\0'? 1 : 0;
++		pathjoin(full_name, sizeof full_name, cd+plus, name);
  		name = full_name;
  	}
  
@@ -565,7 +565,7 @@ option).
  
  	if (ex->match_flags & MATCHFLG_DIRECTORY && !name_is_dir)
  		return 0;
-@@ -148,9 +515,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +505,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -577,7 +577,7 @@ option).
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +588,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +578,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -591,7 +591,7 @@ option).
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -253,11 +627,36 @@ static const char *get_exclude_tok(const
+@@ -253,11 +617,36 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -630,7 +630,7 @@ option).
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -273,6 +672,8 @@ static const char *get_exclude_tok(const
+@@ -273,6 +662,8 @@ static const char *get_exclude_tok(const
  
  	if (*p == '!' && len == 1 && !(xflags & XFLG_WORDS_ONLY))
  		mflags |= MATCHFLG_CLEAR_LIST;
@@ -639,7 +639,16 @@ option).
  
  	*len_ptr = len;
  	*flag_ptr = mflags;
-@@ -292,9 +693,15 @@ void add_exclude(struct exclude_list_str
+@@ -284,7 +675,7 @@ void add_exclude(struct exclude_list_str
+ 		 int xflags)
+ {
+ 	unsigned int pat_len, mflags;
+-	const char *cp;
++	const char *cp, *p;
+ 
+ 	if (!pattern)
+ 		return;
+@@ -292,9 +683,15 @@ void add_exclude(struct exclude_list_str
  	cp = pattern;
  	pat_len = 0;
  	while (1) {
@@ -655,7 +664,7 @@ option).
  
  		if (mflags & MATCHFLG_CLEAR_LIST) {
  			if (verbose > 2) {
-@@ -306,13 +713,23 @@ void add_exclude(struct exclude_list_str
+@@ -306,13 +703,24 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -666,17 +675,18 @@ option).
 -				who_am_i(), (int)pat_len, cp, listp->debug_type,
 -				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
 +		if (mflags & MATCHFLG_MERGE_FILE) {
++			unsigned int len = pat_len;
 +			if (mflags & MATCHFLG_PERDIR_MERGE) {
 +				if (parent_dirscan) {
-+					if (!(cp = parse_merge_name(cp, &pat_len)))
++					if (!(p = parse_merge_name(cp, &len, module_dirlen)))
 +						continue;
-+					make_exclude(listp, cp, pat_len, mflags);
++					make_exclude(listp, p, len, mflags);
 +					continue;
 +				}
 +			} else {
-+				if (!(cp = parse_merge_name(cp, &pat_len)))
++				if (!(p = parse_merge_name(cp, &len, 0)))
 +					continue;
-+				add_exclude_file(listp, cp, xflags | XFLG_FATAL_ERRORS);
++				add_exclude_file(listp, p, xflags | XFLG_FATAL_ERRORS);
 +				continue;
 +			}
  		}
@@ -685,7 +695,7 @@ option).
  	}
  }
  
-@@ -321,7 +738,7 @@ void add_exclude_file(struct exclude_lis
+@@ -321,7 +729,7 @@ void add_exclude_file(struct exclude_lis
  		      int xflags)
  {
  	FILE *fp;
@@ -694,19 +704,20 @@ option).
  	char *eob = line + sizeof line - 1;
  	int word_split = xflags & XFLG_WORD_SPLIT;
  
-@@ -343,6 +760,11 @@ void add_exclude_file(struct exclude_lis
+@@ -342,6 +750,12 @@ void add_exclude_file(struct exclude_lis
+ 		}
  		return;
  	}
- 
++	dirbuf[dirbuf_len] = '\0';
++
 +	if (verbose > 2) {
 +		rprintf(FINFO, "[%s] add_exclude_file(%s,%d)\n",
 +			who_am_i(), fname, xflags);
 +	}
-+
+ 
  	while (1) {
  		char *s = line;
- 		int ch, overflow = 0;
-@@ -402,7 +824,21 @@ void send_exclude_list(int f)
+@@ -402,7 +816,21 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -729,7 +740,7 @@ option).
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +879,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +871,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -738,7 +749,7 @@ option).
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
 --- orig/flist.c	2004-08-05 21:57:29
-+++ flist.c	2004-08-09 02:45:42
++++ flist.c	2004-08-09 18:21:55
 @@ -39,10 +39,9 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -780,6 +791,33 @@ option).
  		return 1;
  	return 0;
  }
+@@ -573,7 +566,7 @@ void receive_file_entry(struct file_stru
+ 	clean_fname(thisname);
+ 
+ 	if (sanitize_paths)
+-		sanitize_path(thisname, thisname, NULL);
++		sanitize_path(thisname, thisname, "", NULL);
+ 
+ 	if ((basename = strrchr(thisname, '/')) != NULL) {
+ 		dirname_len = ++basename - thisname; /* counts future '\0' */
+@@ -671,7 +664,7 @@ void receive_file_entry(struct file_stru
+ 		file->u.link = bp;
+ 		read_sbuf(f, bp, linkname_len - 1);
+ 		if (sanitize_paths)
+-			sanitize_path(bp, bp, lastdir);
++			sanitize_path(bp, bp, "", lastdir);
+ 		bp += linkname_len;
+ 	}
+ #endif
+@@ -761,7 +754,7 @@ struct file_struct *make_file(char *fnam
+ 	}
+ 	clean_fname(thisname);
+ 	if (sanitize_paths)
+-		sanitize_path(thisname, thisname, NULL);
++		sanitize_path(thisname, thisname, "", NULL);
+ 
+ 	memset(sum, 0, SUM_LENGTH);
+ 
 @@ -954,15 +947,7 @@ void send_file_name(int f, struct file_l
  
  	if (recursive && S_ISDIR(file->mode)
@@ -837,7 +875,7 @@ option).
  	char *p, *dir, olddir[sizeof curr_dir];
  	char lastpath[MAXPATHLEN] = "";
  	struct file_list *flist;
-+	BOOL did_first_push = 0;
++	BOOL need_first_push = True;
  	int64 start_write;
  	int use_ff_fd = 0;
  
@@ -847,30 +885,45 @@ option).
  			use_ff_fd = 1;
 +			if (curr_dir_len < MAXPATHLEN - 1) {
 +				push_local_excludes(curr_dir, curr_dir_len);
-+				did_first_push = 1;
++				need_first_push = False;
 +			}
  		}
  	}
  
-@@ -1097,6 +1079,16 @@ struct file_list *send_file_list(int f, 
+@@ -1077,13 +1059,13 @@ struct file_list *send_file_list(int f, 
+ 		if (use_ff_fd) {
+ 			if (read_filesfrom_line(filesfrom_fd, fname) == 0)
+ 				break;
+-			sanitize_path(fname, fname, NULL);
++			sanitize_path(fname, fname, "", NULL);
+ 		} else {
+ 			if (argc-- == 0)
+ 				break;
+ 			strlcpy(fname, *argv++, MAXPATHLEN);
+ 			if (sanitize_paths)
+-				sanitize_path(fname, fname, NULL);
++				sanitize_path(fname, fname, "", NULL);
+ 		}
+ 
+ 		l = strlen(fname);
+@@ -1097,6 +1079,15 @@ struct file_list *send_file_list(int f, 
  			}
  		}
  
-+		if (!did_first_push) {
++		if (need_first_push) {
 +			if ((p = strrchr(fname, '/')) != NULL) {
-+				dir = fname;
-+				p++;
-+			} else
-+				dir = p = "";
-+			push_local_excludes(dir, p - dir);
-+			did_first_push = 1;
++				if (*++p && strcmp(p, ".") != 0)
++					push_local_excludes(fname, p - fname);
++			} else if (strcmp(fname, ".") != 0)
++				push_local_excludes(fname, 0);
++			need_first_push = False;
 +		}
 +
  		if (link_stat(fname, &st, keep_dirlinks) != 0) {
  			if (f != -1) {
  				io_error |= IOERR_GENERAL;
 --- orig/options.c	2004-08-05 21:57:29
-+++ options.c	2004-08-09 03:33:31
++++ options.c	2004-08-09 18:22:26
 @@ -287,6 +287,7 @@ void usage(enum logcode F)
    rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
    rprintf(F,"     --include-from=FILE     don't exclude patterns listed in FILE\n");
@@ -899,6 +952,30 @@ option).
  		case 'P':
  			do_progress = 1;
  			keep_partial = 1;
+@@ -728,17 +735,17 @@ int parse_arguments(int *argc, const cha
+ 	if (sanitize_paths) {
+ 		int i;
+ 		for (i = *argc; i-- > 0; )
+-			(*argv)[i] = sanitize_path(NULL, (*argv)[i], NULL);
++			(*argv)[i] = sanitize_path(NULL, (*argv)[i], "", NULL);
+ 		if (tmpdir)
+-			tmpdir = sanitize_path(NULL, tmpdir, "");
++			tmpdir = sanitize_path(NULL, tmpdir, NULL, NULL);
+ 		if (partial_dir)
+-			partial_dir = sanitize_path(NULL, partial_dir, "");
++			partial_dir = sanitize_path(NULL, partial_dir, NULL, NULL);
+ 		if (compare_dest)
+-			compare_dest = sanitize_path(NULL, compare_dest, "");
++			compare_dest = sanitize_path(NULL, compare_dest, NULL, NULL);
+ 		if (backup_dir)
+-			backup_dir = sanitize_path(NULL, backup_dir, "");
++			backup_dir = sanitize_path(NULL, backup_dir, NULL, NULL);
+ 		if (files_from)
+-			files_from = sanitize_path(NULL, files_from, "");
++			files_from = sanitize_path(NULL, files_from, NULL, NULL);
+ 	}
+ 	if (server_exclude_list.head && !am_sender) {
+ 		struct exclude_list_struct *elp = &server_exclude_list;
 --- orig/rsync.h	2004-08-03 15:41:32
 +++ rsync.h	2004-08-08 06:07:01
 @@ -108,6 +108,7 @@
@@ -1131,3 +1208,72 @@ option).
 +
  # The script would have aborted on error, so getting here means we've won.
  exit 0
+--- orig/util.c	2004-08-07 20:57:02
++++ util.c	2004-08-09 18:28:59
+@@ -524,7 +524,7 @@ static void glob_expand_one(char *s, cha
+ 		s = ".";
+ 
+ 	if (sanitize_paths)
+-		s = sanitize_path(NULL, s, NULL);
++		s = sanitize_path(NULL, s, "", NULL);
+ 	else
+ 		s = strdup(s);
+ 
+@@ -706,18 +706,16 @@ unsigned int clean_fname(char *name)
+  * "/" (either removing it or expanding it) and any leading or embedded
+  * ".." components that attempt to escape past the module's top dir.
+  *
+- * If dest is NULL, a buffer is allocated to hold the result.  If dest is
+- * the same buffer as p (the path) OR if reldir is NULL, a leading slash
+- * is dropped instead of being expanded to be the module's top dir.
++ * If dest is NULL, a buffer is allocated to hold the result.  It is legal
++ * to call with the dest and the path (p) pointing to the same buffer, but
++ * rootdir is ignored to avoid expansion of the string.
++ *
++ * The rootdir string contains a value to use in place of a leading slash.
++ * Specify NULL to get the default of lp_path(module_id).
+  *
+  * If reldir is non-NULL (and non-empty), it is a sanitized directory that
+  * the path will be relative to, so allow as many '..'s at the beginning of
+- * the path as there are components in reldir.  This is used for symbolic
+- * link targets.  If reldir is non-null and the path began with "/", to be
+- * completely like a chroot we should add in depth levels of ".." at the
+- * beginning of the path, but that would blow the assumption that the path
+- * doesn't grow and it is not likely to end up being a valid symlink
+- * anyway, so just do the normal removal of the leading "/" instead.
++ * the path as there are components in reldir.
+  *
+  * While we're at it, remove double slashes and "." components like
+  * clean_fname() does, but DON'T remove a trailing slash because that is
+@@ -725,7 +723,8 @@ unsigned int clean_fname(char *name)
+  *
+  * If the resulting path would be empty, change it into ".".
+  */
+-char *sanitize_path(char *dest, const char *p, const char *reldir)
++char *sanitize_path(char *dest, const char *p, const char *rootdir,
++		    const char *reldir)
+ {
+ 	char *start, *sanp;
+ 	int depth = 0;
+@@ -734,8 +733,10 @@ char *sanitize_path(char *dest, const ch
+ 
+ 	if (dest != p) {
+ 		int plen = strlen(p);
+-		if (*p == '/' && reldir) {
+-			rlen = strlen(lp_path(module_id));
++		if (*p == '/') {
++			if (!rootdir)
++				rootdir = lp_path(module_id);
++			rlen = strlen(rootdir);
+ 			reldir = NULL;
+ 			p++;
+ 		}
+@@ -745,7 +746,7 @@ char *sanitize_path(char *dest, const ch
+ 		} else if (!(dest = new_array(char, rlen + plen + 1)))
+ 			out_of_memory("sanitize_path");
+ 		if (rlen) {
+-			memcpy(dest, lp_path(module_id), rlen);
++			memcpy(dest, rootdir, rlen);
+ 			if (rlen > 1)
+ 				dest[rlen++] = '/';
+ 		}
