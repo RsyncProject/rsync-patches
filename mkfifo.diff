@@ -1,19 +1,17 @@
---- orig/rsync.h	2004-09-22 08:47:31
-+++ rsync.h	2004-07-03 20:23:33
-@@ -163,6 +163,10 @@ enum msgcode {
- #include <sys/socket.h>
- #endif
+--- orig/syscall.c	2004-08-02 21:56:59
++++ syscall.c	2004-09-23 05:46:46
+@@ -26,6 +26,10 @@
  
-+#ifdef HAVE_SYS_UN_H
+ #include "rsync.h"
+ 
++#if HAVE_SYS_UN_H
 +#include <sys/un.h>
 +#endif
 +
- #ifdef HAVE_STRING_H
- #include <string.h>
- #endif
---- orig/syscall.c	2004-08-02 21:56:59
-+++ syscall.c	2004-09-22 22:34:50
-@@ -76,6 +76,28 @@ int do_mknod(char *pathname, mode_t mode
+ extern int dry_run;
+ extern int read_only;
+ extern int list_only;
+@@ -76,6 +80,29 @@ int do_mknod(char *pathname, mode_t mode
  {
  	if (dry_run) return 0;
  	RETURN_ERROR_IF_RO_OR_LO;
@@ -25,11 +23,12 @@
 +	if (S_ISSOCK(mode)) {
 +		int sock;
 +		struct sockaddr_un saddr;
-+		int len = strlen(pathname) + 1; /* include null */
++		unsigned int len;
 +
 +		saddr.sun_family = AF_UNIX;
-+		strlcpy(saddr.sun_path, pathname, sizeof saddr.sun_path);
-+		saddr.sun_len = len > sizeof saddr.sun_path ? sizeof saddr.sun_path : len;
++		len = strlcpy(saddr.sun_path, pathname, sizeof saddr.sun_path);
++		saddr.sun_len = len >= sizeof saddr.sun_path
++			      ? sizeof saddr.sun_path : len + 1;
 +
 +		if ((sock = socket(PF_UNIX, SOCK_STREAM, 0)) < 0
 +		    || (unlink(pathname) < 0 && errno != ENOENT)
