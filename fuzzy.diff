@@ -1,19 +1,8 @@
-From: Rusty Russell <rusty@rustcorp.com.au>
-Date: Wed, 03 Apr 2002 17:08:57 +1000
-
-Found old patch on google, and updated it for 2.5.4 (I know, but that's what
-apt-get source gave me).
-
-Compiles, otherwise untested.
-Rusty.
-
-[Updated for current CVS version by Wayne Davison.  Passes *MOST* of the
-test suite, but otherwise UNTESTED.]
---
-  Anyone who quotes me in their sig is an idiot. -- Rusty Russell.
+Updated for current CVS version by Wayne Davison.  Passes *MOST* of the
+test suite, but otherwise UNTESTED.
 
 --- Makefile.in	15 May 2004 00:48:11 -0000	1.101
-+++ Makefile.in	18 Jun 2004 17:32:53 -0000
++++ Makefile.in	29 Jun 2004 15:14:48 -0000
 @@ -32,7 +32,7 @@ ZLIBOBJ=zlib/deflate.o zlib/infblock.o z
  	zlib/inflate.o zlib/inftrees.o zlib/infutil.o zlib/trees.o \
  	zlib/zutil.o zlib/adler32.o
@@ -23,8 +12,125 @@ test suite, but otherwise UNTESTED.]
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
  	fileio.o batch.o clientname.o
  OBJS3=progress.o pipe.o
---- generator.c	18 Jun 2004 16:30:24 -0000	1.88
-+++ generator.c	18 Jun 2004 17:32:53 -0000
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ alternate.c	29 Jun 2004 15:14:48 -0000
+@@ -0,0 +1,114 @@
++#include "rsync.h"
++
++extern char *compare_dest;
++extern int verbose;
++
++/* Alternate methods for opening files, if local doesn't exist */
++/* Sanity check that we are about to open regular file */
++int do_open_regular(char *fname)
++{
++	STRUCT_STAT st;
++
++	if (do_stat(fname, &st) == 0 && S_ISREG(st.st_mode))
++		return do_open(fname, O_RDONLY, 0);
++
++	return -1;
++}
++
++static void split_names(char *fname, char **dirname, char **basename)
++{
++	char *slash = strrchr(fname, '/');
++	if (slash) {
++		*dirname = fname;
++		*slash = '\0';
++		*basename = slash+1;
++	} else {
++		*basename = fname;
++		*dirname = ".";
++	}
++}
++
++static unsigned int measure_name(const char *name, const char *basename,
++				 const char *ext)
++{
++	int namelen = strlen(name);
++	int extlen = strlen(ext);
++	unsigned int score = 0;
++
++	/* Extensions must match */
++	if (namelen <= extlen || strcmp(name + namelen - extlen, ext) != 0)
++		return 0;
++
++	/* Now score depends on similarity of prefix */
++	for (; *name == *basename && *name; name++, basename++)
++		score++;
++	return score;
++}
++
++int open_alternate_base_fuzzy(const char *fname)
++{
++	DIR *d;
++	struct dirent *di;
++	char *basename, *dirname;
++	char mangled_name[MAXPATHLEN];
++	char bestname[MAXPATHLEN];
++	unsigned int bestscore = 0;
++	const char *ext;
++
++	strlcpy(mangled_name, fname, sizeof mangled_name);
++
++	split_names(mangled_name, &dirname, &basename);
++	if (!(d = opendir(dirname))) {
++		rsyserr(FERROR, errno, "recv_generator opendir(%s)", dirname);
++		return -1;
++	}
++
++	/* Get final extension, eg. .gz; never full basename though. */
++	ext = strrchr(basename + 1, '.');
++	if (!ext)
++		ext = basename + strlen(basename); /* ext = "" */
++
++	while ((di = readdir(d)) != NULL) {
++		const char *dname = d_name(di);
++		unsigned int score;
++
++		if (dname[0] == '.' && (dname[1] == '\0'
++		    || (dname[1] == '.' && dname[2] == '\0')))
++			continue;
++
++		score = measure_name(dname, basename, ext);
++		if (verbose > 4) {
++			rprintf(FINFO,"fuzzy score for %s = %u\n",
++				dname, score);
++		}
++		if (score > bestscore) {
++			strcpy(bestname, dname);
++			bestscore = score;
++		}
++	}
++	closedir(d);
++
++	/* Found a candidate. */
++	if (bestscore != 0) {
++		char fuzzyname[MAXPATHLEN];
++
++		pathjoin(fuzzyname,sizeof fuzzyname, dirname, bestname);
++		if (verbose > 2) {
++			rprintf(FINFO, "fuzzy match %s->%s\n",
++				fname, fuzzyname);
++		}
++		return do_open_regular(fuzzyname);
++	}
++	return -1;
++}
++
++int open_alternate_base_comparedir(const char *fname)
++{
++	char fnamebuf[MAXPATHLEN];
++
++	/* try the file at compare_dest instead */
++	pathjoin(fnamebuf, sizeof fnamebuf, compare_dest, fname);
++
++	/* FIXME: now follows symlinks... */
++	return do_open_regular(fnamebuf);
++}
+--- generator.c	23 Jun 2004 21:21:19 -0000	1.90
++++ generator.c	29 Jun 2004 15:14:48 -0000
 @@ -41,6 +41,7 @@ extern int ignore_times;
  extern int size_only;
  extern int io_timeout;
@@ -33,7 +139,7 @@ test suite, but otherwise UNTESTED.]
  extern int always_checksum;
  extern char *compare_dest;
  extern int link_dest;
-@@ -259,7 +260,61 @@ static void generate_and_send_sums(struc
+@@ -256,7 +257,61 @@ static void generate_and_send_sums(struc
  	}
  }
  
@@ -95,7 +201,7 @@ test suite, but otherwise UNTESTED.]
  
  /**
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -275,8 +330,6 @@ void recv_generator(char *fname, struct 
+@@ -272,8 +327,6 @@ void recv_generator(char *fname, struct 
  	STRUCT_STAT st;
  	struct map_struct *mapbuf;
  	int statret;
@@ -104,7 +210,7 @@ test suite, but otherwise UNTESTED.]
  
  	if (list_only)
  		return;
-@@ -416,109 +469,39 @@ void recv_generator(char *fname, struct 
+@@ -413,109 +466,39 @@ void recv_generator(char *fname, struct 
  	}
  #endif
  
@@ -233,7 +339,7 @@ test suite, but otherwise UNTESTED.]
  		return;
  	}
  
-@@ -528,7 +511,7 @@ void recv_generator(char *fname, struct 
+@@ -525,7 +508,7 @@ void recv_generator(char *fname, struct 
  		mapbuf = NULL;
  
  	if (verbose > 3) {
@@ -242,8 +348,8 @@ test suite, but otherwise UNTESTED.]
  			(double)st.st_size);
  	}
  
---- options.c	7 Jun 2004 22:05:22 -0000	1.156
-+++ options.c	18 Jun 2004 17:32:54 -0000
+--- options.c	20 Jun 2004 19:47:05 -0000	1.157
++++ options.c	29 Jun 2004 15:14:48 -0000
 @@ -94,6 +94,7 @@ int ignore_errors = 0;
  int modify_window = 0;
  int blocking_io = -1;
@@ -278,8 +384,8 @@ test suite, but otherwise UNTESTED.]
  	*argc = ac;
  	return;
  
---- receiver.c	14 Jun 2004 15:09:36 -0000	1.82
-+++ receiver.c	18 Jun 2004 17:32:54 -0000
+--- receiver.c	29 Jun 2004 15:12:01 -0000	1.83
++++ receiver.c	29 Jun 2004 15:14:48 -0000
 @@ -48,6 +48,7 @@ extern int ignore_errors;
  extern int orig_umask;
  extern int keep_partial;
@@ -342,21 +448,17 @@ test suite, but otherwise UNTESTED.]
  			receive_data(f_in, NULL, -1, NULL, file->length);
  			close(fd1);
  			continue;
-@@ -413,8 +408,10 @@ int recv_files(int f_in,struct file_list
- 
- 		if (fd1 != -1 && st.st_size > 0) {
+@@ -415,7 +410,7 @@ int recv_files(int f_in,struct file_list
  			mapbuf = map_file(fd1,st.st_size);
--			if (verbose > 2)
--				rprintf(FINFO,"recv mapped %s of size %.0f\n",fnamecmp,(double)st.st_size);
-+			if (verbose > 2) {
-+				rprintf(FINFO, "recv mapped %s of size %.0f\n",
-+				    fname, (double)st.st_size);
-+			}
+ 			if (verbose > 2) {
+ 				rprintf(FINFO, "recv mapped %s of size %.0f\n",
+-					fnamecmp, (double)st.st_size);
++					fname, (double)st.st_size);
+ 			}
  		} else
  			mapbuf = NULL;
- 
 --- rsync.yo	5 Jun 2004 16:16:30 -0000	1.171
-+++ rsync.yo	18 Jun 2004 17:32:54 -0000
++++ rsync.yo	29 Jun 2004 15:14:49 -0000
 @@ -325,6 +325,7 @@ verb(
   -T  --temp-dir=DIR          create temporary files in directory DIR
       --compare-dest=DIR      also compare received files relative to DIR
