@@ -5,7 +5,7 @@ command before "make":
 
 
 --- orig/io.c	2005-01-01 21:11:00
-+++ io.c	2004-07-03 20:17:10
++++ io.c	2005-01-10 10:49:17
 @@ -243,6 +243,14 @@ static void read_msg_fd(void)
  		read_loop(fd, buf, 4);
  		redo_list_add(IVAL(buf,0));
@@ -38,7 +38,7 @@ command before "make":
  		case MSG_INFO:
  		case MSG_ERROR:
  			if (remaining >= sizeof line) {
---- orig/main.c	2005-01-01 21:11:00
+--- orig/main.c	2005-01-10 00:22:54
 +++ main.c	2004-08-13 08:24:23
 @@ -42,6 +42,7 @@ extern int list_only;
  extern int local_server;
@@ -48,7 +48,7 @@ command before "make":
  extern int orig_umask;
  extern int copy_links;
  extern int keep_dirlinks;
-@@ -648,6 +649,8 @@ void start_server(int f_in, int f_out, i
+@@ -647,6 +648,8 @@ void start_server(int f_in, int f_out, i
  
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
@@ -57,7 +57,7 @@ command before "make":
  
  		recv_exclude_list(f_in);
  		if (cvs_exclude)
-@@ -732,6 +735,9 @@ int client_run(int f_in, int f_out, pid_
+@@ -731,6 +734,9 @@ int client_run(int f_in, int f_out, pid_
  		exit_cleanup(status);
  	}
  
@@ -68,7 +68,7 @@ command before "make":
  		list_only = 1;
  
 --- orig/options.c	2005-01-01 21:11:00
-+++ options.c	2004-11-27 18:04:22
++++ options.c	2005-01-10 10:46:47
 @@ -88,8 +88,10 @@ int daemon_bwlimit = 0;
  int bwlimit = 0;
  size_t bwlimit_writemax = 0;
@@ -88,36 +88,25 @@ command before "make":
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
    rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
-@@ -320,7 +323,7 @@ void usage(enum logcode F)
- }
- 
- enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
--      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED,
-+      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_DELETE_SENT_FILES,
-       OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
-       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
-       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
 @@ -341,6 +344,7 @@ static struct poptOption long_options[] 
    {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
    {"delete-after",     0,  POPT_ARG_NONE,   0, OPT_DELETE_AFTER, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   0, OPT_DELETE_EXCLUDED, 0, 0 },
-+  {"delete-sent-files",0,  POPT_ARG_NONE,   0, OPT_DELETE_SENT_FILES, 0, 0 },
++  {"delete-sent-files",0,  POPT_ARG_NONE,   &delete_sent_files, 0, 0, 0 },
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"exclude",          0,  POPT_ARG_STRING, 0, OPT_EXCLUDE, 0, 0 },
-@@ -622,6 +626,11 @@ int parse_arguments(int *argc, const cha
- 			delete_mode = 1;
- 			break;
+@@ -854,6 +858,9 @@ int parse_arguments(int *argc, const cha
+ 	if (relative_paths < 0)
+ 		relative_paths = files_from? 1 : 0;
  
-+		case OPT_DELETE_SENT_FILES:
-+			delete_sent_files = 1;
-+			need_messages_from_generator = 1;
-+			break;
++	if (delete_sent_files)
++		need_messages_from_generator = 1;
 +
- 		case OPT_EXCLUDE:
- 			add_exclude(&exclude_list, poptGetOptArg(pc), 0);
- 			break;
-@@ -1240,6 +1249,9 @@ void server_options(char **args,int *arg
+ 	*argv = poptGetArgs(pc);
+ 	*argc = count_args(*argv);
+ 
+@@ -1240,6 +1247,9 @@ void server_options(char **args,int *arg
  			args[ac++] = "--no-relative";
  	}
  
@@ -127,7 +116,7 @@ command before "make":
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2005-01-01 21:11:00
+--- orig/receiver.c	2005-01-10 09:46:01
 +++ receiver.c	2004-08-13 08:38:51
 @@ -46,6 +46,7 @@ extern char *backup_dir;
  extern char *backup_suffix;
@@ -172,7 +161,7 @@ command before "make":
  			}
  		}
  	}
---- orig/rsync.h	2005-01-01 21:11:01
+--- orig/rsync.h	2005-01-10 00:21:12
 +++ rsync.h	2004-07-03 20:17:10
 @@ -60,6 +60,7 @@
  #define FLAG_TOP_DIR (1<<0)
@@ -234,7 +223,7 @@ command before "make":
 +	struct file_struct *file;
 +	unsigned int offset;
 +
-+	if (!the_flist)
++	if (!the_flist || i < 0 || i >= the_flist->count)
 +		return;
 +
 +	file = the_flist->files[i];
