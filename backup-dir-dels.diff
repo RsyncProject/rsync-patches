@@ -156,8 +156,8 @@ Marc St-Onge
  	else
  		ok = do_rmdir(fname) == 0;
  	if (ok) {
---- orig/options.c	2005-02-25 18:44:31
-+++ options.c	2005-02-21 11:02:45
+--- orig/options.c	2005-03-01 01:22:59
++++ options.c	2005-03-01 01:25:39
 @@ -127,10 +127,14 @@ int no_detach
  int write_batch = 0;
  int read_batch = 0;
@@ -214,23 +214,25 @@ Marc St-Onge
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0);
 +		if (backup_dir_dels)							
 +			backup_dir_dels = sanitize_path(NULL, backup_dir_dels, NULL, 0);
- 		if (files_from)
- 			files_from = sanitize_path(NULL, files_from, NULL, 0);
  	}
-@@ -1036,6 +1048,12 @@ int parse_arguments(int *argc, const cha
- 			if (check_filter(elp, backup_dir, 1) < 0)
- 				goto options_rejected;
+ 	if (server_filter_list.head && !am_sender) {
+ 		struct filter_list_struct *elp = &server_filter_list;
+@@ -1038,6 +1050,14 @@ int parse_arguments(int *argc, const cha
+ 				return 0;
+ 			}
  		}
 +		/* Clean backup_dir_dels same as for backup_dir */
 +		if (backup_dir_dels) {
++			if (!*backup_dir_dels)
++				goto options_rejected;
 +			clean_fname(backup_dir_dels, 1);
 +			if (check_filter(elp, backup_dir_dels, 1) < 0)
 +				goto options_rejected;
 +		}
  	}
- 	if (server_filter_list.head && files_from) {
- 		if (!*files_from)
-@@ -1058,6 +1076,16 @@ int parse_arguments(int *argc, const cha
+ 
+ 	if (!backup_suffix)
+@@ -1049,6 +1069,16 @@ int parse_arguments(int *argc, const cha
  			backup_suffix);
  		return 0;
  	}
@@ -247,7 +249,7 @@ Marc St-Onge
  	if (backup_dir) {
  		backup_dir_len = strlcpy(backup_dir_buf, backup_dir, sizeof backup_dir_buf);
  		backup_dir_remainder = sizeof backup_dir_buf - backup_dir_len;
-@@ -1079,6 +1107,31 @@ int parse_arguments(int *argc, const cha
+@@ -1070,6 +1100,31 @@ int parse_arguments(int *argc, const cha
  			"--suffix cannot be a null string without --backup-dir\n");
  		return 0;
  	}
@@ -279,7 +281,7 @@ Marc St-Onge
  	if (make_backups && !backup_dir)
  		omit_dir_times = 1;
  
-@@ -1346,6 +1399,10 @@ void server_options(char **args,int *arg
+@@ -1348,6 +1403,10 @@ void server_options(char **args,int *arg
  		args[ac++] = "--backup-dir";
  		args[ac++] = backup_dir;
  	}
@@ -290,7 +292,7 @@ Marc St-Onge
  
  	/* Only send --suffix if it specifies a non-default value. */
  	if (strcmp(backup_suffix, backup_dir ? "" : BACKUP_SUFFIX) != 0) {
-@@ -1354,7 +1411,13 @@ void server_options(char **args,int *arg
+@@ -1356,7 +1415,13 @@ void server_options(char **args,int *arg
  			goto oom;
  		args[ac++] = arg;
  	}

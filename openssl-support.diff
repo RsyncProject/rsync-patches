@@ -72,7 +72,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (verbose > 3) {
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): entered\n",
  			code, safe_fname(file), line);
---- orig/clientserver.c	2005-02-27 07:33:41
+--- orig/clientserver.c	2005-03-01 01:22:59
 +++ clientserver.c	2004-10-08 20:44:59
 @@ -45,6 +45,9 @@ extern int select_timeout;
  extern int orig_umask;
@@ -160,7 +160,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			return RERR_STARTCLIENT;
  		} else {
  			rprintf(FINFO,"%s\n", line);
-@@ -536,6 +584,7 @@ static void send_listing(int fd)
+@@ -552,6 +600,7 @@ static void send_listing(int fd)
  		io_printf(fd,"@RSYNCD: EXIT\n");
  }
  
@@ -168,7 +168,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  /* this is called when a connection is established to a client
     and we want to start talking. The setup of the system is done from
     here */
-@@ -585,6 +634,9 @@ int start_daemon(int f_in, int f_out)
+@@ -601,6 +650,9 @@ int start_daemon(int f_in, int f_out)
  	if (protocol_version > remote_protocol)
  		protocol_version = remote_protocol;
  
@@ -178,7 +178,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	line[0] = 0;
  	if (!read_line(f_in, line, sizeof line - 1))
  		return -1;
-@@ -594,6 +646,20 @@ int start_daemon(int f_in, int f_out)
+@@ -610,6 +662,20 @@ int start_daemon(int f_in, int f_out)
  		return -1;
  	}
  
@@ -223,123 +223,8 @@ can't say if I've left any cleanup/compatibility errors in the code.
  AC_MSG_CHECKING([whether to call shutdown on all sockets])
  case $host_os in
  	*cygwin* ) AC_MSG_RESULT(yes)
---- orig/main.c	2005-02-28 02:16:55
-+++ main.c	2004-10-08 20:15:28
-@@ -56,6 +56,9 @@ extern int write_batch;
- extern int batch_fd;
- extern int batch_gen_fd;
- extern int filesfrom_fd;
-+#if HAVE_OPENSSL
-+extern int use_ssl;
-+#endif
- extern pid_t cleanup_child_pid;
- extern struct stats stats;
- extern char *files_from;
-@@ -866,33 +869,48 @@ static int start_client(int argc, char *
- 	if ((rc = copy_argv(argv)))
- 		return rc;
- 
--	/* rsync:// always uses rsync server over direct socket connection */
--	if (strncasecmp(URL_PREFIX, argv[0], strlen(URL_PREFIX)) == 0
--	    && !read_batch) {
--		char *host, *path;
-+	if (!read_batch) { /* for read_batch, NO source is specified */
-+		int url_prefix_len = sizeof URL_PREFIX - 1;
- 
--		host = argv[0] + strlen(URL_PREFIX);
--		p = strchr(host,'/');
--		if (p) {
--			*p = '\0';
--			path = p+1;
--		} else
--			path = "";
--		if (*host == '[' && (p = strchr(host, ']')) != NULL) {
--			host++;
--			*p++ = '\0';
--			if (*p != ':')
--				p = NULL;
--		} else
--			p = strchr(host, ':');
--		if (p) {
--			rsync_port = atoi(p+1);
--			*p = '\0';
-+		/* rsync:// always uses rsync server over direct socket connection */
-+		if (strncasecmp(URL_PREFIX, argv[0], url_prefix_len) != 0) {
-+#if HAVE_OPENSSL
-+			url_prefix_len = sizeof SSL_URL_PREFIX - 1;
-+			if (strncasecmp(SSL_URL_PREFIX, argv[0], url_prefix_len) != 0)
-+				url_prefix_len = 0;
-+			else {
-+				if (!use_ssl)
-+					init_tls();
-+				use_ssl = 1;
-+			}
-+#else
-+			url_prefix_len = 0;
-+#endif
-+		}
-+		if (url_prefix_len) {
-+			char *host, *path;
-+
-+			host = argv[0] + url_prefix_len;
-+			p = strchr(host,'/');
-+			if (p) {
-+				*p = '\0';
-+				path = p+1;
-+			} else
-+				path = "";
-+			if (*host == '[' && (p = strchr(host, ']')) != NULL) {
-+				host++;
-+				*p++ = '\0';
-+				if (*p != ':')
-+					p = NULL;
-+			} else
-+				p = strchr(host, ':');
-+			if (p) {
-+				rsync_port = atoi(p+1);
-+				*p = '\0';
-+			}
-+			return start_socket_client(host, path, argc-1, argv+1);
- 		}
--		return start_socket_client(host, path, argc-1, argv+1);
--	}
- 
--	if (!read_batch) { /* for read_batch, NO source is specified */
- 		p = find_colon(argv[0]);
- 		if (p) { /* source is remote */
- 			if (remote_filesfrom_file
-@@ -924,12 +942,26 @@ static int start_client(int argc, char *
- 			argv++;
- 		} else { /* source is local */
- 			am_sender = 1;
--
-+			url_prefix_len = sizeof URL_PREFIX - 1;
- 			/* rsync:// destination uses rsync server over direct socket */
--			if (strncasecmp(URL_PREFIX, argv[argc-1], strlen(URL_PREFIX)) == 0) {
-+			if (strncasecmp(URL_PREFIX, argv[argc-1], url_prefix_len) != 0) {
-+#if HAVE_OPENSSL
-+				url_prefix_len = sizeof SSL_URL_PREFIX - 1;
-+				if (strncasecmp(SSL_URL_PREFIX, argv[argc-1], url_prefix_len) != 0)
-+					url_prefix_len = 0;
-+				else {
-+					if (!use_ssl)
-+						init_tls();
-+					use_ssl = 1;
-+				}
-+#else
-+				url_prefix_len = 0;
-+#endif
-+			}
-+			if (url_prefix_len) {
- 				char *host, *path;
- 
--				host = argv[argc-1] + strlen(URL_PREFIX);
-+				host = argv[argc-1] + url_prefix_len;
- 				p = strchr(host,'/');
- 				if (p) {
- 					*p = '\0';
---- orig/options.c	2005-02-25 18:44:31
-+++ options.c	2004-11-27 18:31:46
+--- orig/options.c	2005-03-01 01:22:59
++++ options.c	2005-03-01 01:34:42
 @@ -155,6 +155,14 @@ int log_format_has_o_or_i = 0;
  int always_checksum = 0;
  int list_only = 0;
@@ -437,7 +322,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1117,6 +1150,17 @@ int parse_arguments(int *argc, const cha
+@@ -1108,6 +1141,17 @@ int parse_arguments(int *argc, const cha
  	if (delay_updates && !partial_dir)
  		partial_dir = partialdir_for_delayupdate;
  
@@ -455,6 +340,37 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (inplace) {
  #ifdef HAVE_FTRUNCATE
  		if (partial_dir) {
+@@ -1475,11 +1519,28 @@ char *check_for_hostspec(char *s, char *
+ {
+ 	char *p;
+ 	int not_host;
++	int url_prefix_len = sizeof URL_PREFIX - 1;
+ 
+-	if (port_ptr && strncasecmp(URL_PREFIX, s, strlen(URL_PREFIX)) == 0) {
++	if (!port_ptr)
++		url_prefix_len = 0;
++	else if (strncasecmp(URL_PREFIX, s, url_prefix_len) != 0) {
++#if HAVE_OPENSSL
++		url_prefix_len = sizeof SSL_URL_PREFIX - 1;
++		if (strncasecmp(SSL_URL_PREFIX, s, url_prefix_len) != 0)
++			url_prefix_len = 0;
++		else {
++			if (!use_ssl)
++				init_tls();
++			use_ssl = 1;
++		}
++#else
++		url_prefix_len = 0;
++#endif
++	}
++	if (url_prefix_len) {
+ 		char *path;
+ 		int hostlen;
+-		s += strlen(URL_PREFIX);
++		s += url_prefix_len;
+ 		if ((p = strchr(s, '/')) != NULL) {
+ 			hostlen = p - s;
+ 			path = p + 1;
 --- orig/rsync.h	2005-02-23 02:57:27
 +++ rsync.h	2004-10-08 21:01:33
 @@ -32,6 +32,7 @@
