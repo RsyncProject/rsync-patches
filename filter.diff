@@ -89,7 +89,7 @@ that's how you can make rules local instead of inherited).
  	log_init();
  
 --- orig/exclude.c	2004-08-10 18:17:01
-+++ exclude.c	2004-08-11 23:50:12
++++ exclude.c	2004-08-13 07:40:08
 @@ -30,13 +30,69 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
@@ -341,7 +341,7 @@ that's how you can make rules local instead of inherited).
 +		}
 +	} else {
 +		strlcpy(fn, merge_file, len_ptr ? *len_ptr + 1 : MAXPATHLEN);
-+		clean_fname(fn);
++		clean_fname(fn, 1);
 +	}
 +	
 +	fn_len = strlen(fn);
@@ -354,7 +354,7 @@ that's how you can make rules local instead of inherited).
 +	}
 +	memcpy(buf, dirbuf + prefix_skip, dirbuf_len - prefix_skip);
 +	memcpy(buf + dirbuf_len - prefix_skip, fn, fn_len + 1);
-+	fn_len = clean_fname(buf);
++	fn_len = clean_fname(buf, 1);
 +
 +    done:
 +	if (len_ptr)
@@ -376,7 +376,7 @@ that's how you can make rules local instead of inherited).
 +		len = 0;
 +	memcpy(dirbuf + len, dir, dirlen);
 +	dirbuf[dirlen + len] = '\0';
-+	dirbuf_len = clean_fname(dirbuf);
++	dirbuf_len = clean_fname(dirbuf, 1);
 +	if (dirbuf_len > 1 && dirbuf[dirbuf_len-1] == '.'
 +	    && dirbuf[dirbuf_len-2] == '/')
 +		dirbuf_len -= 2;
@@ -411,7 +411,7 @@ that's how you can make rules local instead of inherited).
 +	else
 +		pathjoin(buf, MAXPATHLEN, dirbuf, x);
 +
-+	len = clean_fname(buf);
++	len = clean_fname(buf, 1);
 +	if (len != 1 && len < MAXPATHLEN-1) {
 +		buf[len++] = '/';
 +		buf[len] = '\0';
@@ -739,8 +739,8 @@ that's how you can make rules local instead of inherited).
  	add_exclude(&exclude_list, default_cvsignore,
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
---- orig/flist.c	2004-08-11 23:42:23
-+++ flist.c	2004-08-11 23:41:35
+--- orig/flist.c	2004-08-12 18:34:38
++++ flist.c	2004-08-12 18:59:28
 @@ -39,10 +39,9 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -870,8 +870,8 @@ that's how you can make rules local instead of inherited).
  		if (link_stat(fname, &st, keep_dirlinks) != 0) {
  			if (f != -1) {
  				io_error |= IOERR_GENERAL;
---- orig/options.c	2004-08-11 23:42:23
-+++ options.c	2004-08-11 23:40:34
+--- orig/options.c	2004-08-12 18:34:38
++++ options.c	2004-08-12 18:59:28
 @@ -287,6 +287,7 @@ void usage(enum logcode F)
    rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
    rprintf(F,"     --include-from=FILE     don't exclude patterns listed in FILE\n");
@@ -930,9 +930,9 @@ that's how you can make rules local instead of inherited).
  };
  
  struct exclude_list_struct {
---- orig/rsync.yo	2004-08-11 17:26:27
-+++ rsync.yo	2004-08-11 17:32:03
-@@ -335,6 +335,7 @@ verb(
+--- orig/rsync.yo	2004-08-13 07:18:59
++++ rsync.yo	2004-08-13 00:43:31
+@@ -364,6 +364,7 @@ verb(
       --include=PATTERN       don't exclude files matching PATTERN
       --include-from=FILE     don't exclude patterns listed in FILE
       --files-from=FILE       read FILE for list of source-file names
@@ -940,7 +940,7 @@ that's how you can make rules local instead of inherited).
   -0  --from0                 all file lists are delimited by nulls
       --version               print version number
       --daemon                run as an rsync daemon
-@@ -979,24 +980,32 @@ The exclude and include patterns specifi
+@@ -1008,24 +1009,32 @@ The exclude and include patterns specifi
  selection of which files to transfer and which files to skip.
  
  Rsync builds an ordered list of include/exclude options as specified on
@@ -981,7 +981,7 @@ that's how you can make rules local instead of inherited).
  
  Let's say that we want to match two source files, one with an absolute
  path of "/home/me/foo/bar", and one with a path of "/home/you/bar/baz".
-@@ -1043,23 +1052,27 @@ because rsync did not descend through th
+@@ -1072,23 +1081,27 @@ because rsync did not descend through th
  hierarchy.
  
  Note also that the --include and --exclude options take one pattern
@@ -1020,7 +1020,7 @@ that's how you can make rules local instead of inherited).
  
    it() if the pattern ends with a / then it will only match a
    directory, not a file, link, or device.
-@@ -1072,22 +1085,31 @@ itemize(
+@@ -1101,22 +1114,31 @@ itemize(
    single asterisk pattern "*" will stop at slashes.
  
    it() if the pattern contains a / (not counting a trailing /) or a "**"
@@ -1056,7 +1056,7 @@ that's how you can make rules local instead of inherited).
  )
  
  The +/- rules are most useful in a list that was read from a file, allowing
-@@ -1134,8 +1156,160 @@ itemize(
+@@ -1163,8 +1185,160 @@ itemize(
    it() --include "*/" --include "*.c" --exclude "*" would include all 
    directories and C source files
    it() --include "foo/" --include "foo/bar.c" --exclude "*" would include
