@@ -29,7 +29,7 @@ for the current dir because its name contained a slash.
 ..wayne..
 
 --- exclude.c	14 May 2004 21:23:41 -0000	1.76
-+++ exclude.c	15 May 2004 00:36:36 -0000
++++ exclude.c	15 May 2004 02:45:44 -0000
 @@ -30,32 +30,58 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
@@ -98,7 +98,7 @@ for the current dir because its name contained a slash.
  		ex_len = strlen(exclude_path_prefix);
  	else
  		ex_len = 0;
-@@ -64,33 +90,51 @@ static void make_exclude(struct exclude_
+@@ -64,33 +90,52 @@ static void make_exclude(struct exclude_
  		out_of_memory("make_exclude");
  	if (ex_len)
  		memcpy(ret->pattern, exclude_path_prefix, ex_len);
@@ -133,12 +133,11 @@ for the current dir because its name contained a slash.
 +		ret->next = listp->head;
  		listp->head = listp->tail = ret;
 -	else {
--		listp->tail->next = ret;
--		listp->tail = ret;
 +	} else {
 +		ret->next = listp->tail->next;
-+		listp->tail->next = listp->tail = ret;
-+	}
+ 		listp->tail->next = ret;
+ 		listp->tail = ret;
+ 	}
 +
 +	if (mflags & MATCHFLG_MERGE_FILE) {
 +		struct exclude_list_struct *lp;
@@ -153,13 +152,13 @@ for the current dir because its name contained a slash.
 +			out_of_memory("make_exclude");
 +		lp->parent = ret;
 +		ret->slash_cnt = ndx;
- 	}
++	}
 +
 +	ret->match_flags = mflags;
  }
  
  static void free_exclude(struct exclude_struct *ex)
-@@ -99,18 +143,90 @@ static void free_exclude(struct exclude_
+@@ -99,18 +144,90 @@ static void free_exclude(struct exclude_
  	free(ex);
  }
  
@@ -256,7 +255,7 @@ for the current dir because its name contained a slash.
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -134,7 +250,8 @@ static int check_one_exclude(char *name,
+@@ -134,7 +251,8 @@ static int check_one_exclude(char *name,
  
  	if (!name[0]) return 0;
  
@@ -266,7 +265,7 @@ for the current dir because its name contained a slash.
  
  	if (*pattern == '/') {
  		match_start = 1;
-@@ -201,9 +318,11 @@ static void report_exclude_result(char c
+@@ -201,9 +319,11 @@ static void report_exclude_result(char c
  
  	if (verbose >= 2) {
  		rprintf(FINFO, "[%s] %scluding %s %s because of %spattern %s%s\n",
@@ -280,7 +279,7 @@ for the current dir because its name contained a slash.
  	}
  }
  
-@@ -217,10 +336,18 @@ int check_exclude(struct exclude_list_st
+@@ -217,10 +337,18 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -300,7 +299,7 @@ for the current dir because its name contained a slash.
  		}
  	}
  
-@@ -236,11 +363,11 @@ int check_exclude(struct exclude_list_st
+@@ -236,11 +364,11 @@ int check_exclude(struct exclude_list_st
   * *incl_ptr value will be 1 for an include, 0 for an exclude, and -1 for
   * the list-clearing "!" token.
   */
@@ -314,7 +313,7 @@ for the current dir because its name contained a slash.
  
  	if (xflags & XFLG_WORD_SPLIT) {
  		/* Skip over any initial whitespace. */
-@@ -250,13 +377,19 @@ static const char *get_exclude_tok(const
+@@ -250,13 +378,19 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -339,7 +338,7 @@ for the current dir because its name contained a slash.
  
  	if (xflags & XFLG_WORD_SPLIT) {
  		const unsigned char *cp = s;
-@@ -268,9 +401,10 @@ static const char *get_exclude_tok(const
+@@ -268,9 +402,10 @@ static const char *get_exclude_tok(const
  		len = strlen(s);
  
  	if (*p == '!' && len == 1 && !(xflags & XFLG_WORDS_ONLY))
@@ -351,7 +350,7 @@ for the current dir because its name contained a slash.
  	return (const char *)s;
  }
  
-@@ -278,7 +412,7 @@ static const char *get_exclude_tok(const
+@@ -278,7 +413,7 @@ static const char *get_exclude_tok(const
  void add_exclude(struct exclude_list_struct *listp, const char *pattern,
  		 int xflags)
  {
@@ -360,7 +359,7 @@ for the current dir because its name contained a slash.
  	const char *cp;
  
  	if (!pattern)
-@@ -287,27 +421,49 @@ void add_exclude(struct exclude_list_str
+@@ -287,27 +422,49 @@ void add_exclude(struct exclude_list_str
  	cp = pattern;
  	pat_len = 0;
  	while (1) {
@@ -421,7 +420,7 @@ for the current dir because its name contained a slash.
  	}
  }
  
-@@ -383,15 +539,19 @@ void send_exclude_list(int f)
+@@ -383,15 +540,19 @@ void send_exclude_list(int f)
  		l = strlcpy(p, ent->pattern, sizeof p);
  		if (l == 0 || l >= MAXPATHLEN)
  			continue;
@@ -444,7 +443,7 @@ for the current dir because its name contained a slash.
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -432,6 +592,7 @@ void add_cvs_excludes(void)
+@@ -432,6 +593,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
@@ -453,7 +452,7 @@ for the current dir because its name contained a slash.
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
 --- flist.c	14 May 2004 21:23:41 -0000	1.222
-+++ flist.c	15 May 2004 00:36:36 -0000
++++ flist.c	15 May 2004 02:45:44 -0000
 @@ -39,8 +39,6 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -546,7 +545,7 @@ for the current dir because its name contained a slash.
  	closedir(d);
  }
 --- rsync.h	13 May 2004 18:51:22 -0000	1.203
-+++ rsync.h	15 May 2004 00:36:36 -0000
++++ rsync.h	15 May 2004 02:45:45 -0000
 @@ -493,18 +493,21 @@ struct map_struct {
  #define MATCHFLG_WILD2		(1<<1) /* pattern has '**' */
  #define MATCHFLG_WILD2_PREFIX	(1<<2) /* pattern starts with '**' */
@@ -574,7 +573,7 @@ for the current dir because its name contained a slash.
  };
  
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	15 May 2004 00:36:37 -0000
++++ rsync.yo	15 May 2004 02:45:45 -0000
 @@ -1075,6 +1075,72 @@ itemize(
    it would be excluded by the "*")
  )
