@@ -11,8 +11,8 @@ invoke, either personally or site-wide, without having to recompile rsync).
 
 Be sure to run "make proto" before "make".
 
---- orig/flist.c	2005-01-21 00:35:26
-+++ flist.c	2005-01-21 10:16:02
+--- orig/flist.c	2005-01-22 22:48:52
++++ flist.c	2005-01-23 07:14:40
 @@ -35,6 +35,7 @@ extern int am_root;
  extern int am_server;
  extern int am_daemon;
@@ -93,44 +93,18 @@ Be sure to run "make proto" before "make".
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
  		lastdir_len = dirname_len - 1;
-@@ -1044,7 +1067,8 @@ static void send_directory(int f, struct
- 		    || (dname[1] == '.' && dname[2] == '\0')))
- 			continue;
- 		if (strlcpy(p, dname, MAXPATHLEN - offset) < MAXPATHLEN - offset) {
--			send_file_name(f, flist, fname, recurse, 0);
-+			int do_subdirs = recurse >= 1 ? recurse-- : recurse;
-+			send_file_name(f, flist, fname, do_subdirs, 0);
- 		} else {
- 			io_error |= IOERR_GENERAL;
- 			rprintf(FINFO,
-@@ -1102,6 +1126,7 @@ struct file_list *send_file_list(int f, 
- 	while (1) {
- 		char fname2[MAXPATHLEN];
- 		char *fname = fname2;
-+		int do_subdirs;
- 
- 		if (use_ff_fd) {
- 			if (read_filesfrom_line(filesfrom_fd, fname) == 0)
-@@ -1143,7 +1168,7 @@ struct file_list *send_file_list(int f, 
- 		dir = NULL;
- 		olddir[0] = '\0';
- 
--		if (!relative_paths) {
-+		if (!relative_paths && recurse <= 0) {
- 			p = strrchr(fname, '/');
- 			if (p) {
- 				*p = 0;
-@@ -1212,7 +1237,8 @@ struct file_list *send_file_list(int f, 
- 		if (one_file_system)
- 			set_filesystem(fname);
- 
--		send_file_name(f, flist, fname, recurse, XMIT_DEL_START);
-+		do_subdirs = recurse >= 1 ? recurse-- : recurse;
-+		send_file_name(f, flist, fname, do_subdirs, XMIT_DEL_START);
- 
- 		if (olddir[0]) {
- 			flist_dir = NULL;
-@@ -1634,3 +1660,72 @@ char *f_name(struct file_struct *f)
+@@ -1129,7 +1152,9 @@ struct file_list *send_file_list(int f, 
+ 				fname[l] = '\0';
+ 			}
+ 		}
+-		if (fname[l-1] == '.' && (l == 1 || fname[l-2] == '/')) {
++		if (relative_paths < 0)
++			; /* recurse is pre-set */
++		else if (fname[l-1] == '.' && (l == 1 || fname[l-2] == '/')) {
+ 			if (!recurse && keep_dirs)
+ 				recurse = 1; /* allow one level */
+ 		} else if (recurse > 0)
+@@ -1644,3 +1669,75 @@ char *f_name(struct file_struct *f)
  
  	return f_name_to(f, names[n]);
  }
@@ -148,6 +122,7 @@ Be sure to run "make proto" before "make".
 +	int save_recurse = recurse;
 +	int save_keep_dirs = keep_dirs;
 +	int save_implied_dirs = implied_dirs;
++	int save_relative_paths = relative_paths;
 +	char *argv[1];
 +	int i, j, mode;
 +
@@ -163,10 +138,12 @@ Be sure to run "make proto" before "make".
 +	recurse = do_subdirs ? -1 : 1;
 +	keep_dirs = 1;
 +	implied_dirs = 0;
++	relative_paths = -1;
 +
 +	argv[0] = fname;
 +	del_flist = send_file_list(-1, 1, argv);
 +
++	relative_paths = save_relative_paths;
 +	implied_dirs = save_implied_dirs;
 +	keep_dirs = save_keep_dirs;
 +	recurse = save_recurse;
@@ -262,29 +239,9 @@ Be sure to run "make proto" before "make".
  	}
  
  	if (verbose > 2)
---- orig/main.c	2005-01-17 23:11:45
-+++ main.c	2005-01-21 10:55:05
-@@ -33,6 +33,7 @@ extern int verbose;
- extern int blocking_io;
- extern int cvs_exclude;
- extern int delete_mode;
-+extern int delete_before;
- extern int delete_excluded;
- extern int delete_after;
- extern int daemon_over_rsh;
-@@ -473,9 +474,9 @@ static int do_recv(int f_in,int f_out,st
- 	if (preserve_hard_links)
- 		init_hard_links(flist);
- 
--	if (!delete_after) {
-+	if (delete_before) {
- 		/* I moved this here from recv_files() to prevent a race condition */
--		if (recurse && delete_mode && !local_name && flist->count > 0)
-+		if (recurse && !local_name && flist->count > 0)
- 			delete_files(flist);
- 	}
- 
-@@ -735,6 +736,8 @@ int client_run(int f_in, int f_out, pid_
+--- orig/main.c	2005-01-22 22:48:52
++++ main.c	2005-01-23 01:48:52
+@@ -737,6 +737,8 @@ int client_run(int f_in, int f_out, pid_
  
  	if (!read_batch)
  		send_exclude_list(f_out);
@@ -293,120 +250,74 @@ Be sure to run "make proto" before "make".
  
  	if (filesfrom_fd >= 0) {
  		io_set_filesfrom_fds(filesfrom_fd, f_out);
---- orig/options.c	2005-01-20 23:05:34
-+++ options.c	2005-01-20 23:06:33
-@@ -54,6 +54,8 @@ int dry_run = 0;
+--- orig/options.c	2005-01-23 01:45:43
++++ options.c	2005-01-23 01:53:35
+@@ -54,6 +54,7 @@ int dry_run = 0;
  int local_server = 0;
  int ignore_times = 0;
  int delete_mode = 0;
 +int delete_during = 0;
-+int delete_before = 0;
+ int delete_before = 0;
+ int delete_after = 0;
  int delete_excluded = 0;
- int one_file_system = 0;
- int protocol_version = PROTOCOL_VERSION;
-@@ -272,14 +274,15 @@ void usage(enum logcode F)
+@@ -274,7 +275,8 @@ void usage(enum logcode F)
    rprintf(F,"     --existing              only update files that already exist\n");
    rprintf(F,"     --ignore-existing       ignore files that already exist on receiving side\n");
    rprintf(F,"     --delete                delete files that don't exist on the sending side\n");
+-  rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
 +  rprintf(F,"     --delete-before         receiver deletes before transfer, not during\n");
 +  rprintf(F,"     --delete-after          receiver deletes after transfer, not during\n");
    rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
--  rprintf(F,"     --delete-after          receiver deletes after transferring, not before\n");
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
-+  rprintf(F,"     --force                 force deletion of directories even if not empty\n");
-   rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
-   rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
-   rprintf(F,"     --partial               keep partially transferred files\n");
-   rprintf(F,"     --partial-dir=DIR       put a partially transferred file into DIR\n");
--  rprintf(F,"     --force                 force deletion of directories even if not empty\n");
-   rprintf(F,"     --numeric-ids           don't map uid/gid values by user/group name\n");
-   rprintf(F,"     --timeout=TIME          set I/O timeout in seconds\n");
-   rprintf(F," -I, --ignore-times          turn off mod time & file size quick check\n");
-@@ -321,7 +324,6 @@ void usage(enum logcode F)
- }
- 
- enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
--      OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED,
-       OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
-       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
-       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_TIMEOUT, OPT_MAX_SIZE,
-@@ -337,11 +339,13 @@ static struct poptOption long_options[] 
-   {"size-only",        0,  POPT_ARG_NONE,   &size_only, 0, 0, 0 },
-   {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
+   rprintf(F,"     --force                 force deletion of directories even if not empty\n");
+@@ -340,7 +342,9 @@ static struct poptOption long_options[] 
    {"one-file-system", 'x', POPT_ARG_NONE,   &one_file_system, 0, 0, 0 },
--  {"delete",           0,  POPT_ARG_NONE,   &delete_mode, 0, 0, 0 },
+   {"existing",         0,  POPT_ARG_NONE,   &only_existing, 0, 0, 0 },
+   {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
+-  {"delete",           0,  POPT_ARG_NONE,   &delete_before, 0, 0, 0 },
 +  {"delete",           0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
 +  {"delete-during",    0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
 +  {"delete-before",    0,  POPT_ARG_NONE,   &delete_before, 0, 0, 0 },
-   {"existing",         0,  POPT_ARG_NONE,   &only_existing, 0, 0, 0 },
-   {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
--  {"delete-after",     0,  POPT_ARG_NONE,   0, OPT_DELETE_AFTER, 0, 0 },
--  {"delete-excluded",  0,  POPT_ARG_NONE,   0, OPT_DELETE_EXCLUDED, 0, 0 },
-+  {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, 0, 0, 0 },
-+  {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
+   {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, 0, 0, 0 },
+   {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
-   {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
-   {"exclude",          0,  POPT_ARG_STRING, 0, OPT_EXCLUDE, 0, 0 },
-@@ -613,16 +617,6 @@ int parse_arguments(int *argc, const cha
- 			modify_window_set = 1;
- 			break;
- 
--		case OPT_DELETE_AFTER:
--			delete_after = 1;
--			delete_mode = 1;
--			break;
--
--		case OPT_DELETE_EXCLUDED:
--			delete_excluded = 1;
--			delete_mode = 1;
--			break;
--
- 		case OPT_EXCLUDE:
- 			add_exclude(&exclude_list, poptGetOptArg(pc), 0);
- 			break;
-@@ -851,13 +845,20 @@ int parse_arguments(int *argc, const cha
- 		preserve_uid = 1;
- 		preserve_devices = 1;
- 	}
-+
- 	if (recurse) {
-+		recurse = -1; /* unlimited recursion */
- 		keep_dirs = 1;
- 	}
- 
+@@ -853,10 +857,10 @@ int parse_arguments(int *argc, const cha
  	if (relative_paths < 0)
  		relative_paths = files_from? 1 : 0;
  
+-	if (delete_before || delete_after)
 +	if (delete_during || delete_before || delete_after)
-+		delete_mode = 1;
-+	if (delete_excluded && !delete_mode)
+ 		delete_mode = 1;
+ 	if (delete_excluded && !delete_mode)
+-		delete_mode = delete_before = 1;
 +		delete_mode = delete_during = 1;
-+
+ 
  	*argv = poptGetArgs(pc);
  	*argc = count_args(*argv);
- 
-@@ -1156,7 +1157,9 @@ void server_options(char **args,int *arg
+@@ -1159,7 +1163,9 @@ void server_options(char **args,int *arg
  	if (am_sender) {
  		if (delete_excluded)
  			args[ac++] = "--delete-excluded";
--		else if (delete_mode)
+-		else if (delete_before || delete_after)
 +		else if (delete_before)
 +			args[ac++] = "--delete-before";
 +		else if (delete_during || delete_after)
  			args[ac++] = "--delete";
  
  		if (delete_after)
---- orig/receiver.c	2005-01-21 00:35:26
-+++ receiver.c	2005-01-21 10:22:37
-@@ -23,7 +23,6 @@
+--- orig/receiver.c	2005-01-22 22:48:52
++++ receiver.c	2005-01-23 01:50:42
+@@ -21,8 +21,8 @@
+ #include "rsync.h"
+ 
  extern int verbose;
- extern int recurse;
++extern int recurse;
  extern int delete_after;
 -extern int max_delete;
  extern int csum_length;
  extern struct stats stats;
  extern int dry_run;
-@@ -35,7 +34,6 @@ extern int relative_paths;
+@@ -35,7 +35,6 @@ extern int keep_dirs;
  extern int keep_dirlinks;
  extern int preserve_hard_links;
  extern int preserve_perms;
@@ -414,7 +325,7 @@ Be sure to run "make proto" before "make".
  extern int io_error;
  extern char *tmpdir;
  extern char *partial_dir;
-@@ -43,9 +41,6 @@ extern char *basis_dir[];
+@@ -43,9 +42,6 @@ extern char *basis_dir[];
  extern int basis_dir_cnt;
  extern int make_backups;
  extern int do_progress;
@@ -424,7 +335,7 @@ Be sure to run "make proto" before "make".
  extern int cleanup_got_literal;
  extern int module_id;
  extern int ignore_errors;
-@@ -57,66 +52,19 @@ extern int inplace;
+@@ -57,66 +53,19 @@ extern int inplace;
  extern struct exclude_list_struct server_exclude_list;
  
  
@@ -496,39 +407,30 @@ Be sure to run "make proto" before "make".
  	}
  }
  
---- orig/rsync.yo	2005-01-20 19:47:08
-+++ rsync.yo	2005-01-19 01:05:05
-@@ -341,14 +341,15 @@ verb(
+--- orig/rsync.yo	2005-01-22 22:48:52
++++ rsync.yo	2005-01-23 02:57:49
+@@ -341,7 +341,8 @@ verb(
       --existing              only update files that already exist
       --ignore-existing       ignore files that already exist on receiver
       --delete                delete files that don't exist on sender
+-     --delete-after          receiver deletes after transfer, not before
 +     --delete-before         receiver deletes before xfer, not during
 +     --delete-after          receiver deletes after transfer, not during
       --delete-excluded       also delete excluded files on receiver
--     --delete-after          receiver deletes after transfer, not before
       --ignore-errors         delete even if there are I/O errors
-+     --force                 force deletion of dirs even if not empty
-      --max-delete=NUM        don't delete more than NUM files
-      --max-size=SIZE         don't transfer any file larger than SIZE
-      --partial               keep partially transferred files
-      --partial-dir=DIR       put a partially transferred file into DIR
--     --force                 force deletion of dirs even if not empty
-      --numeric-ids           don't map uid/gid values by user/group name
-      --timeout=TIME          set I/O timeout in seconds
-  -I, --ignore-times          turn off mod time & file size quick check
-@@ -669,7 +670,7 @@ by the shell and rsync thus gets a reque
- the files' parent directory.  Files that are excluded from transfer are
- excluded from being deleted unless you use --delete-excluded.
- 
--This option has no effect if directory recursion is not selected.
-+This option has no effect unless directory recursion is selected.
- 
- This option can be dangerous if used incorrectly!  It is a very good idea
- to run first using the --dry-run option (-n) to see what files would be
-@@ -681,20 +682,29 @@ prevent temporary filesystem failures (s
+      --force                 force deletion of dirs even if not empty
+@@ -681,14 +682,23 @@ prevent temporary filesystem failures (s
  sending side causing a massive deletion of files on the
  destination.  You can override this with the --ignore-errors option.
  
+-dit(bf(--delete-after)) By default rsync does file deletions on the
+-receiving side before transferring files to try to ensure that there is
+-sufficient space on the receiving filesystem. If you want to delete
+-after transferring, use the --delete-after switch. Implies --delete.
+-
+-One reason to use --delete-after is to avoid a delay before the start of
+-the transfer (while the receiving side is scanned for deletions) as this
+-delay might cause the transfer to timeout.  
 +By default rsync does file deletions on the receiving side during the
 +transfer of files to try make it as efficient as possible.  For other
 +options, see --delete-before and --delte-after.
@@ -546,21 +448,6 @@ Be sure to run "make proto" before "make".
 +dit(bf(--delete-after)) Request that the file-deletions on the receving
 +side be done after the transfer has completed, not incrementally as the
 +transfer happens.  Implies --delete.
-+
+ 
  dit(bf(--delete-excluded)) In addition to deleting the files on the
  receiving side that are not on the sending side, this tells rsync to also
- delete any files on the receiving side that are excluded (see --exclude).
- Implies --delete.
- 
--dit(bf(--delete-after)) By default rsync does file deletions on the
--receiving side before transferring files to try to ensure that there is
--sufficient space on the receiving filesystem. If you want to delete
--after transferring, use the --delete-after switch. Implies --delete.
--
--One reason to use --delete-after is to avoid a delay before the start of
--the transfer (while the receiving side is scanned for deletions) as this
--delay might cause the transfer to timeout.  
--
- dit(bf(--ignore-errors)) Tells --delete to go ahead and delete files
- even when there are I/O errors.
- 
