@@ -11,8 +11,8 @@ will only store one copy of the unique contents of each file, regardless of
 the file's name.
 
 
---- Makefile.in	2 May 2004 17:04:14 -0000	1.100
-+++ Makefile.in	13 May 2004 19:04:49 -0000
+--- Makefile.in	15 May 2004 00:48:11 -0000	1.101
++++ Makefile.in	15 May 2004 20:29:17 -0000
 @@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
@@ -23,8 +23,8 @@ the file's name.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ hashlink.c	13 May 2004 19:04:49 -0000
-@@ -0,0 +1,351 @@
++++ hashlink.c	15 May 2004 20:29:17 -0000
+@@ -0,0 +1,342 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
 +
@@ -115,8 +115,7 @@ the file's name.
 +	/* Build a list of potential candidates and open
 +	 * them. */
 +	if ((d = opendir(hashname)) == NULL) {
-+		rprintf(FERROR,"opendir \"%s\": %s\n",
-+			hashname, strerror(errno));
++		rsyserr(FERROR, errno, "opendir \"%s\"", hashname);
 +		free(hashname);
 +		return NULL;
 +	}
@@ -135,8 +134,7 @@ the file's name.
 +		asprintf(&hashfile->name,"%s/%s",hashname,
 +			 di->d_name);
 +		if (do_stat(hashfile->name,&st) == -1) {
-+			rprintf(FERROR,"%s: %s", hashfile->name,
-+				strerror(errno));
++			rsyserr(FERROR, errno, "%s: %s", hashfile->name);
 +			kill_hashfile(hashfile);
 +			continue;
 +		}
@@ -147,8 +145,7 @@ the file's name.
 +		hashfile->nlink = st.st_nlink;
 +		hashfile->fd = open(hashfile->name,O_RDONLY|O_BINARY);
 +		if (hashfile->fd == -1) {
-+			rprintf(FERROR,"%s: %s\n", hashfile->name,
-+				strerror(errno));
++			rsyserr(FERROR, errno, "%s", hashfile->name);
 +			kill_hashfile(hashfile);
 +			continue;
 +		}
@@ -217,7 +214,7 @@ the file's name.
 +	}
 +
 +	if (amt == -1) {
-+		rprintf(FERROR,"%s",strerror(errno));
++		rsyserr(FERROR, errno, "%s");
 +		kill_hashfiles(files);
 +		return NULL;
 +	}
@@ -269,8 +266,7 @@ the file's name.
 +		dirname = strdup(hashname);
 +		*strrchr(dirname,'/') = 0;
 +		if (do_mkdir(dirname, 0755) == -1 && errno != EEXIST) {
-+			rprintf(FERROR, "mkdir %s: %s\n", dirname,
-+				strerror(errno));
++			rsyserr(FERROR, errno, "mkdir %s", dirname);
 +			free(hashname);
 +			free(dirname);
 +			return robust_rename(fnametmp,fname,0644);
@@ -278,8 +274,7 @@ the file's name.
 +		free(dirname);
 +
 +		if (do_mkdir(hashname, 0755) == -1 && errno != EEXIST) {
-+			rprintf(FERROR, "mkdir %s: %s\n", hashname,
-+				strerror(errno));
++			rsyserr(FERROR, errno, "mkdir %s", hashname);
 +			free(hashname);
 +			return robust_rename(fnametmp,fname,0644);
 +		}
@@ -293,7 +288,7 @@ the file's name.
 +		int fd;
 +
 +		if (do_stat(fnametmp,&st) == -1) {
-+			rprintf(FERROR,"%s: %s\n",fname,strerror(errno));
++			rsyserr(FERROR, errno, "%s", fname);
 +			return -1;
 +		}
 +		hashfiles = find_hashfiles(hashname, st.st_size, &last_fnbr);
@@ -306,8 +301,7 @@ the file's name.
 +			
 +			/* Search for one identical to us. */
 +			if ((fd = open(fnametmp,O_RDONLY|O_BINARY)) == -1) {
-+				rprintf(FERROR,"%s: %s\n",fnametmp,
-+					strerror(errno));
++				rsyserr(FERROR, errno, "%s", fnametmp);
 +				kill_hashfiles(hashfiles);
 +				return -1;
 +			}
@@ -341,9 +335,8 @@ the file's name.
 +				rprintf(FINFO, "(5) linkname = %s\n", linkname);
 +				rprintf(FINFO,"link-by-hash: max link count exceeded, starting new file \"%s\".\n", linkname);
 +			} else {
-+				rprintf(FERROR,"link \"%s\" -> %s: %s\n",
-+					linkname,full_fname(fname),
-+					strerror(errno));
++				rsyserr(FERROR, errno, "link \"%s\" -> \"%s\"",
++					linkname, full_fname(fname));
 +				robust_unlink(fname);
 +				rc = robust_rename(fnametmp,fname,0644);
 +			}
@@ -358,15 +351,13 @@ the file's name.
 +
 +		rc = robust_rename(fnametmp,fname,0644);
 +		if (rc != 0) {
-+			rprintf(FERROR,"rename \"%s\" -> \"%s\": %s\n",
-+				full_fname(fnametmp),full_fname(fname),
-+				strerror(errno));
++			rsyserr(FERROR, errno, "rename \"%s\" -> \"%s\"",
++				full_fname(fnametmp), full_fname(fname));
 +		}
 +		rc = do_link(fname,linkname);
 +		if (rc != 0) {
-+			rprintf(FERROR,"link \"%s\" -> \"%s\": %s\n",
-+				full_fname(fname),linkname,
-+				strerror(errno));
++			rsyserr(FERROR, errno, "link \"%s\" -> \"%s\"",
++				full_fname(fname), linkname);
 +		}
 +	}
 +
@@ -377,7 +368,7 @@ the file's name.
 +
 +#endif
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	13 May 2004 19:04:49 -0000
++++ options.c	15 May 2004 20:29:17 -0000
 @@ -121,6 +121,7 @@ char *log_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
@@ -443,8 +434,8 @@ the file's name.
  	}
  
  	if (files_from && (!am_sender || remote_filesfrom_file)) {
---- receiver.c	13 May 2004 07:08:22 -0000	1.77
-+++ receiver.c	13 May 2004 19:04:49 -0000
+--- receiver.c	15 May 2004 19:31:10 -0000	1.78
++++ receiver.c	15 May 2004 20:29:17 -0000
 @@ -46,6 +46,7 @@ extern int module_id;
  extern int ignore_errors;
  extern int orig_umask;
@@ -453,7 +444,7 @@ the file's name.
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -191,10 +192,11 @@ static int get_tmpname(char *fnametmp, c
+@@ -192,10 +193,11 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in,struct map_struct *mapbuf,int fd,char *fname,
@@ -466,7 +457,7 @@ the file's name.
  	unsigned int len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -204,7 +206,9 @@ static int receive_data(int f_in,struct 
+@@ -205,7 +207,9 @@ static int receive_data(int f_in,struct 
  	char *map=NULL;
  
  	read_sum_head(f_in, &sum);
@@ -477,7 +468,7 @@ the file's name.
  	sum_init();
  
  	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -221,6 +225,8 @@ static int receive_data(int f_in,struct 
+@@ -222,6 +226,8 @@ static int receive_data(int f_in,struct 
  			cleanup_got_literal = 1;
  
  			sum_update(data,i);
@@ -485,8 +476,8 @@ the file's name.
 +				mdfour_update(&mdfour_data,data,i);
  
  			if (fd != -1 && write_file(fd,data,i) != i) {
- 				rprintf(FERROR, "write failed on %s: %s\n",
-@@ -248,6 +254,8 @@ static int receive_data(int f_in,struct 
+ 				rsyserr(FERROR, errno, "write failed on %s",
+@@ -249,6 +255,8 @@ static int receive_data(int f_in,struct 
  
  			see_token(map, len);
  			sum_update(map,len);
@@ -495,7 +486,7 @@ the file's name.
  		}
  
  		if (fd != -1 && write_file(fd,map,len) != (int) len) {
-@@ -270,6 +278,8 @@ static int receive_data(int f_in,struct 
+@@ -271,6 +279,8 @@ static int receive_data(int f_in,struct 
  	}
  
  	sum_end(file_sum1);
@@ -504,16 +495,16 @@ the file's name.
  
  	read_buf(f_in,file_sum2,MD4_SUM_LENGTH);
  	if (verbose > 2) {
-@@ -373,7 +383,7 @@ int recv_files(int f_in,struct file_list
+@@ -374,7 +384,7 @@ int recv_files(int f_in,struct file_list
  		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
- 			rprintf(FERROR, "fstat %s failed: %s\n",
- 				full_fname(fnamecmp), strerror(errno));
+ 			rsyserr(FERROR, errno, "fstat %s failed",
+ 				full_fname(fnamecmp));
 -			receive_data(f_in,NULL,-1,NULL,file->length);
 +			receive_data(f_in,NULL,-1,NULL,file->length,NULL);
  			close(fd1);
  			continue;
  		}
-@@ -386,7 +396,7 @@ int recv_files(int f_in,struct file_list
+@@ -387,7 +397,7 @@ int recv_files(int f_in,struct file_list
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -522,16 +513,16 @@ the file's name.
  			close(fd1);
  			continue;
  		}
-@@ -438,7 +448,7 @@ int recv_files(int f_in,struct file_list
+@@ -439,7 +449,7 @@ int recv_files(int f_in,struct file_list
  		if (fd2 == -1) {
- 			rprintf(FERROR, "mkstemp %s failed: %s\n",
- 				full_fname(fnametmp), strerror(errno));
+ 			rsyserr(FERROR, errno, "mkstemp %s failed",
+ 				full_fname(fnametmp));
 -			receive_data(f_in,mapbuf,-1,NULL,file->length);
 +			receive_data(f_in,mapbuf,-1,NULL,file->length,NULL);
  			if (mapbuf) unmap_file(mapbuf);
  			if (fd1 != -1) close(fd1);
  			continue;
-@@ -451,7 +461,12 @@ int recv_files(int f_in,struct file_list
+@@ -452,7 +462,12 @@ int recv_files(int f_in,struct file_list
  		}
  
  		/* recv file data */
@@ -545,8 +536,8 @@ the file's name.
  
  		log_recv(file, &initial_stats);
  
---- rsync.c	13 May 2004 18:51:22 -0000	1.138
-+++ rsync.c	13 May 2004 19:04:49 -0000
+--- rsync.c	15 May 2004 19:31:10 -0000	1.139
++++ rsync.c	15 May 2004 20:29:17 -0000
 @@ -31,6 +31,7 @@ extern int am_generator;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -568,10 +559,10 @@ the file's name.
 +#endif
 +		ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
  	if (ret < 0) {
- 		rprintf(FERROR, "%s %s -> \"%s\": %s\n",
+ 		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
  		    ret == -2 ? "copy" : "rename",
 --- rsync.h	13 May 2004 18:51:22 -0000	1.203
-+++ rsync.h	13 May 2004 19:04:50 -0000
++++ rsync.h	15 May 2004 20:29:18 -0000
 @@ -521,6 +521,14 @@ struct stats {
  	int current_file_index;
  };

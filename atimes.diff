@@ -4,9 +4,9 @@ command before "make":
     make proto
 
 
---- batch.c	6 Mar 2004 07:45:52 -0000	1.31
-+++ batch.c	13 May 2004 18:54:03 -0000
-@@ -342,6 +342,8 @@ void show_flist(int index, struct file_s
+--- batch.c	15 May 2004 19:31:10 -0000	1.32
++++ batch.c	15 May 2004 20:13:11 -0000
+@@ -335,6 +335,8 @@ void show_flist(int index, struct file_s
  		rprintf(FINFO, "flist->flags=%#x\n", fptr[i]->flags);
  		rprintf(FINFO, "flist->modtime=%#lx\n",
  			(long unsigned) fptr[i]->modtime);
@@ -15,8 +15,8 @@ command before "make":
  		rprintf(FINFO, "flist->length=%.0f\n",
  			(double) fptr[i]->length);
  		rprintf(FINFO, "flist->mode=%#o\n", (int) fptr[i]->mode);
---- flist.c	11 May 2004 17:25:16 -0000	1.221
-+++ flist.c	13 May 2004 18:54:03 -0000
+--- flist.c	15 May 2004 19:31:10 -0000	1.223
++++ flist.c	15 May 2004 20:13:11 -0000
 @@ -57,6 +57,7 @@ extern int relative_paths;
  extern int implied_dirs;
  extern int copy_links;
@@ -127,8 +127,8 @@ command before "make":
  	file->length = st.st_size;
  	file->mode = st.st_mode;
  	file->uid = st.st_uid;
---- generator.c	13 May 2004 06:55:01 -0000	1.82
-+++ generator.c	13 May 2004 18:54:03 -0000
+--- generator.c	15 May 2004 19:31:10 -0000	1.83
++++ generator.c	15 May 2004 20:13:11 -0000
 @@ -98,7 +98,7 @@ static int skip_file(char *fname, struct
  		return 0;
  	}
@@ -138,7 +138,7 @@ command before "make":
  }
  
  
-@@ -466,7 +466,7 @@ void recv_generator(char *fname, struct 
+@@ -467,7 +467,7 @@ void recv_generator(char *fname, struct 
  		return;
  	}
  
@@ -148,7 +148,7 @@ command before "make":
  			rprintf(FINFO,"%s is newer\n",fname);
  		return;
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	13 May 2004 18:54:04 -0000
++++ options.c	15 May 2004 20:13:11 -0000
 @@ -46,6 +46,7 @@ int preserve_devices = 0;
  int preserve_uid = 0;
  int preserve_gid = 0;
@@ -182,8 +182,8 @@ command before "make":
  	if (preserve_perms)
  		argstr[x++] = 'p';
  	if (recurse)
---- rsync.c	13 May 2004 18:51:22 -0000	1.138
-+++ rsync.c	13 May 2004 18:54:04 -0000
+--- rsync.c	15 May 2004 19:31:10 -0000	1.139
++++ rsync.c	15 May 2004 20:13:12 -0000
 @@ -25,6 +25,7 @@
  extern int verbose;
  extern int dry_run;
@@ -220,8 +220,8 @@ command before "make":
 -		if (set_modtime(fname,file->modtime) != 0 &&
 +		if (updated && set_times(fname, mtime, atime) != 0 &&
  		    !S_ISDIR(st->st_mode)) {
- 			rprintf(FERROR, "failed to set times on %s: %s\n",
- 				full_fname(fname), strerror(errno));
+ 			rsyserr(FERROR, errno, "failed to set times on %s",
+ 				full_fname(fname));
  			return 0;
  		}
 -		updated = 1;
@@ -229,7 +229,7 @@ command before "make":
  
  	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
 --- rsync.h	13 May 2004 18:51:22 -0000	1.203
-+++ rsync.h	13 May 2004 18:54:04 -0000
++++ rsync.h	15 May 2004 20:13:12 -0000
 @@ -54,6 +54,7 @@
  #define XMIT_HAS_IDEV_DATA (1<<9)
  #define XMIT_SAME_DEV (1<<10)
@@ -255,7 +255,7 @@ command before "make":
  	gid_t gid;
  	mode_t mode;
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	13 May 2004 18:54:05 -0000
++++ rsync.yo	15 May 2004 20:13:12 -0000
 @@ -299,6 +299,7 @@ verb(
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
@@ -276,8 +276,8 @@ command before "make":
  
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
---- tls.c	9 Apr 2004 20:22:44 -0000	1.19
-+++ tls.c	13 May 2004 18:54:05 -0000
+--- tls.c	15 May 2004 19:09:42 -0000	1.20
++++ tls.c	15 May 2004 20:13:13 -0000
 @@ -39,6 +39,7 @@
  
  
@@ -292,10 +292,10 @@ command before "make":
  
 +static int display_atime = 0;
  
- static void failed (char const *what,
- 		    char const *where)
-@@ -57,14 +59,29 @@ static void failed (char const *what,
- 	exit (1);
+ static void failed(char const *what, char const *where)
+ {
+@@ -56,14 +58,29 @@ static void failed(char const *what, cha
+ 	exit(1);
  }
  
 +static void storetime(char *dest, time_t t)
@@ -315,7 +315,7 @@ command before "make":
 +	}
 +}	
  
- static void list_file (const char *fname)
+ static void list_file(const char *fname)
  {
  	STRUCT_STAT buf;
  	char permbuf[PERMSTRING_SIZE];
@@ -326,7 +326,7 @@ command before "make":
  	char linkbuf[4096];
  
  	if (do_lstat(fname, &buf) == -1)
-@@ -97,19 +114,8 @@ static void list_file (const char *fname
+@@ -96,19 +113,8 @@ static void list_file(const char *fname)
  
  	permstring(permbuf, buf.st_mode);
  
@@ -348,7 +348,7 @@ command before "make":
  
  	/* TODO: Perhaps escape special characters in fname? */
  
-@@ -120,24 +126,55 @@ static void list_file (const char *fname
+@@ -119,24 +125,55 @@ static void list_file(const char *fname)
  		    (long)minor(buf.st_rdev));
  	} else /* NB: use double for size since it might not fit in a long. */
  		printf("%12.0f", (double)buf.st_size);
@@ -378,8 +378,8 @@ command before "make":
  main(int argc, char *argv[])
  {
 -	if (argc < 2) {
--		fprintf (stderr, "usage: " PROGRAM " DIR ...\n"
--			 "Trivial file listing program for portably checking rsync\n");
+-		fprintf(stderr, "usage: " PROGRAM " DIR ...\n"
+-			"Trivial file listing program for portably checking rsync\n");
 -		return 1;
 +	poptContext pc;
 +	const char **extra_args;
@@ -401,7 +401,7 @@ command before "make":
  	}
  
 -	for (argv++; *argv; argv++) {
--		list_file (*argv);
+-		list_file(*argv);
 -	}
 +	extra_args = poptGetArgs(pc);
 +	if (*extra_args == NULL)
@@ -413,8 +413,8 @@ command before "make":
  
  	return 0;
  }
---- util.c	8 May 2004 20:03:39 -0000	1.142
-+++ util.c	13 May 2004 18:54:05 -0000
+--- util.c	15 May 2004 19:31:10 -0000	1.143
++++ util.c	15 May 2004 20:13:13 -0000
 @@ -124,32 +124,40 @@ void overflow(char *str)
  
  
@@ -462,7 +462,7 @@ command before "make":
  		t[0].tv_usec = 0;
  		t[1].tv_sec = modtime;
  		t[1].tv_usec = 0;
-@@ -1063,8 +1071,8 @@ int msleep(int t)
+@@ -1058,8 +1066,8 @@ int msleep(int t)
  
  
  /**
@@ -473,7 +473,7 @@ command before "make":
   * --modify-window).
   *
   * @retval 0 if the times should be treated as the same
-@@ -1073,7 +1081,7 @@ int msleep(int t)
+@@ -1068,7 +1076,7 @@ int msleep(int t)
   *
   * @retval -1 if the 2nd is later
   **/
@@ -483,7 +483,7 @@ command before "make":
  	extern int modify_window;
  
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ testsuite/copy-atimes.test	13 May 2004 18:54:05 -0000
++++ testsuite/copy-atimes.test	15 May 2004 20:13:13 -0000
 @@ -0,0 +1,22 @@
 +#! /bin/sh
 +
@@ -508,7 +508,7 @@ command before "make":
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
 --- testsuite/rsync.fns	4 Feb 2004 07:32:48 -0000	1.59
-+++ testsuite/rsync.fns	13 May 2004 18:54:05 -0000
++++ testsuite/rsync.fns	15 May 2004 20:13:13 -0000
 @@ -51,7 +51,7 @@ printmsg() {
  
  

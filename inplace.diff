@@ -1,7 +1,7 @@
 Patch from Mark Curtis to implement the --inplace option.
 
 --- match.c	13 May 2004 06:46:20 -0000	1.61
-+++ match.c	13 May 2004 19:02:25 -0000
++++ match.c	15 May 2004 20:23:18 -0000
 @@ -22,6 +22,7 @@
  extern int verbose;
  extern int am_server;
@@ -22,7 +22,7 @@ Patch from Mark Curtis to implement the --inplace option.
  
  			if (verbose > 3)
 --- options.c	6 May 2004 21:08:01 -0000	1.148
-+++ options.c	13 May 2004 19:02:25 -0000
++++ options.c	15 May 2004 20:23:19 -0000
 @@ -91,6 +91,7 @@ int ignore_errors = 0;
  int modify_window = 0;
  int blocking_io = -1;
@@ -67,8 +67,8 @@ Patch from Mark Curtis to implement the --inplace option.
  
  	if (tmpdir) {
  		args[ac++] = "--temp-dir";
---- receiver.c	13 May 2004 07:08:22 -0000	1.77
-+++ receiver.c	13 May 2004 19:02:25 -0000
+--- receiver.c	15 May 2004 19:31:10 -0000	1.78
++++ receiver.c	15 May 2004 20:23:19 -0000
 @@ -46,6 +46,7 @@ extern int module_id;
  extern int ignore_errors;
  extern int orig_umask;
@@ -77,18 +77,18 @@ Patch from Mark Curtis to implement the --inplace option.
  
  static void delete_one(char *fn, int is_dir)
  {
-@@ -250,16 +251,28 @@ static int receive_data(int f_in,struct 
+@@ -251,16 +252,28 @@ static int receive_data(int f_in,struct 
  			sum_update(map,len);
  		}
  
 -		if (fd != -1 && write_file(fd,map,len) != (int) len) {
--			rprintf(FERROR, "write failed on %s: %s\n",
--				full_fname(fname), strerror(errno));
+-			rsyserr(FERROR, errno, "write failed on %s",
+-				full_fname(fname));
 -			exit_cleanup(RERR_FILEIO);
 +		if (!inplace || offset != offset2) {
 +			if (fd != -1 && write_file(fd,map,len) != (int) len) {
-+				rprintf(FERROR, "write failed on %s: %s\n",
-+					full_fname(fname), strerror(errno));
++				rsyserr(FERROR, errno, "write failed on %s",
++					full_fname(fname));
 +				exit_cleanup(RERR_FILEIO);
 +			}
 +		} else {
@@ -110,7 +110,7 @@ Patch from Mark Curtis to implement the --inplace option.
  	if (do_progress)
  		end_progress(total_size);
  
-@@ -411,37 +424,50 @@ int recv_files(int f_in,struct file_list
+@@ -412,37 +425,50 @@ int recv_files(int f_in,struct file_list
  		} else
  			mapbuf = NULL;
  
@@ -123,8 +123,8 @@ Patch from Mark Curtis to implement the --inplace option.
 +		if (inplace)  {
 +			fd2 = do_open(fnamecmp, O_WRONLY|O_CREAT, 0);
 +			if (fd2 == -1) {
-+				rprintf(FERROR, "open %s failed: %s\n",
-+					full_fname(fnametmp), strerror(errno));
++				rsyserr(FERROR, errno, "open %s failed",
++					full_fname(fnametmp));
 +				receive_data(f_in,mapbuf,-1,NULL,file->length);
 +				if (mapbuf) unmap_file(mapbuf);
 +				if (fd1 != -1) close(fd1);
@@ -163,8 +163,8 @@ Patch from Mark Curtis to implement the --inplace option.
  			fd2 = do_mkstemp(fnametmp, file->mode & INITACCESSPERMS);
 -		}
 -		if (fd2 == -1) {
--			rprintf(FERROR, "mkstemp %s failed: %s\n",
--				full_fname(fnametmp), strerror(errno));
+-			rsyserr(FERROR, errno, "mkstemp %s failed",
+-				full_fname(fnametmp));
 -			receive_data(f_in,mapbuf,-1,NULL,file->length);
 -			if (mapbuf) unmap_file(mapbuf);
 -			if (fd1 != -1) close(fd1);
@@ -179,8 +179,8 @@ Patch from Mark Curtis to implement the --inplace option.
 +				fd2 = do_mkstemp(fnametmp, file->mode & INITACCESSPERMS);
 +			}
 +			if (fd2 == -1) {
-+				rprintf(FERROR, "mkstemp %s failed: %s\n",
-+					full_fname(fnametmp), strerror(errno));
++				rsyserr(FERROR, errno, "mkstemp %s failed",
++					full_fname(fnametmp));
 +				receive_data(f_in,mapbuf,-1,NULL,file->length);
 +				if (mapbuf) unmap_file(mapbuf);
 +				if (fd1 != -1) close(fd1);
@@ -189,8 +189,8 @@ Patch from Mark Curtis to implement the --inplace option.
  		}
  
  		cleanup_set(fnametmp, fname, file, mapbuf, fd1, fd2);
---- rsync.c	13 May 2004 18:51:22 -0000	1.138
-+++ rsync.c	13 May 2004 19:02:25 -0000
+--- rsync.c	15 May 2004 19:31:10 -0000	1.139
++++ rsync.c	15 May 2004 20:23:19 -0000
 @@ -31,6 +31,7 @@ extern int am_generator;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -212,7 +212,7 @@ Patch from Mark Curtis to implement the --inplace option.
  	/* move tmp file over real file */
  	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
 --- rsync.yo	7 May 2004 00:18:37 -0000	1.169
-+++ rsync.yo	13 May 2004 19:02:26 -0000
++++ rsync.yo	15 May 2004 20:23:20 -0000
 @@ -289,6 +289,7 @@ verb(
       --backup-dir            make backups into this directory
       --suffix=SUFFIX         backup suffix (default ~ w/o --backup-dir)
