@@ -1124,8 +1124,8 @@ local instead of inherited (see also the 'n' modifier).
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
 +  rprintf(F," -f, --filter=RULE           add a file-filtering RULE\n");
-+  rprintf(F," -F                          same as --filter=': /.rsync-rules'\n");
-+  rprintf(F,"                             repeated: --filter='- .rsync-rules'\n");
++  rprintf(F," -F                          same as --filter=': /.rsync-filter'\n");
++  rprintf(F,"                             repeated: --filter='- .rsync-filter'\n");
    rprintf(F,"     --exclude=PATTERN       exclude files matching PATTERN\n");
    rprintf(F,"     --exclude-from=FILE     exclude patterns listed in FILE\n");
    rprintf(F,"     --include=PATTERN       don't exclude files matching PATTERN\n");
@@ -1190,11 +1190,11 @@ local instead of inherited (see also the 'n' modifier).
 +			switch (++F_option_cnt) {
 +			case 1:
 +				add_exclude(&exclude_list,
-+					    ": /.rsync-rules", 0);
++					    ": /.rsync-filter", 0);
 +				break;
 +			case 2:
 +				add_exclude(&exclude_list,
-+				 	    "- .rsync-rules", 0);
++				 	    "- .rsync-filter", 0);
 +				break;
 +			}
 +			break;
@@ -1256,8 +1256,8 @@ local instead of inherited (see also the 'n' modifier).
   -z, --compress              compress file data
   -C, --cvs-exclude           auto ignore files in the same way CVS does
 + -f, --filter=RULE           add a file-filtering RULE
-+ -F                          same as --filter=': /.rsync-rules'
-+                             repeated: --filter='- .rsync-rules'
++ -F                          same as --filter=': /.rsync-filter'
++                             repeated: --filter='- .rsync-filter'
       --exclude=PATTERN       exclude files matching PATTERN
       --exclude-from=FILE     exclude patterns listed in FILE
       --include=PATTERN       don't exclude files matching PATTERN
@@ -1283,19 +1283,19 @@ local instead of inherited (see also the 'n' modifier).
 +your command.  The first time it is used is a shorthand for this rule:
 +
 +verb(
-+  --filter=': /.rsync-rules'
++  --filter=': /.rsync-filter'
 +)
 +
-+This tells rsync to look for per-directory .rsync-rules files that have
++This tells rsync to look for per-directory .rsync-filter files that have
 +been sprinkled through the hierarchy and use their rules to filter the
 +files in the transfer.  If -F is repeated, it is a shorthand for this
 +rule:
 +
 +verb(
-+  --filter='- .rsync-rules'
++  --filter='- .rsync-filter'
 +)
 +
-+This filters out the .rsync-rules files themselves from the transfer.
++This filters out the .rsync-filter files themselves from the transfer.
 +
 +See the FILTER RULES section for detailed information on how these options
 +work.
@@ -1532,7 +1532,7 @@ local instead of inherited (see also the 'n' modifier).
 +
 +verb(
 +    . /etc/rsync/default.rules
-+    : .per-dir-rules
++    : .per-dir-filter
 +    :n- .non-inherited-per-dir-excludes
 +)
 +
@@ -1582,14 +1582,14 @@ local instead of inherited (see also the 'n' modifier).
 +Here's an example filter file which you'd specify via --filter=". file":
 +
 +verb(
-+    . /home/user/.global-rules
++    . /home/user/.global-filter
 +    - *.gz
 +    : .rules
 +    + *.[ch]
 +    - *.o
 +)
 +
-+This will merge the contents of the /home/user/.global-rules file at the
++This will merge the contents of the /home/user/.global-filter file at the
 +start of the list and also turns the ".rules" filename into a per-directory
 +filter file.  All rules read-in prior to the start of the directory scan
 +follow the global anchoring rules (i.e. a leading slash matches at the root
@@ -1601,10 +1601,10 @@ local instead of inherited (see also the 'n' modifier).
 +per-directory file.  For instance, here is a common filter (see -F):
 +
 +verb(
-+  --filter=': /.rsync-rules'
++  --filter=': /.rsync-filter'
 +)
 +
-+That rule tells rsync to scan for the file .rsync-rules in all
++That rule tells rsync to scan for the file .rsync-filter in all
 +directories from the root down through the parent directory of the
 +transfer prior to the start of the normal directory scan of the file in
 +the directories that are sent as a part of the transfer.  (Note: for an
@@ -1614,14 +1614,14 @@ local instead of inherited (see also the 'n' modifier).
 +
 +verb(
 +  rsync -avF /src/path/ /dest/dir
-+  rsync -av --filter=': ../../.rsync-rules' /src/path/ /dest/dir
-+  rsync -av --fitler=': .rsync-rules' /src/path/ /dest/dir
++  rsync -av --filter=': ../../.rsync-filter' /src/path/ /dest/dir
++  rsync -av --fitler=': .rsync-filter' /src/path/ /dest/dir
 +)
 +
-+The first two commands above will look for ".rsync-rules" in "/" and
++The first two commands above will look for ".rsync-filter" in "/" and
 +"/src" before the normal scan begins looking for the file in "/src/path"
 +and its subdirectories.  The last command avoids the parent-dir scan
-+and only looks for the ".rsync-rules" files in each directory that is
++and only looks for the ".rsync-filter" files in each directory that is
 +a part of the transfer.
 +
 +If you want to include the contents of a ".cvsignore" in your patterns,
@@ -1807,8 +1807,8 @@ local instead of inherited (see also the 'n' modifier).
 +merged from the .rules files because they were specified after the
 +per-directory merge rule.
 +
-+In one final example, the remote side is excluding the .rsync-rules
-+files from the transfer, but we want to use our own .rsync-rules files
++In one final example, the remote side is excluding the .rsync-filter
++files from the transfer, but we want to use our own .rsync-filter files
 +to control what gets deleted on the receiving side.  To do this we must
 +specifically exclude the per-directory merge files (so that they don't get
 +deleted) and then put rules into the local files to control what else
@@ -1828,7 +1828,7 @@ local instead of inherited (see also the 'n' modifier).
 -  only foo/bar.c (the foo/ directory must be explicitly included or
 -  it would be excluded by the "*")
 +verb(
-+  rsync -av --filter=':e /.rsync-rules' --delete host:src/dir /dest
++  rsync -av --filter=':e /.rsync-filter' --delete host:src/dir /dest
 +  rsync -avFF --delete host:src/dir /dest
  )
  
