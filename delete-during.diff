@@ -11,7 +11,7 @@ invoke, either personally or site-wide, without having to recompile rsync).
 
 Be sure to run "make proto" before "make".
 
---- orig/flist.c	2005-01-22 22:48:52
+--- orig/flist.c	2005-01-24 00:18:21
 +++ flist.c	2005-01-23 08:02:39
 @@ -35,6 +35,7 @@ extern int am_root;
  extern int am_server;
@@ -23,7 +23,7 @@ Be sure to run "make proto" before "make".
  extern int ignore_errors;
 @@ -45,6 +46,8 @@ extern int cvs_exclude;
  extern int recurse;
- extern int keep_dirs;
+ extern int xfer_dirs;
  extern char curr_dir[MAXPATHLEN];
 +extern char *backup_dir;
 +extern char *backup_suffix;
@@ -123,7 +123,7 @@ Be sure to run "make proto" before "make".
 +		if (f == -1 && delete_during)
 +			; /* recurse is pre-set */
 +		else if (fname[l-1] == '.' && (l == 1 || fname[l-2] == '/')) {
- 			if (!recurse && keep_dirs)
+ 			if (!recurse && xfer_dirs)
  				recurse = 1; /* allow one level */
  		} else if (recurse > 0)
 @@ -1644,3 +1668,77 @@ char *f_name(struct file_struct *f)
@@ -142,7 +142,7 @@ Be sure to run "make proto" before "make".
 +	static int deletion_count = 0;
 +	struct file_list *del_flist;
 +	int save_recurse = recurse;
-+	int save_keep_dirs = keep_dirs;
++	int save_xfer_dirs = xfer_dirs;
 +	int save_implied_dirs = implied_dirs;
 +	int save_relative_paths = relative_paths;
 +	char *argv[1];
@@ -159,7 +159,7 @@ Be sure to run "make proto" before "make".
 +
 +	if (delete_during) {
 +		recurse = 1; /* allow one level only */
-+		keep_dirs = 1;
++		xfer_dirs = 1;
 +		implied_dirs = 0;
 +		relative_paths = 1;
 +	}
@@ -169,7 +169,7 @@ Be sure to run "make proto" before "make".
 +
 +	relative_paths = save_relative_paths;
 +	implied_dirs = save_implied_dirs;
-+	keep_dirs = save_keep_dirs;
++	xfer_dirs = save_xfer_dirs;
 +	recurse = save_recurse;
 +
 +	if (!del_flist)
@@ -274,7 +274,7 @@ Be sure to run "make proto" before "make".
  
  	if (filesfrom_fd >= 0) {
  		io_set_filesfrom_fds(filesfrom_fd, f_out);
---- orig/options.c	2005-01-23 01:45:43
+--- orig/options.c	2005-01-24 00:18:21
 +++ options.c	2005-01-23 01:53:35
 @@ -54,6 +54,7 @@ int dry_run = 0;
  int local_server = 0;
@@ -294,7 +294,7 @@ Be sure to run "make proto" before "make".
    rprintf(F,"     --delete-excluded       also delete excluded files on the receiving side\n");
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
    rprintf(F,"     --force                 force deletion of directories even if not empty\n");
-@@ -340,7 +342,9 @@ static struct poptOption long_options[] 
+@@ -341,7 +343,9 @@ static struct poptOption long_options[] 
    {"one-file-system", 'x', POPT_ARG_NONE,   &one_file_system, 0, 0, 0 },
    {"existing",         0,  POPT_ARG_NONE,   &only_existing, 0, 0, 0 },
    {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
@@ -305,7 +305,7 @@ Be sure to run "make proto" before "make".
    {"delete-after",     0,  POPT_ARG_NONE,   &delete_after, 0, 0, 0 },
    {"delete-excluded",  0,  POPT_ARG_NONE,   &delete_excluded, 0, 0, 0 },
    {"force",            0,  POPT_ARG_NONE,   &force_delete, 0, 0, 0 },
-@@ -853,10 +857,10 @@ int parse_arguments(int *argc, const cha
+@@ -854,10 +858,10 @@ int parse_arguments(int *argc, const cha
  	if (relative_paths < 0)
  		relative_paths = files_from? 1 : 0;
  
@@ -318,7 +318,7 @@ Be sure to run "make proto" before "make".
  
  	*argv = poptGetArgs(pc);
  	*argc = count_args(*argv);
-@@ -1159,7 +1163,9 @@ void server_options(char **args,int *arg
+@@ -1160,7 +1164,9 @@ void server_options(char **args,int *arg
  	if (am_sender) {
  		if (delete_excluded)
  			args[ac++] = "--delete-excluded";
@@ -429,9 +429,9 @@ Be sure to run "make proto" before "make".
  	}
  }
  
---- orig/rsync.yo	2005-01-22 22:48:52
+--- orig/rsync.yo	2005-01-24 00:18:21
 +++ rsync.yo	2005-01-23 02:57:49
-@@ -341,7 +341,8 @@ verb(
+@@ -342,7 +342,8 @@ verb(
       --existing              only update files that already exist
       --ignore-existing       ignore files that already exist on receiver
       --delete                delete files that don't exist on sender
@@ -441,7 +441,7 @@ Be sure to run "make proto" before "make".
       --delete-excluded       also delete excluded files on receiver
       --ignore-errors         delete even if there are I/O errors
       --force                 force deletion of dirs even if not empty
-@@ -681,14 +682,23 @@ prevent temporary filesystem failures (s
+@@ -689,14 +690,23 @@ prevent temporary filesystem failures (s
  sending side causing a massive deletion of files on the
  destination.  You can override this with the --ignore-errors option.
  
