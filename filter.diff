@@ -30,13 +30,14 @@ for the current dir because its name contained a slash.
 ..wayne..
 
 --- exclude.c	22 May 2004 05:32:20 -0000	1.82
-+++ exclude.c	24 May 2004 00:44:00 -0000
-@@ -30,13 +30,56 @@ extern int verbose;
++++ exclude.c	28 May 2004 21:56:09 -0000
+@@ -30,13 +30,57 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
  extern int recurse;
 +extern int io_error;
 +extern int sanitize_paths;
++extern int inherit_exclude_levels;
  
  extern char curr_dir[];
  
@@ -89,7 +90,7 @@ for the current dir because its name contained a slash.
  
  /** Build an exclude structure given an exclude pattern. */
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
-@@ -46,6 +89,24 @@ static void make_exclude(struct exclude_
+@@ -46,6 +90,24 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
@@ -114,7 +115,7 @@ for the current dir because its name contained a slash.
  	ret = new(struct exclude_struct);
  	if (!ret)
  		out_of_memory("make_exclude");
-@@ -81,14 +142,36 @@ static void make_exclude(struct exclude_
+@@ -81,14 +143,36 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -155,7 +156,7 @@ for the current dir because its name contained a slash.
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +179,116 @@ static void make_exclude(struct exclude_
+@@ -96,22 +180,143 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
@@ -189,6 +190,28 @@ for the current dir because its name contained a slash.
  	listp->head = listp->tail = NULL;
  }
  
++static void pre_inherit_files(struct exclude_list_struct *lp, const char *fn,
++			      int flags)
++{
++	char *t = dirbuf + dirbuf_offset;
++	int i;
++
++	if (dirbuf_offset + inherit_exclude_levels * 3 + strlen(fn)
++	    >= MAXPATHLEN)
++		return;
++
++	/* XXX sanitize_path() !! */
++
++	for (i = 0; i < inherit_exclude_levels; i++)
++		*t++ = '.', *t++ = '.', *t++ = '/';
++	while (i-- > 0) {
++		lp->tail = NULL;
++		strcpy(t, fn);
++		add_exclude_file(lp, dirbuf, flags);
++		t -= 3;
++	}
++}
++
 +void *push_local_excludes(char *fname, unsigned int offset)
 +{
 +	struct mergelist_save_struct *push;
@@ -231,6 +254,8 @@ for the current dir because its name contained a slash.
 +		} else {
 +			flags = ex->match_flags & MATCHFLG_INCLUDE
 +			    ? XFLG_DEF_INCLUDE : 0;
++			if (inherit_exclude_levels > 0)
++				pre_inherit_files(lp, ex->pattern, flags);
 +		}
 +		lp->tail = NULL; /* Switch any local rules to inherited. */
 +		if (strlcpy(dirbuf +  dirbuf_offset, ex->pattern,
@@ -243,6 +268,9 @@ for the current dir because its name contained a slash.
 +			    full_fname(dirbuf));
 +		}
 +	}
++
++	if (inherit_exclude_levels > 0)
++		inherit_exclude_levels = 0;
 +
 +	return (void*)push;
 +}
@@ -278,7 +306,7 @@ for the current dir because its name contained a slash.
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -122,7 +299,7 @@ static int check_one_exclude(char *name,
+@@ -122,7 +327,7 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -287,7 +315,7 @@ for the current dir because its name contained a slash.
  		if ((p = strrchr(name,'/')) != NULL)
  			name = p+1;
  	}
-@@ -148,9 +325,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +353,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -299,7 +327,7 @@ for the current dir because its name contained a slash.
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +398,13 @@ int check_exclude(struct exclude_list_st
+@@ -221,6 +426,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -313,7 +341,7 @@ for the current dir because its name contained a slash.
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -253,11 +437,16 @@ static const char *get_exclude_tok(const
+@@ -253,11 +465,16 @@ static const char *get_exclude_tok(const
  		p = (const char *)s;
  	}
  
@@ -332,7 +360,7 @@ for the current dir because its name contained a slash.
  		s += 2;
  	} else if (xflags & XFLG_DEF_INCLUDE)
  		mflags |= MATCHFLG_INCLUDE;
-@@ -306,11 +495,52 @@ void add_exclude(struct exclude_list_str
+@@ -306,11 +523,54 @@ void add_exclude(struct exclude_list_str
  			continue;
  		}
  
@@ -344,7 +372,9 @@ for the current dir because its name contained a slash.
 +				continue;
 +			}
 +			strlcpy(name, cp, pat_len+1);
-+			if (strchr(name, '/') != NULL) {
++			if (!(xflags & XFLG_PERDIR_MERGE)
++			    && (inherit_exclude_levels == -1
++			     || strchr(name, '/') != NULL)) {
 +				char *mem = NULL;
 +				if (*name == '/') {
 +					if (sanitize_paths) {
@@ -386,19 +416,19 @@ for the current dir because its name contained a slash.
  				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
  		}
  	}
-@@ -343,6 +573,11 @@ void add_exclude_file(struct exclude_lis
+@@ -343,6 +603,11 @@ void add_exclude_file(struct exclude_lis
  		return;
  	}
  
 +	if (verbose > 2) {
-+		rprintf(FINFO, "[%s] add_exclude_file(%s)\n",
-+			who_am_i(), fname);
++		rprintf(FINFO, "[%s] add_exclude_file(%s,%d)\n",
++			who_am_i(), fname, xflags);
 +	}
 +
  	while (1) {
  		char *s = line;
  		int ch, overflow = 0;
-@@ -402,7 +637,11 @@ void send_exclude_list(int f)
+@@ -402,7 +667,11 @@ void send_exclude_list(int f)
  		if (ent->match_flags & MATCHFLG_INCLUDE) {
  			write_int(f, l + 2);
  			write_buf(f, "+ ", 2);
@@ -411,16 +441,16 @@ for the current dir because its name contained a slash.
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -443,6 +682,7 @@ void add_cvs_excludes(void)
+@@ -443,6 +712,7 @@ void add_cvs_excludes(void)
  	char fname[MAXPATHLEN];
  	char *p;
  
-+	add_exclude(&exclude_list, ". .cvsignore", 0);
++	add_exclude(&exclude_list, ". .cvsignore", XFLG_PERDIR_MERGE);
  	add_exclude(&exclude_list, default_cvsignore,
  		    XFLG_WORD_SPLIT | XFLG_WORDS_ONLY);
  
 --- flist.c	21 May 2004 23:22:14 -0000	1.225
-+++ flist.c	24 May 2004 00:44:00 -0000
++++ flist.c	28 May 2004 21:56:09 -0000
 @@ -39,8 +39,6 @@ extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
@@ -512,9 +542,99 @@ for the current dir because its name contained a slash.
  	closedir(d);
  }
  
+--- options.c	27 May 2004 21:51:53 -0000	1.153
++++ options.c	28 May 2004 21:56:09 -0000
+@@ -48,6 +48,7 @@ int preserve_gid = 0;
+ int preserve_times = 0;
+ int update_only = 0;
+ int cvs_exclude = 0;
++int inherit_exclude_levels = -9999;
+ int dry_run = 0;
+ int local_server = 0;
+ int ignore_times = 0;
+@@ -306,7 +307,7 @@ void usage(enum logcode F)
+ 
+ enum {OPT_VERSION = 1000, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+       OPT_DELETE_AFTER, OPT_DELETE_EXCLUDED, OPT_LINK_DEST,
+-      OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
++      OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_INHERIT, OPT_MODIFY_WINDOW,
+       OPT_READ_BATCH, OPT_WRITE_BATCH,
+       OPT_REFUSED_BASE = 9000};
+ 
+@@ -331,6 +332,7 @@ static struct poptOption long_options[] 
+   {"include",          0,  POPT_ARG_STRING, 0,              OPT_INCLUDE, 0, 0 },
+   {"exclude-from",     0,  POPT_ARG_STRING, 0,              OPT_EXCLUDE_FROM, 0, 0 },
+   {"include-from",     0,  POPT_ARG_STRING, 0,              OPT_INCLUDE_FROM, 0, 0 },
++  {"inherit",          0,  POPT_ARG_STRING, 0,              OPT_INHERIT, 0, 0 },
+   {"safe-links",       0,  POPT_ARG_NONE,   &safe_symlinks, 0, 0, 0 },
+   {"help",            'h', POPT_ARG_NONE,   0,              'h', 0, 0 },
+   {"backup",          'b', POPT_ARG_NONE,   &make_backups, 0, 0, 0 },
+@@ -543,6 +545,31 @@ int parse_arguments(int *argc, const cha
+ 					 XFLG_FATAL_ERRORS | XFLG_DEF_INCLUDE);
+ 			break;
+ 
++		case OPT_INHERIT:
++			arg = poptGetOptArg(pc);
++			if (isdigit(*arg))
++				inherit_exclude_levels = atoi(arg);
++			else if (*arg == '.') {
++				if (!arg[1])
++					inherit_exclude_levels = 0;
++				else if (arg[1] == '.') {
++					inherit_exclude_levels = 0;
++					arg--;
++					do {
++						inherit_exclude_levels++;
++						arg += 3;
++					} while (strncmp(arg, "/..", 3) == 0);
++					if (*arg)
++						inherit_exclude_levels = -1;
++				}
++			}
++			if (inherit_exclude_levels < 0) {
++				snprintf(err_buf, sizeof err_buf,
++				    "Invalid argument given to --inherit.\n");
++				return 0;
++			}
++			break;
++
+ 		case 'h':
+ 			usage(FINFO);
+ 			exit_cleanup(0);
+@@ -767,6 +794,9 @@ int parse_arguments(int *argc, const cha
+ 		}
+ 	}
+ 
++	if (inherit_exclude_levels < 0)
++		inherit_exclude_levels = -1;
++
+ 	return 1;
+ }
+ 
+@@ -866,6 +896,12 @@ void server_options(char **args,int *arg
+ 	if (x != 1)
+ 		args[ac++] = argstr;
+ 
++	if (inherit_exclude_levels >= 0) {
++		if (asprintf(&arg, "--inherit=%d", inherit_exclude_levels) < 0)
++			goto oom;
++		args[ac++] = arg;
++	}
++
+ 	if (block_size) {
+ 		if (asprintf(&arg, "-B%u", block_size) < 0)
+ 			goto oom;
 --- rsync.h	16 May 2004 07:28:24 -0000	1.204
-+++ rsync.h	24 May 2004 00:44:02 -0000
-@@ -496,11 +496,16 @@ struct map_struct {
++++ rsync.h	28 May 2004 21:56:10 -0000
+@@ -108,6 +108,7 @@
+ #define XFLG_DEF_INCLUDE	(1<<1)
+ #define XFLG_WORDS_ONLY 	(1<<2)
+ #define XFLG_WORD_SPLIT 	(1<<3)
++#define XFLG_PERDIR_MERGE 	(1<<4)
+ 
+ #define PERMS_REPORT		(1<<0)
+ #define PERMS_SKIP_MTIME	(1<<1)
+@@ -496,11 +497,16 @@ struct map_struct {
  #define MATCHFLG_INCLUDE	(1<<4) /* this is an include, not an exclude */
  #define MATCHFLG_DIRECTORY	(1<<5) /* this matches only directories */
  #define MATCHFLG_CLEAR_LIST 	(1<<6) /* this item is the "!" token */
@@ -533,8 +653,57 @@ for the current dir because its name contained a slash.
  
  struct exclude_list_struct {
 --- rsync.yo	21 May 2004 09:44:32 -0000	1.170
-+++ rsync.yo	24 May 2004 00:44:02 -0000
-@@ -1090,6 +1090,74 @@ itemize(
++++ rsync.yo	28 May 2004 21:56:11 -0000
+@@ -331,6 +331,7 @@ verb(
+      --exclude-from=FILE     exclude patterns listed in FILE
+      --include=PATTERN       don't exclude files matching PATTERN
+      --include-from=FILE     don't exclude patterns listed in FILE
++     --inherit=DEPTH         make per-dir merge files inherited
+      --files-from=FILE       read FILE for list of source-file names
+  -0  --from0                 all file lists are delimited by nulls
+      --version               print version number
+@@ -683,6 +684,28 @@ dit(bf(--include-from=FILE)) This specif
+ from a file.
+ If em(FILE) is bf(-) the list will be read from standard input.
+ 
++dit(bf(--inherit=DEPTH)) Using this option allows you to specify that the
++contents of per-directory merge files is inherited by the subdirectories of
++the spot where the rules were read in.  If a subdirectory has its own
++per-directory merge file, its contents are prefixed to the inherited rules,
++which gives them higher priority.
++
++The DEPTH value tells rsync how much deeper than the root directory of the
++transfer should be scanned for merge files.  If you don't need any higher
++directories scanned, use "." (dot).  If you want the parent directory
++scanned, specify ".." (dot dot) or "1" (i.e. one directory higher).  You
++can continue to specify either more ".."s (separated by slashes) or simply
++supply the count of how many parent-directory levels should be scanned.
++The reason this is useful is that you may wish to transfer just a small
++portion of a larger tree of files, but to be sure to get all the
++appropriate exclude rules, you need to be sure that rsync reads in all the
++merge files from the top of the tree of related files.
++
++Note also that you can eliminate all the inherited rules for the current
++per-directory ruleset by putting the list-clearing token (!) in the file.
++This only clears the rules in the current per-directory sub-list for the
++current directory and its subdirectories.
++
+ dit(bf(--files-from=FILE)) Using this option allows you to specify the
+ exact list of files to transfer (as read from the specified FILE or "-"
+ for stdin).  It also tweaks the default behavior of rsync to make
+@@ -1038,6 +1061,11 @@ itemize(
+   then it is always considered an exclude pattern, even if specified as
+   part of an include option. The prefix is discarded before matching.
+ 
++  it() if the pattern starts with ". " (a dot followed by a space) then it
++  its pattern is taken to be a merge file that is read in to supplement the
++  current rules.  See the section on MERGING EXCLUDE FILES for more
++  information.
++
+   it() if the pattern is a single exclamation mark ! then the current
+   include/exclude list is reset, removing all previously defined patterns.
+ )
+@@ -1090,6 +1118,67 @@ itemize(
    it would be excluded by the "*")
  )
  
@@ -548,25 +717,15 @@ for the current dir because its name contained a slash.
 +itemize(
 +  it() If the filename has no slashes in it, it is a per-directory merge;
 +  rsync scans every directory that it traverses for the named file, merging
-+  its contents (when it exists) at the start of this per-directory sub-list
-+  (subdirectories inherit the contents of their parent directories by
-+  default, and each subdirectory's rules have precedence over the parent
-+  directory's rules).  When a per-directory merge file adds another
-+  per-directory merge file, it is only active in the subtree of the current
-+  directory.
++  its contents (when it exists) at the start of this per-directory
++  sub-list.
 +
 +  it() If a filename has a slash in it, it is a single-instance merge; the
 +  named file's contents will be merged into the current exclude file,
 +  replacing the merge rule.  Thus, you should use the name ./foo instead of
-+  foo if you don't want to scan for "foo" in all the subdirectories of the
-+  current directory.
++  foo if you don't want to scan for "foo" in all the subdirectories in the
++  transferred tree of directories.
 +)
-+
-+Note also that you can eliminate all the inherited rules for the current
-+per-directory ruleset by putting the list-clearing token (!) in the file.
-+This only clears the rules for the current per-directory sub-list (up
-+through the ! token) and only for the current directory and its
-+subdirectories.
 +
 +Here's an example exclude file (which you'd specify via the normal
 +--exclude-from option):
@@ -602,15 +761,18 @@ for the current dir because its name contained a slash.
 +Note also that the parsing of any merge-file named ".cvsignore" is always
 +done in a CVS-compatible manner, even if -C wasn't specified (i.e. the
 +rules are always exclude rules (even when specified by an include option);
-+they are split on whitespace; no special prefixes, list-clearing tokens, or
-+comment characters are honored; and, for per-directory files,
-+subdirectories don't inherit the parent directory's rules).
++they are split on whitespace; and no special prefixes, list-clearing
++tokens, or comment characters are honored).
++
++See the --inherit option for how to make the rules read from a
++per-directory merge file inherited by all the subdirectories of the
++spot where the per-directory rule file was found.
 +
  manpagesection(BATCH MODE)
  
  bf(Note:) Batch mode should be considered experimental in this version
 --- testsuite/exclude.test	24 May 2004 00:16:07 -0000	1.8
-+++ testsuite/exclude.test	24 May 2004 00:44:02 -0000
++++ testsuite/exclude.test	28 May 2004 21:56:11 -0000
 @@ -23,19 +23,47 @@ export HOME CVSIGNORE
  makepath "$fromdir/foo/down/to/you"
  makepath "$fromdir/bar/down/to/foo/too"
@@ -679,7 +841,7 @@ for the current dir because its name contained a slash.
 +# Now, test if rsync excludes the same files, this time with a merge-exclude
 +# file.
 +
-+checkit "$RSYNC -avv --exclude='. .excl' --exclude-from=\"$excl\" \
++checkit "$RSYNC -avv --exclude='. .excl' --exclude-from=\"$excl\" --inherit=. \
 +    --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
 +
  # The script would have aborted on error, so getting here means we've won.
