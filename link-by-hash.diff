@@ -1,3 +1,41 @@
+To: rsync@lists.samba.org
+From: "Jason M. Felice" <jfelice@cronosys.com>
+Subject: [patch] Add `--link-by-hash' option (rev 5).
+Date: Mon, 23 Feb 2004 13:29:08 -0500
+
+This patch adds the --link-by-hash=DIR option, which hard links received
+files in a link farm arranged by MD4 file hash.  The result is that the system
+will only store one copy of the unique contents of each file, regardless of
+the file's name.
+
+(rev 5)
+* Fixed silly logic error.
+
+(rev 4)
+* Updated for committed robust_rename() patch, other changes in CVS.
+
+(rev 3)
+* Don't link empty files.
+* Roll over to new file when filesystem maximum link count is reached.
+* If link fails for another reason, leave non-linked file there.
+* Depends on rsync-rename.diff
+
+(rev 2)
+* This revision is actually against CVS HEAD (I didn't realize I was working
+  from a stale rsync'd CVS).
+* Apply permissions after linking (permissions were lost if we already had
+  a copy of the file in the link farm).
+
+Patch Summary:
+
+    -1   +1    Makefile.in
+    -0   +351  hashlink.c (new)
+    -1   +22   options.c
+    -0   +6    proto.h
+    -6   +21   receiver.c
+    -2   +8    rsync.c
+    -0   +8    rsync.h
+
 --- hashlink.c	1969-12-31 19:00:00.000000000 -0500
 +++ hashlink.c	2004-02-23 10:30:45.000000000 -0500
 @@ -0,0 +1,351 @@
@@ -431,7 +469,7 @@
  		if (remote_filesfrom_file) {
  			args[ac++] = "--files-from";
 --- proto.h	2004-02-23 10:22:51.000000000 -0500
-+++ proto.h	2004-02-23 10:22:51.000000000 -0500
++++ proto.h	2004-02-23 11:06:03.000000000 -0500
 @@ -93,6 +93,12 @@
  void write_sum_head(int f, struct sum_struct *sum);
  void recv_generator(char *fname, struct file_struct *file, int i, int f_out);
@@ -548,7 +586,7 @@
  		log_recv(file, &initial_stats);
  
 --- rsync.c	2004-02-23 10:22:51.000000000 -0500
-+++ rsync.c	2004-02-23 10:27:15.000000000 -0500
++++ rsync.c	2004-02-23 12:49:33.000000000 -0500
 @@ -33,6 +33,7 @@
  extern int preserve_gid;
  extern int preserve_perms;
@@ -557,21 +595,24 @@
  
  
  /*
-@@ -236,6 +237,12 @@
+@@ -236,8 +237,13 @@
  	if (make_backups && !make_backup(fname))
  		return;
  
+-	/* move tmp file over real file */
+-	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
 +#ifdef HAVE_LINK
-+	if (link_by_hash_dir) {
-+		if ((ret = link_by_hash(fnametmp,fname,file)) != 0)
-+			return;
-+	} else
++	if (link_by_hash_dir)
++		ret = link_by_hash(fnametmp,fname,file);
++	else
 +#endif
- 	/* move tmp file over real file */
- 	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
++		ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
++
  	if (ret != 0) {
+ 		rprintf(FERROR, "%s %s -> \"%s\": %s\n",
+ 		    ret == -2 ? "copy" : "rename",
 --- rsync.h	2004-02-23 10:22:51.000000000 -0500
-+++ rsync.h	2004-02-23 10:22:51.000000000 -0500
++++ rsync.h	2004-02-23 12:42:59.000000000 -0500
 @@ -513,6 +513,14 @@
  	int current_file_index;
  };
