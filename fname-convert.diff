@@ -42,13 +42,13 @@ like a minor concern.
 
 Most of the new code is in the new file fnameconv.c. The patch lightly
 touches some other files, mostly flist.c and the addition/extension of
-some utility functions. I took the opportunity to fix an argument
-parsing buffer overflow bug in main.c. Note that you'll need to run
-autoconf and 'make proto'.
+some utility functions.
+
+Note that you'll need to run 'make proto' after applying this patch.
 
 
 --- Makefile.in	15 May 2004 00:48:11 -0000	1.101
-+++ Makefile.in	18 Jun 2004 17:25:38 -0000
++++ Makefile.in	28 Jun 2004 21:08:38 -0000
 @@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
@@ -59,7 +59,7 @@ autoconf and 'make proto'.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
 --- cleanup.c	13 May 2004 07:08:18 -0000	1.22
-+++ cleanup.c	18 Jun 2004 17:25:38 -0000
++++ cleanup.c	28 Jun 2004 21:08:38 -0000
 @@ -24,6 +24,7 @@
  extern int io_error;
  extern int keep_partial;
@@ -78,7 +78,7 @@ autoconf and 'make proto'.
  		do_unlink(cleanup_fname);
  	if (code) {
 --- errcode.h	15 Dec 2003 08:04:14 -0000	1.8
-+++ errcode.h	18 Jun 2004 17:25:38 -0000
++++ errcode.h	28 Jun 2004 21:08:38 -0000
 @@ -34,6 +34,7 @@
  #define RERR_STREAMIO   12      /* error in rsync protocol data stream */
  #define RERR_MESSAGEIO  13      /* errors with program diagnostics */
@@ -88,7 +88,7 @@ autoconf and 'make proto'.
  #define RERR_SIGNAL     20      /* status returned when sent SIGUSR1, SIGINT */
  #define RERR_WAITCHILD  21      /* some error returned by waitpid() */
 --- flist.c	18 Jun 2004 16:29:21 -0000	1.231
-+++ flist.c	18 Jun 2004 17:25:38 -0000
++++ flist.c	28 Jun 2004 21:08:38 -0000
 @@ -43,6 +43,7 @@ extern int cvs_exclude;
  
  extern int recurse;
@@ -160,7 +160,7 @@ autoconf and 'make proto'.
  		output_flist(flist);
  
 --- /dev/null	1 Jan 1970 00:00:00 -0000
-+++ fnameconv.c	18 Jun 2004 17:25:38 -0000
++++ fnameconv.c	28 Jun 2004 21:08:38 -0000
 @@ -0,0 +1,220 @@
 +/*  -*- c-file-style: "linux" -*-
 + *
@@ -382,9 +382,9 @@ autoconf and 'make proto'.
 +	if (verbose > 2)
 +		rprintf(FINFO, "Converted filename: %s -> %s\n", src, dest);
 +}
---- generator.c	18 Jun 2004 16:30:24 -0000	1.88
-+++ generator.c	18 Jun 2004 17:25:38 -0000
-@@ -268,6 +268,12 @@ static void generate_and_send_sums(struc
+--- generator.c	23 Jun 2004 21:21:19 -0000	1.90
++++ generator.c	28 Jun 2004 21:08:39 -0000
+@@ -265,6 +265,12 @@ static void generate_and_send_sums(struc
   *
   * @note This comment was added later by mbp who was trying to work it
   * out.  It might be wrong.
@@ -398,7 +398,7 @@ autoconf and 'make proto'.
  void recv_generator(char *fname, struct file_struct *file, int i, int f_out)
  {
 --- log.c	7 Jun 2004 22:51:14 -0000	1.74
-+++ log.c	18 Jun 2004 17:25:39 -0000
++++ log.c	28 Jun 2004 21:08:39 -0000
 @@ -57,6 +57,7 @@ struct {
  	{ RERR_STREAMIO   , "error in rsync protocol data stream" },
  	{ RERR_MESSAGEIO  , "errors with program diagnostics" },
@@ -407,33 +407,9 @@ autoconf and 'make proto'.
  	{ RERR_SIGNAL     , "received SIGUSR1 or SIGINT" },
  	{ RERR_WAITCHILD  , "some error returned by waitpid()" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
---- main.c	18 Jun 2004 16:50:20 -0000	1.198
-+++ main.c	18 Jun 2004 17:25:39 -0000
-@@ -219,7 +219,7 @@ static pid_t do_cmd(char *cmd, char *mac
- 		    int *f_in, int *f_out)
- {
- 	int i, argc = 0;
--	char *args[100];
-+	char *args[MAX_ARGS];
- 	pid_t ret;
- 	char *tok, *dir = NULL;
- 	int dash_l_set = 0;
-@@ -234,8 +234,13 @@ static pid_t do_cmd(char *cmd, char *mac
- 		if (!cmd)
- 			goto oom;
- 
--		for (tok = strtok(cmd, " "); tok; tok = strtok(NULL, " "))
-+		for (tok = strtok(cmd, " "); tok; tok = strtok(NULL, " ")) {
-+			if (argc >= MAX_ARGS) {
-+				rprintf(FERROR, "Command is too long\n");
-+				exit_cleanup(RERR_SYNTAX);
-+			}
- 			args[argc++] = tok;
-+		}
- 
- 		/* check to see if we've already been given '-l user' in
- 		 * the remote-shell command */
-@@ -298,7 +303,7 @@ static pid_t do_cmd(char *cmd, char *mac
+--- main.c	28 Jun 2004 17:45:40 -0000	1.201
++++ main.c	28 Jun 2004 21:08:39 -0000
+@@ -304,7 +304,7 @@ static pid_t do_cmd(char *cmd, char *mac
  			create_flist_from_batch(); /* sets batch_flist */
  		ret = local_child(argc, args, f_in, f_out, child_main);
  	} else {
@@ -441,9 +417,9 @@ autoconf and 'make proto'.
 +		ret = piped_child(args, f_in, f_out, blocking_io, 1);
  	}
  
- 	if (dir) free(dir);
---- options.c	7 Jun 2004 22:05:22 -0000	1.156
-+++ options.c	18 Jun 2004 17:25:39 -0000
+ 	if (dir)
+--- options.c	20 Jun 2004 19:47:05 -0000	1.157
++++ options.c	28 Jun 2004 21:08:39 -0000
 @@ -127,6 +127,7 @@ char *backup_dir = NULL;
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = RSYNC_PORT;
@@ -469,7 +445,7 @@ autoconf and 'make proto'.
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   &daemon_opt, 0, 0, 0 },
 --- pipe.c	18 Jun 2004 16:00:33 -0000	1.8
-+++ pipe.c	18 Jun 2004 17:25:39 -0000
++++ pipe.c	28 Jun 2004 21:08:39 -0000
 @@ -23,7 +23,6 @@
  
  extern int am_sender;
@@ -500,7 +476,7 @@ autoconf and 'make proto'.
  		rsyserr(FERROR, errno, "fork");
  		exit_cleanup(RERR_IPC);
 --- syscall.c	18 Feb 2004 22:33:21 -0000	1.30
-+++ syscall.c	18 Jun 2004 17:25:39 -0000
++++ syscall.c	28 Jun 2004 21:08:39 -0000
 @@ -231,3 +231,34 @@ char *d_name(struct dirent *di)
  	return di->d_name;
  #endif
@@ -537,8 +513,8 @@ autoconf and 'make proto'.
 +	return result;
 +}
 --- util.c	9 Jun 2004 21:51:07 -0000	1.149
-+++ util.c	18 Jun 2004 17:25:40 -0000
-@@ -1153,3 +1153,52 @@ void *_realloc_array(void *ptr, unsigned
++++ util.c	28 Jun 2004 21:08:40 -0000
+@@ -1153,3 +1153,55 @@ void *_realloc_array(void *ptr, unsigned
  		return malloc(size * num);
  	return realloc(ptr, size * num);
  }
@@ -557,37 +533,40 @@ autoconf and 'make proto'.
 +	struct timeval tv;
 +	int res;
 +
-+	tv.tv_sec = timeout_ms/1000;
-+	tv.tv_usec = (timeout_ms%1000)*1000;
++	tv.tv_sec = timeout_ms / 1000;
++	tv.tv_usec = (timeout_ms % 1000) * 1000;
 +
 +	while (1) {
++		int maxfd = 0;
 +		FD_ZERO(&read_fds);
 +		FD_ZERO(&write_fds);
 +		FD_ZERO(&except_fds);
 +		if (write_fd >= 0) {
 +			FD_SET(write_fd, &write_fds);
 +			FD_SET(write_fd, &except_fds);
++			if (write_fd > maxfd)
++				maxfd = write_fd;
 +		}
 +		if (read_fd >= 0) {
 +			FD_SET(read_fd, &read_fds);
 +			FD_SET(read_fd, &except_fds);
++			if (read_fd > maxfd)
++				maxfd = read_fd;
 +		}
 +
-+		res = do_select(MAX(0,MAX(read_fd, write_fd)+1), &read_fds, &write_fds, &except_fds, &tv);
++		res = do_select(maxfd+1, &read_fds, &write_fds, &except_fds, &tv);
 +		if (res > 0)
 +			return 1;
++		if (res < 0) {
++			if (errno == EINTR || errno == EAGAIN)
++				continue; /* Retry */
++			rprintf(FERROR, "Error awaiting fname converter: %s\n", strerror(errno));
++			exit_cleanup(RERR_FNAMECONV);
++		}
 +		if (read_fd >= 0 && (FD_ISSET(read_fd, &read_fds) || FD_ISSET(read_fd, &except_fds)))
 +			return 1;
 +		if (write_fd >= 0 && (FD_ISSET(write_fd, &write_fds) || FD_ISSET(write_fd, &except_fds)))
 +			return 1;
-+		if (res == EINTR || res == EAGAIN) {
-+			continue; /* Retry */
-+		}
-+		if (res < 0) {
-+			rprintf(FERROR, "Error awaiting fname converter: %s\n", strerror(errno));
-+			exit_cleanup(RERR_FNAMECONV);
-+		}
 +		return 0; /* res == 0 and no FDs set, hence a timeout. */
 +	}
 +}
-+
