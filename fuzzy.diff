@@ -1,12 +1,9 @@
-This latest version has most of the TODO-list items solved.  The one
-remaining issue is that we really need to handle all the files in a dir
-before we move on to the sub-directories, so this patch needs the sorting
-algorithm to change to put all the subdirs at the end of the list of a
-dir's contents.
+This patch makes rsync look try to find a basis file for a file that
+doesn't already have one.
 
 Be sure to run "make proto" before "make".
 
---- orig/flist.c	2005-02-12 19:54:27
+--- orig/flist.c	2005-02-13 21:17:16
 +++ flist.c	2005-02-13 09:49:22
 @@ -330,7 +330,7 @@ void send_file_entry(struct file_struct 
  	char fname[MAXPATHLEN];
@@ -27,7 +24,7 @@ Be sure to run "make proto" before "make".
  		return;
  
  	maybe_emit_filelist_progress(flist);
-@@ -1311,7 +1312,7 @@ struct file_list *recv_file_list(int f)
+@@ -1315,7 +1316,7 @@ struct file_list *recv_file_list(int f)
  
  	clean_flist(flist, relative_paths, 1);
  
@@ -36,7 +33,7 @@ Be sure to run "make proto" before "make".
  		/* Now send the uid/gid list. This was introduced in
  		 * protocol version 15 */
  		recv_uid_list(f, flist);
-@@ -1650,6 +1651,25 @@ static int is_backup_file(char *fn)
+@@ -1715,6 +1716,25 @@ static int is_backup_file(char *fn)
  	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
  }
  
@@ -63,7 +60,7 @@ Be sure to run "make proto" before "make".
  /* This function is used to implement per-directory deletion, and
   * is used by all the --delete-WHEN options.  Note that the fbuf
 --- orig/generator.c	2005-02-13 05:50:28
-+++ generator.c	2005-02-13 10:01:48
++++ generator.c	2005-02-13 21:22:28
 @@ -47,6 +47,7 @@ extern int size_only;
  extern OFF_T max_size;
  extern int io_timeout;
@@ -72,7 +69,7 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -227,6 +228,47 @@ static void generate_and_send_sums(int f
+@@ -227,6 +228,48 @@ static void generate_and_send_sums(int f
  		unmap_file(mapbuf);
  }
  
@@ -93,7 +90,8 @@ Be sure to run "make proto" before "make".
 +		int len, suf_len;
 +		uint32 dist;
 +
-+		if (!S_ISREG(fp->mode) || !fp->length)
++		if (!S_ISREG(fp->mode) || !fp->length
++		    || fp->flags & FLAG_NO_FUZZY)
 +			continue;
 +
 +		name = fp->basename;
@@ -105,7 +103,7 @@ Be sure to run "make proto" before "make".
 +		dist += fuzzy_distance(suf, suf_len, fname_suf, fname_suf_len)
 +		      * 10;
 +		if (verbose > 4) {
-+			rprintf(FINFO, "fuzzy distance for %s = %d (%d)\n",
++			rprintf(FINFO, "fuzzy distance for %s = %d.%05d\n",
 +				name, (int)(dist>>16), (int)(dist&0xFFFF));
 +		}
 +		if (dist <= lowest_dist) {
@@ -120,7 +118,7 @@ Be sure to run "make proto" before "make".
  
  /* Acts on flist->file's ndx'th item, whose name is fname.  If a directory,
   * make sure it exists, and has the right permissions/timestamp info.  For
-@@ -241,6 +283,8 @@ static void recv_generator(char *fname, 
+@@ -241,6 +284,8 @@ static void recv_generator(char *fname, 
  			   int f_out, int f_out_name)
  {
  	static int missing_below = -1;
@@ -129,7 +127,7 @@ Be sure to run "make proto" before "make".
  	int fd = -1, f_copy = -1;
  	STRUCT_STAT st, partial_st;
  	struct file_struct *back_file = NULL;
-@@ -275,6 +319,16 @@ static void recv_generator(char *fname, 
+@@ -275,6 +320,16 @@ static void recv_generator(char *fname, 
  		statret = -1;
  		stat_errno = ENOENT;
  	} else {
@@ -146,7 +144,7 @@ Be sure to run "make proto" before "make".
  		statret = link_stat(fname, &st,
  				    keep_dirlinks && S_ISDIR(file->mode));
  		stat_errno = errno;
-@@ -492,6 +546,24 @@ static void recv_generator(char *fname, 
+@@ -492,6 +547,24 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -171,7 +169,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -520,6 +592,8 @@ static void recv_generator(char *fname, 
+@@ -520,6 +593,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -180,19 +178,19 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -540,6 +614,11 @@ prepare_to_open:
+@@ -540,6 +615,11 @@ prepare_to_open:
  		statret = -1;
  		goto notify_others;
  	}
 +	if (fuzzy_basis && fnamecmp_type == FNAMECMP_FNAME) {
 +		int j = flist_find(fuzzy_dirlist, file);
-+		if (j >= 0) /* don't use an updating file as fuzzy basis */
-+			fuzzy_dirlist->files[j]->length = 0;
++		if (j >= 0) /* don't use updating file as future fuzzy basis */
++			fuzzy_dirlist->files[j]->flags |= FLAG_NO_FUZZY;
 +	}
  
  	/* open the file */
  	fd = do_open(fnamecmp, O_RDONLY, 0);
-@@ -594,8 +673,24 @@ notify_others:
+@@ -594,8 +674,24 @@ notify_others:
  	write_int(f_out, ndx);
  	if (protocol_version >= 29 && inplace && !read_batch)
  		write_byte(f_out, fnamecmp_type);
@@ -316,8 +314,16 @@ Be sure to run "make proto" before "make".
  				if (j >= basis_dir_cnt) {
  					rprintf(FERROR,
 --- orig/rsync.h	2005-02-12 19:54:27
-+++ rsync.h	2005-01-19 18:36:47
-@@ -127,6 +127,7 @@
++++ rsync.h	2005-02-13 21:19:16
+@@ -60,6 +60,7 @@
+ #define FLAG_TOP_DIR (1<<0)
+ #define FLAG_HLINK_EOL (1<<1)	/* generator only */
+ #define FLAG_MOUNT_POINT (1<<2)	/* sender only */
++#define FLAG_NO_FUZZY (1<<2)	/* generator only */
+ #define FLAG_DEL_HERE (1<<3)	/* receiver/generator */
+ 
+ /* update this if you make incompatible changes */
+@@ -127,6 +128,7 @@
  #define FNAMECMP_FNAME		0x80
  #define FNAMECMP_PARTIAL_DIR	0x81
  #define FNAMECMP_BACKUP 	0x82
