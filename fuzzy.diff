@@ -6,9 +6,9 @@ Lightly tested.
 
 Be sure to run "make proto" before "make".
 
---- orig/generator.c	2005-01-18 23:14:23
+--- orig/generator.c	2005-01-23 07:55:40
 +++ generator.c	2005-01-19 18:39:15
-@@ -46,6 +46,7 @@ extern int size_only;
+@@ -45,6 +45,7 @@ extern int size_only;
  extern OFF_T max_size;
  extern int io_timeout;
  extern int protocol_version;
@@ -16,7 +16,7 @@ Be sure to run "make proto" before "make".
  extern int always_checksum;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -226,6 +227,88 @@ static void generate_and_send_sums(int f
+@@ -225,6 +226,88 @@ static void generate_and_send_sums(int f
  		unmap_file(mapbuf);
  }
  
@@ -105,7 +105,7 @@ Be sure to run "make proto" before "make".
  
  /*
   * Acts on file number @p i from @p flist, whose name is @p fname.
-@@ -478,6 +561,15 @@ static void recv_generator(char *fname, 
+@@ -479,6 +562,15 @@ static void recv_generator(char *fname, 
  	} else
  		partialptr = NULL;
  
@@ -121,7 +121,7 @@ Be sure to run "make proto" before "make".
  	if (statret == -1) {
  		if (preserve_hard_links && hard_link_check(file, HL_SKIP))
  			return;
-@@ -506,6 +598,8 @@ static void recv_generator(char *fname, 
+@@ -507,6 +599,8 @@ static void recv_generator(char *fname, 
  
  	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -130,7 +130,7 @@ Be sure to run "make proto" before "make".
  	else if (unchanged_file(fnamecmp, file, &st)) {
  		if (fnamecmp_type == FNAMECMP_FNAME)
  			set_perms(fname, file, &st, PERMS_REPORT);
-@@ -580,8 +674,24 @@ notify_others:
+@@ -581,8 +675,24 @@ notify_others:
  	write_int(f_out, i);
  	if (protocol_version >= 29 && inplace && !read_batch)
  		write_byte(f_out, fnamecmp_type);
@@ -156,7 +156,7 @@ Be sure to run "make proto" before "make".
  
  	if (dry_run || read_batch)
  		return;
---- orig/main.c	2005-01-18 21:56:05
+--- orig/main.c	2005-01-23 01:48:52
 +++ main.c	2005-01-14 18:33:15
 @@ -49,6 +49,7 @@ extern int keep_dirlinks;
  extern int preserve_hard_links;
@@ -176,17 +176,17 @@ Be sure to run "make proto" before "make".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
---- orig/options.c	2005-01-19 01:07:34
+--- orig/options.c	2005-01-23 01:53:35
 +++ options.c	2005-01-15 21:08:13
-@@ -89,6 +89,7 @@ int copy_unsafe_links = 0;
+@@ -90,6 +90,7 @@ int copy_unsafe_links = 0;
  int size_only = 0;
  int daemon_bwlimit = 0;
  int bwlimit = 0;
 +int fuzzy_basis = 0;
  size_t bwlimit_writemax = 0;
- int delete_after = 0;
  int only_existing = 0;
-@@ -292,6 +293,7 @@ void usage(enum logcode F)
+ int opt_ignore_existing = 0;
+@@ -293,6 +294,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -194,7 +194,7 @@ Be sure to run "make proto" before "make".
    rprintf(F," -P                          equivalent to --partial --progress\n");
    rprintf(F," -z, --compress              compress file data\n");
    rprintf(F," -C, --cvs-exclude           auto ignore files in the same way CVS does\n");
-@@ -390,6 +392,7 @@ static struct poptOption long_options[] 
+@@ -393,6 +395,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -202,7 +202,7 @@ Be sure to run "make proto" before "make".
    /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
    {"stats",            0,  POPT_ARG_NONE,   &do_stats, 0, 0, 0 },
-@@ -1247,6 +1250,9 @@ void server_options(char **args,int *arg
+@@ -1251,6 +1254,9 @@ void server_options(char **args,int *arg
  	if (!implied_dirs && !am_sender)
  		args[ac++] = "--no-implied-dirs";
  
@@ -212,9 +212,9 @@ Be sure to run "make proto" before "make".
  	*argc = ac;
  	return;
  
---- orig/receiver.c	2005-01-18 22:47:38
+--- orig/receiver.c	2005-01-23 07:55:58
 +++ receiver.c	2005-01-15 21:21:02
-@@ -234,6 +234,27 @@ static int receive_data(int f_in, char *
+@@ -251,6 +251,27 @@ static int receive_data(int f_in, char *
  }
  
  
@@ -242,7 +242,7 @@ Be sure to run "make proto" before "make".
  static void discard_receive_data(int f_in, OFF_T length)
  {
  	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
-@@ -364,6 +385,10 @@ int recv_files(int f_in, struct file_lis
+@@ -381,6 +402,10 @@ int recv_files(int f_in, struct file_lis
  			case FNAMECMP_BACKUP:
  				fnamecmp = get_backup_name(fname);
  				break;
@@ -253,7 +253,7 @@ Be sure to run "make proto" before "make".
  			default:
  				if (j >= basis_dir_cnt) {
  					rprintf(FERROR,
---- orig/rsync.h	2005-01-19 20:11:10
+--- orig/rsync.h	2005-01-21 00:35:26
 +++ rsync.h	2005-01-19 18:36:47
 @@ -128,6 +128,7 @@
  #define FNAMECMP_FNAME		0x80
@@ -262,10 +262,10 @@ Be sure to run "make proto" before "make".
 +#define FNAMECMP_FUZZY		0x83
  
  /* For calling delete_file() */
- #define DEL_DIR			(1<<0)
---- orig/rsync.yo	2005-01-19 01:05:05
+ #define DEL_DIR 		(1<<0)
+--- orig/rsync.yo	2005-01-23 02:57:49
 +++ rsync.yo	2005-01-15 21:48:52
-@@ -359,6 +359,7 @@ verb(
+@@ -360,6 +360,7 @@ verb(
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
@@ -273,7 +273,7 @@ Be sure to run "make proto" before "make".
   -P                          equivalent to --partial --progress
   -z, --compress              compress file data
   -C, --cvs-exclude           auto ignore files in the same way CVS does
-@@ -888,6 +889,14 @@ Note that rsync versions prior to 2.6.1 
+@@ -896,6 +897,14 @@ Note that rsync versions prior to 2.6.1 
  (or implied by -a).  You can work-around this bug by avoiding the -o option
  when sending to an old rsync.
  
@@ -288,7 +288,7 @@ Be sure to run "make proto" before "make".
  dit(bf(-z, --compress)) With this option, rsync compresses any data from
  the files that it sends to the destination machine.  This
  option is useful on slow connections.  The compression method used is the
---- orig/util.c	2005-01-19 20:11:10
+--- orig/util.c	2005-01-20 23:05:34
 +++ util.c	2005-01-19 17:30:51
 @@ -1213,3 +1213,108 @@ void *_realloc_array(void *ptr, unsigned
  		return malloc(size * num);
