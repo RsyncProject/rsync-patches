@@ -4,7 +4,7 @@ command before "make":
     make proto
 
 This patch adds the --filter option, which implements an improved set of
-excludes/includes rules:
+include/exclude rules:
 
     . SINGLE-INSTANCE_MERGE_FILE
     : PER-DIRECTORY_MERGE_FILE
@@ -12,8 +12,9 @@ excludes/includes rules:
     + include-pattern
 
 Note that the prefix for a filter rule is NOT optional, and that the
-separating space can be an equal-sign (=), if desired.  There are also
-optional modifiers that can be specified for a merge-file rule.
+separating space can be replaced by an equal-sign (=) or an underscore (_),
+if desired.  There are also optional modifiers that can be specified for
+the merge-file rules.
 
 A per-directory merge file is one that will be looked for in every
 sub-directory that rsync visits, and the rules found in that sub-
@@ -21,21 +22,21 @@ directory's file will affect that dir and (if desired) its subdirs.
 
 For example:
 
-  rsync -av --filter :=.filt from/ to
+  rsync -av --filter :_.rules from/ to
 
-The above will look for a file named ".filt" in every directory of the
+The above will look for a file named ".rules" in every directory of the
 hierarchy that rsync visits, and it will filter names based on the rules
-found therein.  If one of the .filt files contains this:
+found therein.  If one of the .rules files contains this:
 
   + *.c
-  : .filt2
-  . .filt3
+  : .rules2
+  . .rules3
   - *.o
   - /foobar
 
-Then the file ".filt2" will also be read in from the current dir and all
-its subdirs.  The file ".filt3" would just be read in from the current dir
-only.  The exclusion of "foobar" will only happen in that .filt file's
+Then the file ".rules2" will also be read in from the current dir and all
+its subdirs.  The file ".rules3" would just be read in from the current dir
+only.  The exclusion of "foobar" will only happen in that .rules file's
 directory because the rule is anchored, which is one way to make a rule
 local instead of inherited (see also the 'n' modifier).
 
@@ -103,8 +104,8 @@ local instead of inherited (see also the 'n' modifier).
  	log_init();
  
 --- orig/exclude.c	2005-01-13 23:15:56
-+++ exclude.c	2005-01-17 00:25:08
-@@ -30,15 +30,73 @@ extern int verbose;
++++ exclude.c	2005-01-17 05:55:59
+@@ -30,15 +30,68 @@ extern int verbose;
  extern int eol_nulls;
  extern int list_only;
  extern int recurse;
@@ -122,11 +123,6 @@ local instead of inherited (see also the 'n' modifier).
 -char *exclude_path_prefix = NULL;
  
 -/** Build an exclude structure given an exclude pattern. */
-+struct mergelist_save_struct {
-+    struct exclude_list_struct *array;
-+    int count;
-+};
-+
 +/* The dirbuf is set by push_local_excludes() to the current subdirectory
 + * relative to curr_dir that is being processed.  The path always has a
 + * trailing slash appended, and the variable dirbuf_len contains the length
@@ -181,15 +177,16 @@ local instead of inherited (see also the 'n' modifier).
  static void make_exclude(struct exclude_list_struct *listp, const char *pat,
  			 unsigned int pat_len, unsigned int mflags)
  {
-@@ -46,23 +104,44 @@ static void make_exclude(struct exclude_
+@@ -46,23 +99,45 @@ static void make_exclude(struct exclude_
  	const char *cp;
  	unsigned int ex_len;
  
 +	if (verbose > 2) {
 +		rprintf(FINFO, "[%s] add_exclude(%.*s, %s%s)\n",
-+			who_am_i(), (int)pat_len, pat, listp->debug_type,
-+			mflags & MATCHFLG_MERGE_FILE ? "MERGE-FILE"
-+			: mflags & MATCHFLG_INCLUDE ? "include" : "exclude");
++			who_am_i(), (int)pat_len, pat,
++			mflags & MATCHFLG_MERGE_FILE ? "per-dir-merge"
++			: mflags & MATCHFLG_INCLUDE ? "include" : "exclude",
++			listp->debug_type);
 +	}
 +
 +	if (mflags & MATCHFLG_MERGE_FILE) {
@@ -232,7 +229,7 @@ local instead of inherited (see also the 'n' modifier).
  	strlcpy(ret->pattern + ex_len, pat, pat_len + 1);
  	pat_len += ex_len;
  
-@@ -81,14 +160,40 @@ static void make_exclude(struct exclude_
+@@ -81,14 +156,40 @@ static void make_exclude(struct exclude_
  		mflags |= MATCHFLG_DIRECTORY;
  	}
  
@@ -248,7 +245,7 @@ local instead of inherited (see also the 'n' modifier).
 +			cp++;
 +		else
 +			cp = ret->pattern;
-+		if (asprintf(&lp->debug_type, "per-dir %s ", cp) < 0)
++		if (asprintf(&lp->debug_type, " (per-dir %s)", cp) < 0)
 +			out_of_memory("make_exclude");
 +		ret->u.mergelist = lp;
 +		if (mergelist_cnt == mergelist_size) {
@@ -277,13 +274,14 @@ local instead of inherited (see also the 'n' modifier).
  		listp->tail->next = ret;
  		listp->tail = ret;
  	}
-@@ -96,22 +201,270 @@ static void make_exclude(struct exclude_
+@@ -96,22 +197,263 @@ static void make_exclude(struct exclude_
  
  static void free_exclude(struct exclude_struct *ex)
  {
 +	if (ex->match_flags & MATCHFLG_MERGE_FILE) {
 +		free(ex->u.mergelist->debug_type);
 +		free(ex->u.mergelist);
++		mergelist_cnt--;
 +	}
  	free(ex->pattern);
  	free(ex);
@@ -459,21 +457,16 @@ local instead of inherited (see also the 'n' modifier).
 + * into dirbuf so that we can easily append a file name on the end. */
 +void *push_local_excludes(const char *dir, unsigned int dirlen)
 +{
-+	struct mergelist_save_struct *push;
-+	struct exclude_list_struct *ap;
++	struct exclude_list_struct *ap, *push;
 +	int i;
 +
 +	set_excludes_dir(dir, dirlen);
 +
-+	if (!(push = new_array(struct mergelist_save_struct, 1)))
++	push = new_array(struct exclude_list_struct, mergelist_cnt);
++	if (!push)
 +		out_of_memory("push_local_excludes");
 +
-+	push->count = mergelist_cnt;
-+	push->array = new_array(struct exclude_list_struct, mergelist_cnt);
-+	if (!push->array)
-+		out_of_memory("push_local_excludes");
-+
-+	for (i = 0, ap = push->array; i < mergelist_cnt; i++) {
++	for (i = 0, ap = push; i < mergelist_cnt; i++) {
 +		memcpy(ap++, mergelist_parents[i]->u.mergelist,
 +		       sizeof (struct exclude_list_struct));
 +	}
@@ -486,7 +479,7 @@ local instead of inherited (see also the 'n' modifier).
 +		int flags = 0;
 +
 +		if (verbose > 2) {
-+			rprintf(FINFO, "[%s] pushing %sexclude list\n",
++			rprintf(FINFO, "[%s] pushing exclude list%s\n",
 +				who_am_i(), lp->debug_type);
 +		}
 +
@@ -525,8 +518,7 @@ local instead of inherited (see also the 'n' modifier).
 +
 +void pop_local_excludes(void *mem)
 +{
-+	struct mergelist_save_struct *pop = (struct mergelist_save_struct*)mem;
-+	struct exclude_list_struct *ap;
++	struct exclude_list_struct *ap, *pop = (struct exclude_list_struct*)mem;
 +	int i;
 +
 +	for (i = mergelist_cnt; i-- > 0; ) {
@@ -534,27 +526,25 @@ local instead of inherited (see also the 'n' modifier).
 +		struct exclude_list_struct *lp = ex->u.mergelist;
 +
 +		if (verbose > 2) {
-+			rprintf(FINFO, "[%s] popping %sexclude list\n",
++			rprintf(FINFO, "[%s] popping exclude list%s\n",
 +				who_am_i(), lp->debug_type);
 +		}
 +
 +		clear_exclude_list(lp);
 +	}
 +
-+	mergelist_cnt = pop->count;
-+	for (i = 0, ap = pop->array; i < mergelist_cnt; i++) {
++	for (i = 0, ap = pop; i < mergelist_cnt; i++) {
 +		memcpy(mergelist_parents[i]->u.mergelist, ap++,
 +		       sizeof (struct exclude_list_struct));
 +	}
 +
-+	free(pop->array);
 +	free(pop);
 +}
 +
  static int check_one_exclude(char *name, struct exclude_struct *ex,
                               int name_is_dir)
  {
-@@ -125,13 +478,14 @@ static int check_one_exclude(char *name,
+@@ -125,13 +467,14 @@ static int check_one_exclude(char *name,
  	/* If the pattern does not have any slashes AND it does not have
  	 * a "**" (which could match a slash), then we just match the
  	 * name portion of the path. */
@@ -572,7 +562,7 @@ local instead of inherited (see also the 'n' modifier).
  		name = full_name;
  	}
  
-@@ -148,9 +502,9 @@ static int check_one_exclude(char *name,
+@@ -148,9 +491,9 @@ static int check_one_exclude(char *name,
  	if (ex->match_flags & MATCHFLG_WILD) {
  		/* A non-anchored match with an infix slash and no "**"
  		 * needs to match the last slash_cnt+1 name elements. */
@@ -584,7 +574,23 @@ local instead of inherited (see also the 'n' modifier).
  			for (p = name + strlen(name) - 1; p >= name; p--) {
  				if (*p == '/' && !--cnt)
  					break;
-@@ -221,6 +575,13 @@ int check_exclude(struct exclude_list_st
+@@ -202,12 +545,11 @@ static void report_exclude_result(char c
+ 	 * case we add it back in here. */
+ 
+ 	if (verbose >= 2) {
+-		rprintf(FINFO, "[%s] %scluding %s %s because of %spattern %s%s\n",
++		rprintf(FINFO, "[%s] %scluding %s %s because of pattern %s%s%s\n",
+ 			who_am_i(),
+ 			ent->match_flags & MATCHFLG_INCLUDE ? "in" : "ex",
+-			name_is_dir ? "directory" : "file", name, type,
+-			ent->pattern,
+-			ent->match_flags & MATCHFLG_DIRECTORY ? "/" : "");
++			name_is_dir ? "directory" : "file", name, ent->pattern,
++			ent->match_flags & MATCHFLG_DIRECTORY ? "/" : "", type);
+ 	}
+ }
+ 
+@@ -221,6 +563,13 @@ int check_exclude(struct exclude_list_st
  	struct exclude_struct *ent;
  
  	for (ent = listp->head; ent; ent = ent->next) {
@@ -598,7 +604,7 @@ local instead of inherited (see also the 'n' modifier).
  		if (check_one_exclude(name, ent, name_is_dir)) {
  			report_exclude_result(name, ent, name_is_dir,
  					      listp->debug_type);
-@@ -236,7 +597,7 @@ int check_exclude(struct exclude_list_st
+@@ -236,32 +585,102 @@ int check_exclude(struct exclude_list_st
   * be '\0' terminated, so use the returned length to limit the string.
   * Also, be sure to add this length to the returned pointer before passing
   * it back to ask for the next token.  This routine parses the "!" (list-
@@ -607,21 +613,29 @@ local instead of inherited (see also the 'n' modifier).
   * +/- prefixes for overriding the include/exclude mode.  The *flag_ptr
   * value will also be set to the MATCHFLG_* bits for the current token.
   */
-@@ -245,6 +606,7 @@ static const char *get_exclude_tok(const
+-static const char *get_exclude_tok(const char *p, unsigned int *len_ptr,
+-				   unsigned int *flag_ptr, int xflags)
++static const char *get_exclude_tok(const char *p, int xflags,
++			unsigned int *len_ptr, unsigned int *flag_ptr)
  {
  	const unsigned char *s = (const unsigned char *)p;
  	unsigned int len, mflags = 0;
-+	int add_dot_cvsinore = 0;
++	int empty_pat_is_OK = 0;
  
  	if (xflags & XFLG_WORD_SPLIT) {
  		/* Skip over any initial whitespace. */
-@@ -254,14 +616,74 @@ static const char *get_exclude_tok(const
+ 		while (isspace(*s))
+ 			s++;
+-		/* Update for "!" check. */
++		/* Update to point to real start of rule. */
  		p = (const char *)s;
  	}
++	if (!*s)
++		return NULL;
  
 -	/* Is this a '+' or '-' followed by a space (not whitespace)? */
 -	if (!(xflags & XFLG_WORDS_ONLY)
-+	/* Check for a leading '+' or '-'. */
++	/* Figure out what kind of a filter rule "s" is pointing at. */
 +	if (!(xflags & (XFLG_DEF_INCLUDE | XFLG_DEF_EXCLUDE))) {
 +		char *mods = "";
 +		switch (*s) {
@@ -639,18 +653,21 @@ local instead of inherited (see also the 'n' modifier).
 +		case '-':
 +			break;
 +		case '!':
++			mflags |= MATCHFLG_CLEAR_LIST;
++			mods = NULL;
 +			break;
-+		case '\0':
-+			len = 0;
-+			goto all_done;
 +		default:
-+			rprintf(FERROR, "Unknown filter command: %s\n", p);
++			rprintf(FERROR, "Unknown filter rule: %s\n", p);
 +			exit_cleanup(RERR_SYNTAX);
 +		}
-+		while (*++s && *s != ' ' && *s != '=') {
++		while (mods && *++s && *s != ' ' && *s != '=' && *s != '_') {
 +			if (strchr(mods, *s) == NULL) {
++				if (xflags & XFLG_WORD_SPLIT && isspace(*s)) {
++					s--;
++					break;
++				}
 +				rprintf(FERROR,
-+					"unknown option '%c' in filter command: %s\n",
++					"unknown option '%c' in filter rule: %s\n",
 +					*s, p);
 +				exit_cleanup(RERR_SYNTAX);
 +			}
@@ -663,7 +680,7 @@ local instead of inherited (see also the 'n' modifier).
 +					| MATCHFLG_INCLUDE;
 +				break;
 +			case 'C':
-+				add_dot_cvsinore = 1;
++				empty_pat_is_OK = 1;
 +				mflags |= MATCHFLG_NO_PREFIXES
 +					| MATCHFLG_WORD_SPLIT
 +					| MATCHFLG_NO_INHERIT;
@@ -686,34 +703,43 @@ local instead of inherited (see also the 'n' modifier).
  		if (*s == '+')
  			mflags |= MATCHFLG_INCLUDE;
  		s += 2;
- 	} else if (xflags & XFLG_DEF_INCLUDE)
- 		mflags |= MATCHFLG_INCLUDE;
+-	} else if (xflags & XFLG_DEF_INCLUDE)
+-		mflags |= MATCHFLG_INCLUDE;
++	} else {
++		if (xflags & XFLG_DEF_INCLUDE)
++			mflags |= MATCHFLG_INCLUDE;
++		if (*s == '!')
++			mflags |= MATCHFLG_CLEAR_LIST; /* Tentative! */
++	}
 +
  	if (xflags & XFLG_DIRECTORY)
  		mflags |= MATCHFLG_DIRECTORY;
  
-@@ -274,9 +696,20 @@ static const char *get_exclude_tok(const
+@@ -274,8 +693,21 @@ static const char *get_exclude_tok(const
  	} else
  		len = strlen(s);
  
-+	if (add_dot_cvsinore && !len) {
-+		s = ".cvsignore";
-+		len = 10;
-+	} else if (!len && *p) {
-+		rprintf(FERROR, "truncated filter command: %s\n", p);
+-	if (*p == '!' && len == 1)
+-		mflags |= MATCHFLG_CLEAR_LIST;
++	if (mflags & MATCHFLG_CLEAR_LIST) {
++		if (!(xflags & (XFLG_DEF_INCLUDE | XFLG_DEF_EXCLUDE)) && len) {
++			rprintf(FERROR,
++				"'!' rule has trailing characters: %s\n", p);
++			exit_cleanup(RERR_SYNTAX);
++		}
++		if (len > 1)
++			mflags &= ~MATCHFLG_CLEAR_LIST;
++	} else if (!len && !empty_pat_is_OK) {
++		rprintf(FERROR, "unexpected end of filter rule: %s\n", p);
 +		exit_cleanup(RERR_SYNTAX);
 +	}
 +
- 	if (*p == '!' && len == 1)
- 		mflags |= MATCHFLG_CLEAR_LIST;
 +	if (xflags & XFLG_ABS_PATH)
 +		mflags |= MATCHFLG_ABS_PATH;
  
-+    all_done:
  	*len_ptr = len;
  	*flag_ptr = mflags;
- 	return (const char *)s;
-@@ -287,7 +720,7 @@ void add_exclude(struct exclude_list_str
+@@ -287,35 +719,71 @@ void add_exclude(struct exclude_list_str
  		 int xflags)
  {
  	unsigned int pat_len, mflags;
@@ -722,23 +748,31 @@ local instead of inherited (see also the 'n' modifier).
  
  	if (!pattern)
  		return;
-@@ -295,9 +728,15 @@ void add_exclude(struct exclude_list_str
- 	cp = pattern;
- 	pat_len = 0;
+ 
+-	cp = pattern;
+-	pat_len = 0;
  	while (1) {
+-		cp = get_exclude_tok(cp + pat_len, &pat_len, &mflags, xflags);
+-		if (!pat_len)
 +		/* Remember that the returned string is NOT '\0' terminated! */
- 		cp = get_exclude_tok(cp + pat_len, &pat_len, &mflags, xflags);
- 		if (!pat_len)
++		cp = get_exclude_tok(pattern, xflags, &pat_len, &mflags);
++		if (!cp)
  			break;
 +		if (pat_len >= MAXPATHLEN) {
 +			rprintf(FERROR, "discarding over-long exclude: %s\n",
 +				cp);
 +			continue;
 +		}
++		pattern = cp + pat_len;
  
  		if (mflags & MATCHFLG_CLEAR_LIST) {
  			if (verbose > 2) {
-@@ -309,13 +748,39 @@ void add_exclude(struct exclude_list_str
+ 				rprintf(FINFO,
+-					"[%s] clearing %sexclude list\n",
++					"[%s] clearing exclude list%s\n",
+ 					who_am_i(), listp->debug_type);
+ 			}
+ 			clear_exclude_list(listp);
  			continue;
  		}
  
@@ -748,6 +782,11 @@ local instead of inherited (see also the 'n' modifier).
 -			rprintf(FINFO, "[%s] add_exclude(%.*s, %s%sclude)\n",
 -				who_am_i(), (int)pat_len, cp, listp->debug_type,
 -				mflags & MATCHFLG_INCLUDE ? "in" : "ex");
++		if (!pat_len) {
++			cp = ".cvsignore";
++			pat_len = 10;
++		}
++
 +		if (mflags & MATCHFLG_MERGE_FILE) {
 +			unsigned int len = pat_len;
 +			if (mflags & MATCHFLG_EXCLUDE_SELF) {
@@ -784,7 +823,7 @@ local instead of inherited (see also the 'n' modifier).
  	}
  }
  
-@@ -324,7 +789,7 @@ void add_exclude_file(struct exclude_lis
+@@ -324,7 +792,7 @@ void add_exclude_file(struct exclude_lis
  		      int xflags)
  {
  	FILE *fp;
@@ -793,15 +832,16 @@ local instead of inherited (see also the 'n' modifier).
  	char *eob = line + sizeof line - 1;
  	int word_split = xflags & XFLG_WORD_SPLIT;
  
-@@ -338,13 +803,19 @@ void add_exclude_file(struct exclude_lis
+@@ -338,13 +806,19 @@ void add_exclude_file(struct exclude_lis
  	if (!fp) {
  		if (xflags & XFLG_FATAL_ERRORS) {
  			rsyserr(FERROR, errno,
 -				"failed to open %s file %s",
 -				xflags & XFLG_DEF_INCLUDE ? "include" : "exclude",
+-				fname);
 +				"failed to open %sclude file %s",
 +				xflags & XFLG_DEF_INCLUDE ? "in" : "ex",
- 				fname);
++				safe_fname(fname));
  			exit_cleanup(RERR_FILEIO);
  		}
  		return;
@@ -810,12 +850,12 @@ local instead of inherited (see also the 'n' modifier).
 +
 +	if (verbose > 2) {
 +		rprintf(FINFO, "[%s] add_exclude_file(%s,%d)\n",
-+			who_am_i(), fname, xflags);
++			who_am_i(), safe_fname(fname), xflags);
 +	}
  
  	while (1) {
  		char *s = line;
-@@ -388,7 +859,7 @@ void send_exclude_list(int f)
+@@ -388,7 +862,7 @@ void send_exclude_list(int f)
  	 * FIXME: This pattern shows up in the output of
  	 * report_exclude_result(), which is not ideal. */
  	if (list_only && !recurse)
@@ -824,7 +864,7 @@ local instead of inherited (see also the 'n' modifier).
  
  	for (ent = exclude_list.head; ent; ent = ent->next) {
  		unsigned int l;
-@@ -402,10 +873,33 @@ void send_exclude_list(int f)
+@@ -402,10 +876,34 @@ void send_exclude_list(int f)
  			p[l] = '\0';
  		}
  
@@ -832,7 +872,8 @@ local instead of inherited (see also the 'n' modifier).
 +		if (ent->match_flags & MATCHFLG_PERDIR_MERGE) {
 +			char buf[32], *op = buf;
 +			if (protocol_version < 29) {
-+				rprintf(FERROR, "remote rsync is too old to understand per-directory filter files.\n");
++				rprintf(FERROR,
++					"remote rsync is too old to understand per-directory filter files.\n");
 +				exit_cleanup(RERR_SYNTAX);
 +			}
 +			*op++ = ':';
@@ -860,7 +901,7 @@ local instead of inherited (see also the 'n' modifier).
  			write_int(f, l + 2);
  			write_buf(f, "- ", 2);
  		} else
-@@ -419,14 +913,15 @@ void send_exclude_list(int f)
+@@ -419,14 +917,15 @@ void send_exclude_list(int f)
  
  void recv_exclude_list(int f)
  {
@@ -878,7 +919,7 @@ local instead of inherited (see also the 'n' modifier).
  	}
  }
  
-@@ -443,18 +938,18 @@ static char default_cvsignore[] = 
+@@ -443,18 +942,18 @@ static char default_cvsignore[] = 
  
  void add_cvs_excludes(void)
  {
@@ -1803,12 +1844,15 @@ local instead of inherited (see also the 'n' modifier).
  show why each individual file is included or excluded.
  
 --- orig/testsuite/exclude.test	2004-05-29 21:25:45
-+++ testsuite/exclude.test	2005-01-17 00:15:40
-@@ -23,19 +23,47 @@ export HOME CVSIGNORE
++++ testsuite/exclude.test	2005-01-17 06:19:10
+@@ -23,19 +23,50 @@ export HOME CVSIGNORE
  makepath "$fromdir/foo/down/to/you"
  makepath "$fromdir/bar/down/to/foo/too"
  makepath "$fromdir/mid/for/foo/and/that/is/who"
 +cat >"$fromdir/.excl" <<EOF
++- down
++: .excl-temp
++!
 +- .excl
 +- *.bak
 +- *.old
@@ -1852,7 +1896,25 @@ local instead of inherited (see also the 'n' modifier).
  echo cvsin >"$fromdir/mid/for/one-in-one-out"
  echo expunged >"$fromdir/mid/for/foo/extra"
  echo retained >"$fromdir/mid/for/foo/keep"
-@@ -97,7 +125,26 @@ $RSYNC -av --existing --include='*/' --e
+@@ -45,6 +76,7 @@ ln -s too "$fromdir/bar/down/to/foo/sym"
+ 
+ excl="$scratchdir/exclude-from"
+ cat >"$excl" <<EOF
++!
+ # If the second line of these two lines does anything, it's a bug.
+ + **/bar
+ - /bar
+@@ -82,7 +114,8 @@ $RSYNC -av --existing --include='*/' --e
+ 
+ # Now, test if rsync excludes the same files.
+ 
+-checkit "$RSYNC -avv --exclude-from=\"$excl\" \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
++checkit "$RSYNC -avv --exclude-from=\"$excl\" \
++    --delete \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
+ 
+ # Modify the chk dir by removing cvs-ignored files and then tweaking the dir times.
+ 
+@@ -97,7 +130,26 @@ $RSYNC -av --existing --include='*/' --e
  # Now, test if rsync excludes the same files, this time with --cvs-exclude
  # and --delete-excluded.
  
@@ -1876,7 +1938,7 @@ local instead of inherited (see also the 'n' modifier).
 +# Now, test if rsync excludes the same files, this time with a merge-exclude
 +# file.
 +
-+checkit "$RSYNC -avv --filter=': .excl' --filter=\". $excl\" \
++checkit "sed '/!/d' \"$excl\" | $RSYNC -avv -f :_.excl -f ._- \
      --delete-excluded \"$fromdir/\" \"$todir/\"" "$chkdir" "$todir"
  
  # The script would have aborted on error, so getting here means we've won.
