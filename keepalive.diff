@@ -1,0 +1,242 @@
+This patch extends the current keep-alive code (which currently only
+handles silences in the generator's output) to deal with potential
+silences in the sender's output when it is reading a lot of checksum
+data from the generator (caused by the transfer of a large file).
+
+--- orig/clientserver.c	2005-04-09 17:38:31
++++ clientserver.c	2005-05-16 01:02:41
+@@ -40,8 +40,6 @@ extern int sanitize_paths;
+ extern int filesfrom_fd;
+ extern int remote_protocol;
+ extern int protocol_version;
+-extern int io_timeout;
+-extern int select_timeout;
+ extern int orig_umask;
+ extern int no_detach;
+ extern int default_af_hint;
+@@ -518,11 +516,8 @@ static int rsync_module(int f_in, int f_
+ 		exit_cleanup(RERR_UNSUPPORTED);
+ 	}
+ 
+-	if (lp_timeout(i)) {
+-		io_timeout = lp_timeout(i);
+-		if (io_timeout < select_timeout)
+-			select_timeout = io_timeout;
+-	}
++	if (lp_timeout(i))
++		set_io_timeout(lp_timeout(i));
+ 
+ 	start_server(f_in, f_out, argc, argp);
+ 
+--- orig/generator.c	2005-05-14 19:51:15
++++ generator.c	2005-05-16 01:02:43
+@@ -59,8 +59,8 @@ extern int csum_length;
+ extern int ignore_times;
+ extern int size_only;
+ extern OFF_T max_size;
+-extern int io_timeout;
+ extern int io_error;
++extern int allowed_lull;
+ extern int sock_f_out;
+ extern int ignore_timeout;
+ extern int protocol_version;
+@@ -89,8 +89,6 @@ extern int backup_suffix_len;
+ extern struct file_list *the_file_list;
+ extern struct filter_list_struct server_filter_list;
+ 
+-int allowed_lull = 0;
+-
+ static int deletion_count = 0; /* used to implement --max-delete */
+ 
+ 
+@@ -1145,10 +1143,11 @@ notify_others:
+ 
+ void generate_files(int f_out, struct file_list *flist, char *local_name)
+ {
+-	int i, lull_mod;
++	int i;
+ 	char fbuf[MAXPATHLEN];
+ 	int itemizing, maybe_PERMS_REPORT;
+ 	enum logcode code;
++	int lull_mod = allowed_lull * 5;
+ 	int need_retouch_dir_times = preserve_times && !omit_dir_times;
+ 	int need_retouch_dir_perms = 0;
+ 	int save_only_existing = only_existing;
+@@ -1156,9 +1155,6 @@ void generate_files(int f_out, struct fi
+ 	int save_do_progress = do_progress;
+ 	int save_make_backups = make_backups;
+ 
+-	allowed_lull = read_batch ? 0 : (io_timeout + 1) / 2;
+-	lull_mod = allowed_lull * 5;
+-
+ 	if (protocol_version >= 29) {
+ 		itemizing = 1;
+ 		maybe_PERMS_REPORT = log_format_has_i ? 0 : PERMS_REPORT;
+--- orig/io.c	2005-05-12 17:42:08
++++ io.c	2005-05-16 01:02:43
+@@ -42,13 +42,13 @@
+ extern int bwlimit;
+ extern size_t bwlimit_writemax;
+ extern int verbose;
+-extern int io_timeout;
+ extern int allowed_lull;
+ extern int am_server;
+ extern int am_daemon;
+ extern int am_sender;
+ extern int am_generator;
+ extern int eol_nulls;
++extern int read_batch;
+ extern int csum_length;
+ extern int checksum_seed;
+ extern int protocol_version;
+@@ -59,7 +59,6 @@ extern struct stats stats;
+ extern struct file_list *the_file_list;
+ 
+ const char phase_unknown[] = "unknown";
+-int select_timeout = SELECT_TIMEOUT;
+ int ignore_timeout = 0;
+ int batch_fd = -1;
+ int batch_gen_fd = -1;
+@@ -103,6 +102,8 @@ static char *io_filesfrom_bp;
+ static char io_filesfrom_lastchar;
+ static int io_filesfrom_buflen;
+ static size_t contiguous_write_len = 0;
++static int io_timeout;
++static int select_timeout = SELECT_TIMEOUT;
+ 
+ static void read_loop(int fd, char *buf, size_t len);
+ 
+@@ -190,6 +191,18 @@ void io_set_sock_fds(int f_in, int f_out
+ 	sock_f_out = f_out;
+ }
+ 
++void set_io_timeout(int secs)
++{
++	io_timeout = secs;
++
++	if (!io_timeout || io_timeout > SELECT_TIMEOUT)
++		select_timeout = SELECT_TIMEOUT;
++	else
++		select_timeout = io_timeout;
++
++	allowed_lull = read_batch ? 0 : (io_timeout + 1) / 2;
++}
++
+ /* Setup the fd used to receive MSG_* messages.  Only needed during the
+  * early stages of being a local sender (up through the sending of the
+  * file list) or when we're the generator (to fetch the messages from
+@@ -1077,7 +1090,7 @@ static void writefd_unbuffered(int fd,ch
+ 			/* If the other side is sending us error messages, try
+ 			 * to grab any messages they sent before they died. */
+ 			while (fd == sock_f_out && io_multiplexing_in) {
+-				io_timeout = select_timeout = 30;
++				set_io_timeout(30);
+ 				ignore_timeout = 0;
+ 				readfd_unbuffered(sock_f_in, io_filesfrom_buf,
+ 						  sizeof io_filesfrom_buf);
+--- orig/options.c	2005-05-10 15:32:58
++++ options.c	2005-05-16 01:02:43
+@@ -23,7 +23,6 @@
+ 
+ extern int module_id;
+ extern int sanitize_paths;
+-extern int select_timeout;
+ extern struct filter_list_struct filter_list;
+ extern struct filter_list_struct server_filter_list;
+ 
+@@ -75,7 +74,7 @@ int relative_paths = -1;
+ int implied_dirs = 1;
+ int numeric_ids = 0;
+ int force_delete = 0;
+-int io_timeout = 0;
++int allowed_lull = 0;
+ char *files_from = NULL;
+ int filesfrom_fd = -1;
+ char *filesfrom_host = NULL;
+@@ -161,6 +160,7 @@ int list_only = 0;
+ char *batch_name = NULL;
+ 
+ static int daemon_opt;   /* sets am_daemon after option error-reporting */
++static int timeout_val;
+ static int F_option_cnt = 0;
+ static int modify_window_set;
+ static int itemize_changes = 0;
+@@ -363,8 +363,7 @@ void usage(enum logcode F)
+ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+       OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
+       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
+-      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH,
+-      OPT_TIMEOUT, OPT_MAX_SIZE,
++      OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
+       OPT_REFUSED_BASE = 9000};
+ 
+ static struct poptOption long_options[] = {
+@@ -428,7 +427,7 @@ static struct poptOption long_options[] 
+   {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
+   {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
+   {"max-size",         0,  POPT_ARG_STRING, &max_size_arg,  OPT_MAX_SIZE, 0, 0 },
+-  {"timeout",          0,  POPT_ARG_INT,    &io_timeout, OPT_TIMEOUT, 0, 0 },
++  {"timeout",          0,  POPT_ARG_INT,    &timeout_val, 0, 0, 0 },
+   {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
+   {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
+   {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
+@@ -844,11 +843,6 @@ int parse_arguments(int *argc, const cha
+ 			}
+ 			break;
+ 
+-		case OPT_TIMEOUT:
+-			if (io_timeout && io_timeout < select_timeout)
+-				select_timeout = io_timeout;
+-			break;
+-
+ 		case OPT_LINK_DEST:
+ #ifdef HAVE_LINK
+ 			link_dest = 1;
+@@ -1115,6 +1109,8 @@ int parse_arguments(int *argc, const cha
+ 	if (dry_run)
+ 		do_xfers = 0;
+ 
++	set_io_timeout(timeout_val);
++
+ 	if (verbose && !log_format) {
+ 		log_format = "%n%L";
+ 		log_before_transfer = !am_server;
+@@ -1357,8 +1353,8 @@ void server_options(char **args,int *arg
+ 		args[ac++] = max_size_arg;
+ 	}
+ 
+-	if (io_timeout) {
+-		if (asprintf(&arg, "--timeout=%d", io_timeout) < 0)
++	if (timeout_val) {
++		if (asprintf(&arg, "--timeout=%d", timeout_val) < 0)
+ 			goto oom;
+ 		args[ac++] = arg;
+ 	}
+--- orig/sender.c	2005-04-14 01:53:12
++++ sender.c	2005-05-16 01:02:44
+@@ -28,6 +28,7 @@ extern int log_format_has_i;
+ extern int daemon_log_format_has_i;
+ extern int csum_length;
+ extern int io_error;
++extern int allowed_lull;
+ extern int protocol_version;
+ extern int remove_sent_files;
+ extern int updating_basis_file;
+@@ -56,6 +57,7 @@ static struct sum_struct *receive_sums(i
+ {
+ 	struct sum_struct *s;
+ 	int32 i;
++	int lull_mod = allowed_lull * 5;
+ 	OFF_T offset = 0;
+ 
+ 	if (!(s = new(struct sum_struct)))
+@@ -89,6 +91,9 @@ static struct sum_struct *receive_sums(i
+ 			s->sums[i].len = s->blength;
+ 		offset += s->sums[i].len;
+ 
++		if (allowed_lull && !(i % lull_mod))
++			maybe_send_keepalive();
++
+ 		if (verbose > 3) {
+ 			rprintf(FINFO,
+ 				"chunk[%d] len=%d offset=%.0f sum1=%08x\n",
