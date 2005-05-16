@@ -1193,7 +1193,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	free(file);
  
  	if (verbose > 1) {
---- orig/configure.in	2005-05-10 23:47:12
+--- orig/configure.in	2005-05-13 22:24:18
 +++ configure.in	2004-08-19 19:53:27
 @@ -478,6 +478,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
      AC_CHECK_LIB(resolv, strcasecmp)
@@ -1285,7 +1285,7 @@ ACLs to a non-ACL-supporting disk should complain.
  AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
  AC_OUTPUT
  
---- orig/flist.c	2005-04-28 15:56:50
+--- orig/flist.c	2005-05-14 19:51:15
 +++ flist.c	2005-03-16 02:24:11
 @@ -974,6 +974,8 @@ static struct file_struct *send_file_nam
  	file = make_file(fname, flist, f == -2 ? SERVER_FILTERS : ALL_FILTERS);
@@ -1307,7 +1307,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  	return file;
  }
-@@ -1308,6 +1314,8 @@ struct file_list *recv_file_list(int f)
+@@ -1318,6 +1324,8 @@ struct file_list *recv_file_list(int f)
  			flags |= read_byte(f) << 8;
  		file = receive_file_entry(flist, flags, f);
  
@@ -1316,7 +1316,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (S_ISREG(file->mode))
  			stats.total_size += file->length;
  
-@@ -1330,6 +1338,8 @@ struct file_list *recv_file_list(int f)
+@@ -1340,6 +1348,8 @@ struct file_list *recv_file_list(int f)
  
  	clean_flist(flist, relative_paths, 1);
  
@@ -1325,9 +1325,9 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (f >= 0) {
  		/* Now send the uid/gid list. This was introduced in
  		 * protocol version 15 */
---- orig/generator.c	2005-04-28 16:26:28
+--- orig/generator.c	2005-05-14 19:51:15
 +++ generator.c	2005-05-12 23:34:00
-@@ -720,6 +720,10 @@ static void recv_generator(char *fname, 
+@@ -721,6 +721,10 @@ static void recv_generator(char *fname, 
  		if (set_perms(fname, file, statret ? NULL : &st, 0)
  		    && verbose && code && f_out != -1)
  			rprintf(code, "%s/\n", safe_fname(fname));
@@ -1338,9 +1338,9 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
  		    && (file->flags & FLAG_DEL_HERE))
  			delete_in_dir(the_file_list, fname, file);
---- orig/lib/sysacls.c	2005-05-12 23:22:36
-+++ lib/sysacls.c	2005-05-12 23:22:36
-@@ -0,0 +1,3217 @@
+--- orig/lib/sysacls.c	2005-05-16 23:27:53
++++ lib/sysacls.c	2005-05-16 23:27:53
+@@ -0,0 +1,3242 @@
 +/* 
 +   Unix SMB/CIFS implementation.
 +   Samba system utilities for ACL support.
@@ -1362,8 +1362,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +*/
 +
 +#include "rsync.h"
-+#include "sysacls.h"
++#include "sysacls.h" /****** ADDED ******/
 +
++/****** EXTRAS -- THESE ITEMS ARE NOT FROM THE SAMBA SOURCE ******/
 +void SAFE_FREE(void *mem)
 +{
 +	if (mem)
@@ -1381,6 +1382,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	}
 +	return pw->pw_name;
 +}
++/****** EXTRAS -- END ******/
 +
 +/*
 + This file wraps all differing system ACL interfaces into a consistent
@@ -1974,7 +1976,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	 */
 +	len	= 0;
 +	maxlen	= 20 * acl_d->count;
-+	if ((text = malloc(maxlen)) == NULL) {
++	if ((text = SMB_MALLOC(maxlen)) == NULL) {
 +		errno = ENOMEM;
 +		return NULL;
 +	}
@@ -2052,7 +2054,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +			maxlen += nbytes + 20 * (acl_d->count - i);
 +
-+			if ((text = Realloc(oldtext, maxlen)) == NULL) {
++			if ((text = SMB_REALLOC(oldtext, maxlen)) == NULL) {
 +				SAFE_FREE(oldtext);
 +				errno = ENOMEM;
 +				return NULL;
@@ -2084,7 +2086,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	 * acl[] array, this actually allocates an ACL with room
 +	 * for (count+1) entries
 +	 */
-+	if ((a = malloc(sizeof(*a) + count * sizeof(struct acl))) == NULL) {
++	if ((a = SMB_MALLOC(sizeof(struct SMB_ACL_T) + count * sizeof(struct acl))) == NULL) {
 +		errno = ENOMEM;
 +		return NULL;
 +	}
@@ -2248,7 +2250,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +		 * allocate a temporary buffer for the complete ACL
 +		 */
 +		acl_count = acc_acl->count + def_acl->count;
-+		acl_p = acl_buf = malloc(acl_count * sizeof(acl_buf[0]));
++		acl_p = acl_buf = SMB_MALLOC_ARRAY(struct acl, acl_count);
 +
 +		if (acl_buf == NULL) {
 +			sys_acl_free_acl(tmp_acl);
@@ -2605,7 +2607,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	 */
 +	len	= 0;
 +	maxlen	= 20 * acl_d->count;
-+	if ((text = malloc(maxlen)) == NULL) {
++	if ((text = SMB_MALLOC(maxlen)) == NULL) {
 +		errno = ENOMEM;
 +		return NULL;
 +	}
@@ -2683,7 +2685,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +			maxlen += nbytes + 20 * (acl_d->count - i);
 +
-+			if ((text = Realloc(oldtext, maxlen)) == NULL) {
++			if ((text = SMB_REALLOC(oldtext, maxlen)) == NULL) {
 +				free(oldtext);
 +				errno = ENOMEM;
 +				return NULL;
@@ -2715,7 +2717,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	 * acl[] array, this actually allocates an ACL with room
 +	 * for (count+1) entries
 +	 */
-+	if ((a = malloc(sizeof(*a) + count * sizeof(struct acl))) == NULL) {
++	if ((a = SMB_MALLOC(sizeof(struct SMB_ACL_T) + count * sizeof(struct acl))) == NULL) {
 +		errno = ENOMEM;
 +		return NULL;
 +	}
@@ -3181,7 +3183,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +		 * allocate a temporary buffer for the complete ACL
 +		 */
 +		acl_count = acc_acl->count + def_acl->count;
-+		acl_p = acl_buf = malloc(acl_count * sizeof(acl_buf[0]));
++		acl_p = acl_buf = SMB_MALLOC_ARRAY(struct acl, acl_count);
 +
 +		if (acl_buf == NULL) {
 +			sys_acl_free_acl(tmp_acl);
@@ -3344,7 +3346,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +{
 +	SMB_ACL_T	a;
 +
-+	if ((a = malloc(sizeof(*a))) == NULL) {
++	if ((a = SMB_MALLOC_P(struct SMB_ACL_T)) == NULL) {
 +		errno = ENOMEM;
 +		return NULL;
 +	}
@@ -3361,7 +3363,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +{
 +	SMB_ACL_T	a;
 +
-+	if ((a = malloc(sizeof(*a))) == NULL) {
++	if ((a = SMB_MALLOC_P(struct SMB_ACL_T)) == NULL) {
 +		errno = ENOMEM;
 +		return NULL;
 +	}
@@ -3418,7 +3420,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +		return NULL;
 +	}
 +
-+	if ((a = malloc(sizeof(*a) + sizeof(struct acl))) == NULL) {
++	if ((a = SMB_MALLOC(sizeof(struct SMB_ACL_T) + sizeof(struct acl))) == NULL) {
 +		errno = ENOMEM;
 +		return NULL;
 +	}
@@ -3639,12 +3641,16 @@ ACLs to a non-ACL-supporting disk should complain.
 +	int rc = 0;
 +	uid_t user_id;
 +
++	/* AIX has no DEFAULT */
++	if  ( type == SMB_ACL_TYPE_DEFAULT )
++		return NULL;
++
 +	/* Get the acl using statacl */
 + 
 +	DEBUG(10,("Entering sys_acl_get_file\n"));
 +	DEBUG(10,("path_p is %s\n",path_p));
 +
-+	file_acl = (struct acl *)malloc(BUFSIZ);
++	file_acl = (struct acl *)SMB_MALLOC(BUFSIZ);
 + 
 +	if(file_acl == NULL) {
 +		errno=ENOMEM;
@@ -3675,7 +3681,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	if(acl_entry_link_head == NULL)
 +		return(NULL);
 +
-+	acl_entry_link->entryp = (struct new_acl_entry *)malloc(sizeof(struct new_acl_entry));
++	acl_entry_link->entryp = SMB_MALLOC_P(struct new_acl_entry);
 +	if(acl_entry_link->entryp == NULL) {
 +		SAFE_FREE(file_acl);
 +		errno = ENOMEM;
@@ -3710,8 +3716,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +			 * and already has entryp allocated.                  */
 +
 +			if(acl_entry_link_head->count != 0) {
-+				acl_entry_link->nextp = (struct acl_entry_link *)
-+											malloc(sizeof(struct acl_entry_link));
++				acl_entry_link->nextp = SMB_MALLOC_P(struct acl_entry_link);
 +
 +				if(acl_entry_link->nextp == NULL) {
 +					SAFE_FREE(file_acl);
@@ -3722,7 +3727,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +				acl_entry_link->nextp->prevp = acl_entry_link;
 +				acl_entry_link = acl_entry_link->nextp;
-+				acl_entry_link->entryp = (struct new_acl_entry *)malloc(sizeof(struct new_acl_entry));
++				acl_entry_link->entryp = SMB_MALLOC_P(struct new_acl_entry);
 +				if(acl_entry_link->entryp == NULL) {
 +					SAFE_FREE(file_acl);
 +					errno = ENOMEM;
@@ -3781,7 +3786,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	for( i = 1; i < 4; i++) {
 +		DEBUG(10,("i is %d\n",i));
 +		if(acl_entry_link_head->count != 0) {
-+			acl_entry_link->nextp = (struct acl_entry_link *)malloc(sizeof(struct acl_entry_link));
++			acl_entry_link->nextp = SMB_MALLOC_P(struct acl_entry_link);
 +			if(acl_entry_link->nextp == NULL) {
 +				SAFE_FREE(file_acl);
 +				errno = ENOMEM;
@@ -3791,7 +3796,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +			acl_entry_link->nextp->prevp = acl_entry_link;
 +			acl_entry_link = acl_entry_link->nextp;
-+			acl_entry_link->entryp = (struct new_acl_entry *)malloc(sizeof(struct new_acl_entry));
++			acl_entry_link->entryp = SMB_MALLOC_P(struct new_acl_entry);
 +			if(acl_entry_link->entryp == NULL) {
 +				SAFE_FREE(file_acl);
 +				errno = ENOMEM;
@@ -3858,7 +3863,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +   
 +	DEBUG(10,("Entering sys_acl_get_fd\n"));
 +	DEBUG(10,("fd is %d\n",fd));
-+	file_acl = (struct acl *)malloc(BUFSIZ);
++	file_acl = (struct acl *)SMB_MALLOC(BUFSIZ);
 +
 +	if(file_acl == NULL) {
 +		errno=ENOMEM;
@@ -3891,7 +3896,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +		return(NULL);
 +	}
 +
-+	acl_entry_link->entryp = (struct new_acl_entry *)malloc(sizeof(struct new_acl_entry));
++	acl_entry_link->entryp = SMB_MALLOC_P(struct new_acl_entry);
 +
 +	if(acl_entry_link->entryp == NULL) {
 +		errno = ENOMEM;
@@ -3928,7 +3933,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +			 * and already has entryp allocated.                 */
 +
 +			if(acl_entry_link_head->count != 0) {
-+				acl_entry_link->nextp = (struct acl_entry_link *)malloc(sizeof(struct acl_entry_link));
++				acl_entry_link->nextp = SMB_MALLOC_P(struct acl_entry_link);
 +				if(acl_entry_link->nextp == NULL) {
 +					errno = ENOMEM;
 +					DEBUG(0,("Error in sys_acl_get_fd is %d\n",errno));
@@ -3937,7 +3942,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +				}
 +				acl_entry_link->nextp->prevp = acl_entry_link;
 +				acl_entry_link = acl_entry_link->nextp;
-+				acl_entry_link->entryp = (struct new_acl_entry *)malloc(sizeof(struct new_acl_entry));
++				acl_entry_link->entryp = SMB_MALLOC_P(struct new_acl_entry);
 +				if(acl_entry_link->entryp == NULL) {
 +					errno = ENOMEM;
 +					DEBUG(0,("Error in sys_acl_get_fd is %d\n",errno));
@@ -3996,7 +4001,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	for( i = 1; i < 4; i++) {
 +		DEBUG(10,("i is %d\n",i));
 +		if(acl_entry_link_head->count != 0){
-+			acl_entry_link->nextp = (struct acl_entry_link *)malloc(sizeof(struct acl_entry_link));
++			acl_entry_link->nextp = SMB_MALLOC_P(struct acl_entry_link);
 +			if(acl_entry_link->nextp == NULL) {
 +				errno = ENOMEM;
 +				DEBUG(0,("Error in sys_acl_get_fd is %d\n",errno));
@@ -4006,7 +4011,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +			acl_entry_link->nextp->prevp = acl_entry_link;
 +			acl_entry_link = acl_entry_link->nextp;
-+			acl_entry_link->entryp = (struct new_acl_entry *)malloc(sizeof(struct new_acl_entry));
++			acl_entry_link->entryp = SMB_MALLOC_P(struct new_acl_entry);
 +
 +			if(acl_entry_link->entryp == NULL) {
 +				SAFE_FREE(file_acl);
@@ -4085,7 +4090,7 @@ ACLs to a non-ACL-supporting disk should complain.
 + 
 +	DEBUG(10,("Entering sys_acl_init\n"));
 +
-+	theacl = (struct acl_entry_link *)malloc(sizeof(struct acl_entry_link));
++	theacl = SMB_MALLOC_P(struct acl_entry_link);
 +	if(theacl == NULL) {
 +		errno = ENOMEM;
 +		DEBUG(0,("Error in sys_acl_init is %d\n",errno));
@@ -4120,7 +4125,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	}
 +
 +	if(theacl->count != 0){
-+		temp_entry->nextp = acl_entryp = (struct acl_entry_link *)malloc(sizeof(struct acl_entry_link));
++		temp_entry->nextp = acl_entryp = SMB_MALLOC_P(struct acl_entry_link);
 +		if(acl_entryp == NULL) {
 +			errno = ENOMEM;
 +			DEBUG(0,("Error in sys_acl_create_entry is %d\n",errno));
@@ -4132,7 +4137,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +		DEBUG(10,("The acl_entryp->prevp is %d\n",acl_entryp->prevp));
 +	}
 +
-+	*pentry = acl_entryp->entryp = (struct new_acl_entry *)malloc(sizeof(struct new_acl_entry));
++	*pentry = acl_entryp->entryp = SMB_MALLOC_P(struct new_acl_entry);
 +	if(*pentry == NULL) {
 +		errno = ENOMEM;
 +		DEBUG(0,("Error in sys_acl_create_entry is %d\n",errno));
@@ -4222,7 +4227,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +		return(0);
 +
 +	acl_length = BUFSIZ;
-+	file_acl = (struct acl *)malloc(BUFSIZ);
++	file_acl = (struct acl *)SMB_MALLOC(BUFSIZ);
 +
 +	if(file_acl == NULL) {
 +		errno = ENOMEM;
@@ -4255,7 +4260,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +		if((file_acl->acl_len + sizeof(struct acl_entry)) > acl_length) {
 +			acl_length += sizeof(struct acl_entry);
-+			file_acl_temp = (struct acl *)malloc(acl_length);
++			file_acl_temp = (struct acl *)SMB_MALLOC(acl_length);
 +			if(file_acl_temp == NULL) {
 +				SAFE_FREE(file_acl);
 +				errno = ENOMEM;
@@ -4310,7 +4315,7 @@ ACLs to a non-ACL-supporting disk should complain.
 + 
 +	DEBUG(10,("Entering sys_acl_set_fd\n"));
 +	acl_length = BUFSIZ;
-+	file_acl = (struct acl *)malloc(BUFSIZ);
++	file_acl = (struct acl *)SMB_MALLOC(BUFSIZ);
 +
 +	if(file_acl == NULL) {
 +		errno = ENOMEM;
@@ -4344,7 +4349,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +		if((file_acl->acl_len + sizeof(struct acl_entry)) > acl_length) {
 +			acl_length += sizeof(struct acl_entry);
-+			file_acl_temp = (struct acl *)malloc(acl_length);
++			file_acl_temp = (struct acl *)SMB_MALLOC(acl_length);
 +			if(file_acl_temp == NULL) {
 +				SAFE_FREE(file_acl);
 +				errno = ENOMEM;
@@ -4558,10 +4563,33 @@ ACLs to a non-ACL-supporting disk should complain.
 +}
 +
 +#endif /* No ACLs. */
---- orig/lib/sysacls.h	2004-10-20 15:31:22
-+++ lib/sysacls.h	2004-10-20 15:31:22
-@@ -0,0 +1,25 @@
-+#define Realloc(mem, cnt)	realloc_array((mem), char, (cnt))
++
++/************************************************************************
++ Deliberately outside the ACL defines. Return 1 if this is a "no acls"
++ errno, 0 if not.
++************************************************************************/
++
++int no_acl_syscall_error(int err)
++{
++#if defined(ENOSYS)
++	if (err == ENOSYS) {
++		return 1;
++	}
++#endif
++#if defined(ENOTSUP)
++	if (err == ENOTSUP) {
++		return 1;
++	}
++#endif
++	return 0;
++}
+--- orig/lib/sysacls.h	2005-05-16 23:25:51
++++ lib/sysacls.h	2005-05-16 23:25:51
+@@ -0,0 +1,28 @@
++#define SMB_MALLOC(cnt) new_array(char, cnt)
++#define SMB_MALLOC_P(obj) new_array(obj, 1)
++#define SMB_MALLOC_ARRAY(obj, cnt) new_array(obj, cnt)
++#define SMB_REALLOC(mem, cnt) realloc_array(mem, char, cnt)
 +#define slprintf snprintf
 +
 +int sys_acl_get_entry(SMB_ACL_T the_acl, int entry_id, SMB_ACL_ENTRY_T *entry_p);
