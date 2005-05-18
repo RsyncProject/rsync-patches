@@ -75,7 +75,7 @@ After applying this patch, run "make proto".
  		itemizing = 1;
  		maybe_PERMS_REPORT = log_format_has_i ? 0 : PERMS_REPORT;
 --- orig/io.c	2005-05-12 17:42:08
-+++ io.c	2005-05-16 01:02:43
++++ io.c	2005-05-18 23:19:18
 @@ -42,13 +42,13 @@
  extern int bwlimit;
  extern size_t bwlimit_writemax;
@@ -99,7 +99,17 @@ After applying this patch, run "make proto".
  int ignore_timeout = 0;
  int batch_fd = -1;
  int batch_gen_fd = -1;
-@@ -103,6 +102,8 @@ static char *io_filesfrom_bp;
+@@ -90,7 +89,8 @@ int sock_f_out = -1;
+ 
+ static int io_multiplexing_out;
+ static int io_multiplexing_in;
+-static time_t last_io;
++static time_t last_in_io;
++static time_t last_out_io;
+ static int no_flush;
+ 
+ static int write_batch_monitor_in = -1;
+@@ -103,6 +103,8 @@ static char *io_filesfrom_bp;
  static char io_filesfrom_lastchar;
  static int io_filesfrom_buflen;
  static size_t contiguous_write_len = 0;
@@ -108,7 +118,29 @@ After applying this patch, run "make proto".
  
  static void read_loop(int fd, char *buf, size_t len);
  
-@@ -190,6 +191,18 @@ void io_set_sock_fds(int f_in, int f_out
+@@ -166,17 +168,17 @@ static void check_timeout(void)
+ 	if (!io_timeout || ignore_timeout)
+ 		return;
+ 
+-	if (!last_io) {
+-		last_io = time(NULL);
++	if (!last_in_io) {
++		last_in_io = time(NULL);
+ 		return;
+ 	}
+ 
+ 	t = time(NULL);
+ 
+-	if (t - last_io >= io_timeout) {
++	if (t - last_in_io >= io_timeout) {
+ 		if (!am_server && !am_daemon) {
+ 			rprintf(FERROR, "io timeout after %d seconds -- exiting\n",
+-				(int)(t-last_io));
++				(int)(t-last_in_io));
+ 		}
+ 		exit_cleanup(RERR_TIMEOUT);
+ 	}
+@@ -190,6 +192,18 @@ void io_set_sock_fds(int f_in, int f_out
  	sock_f_out = f_out;
  }
  
@@ -127,7 +159,35 @@ After applying this patch, run "make proto".
  /* Setup the fd used to receive MSG_* messages.  Only needed during the
   * early stages of being a local sender (up through the sending of the
   * file list) or when we're the generator (to fetch the messages from
-@@ -1077,7 +1090,7 @@ static void writefd_unbuffered(int fd,ch
+@@ -574,8 +588,8 @@ static int read_timeout(int fd, char *bu
+ 		len -= n;
+ 		ret += n;
+ 
+-		if (fd == sock_f_in && (io_timeout || am_generator))
+-			last_io = time(NULL);
++		if (fd == sock_f_in && io_timeout)
++			last_in_io = time(NULL);
+ 	}
+ 
+ 	return ret;
+@@ -667,14 +681,14 @@ void io_end_buffering(void)
+ 
+ void maybe_flush_socket(void)
+ {
+-	if (iobuf_out && iobuf_out_cnt && time(NULL) - last_io >= 5)
++	if (iobuf_out && iobuf_out_cnt && time(NULL) - last_out_io >= 5)
+ 		io_flush(NORMAL_FLUSH);
+ }
+ 
+ 
+ void maybe_send_keepalive(void)
+ {
+-	if (time(NULL) - last_io >= allowed_lull) {
++	if (time(NULL) - last_out_io >= allowed_lull) {
+ 		if (!iobuf_out || !iobuf_out_cnt) {
+ 			if (protocol_version < 29)
+ 				return; /* there's nothing we can do */
+@@ -1077,7 +1091,7 @@ static void writefd_unbuffered(int fd,ch
  			/* If the other side is sending us error messages, try
  			 * to grab any messages they sent before they died. */
  			while (fd == sock_f_out && io_multiplexing_in) {
@@ -136,6 +196,15 @@ After applying this patch, run "make proto".
  				ignore_timeout = 0;
  				readfd_unbuffered(sock_f_in, io_filesfrom_buf,
  						  sizeof io_filesfrom_buf);
+@@ -1089,7 +1103,7 @@ static void writefd_unbuffered(int fd,ch
+ 
+ 		if (fd == sock_f_out) {
+ 			if (io_timeout || am_generator)
+-				last_io = time(NULL);
++				last_out_io = time(NULL);
+ 			sleep_for_bwlimit(ret);
+ 		}
+ 	}
 --- orig/options.c	2005-05-10 15:32:58
 +++ options.c	2005-05-16 01:02:43
 @@ -23,7 +23,6 @@
