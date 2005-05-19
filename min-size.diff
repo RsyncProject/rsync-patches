@@ -1,4 +1,4 @@
---- orig/generator.c	2005-04-28 16:26:28
+--- orig/generator.c	2005-05-19 08:52:42
 +++ generator.c	2005-04-28 16:19:24
 @@ -58,6 +58,7 @@ extern int make_backups;
  extern int csum_length;
@@ -6,9 +6,9 @@
  extern int size_only;
 +extern OFF_T min_size;
  extern OFF_T max_size;
- extern int io_timeout;
  extern int io_error;
-@@ -837,6 +838,15 @@ static void recv_generator(char *fname, 
+ extern int allowed_lull;
+@@ -836,6 +837,15 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -24,7 +24,7 @@
  	if (max_size && file->length > max_size) {
  		if (verbose > 1) {
  			if (the_file_list->count == 1)
-@@ -1239,7 +1249,7 @@ void generate_files(int f_out, struct fi
+@@ -1236,7 +1246,7 @@ void generate_files(int f_out, struct fi
  
  	phase++;
  	csum_length = SUM_LENGTH;
@@ -33,8 +33,8 @@
  	update_only = always_checksum = size_only = 0;
  	ignore_times = 1;
  	make_backups = 0; /* avoid a duplicate backup for inplace processing */
---- orig/options.c	2005-05-10 15:32:58
-+++ options.c	2005-04-28 16:20:41
+--- orig/options.c	2005-05-19 08:52:42
++++ options.c	2005-05-19 08:57:19
 @@ -98,6 +98,7 @@ int only_existing = 0;
  int opt_ignore_existing = 0;
  int need_messages_from_generator = 0;
@@ -60,24 +60,24 @@
    rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
    rprintf(F,"     --partial               keep partially transferred files\n");
    rprintf(F,"     --partial-dir=DIR       put a partially transferred file into DIR\n");
-@@ -364,7 +366,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -362,7 +364,7 @@ void usage(enum logcode F)
+ 
+ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
-       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
-       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH,
--      OPT_TIMEOUT, OPT_MAX_SIZE,
-+      OPT_TIMEOUT, OPT_MIN_SIZE, OPT_MAX_SIZE,
+-      OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW,
++      OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE,
+       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_REFUSED_BASE = 9000};
  
- static struct poptOption long_options[] = {
-@@ -427,6 +429,7 @@ static struct poptOption long_options[] 
+@@ -426,6 +428,7 @@ static struct poptOption long_options[] 
    {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
 +  {"min-size",         0,  POPT_ARG_STRING, &min_size_arg,  OPT_MIN_SIZE, 0, 0 },
    {"max-size",         0,  POPT_ARG_STRING, &max_size_arg,  OPT_MAX_SIZE, 0, 0 },
-   {"timeout",          0,  POPT_ARG_INT,    &io_timeout, OPT_TIMEOUT, 0, 0 },
+   {"timeout",          0,  POPT_ARG_INT,    &io_timeout, 0, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
-@@ -835,6 +838,15 @@ int parse_arguments(int *argc, const cha
+@@ -834,6 +837,15 @@ int parse_arguments(int *argc, const cha
  			read_batch = 1;
  			break;
  
@@ -93,7 +93,7 @@
  		case OPT_MAX_SIZE:
  			if ((max_size = parse_size_arg(max_size_arg)) <= 0) {
  				snprintf(err_buf, sizeof err_buf,
-@@ -1352,6 +1364,11 @@ void server_options(char **args,int *arg
+@@ -1348,6 +1360,11 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  
@@ -105,7 +105,7 @@
  	if (max_size && am_sender) {
  		args[ac++] = "--max-size";
  		args[ac++] = max_size_arg;
---- orig/rsync.yo	2005-05-10 16:14:33
+--- orig/rsync.yo	2005-05-10 23:47:12
 +++ rsync.yo	2005-05-06 19:12:35
 @@ -342,6 +342,7 @@ to the detailed description below for a 
       --ignore-errors         delete even if there are I/O errors
