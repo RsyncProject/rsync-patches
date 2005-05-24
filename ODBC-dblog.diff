@@ -87,9 +87,8 @@ This patch adds the following options:
     after the session row is inserted (as is done when the session ID is
     automatically generates unique IDs).  Defaults to True.
 
-
 --- orig/Makefile.in	2004-11-02 16:47:15
-+++ Makefile.in	2004-07-03 20:22:18
++++ Makefile.in	2005-05-23 23:31:30
 @@ -32,7 +32,7 @@ ZLIBOBJ=zlib/deflate.o zlib/infblock.o z
  	zlib/inflate.o zlib/inftrees.o zlib/infutil.o zlib/trees.o \
  	zlib/zutil.o zlib/adler32.o
@@ -100,15 +99,26 @@ This patch adds the following options:
  	fileio.o batch.o clientname.o
  OBJS3=progress.o pipe.o
 --- orig/cleanup.c	2005-03-05 18:58:38
-+++ cleanup.c	2004-07-03 20:22:18
-@@ -144,8 +144,12 @@ void _exit_cleanup(int code, const char 
++++ cleanup.c	2005-05-23 23:28:28
+@@ -39,6 +39,10 @@ void close_all(void)
+ 	int ret;
+ 	STRUCT_STAT st;
+ 
++#ifdef HAVE_LIBODBC
++	db_log_close();
++#endif
++
+ 	max_fd = sysconf(_SC_OPEN_MAX) - 1;
+ 	for (fd = max_fd; fd >= 0; fd--) {
+ 		if ((ret = do_fstat(fd, &st)) == 0) {
+@@ -144,8 +148,12 @@ void _exit_cleanup(int code, const char 
  			code = RERR_PARTIAL;
  	}
  
 -	if (code)
 +	if (code) {
  		log_exit(code, file, line);
-+#if HAVE_LIBODBC
++#ifdef HAVE_LIBODBC
 +		db_log_exit(code,file,line);
 +#endif
 +	}
@@ -116,12 +126,12 @@ This patch adds the following options:
  	if (verbose > 2) {
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): about to call exit(%d)\n",
 --- orig/clientserver.c	2005-05-19 08:52:42
-+++ clientserver.c	2004-07-03 20:22:18
++++ clientserver.c	2005-05-23 23:29:31
 @@ -346,6 +346,9 @@ static int rsync_module(int f_in, int f_
  		   XFLG_ANCHORED2ABS | XFLG_OLD_PREFIXES);
  
  	log_init();
-+#if HAVE_LIBODBC
++#ifdef HAVE_LIBODBC
 +	db_log_open();
 +#endif
  
@@ -131,14 +141,14 @@ This patch adds the following options:
  			rprintf(FLOG, "rsync %s %s from %s@%s (%s)\n",
  				am_sender ? "on" : "to",
  				request, auth_user, host, addr);
-+#if HAVE_LIBODBC
++#ifdef HAVE_LIBODBC
 +			db_log_session();
 +#endif
  		} else {
  			rprintf(FLOG, "rsync %s %s from %s (%s)\n",
  				am_sender ? "on" : "to",
---- orig/configure.in	2005-05-13 22:24:18
-+++ configure.in	2004-07-03 20:22:18
+--- orig/configure.in	2005-05-22 20:53:34
++++ configure.in	2005-05-23 23:32:21
 @@ -94,6 +94,8 @@ AC_ARG_WITH(rsync-path,
  	[  --with-rsync-path=PATH  set default --rsync-path to PATH (default: rsync)],
  	[ RSYNC_PATH="$with_rsync_path" ],
@@ -163,8 +173,8 @@ This patch adds the following options:
  AC_MSG_CHECKING([whether to use included libpopt])
  if test x"$with_included_popt" = x"yes"
  then
---- orig/dblog-tables-mysql.sql	2004-07-02 21:35:58
-+++ dblog-tables-mysql.sql	2004-07-02 21:35:58
+--- orig/dblog-tables-mysql.sql	2005-05-23 23:28:40
++++ dblog-tables-mysql.sql	2005-05-23 23:28:40
 @@ -0,0 +1,43 @@
 +drop table transfer;
 +drop table exit;
@@ -185,7 +195,6 @@ This patch adds the following options:
 +	id			int auto_increment NOT NULL,
 +	session_id		int NOT NULL,
 +	date			timestamp NOT NULL,
-+	file_path		varchar(255) NOT NULL,
 +	file_name		varchar(255) NOT NULL,
 +	file_size		bigint NOT NULL,
 +	bytes_transferred	bigint NOT NULL,
@@ -206,11 +215,12 @@ This patch adds the following options:
 +	error_code		int NOT NULL,
 +	error_file		varchar(64) NOT NULL,
 +	error_line		int NOT NULL,
++	process_id		int NOT NULL,
 +	Primary Key (id),
 +	foreign key (session_id) references session (id)
 +);
---- orig/dblog-tables-postgresql.sql	2004-07-02 21:35:58
-+++ dblog-tables-postgresql.sql	2004-07-02 21:35:58
+--- orig/dblog-tables-postgresql.sql	2005-05-23 23:28:48
++++ dblog-tables-postgresql.sql	2005-05-23 23:28:48
 @@ -0,0 +1,45 @@
 +drop table transfer;
 +drop table exit;
@@ -233,7 +243,6 @@ This patch adds the following options:
 +	"id"			serial NOT NULL,
 +	"session_id"		int NOT NULL,
 +	"date"			timestamp NOT NULL default now(),
-+	"file_path"		varchar(512) NOT NULL,
 +	"file_name"		varchar(512) NOT NULL,
 +	"file_size"		bigint NOT NULL,
 +	"bytes_transferred"	bigint NOT NULL,
@@ -254,12 +263,13 @@ This patch adds the following options:
 +	"error_code"		int NOT NULL,
 +	"error_file"		varchar(64) NOT NULL,
 +	"error_line"		int NOT NULL,
++	"process_id"		int NOT NULL,
 +	Primary Key (id),
 +	foreign key (session_id) references session (id)
 +);
---- orig/dblog.c	2004-07-02 21:35:58
-+++ dblog.c	2004-07-02 21:35:58
-@@ -0,0 +1,352 @@
+--- orig/dblog.c	2005-05-24 07:12:54
++++ dblog.c	2005-05-24 07:12:54
+@@ -0,0 +1,360 @@
 +/*
 + *  ODBC Database logging functions
 + *
@@ -269,26 +279,26 @@ This patch adds the following options:
 +
 +#include "rsync.h"
 +
-+#if HAVE_SQL_H
++#ifdef HAVE_SQL_H
 +#include <sql.h>
 +#else
-+#if HAVE_ODBC_SQL_H
++#ifdef HAVE_ODBC_SQL_H
 +#include <odbc/sql.h>
 +#endif
 +#endif
 +
-+#if HAVE_SQLEXT_H
++#ifdef HAVE_SQLEXT_H
 +#include <sqlext.h>
 +#else
-+#if HAVE_ODBC_SQLEXT_H
++#ifdef HAVE_ODBC_SQLEXT_H
 +#include <odbc/sqlext.h>
 +#endif
 +#endif
 +
-+#if HAVE_SQLTYPES_H
++#ifdef HAVE_SQLTYPES_H
 +#include <sqltypes.h>
 +#else
-+#if HAVE_ODBC_SQLTYPES_H
++#ifdef HAVE_ODBC_SQLTYPES_H
 +#include <odbc/sqltypes.h>
 +#endif
 +#endif
@@ -545,17 +555,25 @@ This patch adds the following options:
 +void db_log_transfer(struct file_struct *file,struct stats *initial_stats,char *operation)
 +{
 +	extern struct stats stats;
-+	char strSqlStatement[1024];
-+	char strFilePath[255];
-+	char strFileName[255];
++	char strSqlStatement[2048];
++	char strFileName[MAXPATHLEN];
++	char *strFileNamePtr;
 +	char strFileSize[255];
 +	int64 intBytesTransferred;
 +	int64 intCheckSumBytes;
 +
 +	if (lp_database_logging(module_id)) {
 +		if (db_handle != NULL) {
-+			snprintf(strFileName,sizeof(strFileName), "%s",f_name(file));
-+			snprintf(strFilePath, sizeof(strFilePath), "%s", file->basedir?file->basedir:"");
++			strFileNamePtr = safe_fname(f_name(file));
++			if (am_sender && file->dir.root) {
++				pathjoin(strFileName, sizeof strFileName,
++					 file->dir.root, strFileNamePtr);
++				strFileNamePtr = strFileName;
++			}
++			clean_fname(strFileNamePtr, 0);
++			if (*strFileNamePtr == '/')
++				strFileNamePtr++;
++
 +			snprintf(strFileSize,sizeof(strFileSize),"%.0f", (double)file->length);
 +			if (am_sender) {
 +				intBytesTransferred = stats.total_written - initial_stats->total_written;
@@ -569,7 +587,7 @@ This patch adds the following options:
 +				intCheckSumBytes = stats.total_read - initial_stats->total_read;
 +			}
 +
-+			snprintf(strSqlStatement,sizeof(strSqlStatement),"INSERT INTO %s (session_id,date,file_path, file_name, file_size, bytes_transferred, checksum_bytes_transferred, operation) VALUES ('%ld','%s','%s','%s','%s','%Ld','%Ld','%s');",lp_transfer_table_name(module_id),session_id,timestring(time(NULL)),sanitizeSql(strFilePath),sanitizeSql(strFileName),strFileSize,intBytesTransferred,intCheckSumBytes,operation);
++			snprintf(strSqlStatement,sizeof(strSqlStatement),"INSERT INTO %s (session_id,date, file_name, file_size, bytes_transferred, checksum_bytes_transferred, operation) VALUES ('%ld','%s','%s','%s','%Ld','%Ld','%s');",lp_transfer_table_name(module_id),session_id,timestring(time(NULL)),sanitizeSql(strFileNamePtr),strFileSize,intBytesTransferred,intCheckSumBytes,operation);
 +			result = SQLExecDirect(sql_statement_handle,strSqlStatement,SQL_NTS);
 +			if (result != SQL_SUCCESS && result != SQL_SUCCESS_WITH_INFO) {
 +				SQLGetDiagRec(SQL_HANDLE_DBC, db_handle,1, sql_status,&V_OD_err,V_OD_msg,100,&V_OD_mlen);
@@ -599,7 +617,7 @@ This patch adds the following options:
 +			} else {
 +				error_text = "";
 +			}
-+			snprintf(strSqlStatement,sizeof(strSqlStatement),"INSERT INTO %s (session_id, date, total_bytes_written,total_bytes_read,total_size,error_text,error_code,error_file,error_line) VALUES ('%ld','%s','%Ld','%Ld','%Ld','%s','%d','%s','%d');",lp_exit_table_name(module_id),session_id,timestring(time(NULL)),stats.total_written,stats.total_read,stats.total_size,error_text,code,file,line);
++			snprintf(strSqlStatement,sizeof(strSqlStatement),"INSERT INTO %s (session_id, date, total_bytes_written,total_bytes_read,total_size,error_text,error_code,error_file,error_line,process_id) VALUES ('%ld','%s','%Ld','%Ld','%Ld','%s','%d','%s','%d','%d');",lp_exit_table_name(module_id),session_id,timestring(time(NULL)),stats.total_written,stats.total_read,stats.total_size,error_text,code,file,line,getpid());
 +
 +			result = SQLExecDirect(sql_statement_handle,strSqlStatement,SQL_NTS);
 +
@@ -613,7 +631,7 @@ This patch adds the following options:
 +	}
 +}
 --- orig/loadparm.c	2005-02-19 17:38:51
-+++ loadparm.c	2004-07-03 20:22:18
++++ loadparm.c	2005-05-23 23:29:42
 @@ -125,6 +125,17 @@ typedef struct
  	BOOL list;
  	BOOL use_chroot;
@@ -687,7 +705,7 @@ This patch adds the following options:
  FN_LOCAL_BOOL(lp_ignore_nonreadable, ignore_nonreadable)
  FN_LOCAL_STRING(lp_uid, uid)
 --- orig/log.c	2005-04-15 07:08:03
-+++ log.c	2004-07-03 20:22:18
++++ log.c	2005-05-23 23:29:54
 @@ -84,7 +84,7 @@ struct {
  /*
   * Map from rsync error code to name, or return NULL.
@@ -698,36 +716,36 @@ This patch adds the following options:
  	int i;
  	for (i = 0; rerr_names[i].name; i++) {
 --- orig/main.c	2005-05-12 07:51:58
-+++ main.c	2004-07-03 20:22:18
++++ main.c	2005-05-23 23:30:01
 @@ -144,6 +144,9 @@ static void handle_stats(int f)
  
  	if (am_daemon) {
  		log_exit(0, __FILE__, __LINE__);
-+#if HAVE_LIBODBC
++#ifdef HAVE_LIBODBC
 +		db_log_exit(0,__FILE__,__LINE__);
 +#endif
  		if (f == -1 || !am_sender)
  			return;
  	}
 --- orig/receiver.c	2005-04-14 01:53:12
-+++ receiver.c	2005-03-05 00:31:00
++++ receiver.c	2005-05-23 23:30:07
 @@ -640,6 +640,9 @@ int recv_files(int f_in, struct file_lis
  
  		if (!log_before_transfer)
  			log_item(file, &initial_stats, iflags, NULL);
-+#if HAVE_LIBODBC
++#ifdef HAVE_LIBODBC
 +		db_log_transfer(file, &initial_stats, "receive");
 +#endif
  
  		if (fd1 != -1)
  			close(fd1);
 --- orig/sender.c	2005-05-19 08:52:42
-+++ sender.c	2005-03-05 00:31:19
++++ sender.c	2005-05-23 23:30:15
 @@ -347,6 +347,9 @@ void send_files(struct file_list *flist,
  
  		if (!log_before_transfer)
  			log_item(file, &initial_stats, iflags, NULL);
-+#if HAVE_LIBODBC
++#ifdef HAVE_LIBODBC
 +		db_log_transfer(file, &initial_stats,"send");
 +#endif
  
