@@ -1,0 +1,93 @@
+A crude attempt to add two new daemon module options:
+
+    pre-exec = COMMAND
+    post-exec = COMMAND
+
+The pre-exec command runs prior to the chroot() (if enabled) as the daemon user.
+
+The post-exec command runs inside any chroot() as the module user.
+
+You'll want to run "make proto" after applying this patch.
+
+--- cleanup.c	5 Mar 2005 18:58:38 -0000	1.30
++++ cleanup.c	10 Jun 2005 21:25:24 -0000
+@@ -21,9 +21,11 @@
+ 
+ #include "rsync.h"
+ 
++extern int am_daemon;
+ extern int io_error;
+ extern int keep_partial;
+ extern int log_got_error;
++extern int module_id;
+ extern char *partial_dir;
+ 
+ /**
+@@ -152,6 +154,16 @@ void _exit_cleanup(int code, const char 
+ 			ocode, safe_fname(file), line, code);
+ 	}
+ 
++	if (am_daemon) {
++		char *p = lp_post_exec(module_id);
++		if (p && *p) {
++			char *arg;
++			if (asprintf(&arg, "RSYNC_EXIT_STATUS=%d", code) == 0)
++				putenv(arg); /* XXX Need configure support? */
++			system(p); /* XXX Check for errors */
++		}
++	}
++
+ 	close_all();
+ 	exit(code);
+ }
+--- clientserver.c	10 Jun 2005 16:57:43 -0000	1.159
++++ clientserver.c	10 Jun 2005 21:25:25 -0000
+@@ -347,6 +347,10 @@ static int rsync_module(int f_in, int f_
+ 
+ 	log_init();
+ 
++	p = lp_pre_exec(i);
++	if (p && *p)
++		system(p); /* XXX Check for errors */
++
+ 	if (use_chroot) {
+ 		/*
+ 		 * XXX: The 'use chroot' flag is a fairly reliable
+--- loadparm.c	10 Jun 2005 16:57:43 -0000	1.59
++++ loadparm.c	10 Jun 2005 21:25:25 -0000
+@@ -140,6 +140,8 @@ typedef struct
+ 	char *log_format;
+ 	char *refuse_options;
+ 	char *dont_compress;
++	char *pre_exec;
++	char *post_exec;
+ 	int timeout;
+ 	int max_connections;
+ 	int max_verbosity;
+@@ -175,6 +177,8 @@ static service sDefault =
+ 	"%o %h [%a] %m (%u) %f %l",    /* log format */
+ 	NULL,    /* refuse options */
+ 	"*.gz *.tgz *.zip *.z *.rpm *.deb *.iso *.bz2 *.tbz",    /* dont compress */
++	NULL,     /* pre_exec */
++	NULL,     /* post_exec */
+ 	0,        /* timeout */
+ 	0,        /* max connections */
+ 	1,        /* max verbosity */
+@@ -298,6 +302,8 @@ static struct parm_struct parm_table[] =
+   {"log format",       P_STRING,  P_LOCAL,  &sDefault.log_format,  NULL,   0},
+   {"refuse options",   P_STRING,  P_LOCAL,  &sDefault.refuse_options,NULL, 0},
+   {"dont compress",    P_STRING,  P_LOCAL,  &sDefault.dont_compress,NULL,  0},
++  {"pre-exec",         P_STRING,  P_LOCAL,  &sDefault.pre_exec,    NULL,   0},
++  {"post-exec",        P_STRING,  P_LOCAL,  &sDefault.post_exec,   NULL,   0},
+   {NULL,               P_BOOL,    P_NONE,   NULL,                  NULL,   0}
+ };
+ 
+@@ -379,6 +385,8 @@ FN_LOCAL_STRING(lp_include_from, include
+ FN_LOCAL_STRING(lp_log_format, log_format)
+ FN_LOCAL_STRING(lp_refuse_options, refuse_options)
+ FN_LOCAL_STRING(lp_dont_compress, dont_compress)
++FN_LOCAL_STRING(lp_pre_exec, pre_exec)
++FN_LOCAL_STRING(lp_post_exec, post_exec)
+ FN_LOCAL_INTEGER(lp_timeout, timeout)
+ FN_LOCAL_INTEGER(lp_max_connections, max_connections)
+ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
