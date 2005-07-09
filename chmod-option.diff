@@ -4,9 +4,9 @@ command before "make":
     make proto
 
 
---- orig/Makefile.in	2004-11-02 16:47:15
+--- orig/Makefile.in	2005-07-07 23:11:07
 +++ Makefile.in	2004-07-03 20:13:41
-@@ -34,7 +34,7 @@ ZLIBOBJ=zlib/deflate.o zlib/infblock.o z
+@@ -33,7 +33,7 @@ ZLIBOBJ=zlib/deflate.o zlib/inffast.o zl
  OBJS1=rsync.o generator.o receiver.o cleanup.o sender.o exclude.o util.o \
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
@@ -15,10 +15,12 @@ command before "make":
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
---- orig/chmod.c	2004-06-18 17:22:08
-+++ chmod.c	2004-06-18 17:22:08
-@@ -0,0 +1,184 @@
+--- orig/chmod.c	2005-07-09 16:09:14
++++ chmod.c	2005-07-09 16:09:14
+@@ -0,0 +1,195 @@
 +#include "rsync.h"
++
++extern int orig_umask;
 +
 +#define FLAG_X_KEEP (1<<0)
 +#define FLAG_DIRS_ONLY (1<<1)
@@ -50,6 +52,8 @@ command before "make":
 +
 +	while (state != STATE_ERROR) {
 +		if (!*modestr || *modestr == ',') {
++			int bits;
++
 +			if (!op) {
 +				state = STATE_ERROR;
 +				break;
@@ -62,18 +66,25 @@ command before "make":
 +				first_mode = curr_mode;
 +			curr_mode->next = NULL;
 +
++			if (where)
++				bits = where * what;
++			else {
++				where = 0111;
++				bits = (where * what) & ~orig_umask;
++			}
++
 +			switch (op) {
 +			case CHMOD_ADD:
 +				curr_mode->ModeAND = 07777;
-+				curr_mode->ModeOR  = (where * what) + topoct;
++				curr_mode->ModeOR  = bits + topoct;
 +				break;
 +			case CHMOD_SUB:
-+				curr_mode->ModeAND = 07777 - (where * what) - topoct;
++				curr_mode->ModeAND = 07777 - bits - topoct;
 +				curr_mode->ModeOR  = 0;
 +				break;
 +			case CHMOD_EQ:
-+				curr_mode->ModeAND = 07777 - (where * 7);
-+				curr_mode->ModeOR  = where * what - topoct;
++				curr_mode->ModeAND = 07777 - (where * 7) - (topoct ? topbits : 0);
++				curr_mode->ModeOR  = bits + topoct;
 +				break;
 +			}
 +
@@ -202,7 +213,7 @@ command before "make":
 +	}
 +	return 0;
 +}
---- orig/flist.c	2005-05-28 08:24:57
+--- orig/flist.c	2005-07-07 20:35:47
 +++ flist.c	2004-09-18 01:51:11
 @@ -62,6 +62,8 @@ extern struct file_list *the_file_list;
  
@@ -286,9 +297,9 @@ command before "make":
  	if (files_from && (!am_sender || filesfrom_host)) {
  		if (filesfrom_host) {
  			args[ac++] = "--files-from";
---- orig/rsync.yo	2005-05-22 20:53:34
+--- orig/rsync.yo	2005-07-07 23:11:09
 +++ rsync.yo	2005-01-24 01:48:43
-@@ -322,6 +322,7 @@ to the detailed description below for a 
+@@ -311,6 +311,7 @@ to the detailed description below for a 
   -D, --devices               preserve devices (root only)
   -t, --times                 preserve times
   -O, --omit-dir-times        omit directories when preserving times
@@ -296,7 +307,7 @@ command before "make":
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy files whole (without rsync algorithm)
-@@ -659,6 +660,14 @@ it is preserving modification times (see
+@@ -648,6 +649,14 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -311,9 +322,9 @@ command before "make":
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
  
---- orig/testsuite/chmod-option.test	2004-06-18 17:22:09
-+++ testsuite/chmod-option.test	2004-06-18 17:22:09
-@@ -0,0 +1,43 @@
+--- orig/testsuite/chmod-option.test	2005-07-09 15:49:59
++++ testsuite/chmod-option.test	2005-07-09 15:49:59
+@@ -0,0 +1,44 @@
 +#! /bin/sh
 +
 +# Copyright (C) 2002 by Martin Pool <mbp@samba.org>
@@ -350,10 +361,11 @@ command before "make":
 +checkit "$RSYNC -avv \"$fromdir/\" \"$checkdir/\"" "$fromdir" "$checkdir"
 +
 +# And then manually make the changes which should occur 
++umask 002
 +chmod ug-s,a+rX "$checkdir"/*
-+chmod g+w "$checkdir" "$checkdir"/dir*
++chmod +w "$checkdir" "$checkdir"/dir*
 +
-+checkit "$RSYNC -avv --chmod ug-s,a+rX,Dg+w \"$fromdir/\" \"$todir/\"" "$checkdir" "$todir"
++checkit "$RSYNC -avv --chmod ug-s,a+rX,D+w \"$fromdir/\" \"$todir/\"" "$checkdir" "$todir"
 +
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
