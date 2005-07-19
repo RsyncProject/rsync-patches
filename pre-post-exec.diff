@@ -8,17 +8,20 @@ postxfer-exec command runs after the transfer completes, even if the
 transfer failed.  The following environment variables will be set in
 both cases:
 
-    RSYNC_MODULE_NAME  --  The name of the module being accessed
-    RSYNC_MODULE_PATH  --  The path configured for the module
+    RSYNC_MODULE_NAME  The name of the module being accessed.
+    RSYNC_MODULE_PATH  The path configured for the module.
+    RSYNC_HOST_ADDR    The accessing host's IP address.
+    RSYNC_HOST_NAME    The accessing host's name.
+    RSYNC_USER_NAME    The accessing user's name.
 
 These environment variables will also be set for the postxfer-exec
 command:
 
-    RSYNC_EXIT_STATUS -- rsync's exit value.  This will be 0 for a
-                         successful run, a positive value for an error
-			 that rsync returned (e.g. 23=partial xfer),
-			 or a -1 if rsync failed to exit properly.
-    RSYNC_RAW_STATUS -- the raw exit value from waitpid()
+    RSYNC_EXIT_STATUS  rsync's exit value.  This will be 0 for a
+                       successful run, a positive value for an error
+                       that rsync returned (e.g. 23=partial xfer),
+                       or a -1 if rsync failed to exit properly.
+    RSYNC_RAW_STATUS  the raw exit value from waitpid().
 
 Both commands are run by the user that started the daemon (not the
 module's uid/gid setting) without any chroot() restrictions (even if
@@ -27,7 +30,7 @@ the module will/has run chroot()ed).
 BUILD NOTE:  You'll want to run "make proto" after applying this patch.
 
 --- orig/clientserver.c	2005-06-10 21:33:27
-+++ clientserver.c	2005-07-19 20:46:59
++++ clientserver.c	2005-07-19 21:17:22
 @@ -226,7 +226,7 @@ static int rsync_module(int f_in, int f_
  	char line[MAXPATHLEN];
  	uid_t uid = (uid_t)-2;  /* canonically "nobody" */
@@ -37,21 +40,26 @@ BUILD NOTE:  You'll want to run "make proto" after applying this patch.
  	char *addr = client_addr(f_in);
  	char *host = client_name(f_in);
  	char *name = lp_name(i);
-@@ -347,6 +347,49 @@ static int rsync_module(int f_in, int f_
+@@ -347,6 +347,54 @@ static int rsync_module(int f_in, int f_
  
  	log_init();
  
 +	s = lp_prexfer_exec(i);
 +	p = lp_postxfer_exec(i);
 +	if ((s && *s) || (p && *p)) {
-+		char *modname, *modpath;
++		char *modname, *modpath, *hostaddr, *hostname, *username;
 +		int status;
-+		if (asprintf(&modname, "RSYNC_MODULE_NAME=%s", name) < 0)
++		if (asprintf(&modname, "RSYNC_MODULE_NAME=%s", name) < 0
++		 || asprintf(&modpath, "RSYNC_MODULE_PATH=%s", lp_path(i)) < 0
++		 || asprintf(&hostaddr, "RSYNC_HOST_ADDR=%s", addr) < 0
++		 || asprintf(&hostname, "RSYNC_HOST_NAME=%s", host) < 0
++		 || asprintf(&username, "RSYNC_USER_NAME=%s", auth_user) < 0)
 +			out_of_memory("rsync_module");
 +		putenv(modname);
-+		if (asprintf(&modpath, "RSYNC_MODULE_PATH=%s", lp_path(i)) < 0)
-+			out_of_memory("rsync_module");
 +		putenv(modpath);
++		putenv(hostaddr);
++		putenv(hostname);
++		putenv(username);
 +		if (s && *s) {
 +			status = system(s);
 +			if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
