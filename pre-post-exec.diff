@@ -1,68 +1,100 @@
-A crude attempt to add two new daemon module options:
+A fairly decent attempt to add two new daemon module options:
 
-    pre-exec = COMMAND
-    post-exec = COMMAND
+    prexfer-exec = COMMAND
+    postxfer-exec = COMMAND
 
-The pre-exec command runs prior to the chroot() (if enabled) as the daemon user.
+The prexfer-exec command runs before the transfer happens, while the
+postxfer-exec command runs after the transfer completes, even if the
+transfer failed.  The following environment variables will be set in
+both cases:
 
-The post-exec command runs inside any chroot() as the module user.
+    RSYNC_MODULE_NAME  --  The name of the module being accessed
+    RSYNC_MODULE_PATH  --  The path configured for the module
 
-You'll want to run "make proto" after applying this patch.
+These environment variables will also be set for the postxfer-exec
+command:
 
---- orig/cleanup.c	2005-03-05 18:58:38
-+++ cleanup.c	2005-06-10 21:32:40
-@@ -21,9 +21,13 @@
- 
- #include "rsync.h"
- 
-+extern int am_daemon;
-+extern int am_sender;
-+extern int am_generator;
- extern int io_error;
- extern int keep_partial;
- extern int log_got_error;
-+extern int module_id;
- extern char *partial_dir;
- 
- /**
-@@ -152,6 +156,16 @@ void _exit_cleanup(int code, const char 
- 			ocode, safe_fname(file), line, code);
- 	}
- 
-+	if (am_daemon && (am_sender || am_generator)) {
-+		char *p = lp_post_exec(module_id);
-+		if (p && *p) {
-+			char *arg;
-+			if (asprintf(&arg, "RSYNC_EXIT_STATUS=%d", code) == 0)
-+				putenv(arg); /* XXX Need configure support? */
-+			system(p); /* XXX Check for errors */
-+		}
-+	}
-+
- 	close_all();
- 	exit(code);
- }
+    RSYNC_EXIT_STATUS -- rsync's exit value.  This will be 0 for a
+                         successful run, a positive value for an error
+			 that rsync returned (e.g. 23=partial xfer),
+			 or a -1 if rsync failed to exit properly.
+    RSYNC_RAW_STATUS -- the raw exit value from waitpid()
+
+Both commands are run by the user that started the daemon (not the
+module's uid/gid setting) without any chroot() restrictions (even if
+the module will/has run chroot()ed).
+
+BUILD NOTE:  You'll want to run "make proto" after applying this patch.
+
 --- orig/clientserver.c	2005-06-10 21:33:27
-+++ clientserver.c	2005-06-10 21:25:25
-@@ -347,6 +347,10 @@ static int rsync_module(int f_in, int f_
++++ clientserver.c	2005-07-19 20:46:59
+@@ -226,7 +226,7 @@ static int rsync_module(int f_in, int f_
+ 	char line[MAXPATHLEN];
+ 	uid_t uid = (uid_t)-2;  /* canonically "nobody" */
+ 	gid_t gid = (gid_t)-2;
+-	char *p;
++	char *p, *s;
+ 	char *addr = client_addr(f_in);
+ 	char *host = client_name(f_in);
+ 	char *name = lp_name(i);
+@@ -347,6 +347,49 @@ static int rsync_module(int f_in, int f_
  
  	log_init();
  
-+	p = lp_pre_exec(i);
-+	if (p && *p)
-+		system(p); /* XXX Check for errors */
++	s = lp_prexfer_exec(i);
++	p = lp_postxfer_exec(i);
++	if ((s && *s) || (p && *p)) {
++		char *modname, *modpath;
++		int status;
++		if (asprintf(&modname, "RSYNC_MODULE_NAME=%s", name) < 0)
++			out_of_memory("rsync_module");
++		putenv(modname);
++		if (asprintf(&modpath, "RSYNC_MODULE_PATH=%s", lp_path(i)) < 0)
++			out_of_memory("rsync_module");
++		putenv(modpath);
++		if (s && *s) {
++			status = system(s);
++			if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
++				rprintf(FLOG, "prexfer-exec failed\n");
++				io_printf(f_out, "@ERROR: prexfer-exec failed\n");
++				return -1;
++			}
++		}
++		if (p && *p) {
++			pid_t pid = fork();
++			if (pid < 0) {
++				rsyserr(FLOG, errno, "fork failed");
++				io_printf(f_out, "@ERROR: fork failed\n");
++				return -1;
++			}
++			if (pid) {
++				char *ret1, *ret2;
++				waitpid(pid, &status, 0);
++				if (asprintf(&ret1, "RSYNC_RAW_STATUS=%d", status) > 0)
++					putenv(ret1);
++				if (WIFEXITED(status))
++					status = WEXITSTATUS(status);
++				else
++					status = -1;
++				if (asprintf(&ret2, "RSYNC_EXIT_STATUS=%d", status) > 0)
++					putenv(ret2);
++				system(p);
++				_exit(0);
++			}
++		}
++	}
 +
  	if (use_chroot) {
  		/*
  		 * XXX: The 'use chroot' flag is a fairly reliable
 --- orig/loadparm.c	2005-06-10 21:33:28
-+++ loadparm.c	2005-06-10 21:25:25
++++ loadparm.c	2005-07-19 20:05:26
 @@ -140,6 +140,8 @@ typedef struct
  	char *log_format;
  	char *refuse_options;
  	char *dont_compress;
-+	char *pre_exec;
-+	char *post_exec;
++	char *prexfer_exec;
++	char *postxfer_exec;
  	int timeout;
  	int max_connections;
  	int max_verbosity;
@@ -70,8 +102,8 @@ You'll want to run "make proto" after applying this patch.
  	"%o %h [%a] %m (%u) %f %l",    /* log format */
  	NULL,    /* refuse options */
  	"*.gz *.tgz *.zip *.z *.rpm *.deb *.iso *.bz2 *.tbz",    /* dont compress */
-+	NULL,     /* pre_exec */
-+	NULL,     /* post_exec */
++	NULL,     /* prexfer_exec */
++	NULL,     /* postxfer_exec */
  	0,        /* timeout */
  	0,        /* max connections */
  	1,        /* max verbosity */
@@ -79,8 +111,8 @@ You'll want to run "make proto" after applying this patch.
    {"log format",       P_STRING,  P_LOCAL,  &sDefault.log_format,  NULL,   0},
    {"refuse options",   P_STRING,  P_LOCAL,  &sDefault.refuse_options,NULL, 0},
    {"dont compress",    P_STRING,  P_LOCAL,  &sDefault.dont_compress,NULL,  0},
-+  {"pre-exec",         P_STRING,  P_LOCAL,  &sDefault.pre_exec,    NULL,   0},
-+  {"post-exec",        P_STRING,  P_LOCAL,  &sDefault.post_exec,   NULL,   0},
++  {"prexfer-exec",     P_STRING,  P_LOCAL,  &sDefault.prexfer_exec, NULL,  0},
++  {"postxfer-exec",    P_STRING,  P_LOCAL,  &sDefault.postxfer_exec,NULL,  0},
    {NULL,               P_BOOL,    P_NONE,   NULL,                  NULL,   0}
  };
  
@@ -88,8 +120,8 @@ You'll want to run "make proto" after applying this patch.
  FN_LOCAL_STRING(lp_log_format, log_format)
  FN_LOCAL_STRING(lp_refuse_options, refuse_options)
  FN_LOCAL_STRING(lp_dont_compress, dont_compress)
-+FN_LOCAL_STRING(lp_pre_exec, pre_exec)
-+FN_LOCAL_STRING(lp_post_exec, post_exec)
++FN_LOCAL_STRING(lp_prexfer_exec, prexfer_exec)
++FN_LOCAL_STRING(lp_postxfer_exec, postxfer_exec)
  FN_LOCAL_INTEGER(lp_timeout, timeout)
  FN_LOCAL_INTEGER(lp_max_connections, max_connections)
  FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
