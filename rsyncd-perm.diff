@@ -44,40 +44,47 @@
  
  /* local prototypes */
  static int    strwicmp(char *psz1, char *psz2);
---- orig/rsync.c	2005-03-16 02:19:30
-+++ rsync.c	2005-03-31 08:28:41
-@@ -56,6 +56,8 @@ int set_perms(char *fname,struct file_st
+--- orig/rsync.c	2005-07-27 23:31:12
++++ rsync.c	2005-07-27 23:49:21
+@@ -32,6 +32,8 @@ extern int am_server;
+ extern int am_sender;
+ extern int am_generator;
+ extern int am_starting_up;
++extern int am_daemon;
++extern int module_id;
+ extern int preserve_uid;
+ extern int preserve_gid;
+ extern int inplace;
+@@ -56,6 +58,17 @@ int set_perms(char *fname,struct file_st
  	int updated = 0;
  	STRUCT_STAT st2;
  	int change_uid, change_gid;
-+	extern int am_daemon;
-+	extern int module_id;
++	mode_t mode = file->mode; /* file->mode shouldn't be modified */
++
++	if (am_daemon) {
++		if (S_ISDIR(st->st_mode)) {
++			mode = (mode & lp_directory_mask(module_id))
++			     | lp_force_directory_mode(module_id);
++		} else {
++			mode = (mode & lp_create_mask(module_id))
++			     | lp_force_create_mode(module_id);
++		}
++	}
  
  	if (!st) {
  		if (dry_run)
-@@ -126,9 +128,19 @@ int set_perms(char *fname,struct file_st
+@@ -126,8 +139,8 @@ int set_perms(char *fname,struct file_st
+ 	}
  
  #ifdef HAVE_CHMOD
- 	if (!S_ISLNK(st->st_mode)) {
--		if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
-+		mode_t mode = file->mode; /* file->mode shouldn't be modified */
-+		if (am_daemon) {
-+			if (S_ISDIR(st->st_mode)) {
-+				mode = (mode & lp_directory_mask(module_id))
-+				     | lp_force_directory_mode(module_id);
-+			} else {
-+				mode = (mode & lp_create_mask(module_id))
-+				     | lp_force_create_mode(module_id);
-+			}
-+		}
-+		if ((st->st_mode & CHMOD_BITS) != (mode & CHMOD_BITS)) {
- 			updated = 1;
--			if (do_chmod(fname,(file->mode & CHMOD_BITS)) != 0) {
-+			if (do_chmod(fname, (mode & CHMOD_BITS)) != 0) {
- 				rsyserr(FERROR, errno, "failed to set permissions on %s",
- 					full_fname(fname));
- 				return 0;
---- orig/rsyncd.conf.yo	2005-06-03 08:32:34
+-	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
+-		int ret = do_chmod(fname, file->mode);
++	if ((st->st_mode & CHMOD_BITS) != (mode & CHMOD_BITS)) {
++		int ret = do_chmod(fname, mode);
+ 		if (ret < 0) {
+ 			rsyserr(FERROR, errno,
+ 				"failed to set permissions on %s",
+--- orig/rsyncd.conf.yo	2005-07-07 23:11:09
 +++ rsyncd.conf.yo	2005-03-31 08:28:41
 @@ -221,6 +221,70 @@ file transfers to and from that module s
  was run as root. This complements the "uid" option. The default is gid -2,

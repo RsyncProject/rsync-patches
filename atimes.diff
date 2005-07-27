@@ -15,7 +15,7 @@ command before "make":
  		rprintf(FINFO, "flist->length=%.0f\n",
  			(double) fptr[i]->length);
  		rprintf(FINFO, "flist->mode=%#o\n", (int) fptr[i]->mode);
---- orig/flist.c	2005-05-28 08:24:57
+--- orig/flist.c	2005-07-27 23:31:12
 +++ flist.c	2005-02-07 21:06:04
 @@ -54,6 +54,7 @@ extern int relative_paths;
  extern int implied_dirs;
@@ -127,9 +127,9 @@ command before "make":
  	file->length = st.st_size;
  	file->mode = st.st_mode;
  	file->uid = st.st_uid;
---- orig/generator.c	2005-05-22 20:53:34
+--- orig/generator.c	2005-07-27 23:31:12
 +++ generator.c	2004-11-03 23:02:12
-@@ -375,7 +375,7 @@ static int unchanged_file(char *fn, stru
+@@ -377,7 +377,7 @@ static int unchanged_file(char *fn, stru
  	if (ignore_times)
  		return 0;
  
@@ -138,7 +138,7 @@ command before "make":
  }
  
  
-@@ -849,7 +849,7 @@ static void recv_generator(char *fname, 
+@@ -851,7 +851,7 @@ static void recv_generator(char *fname, 
  	}
  
  	if (update_only && statret == 0
@@ -147,7 +147,7 @@ command before "make":
  		if (verbose > 1)
  			rprintf(FINFO, "%s is newer\n", safe_fname(fname));
  		return;
---- orig/options.c	2005-05-19 08:52:42
+--- orig/options.c	2005-07-27 23:31:12
 +++ options.c	2005-02-21 10:53:28
 @@ -49,6 +49,7 @@ int preserve_uid = 0;
  int preserve_gid = 0;
@@ -173,7 +173,7 @@ command before "make":
    {"checksum",        'c', POPT_ARG_NONE,   &always_checksum, 0, 0, 0 },
    {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
    {"quiet",           'q', POPT_ARG_NONE,   0, 'q', 0, 0 },
-@@ -1290,6 +1293,8 @@ void server_options(char **args,int *arg
+@@ -1292,6 +1295,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -182,8 +182,8 @@ command before "make":
  	if (omit_dir_times == 2 && am_sender)
  		argstr[x++] = 'O';
  	if (preserve_perms)
---- orig/rsync.c	2005-03-16 02:19:30
-+++ rsync.c	2005-02-21 10:57:03
+--- orig/rsync.c	2005-07-27 23:31:12
++++ rsync.c	2005-07-27 23:35:49
 @@ -27,6 +27,7 @@ extern int dry_run;
  extern int daemon_log_format_has_i;
  extern int preserve_times;
@@ -200,14 +200,13 @@ command before "make":
  
  	if (!st) {
  		if (dry_run)
-@@ -68,17 +70,27 @@ int set_perms(char *fname,struct file_st
+@@ -68,18 +70,31 @@ int set_perms(char *fname,struct file_st
  		st = &st2;
  	}
  
-+	if (!copy_atimes || S_ISLNK(st->st_mode) || S_ISDIR(st->st_mode))
++	if (!copy_atimes || S_ISDIR(st->st_mode))
 +		flags |= PERMS_SKIP_ATIME;
- 	if (!preserve_times || S_ISLNK(st->st_mode)
- 	 || (S_ISDIR(st->st_mode) && omit_dir_times))
+ 	if (!preserve_times || (S_ISDIR(st->st_mode) && omit_dir_times))
  		flags |= PERMS_SKIP_MTIME;
 +	if (!(flags & PERMS_SKIP_ATIME)
 +	    && cmp_time(st->st_atime, file->atime) != 0) {
@@ -217,20 +216,23 @@ command before "make":
 +		atime = st->st_atime;
  	if (!(flags & PERMS_SKIP_MTIME)
 -	    && cmp_modtime(st->st_mtime, file->modtime) != 0) {
--		if (set_modtime(fname,file->modtime) != 0) {
--			rsyserr(FERROR, errno, "failed to set times on %s",
--				full_fname(fname));
--			return 0;
--		}
+-		int ret = set_modtime(fname, file->modtime, st->st_mode);
 +	    && cmp_time(st->st_mtime, file->modtime) != 0) {
 +		mtime = file->modtime;
- 		updated = 1;
++		updated = 1;
 +	} else
 +		mtime = st->st_mtime;
-+	if (updated && set_times(fname, mtime, atime) != 0) {
-+		rsyserr(FERROR, errno, "failed to set times on %s",
-+			full_fname(fname));
-+		return 0;
++	if (updated) {
++		int ret = set_times(fname, mtime, atime, st->st_mode);
+ 		if (ret < 0) {
+ 			rsyserr(FERROR, errno, "failed to set times on %s",
+ 				full_fname(fname));
+ 			return 0;
+ 		}
+-		if (ret == 0) /* ret == 1 if symlink could not be set */
+-			updated = 1;
++		if (ret > 0) /* ret == 1 if symlink could not be set */
++			updated = 0;
  	}
  
  	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
@@ -260,9 +262,9 @@ command before "make":
  	uid_t uid;
  	gid_t gid;
  	mode_t mode;
---- orig/rsync.yo	2005-05-22 20:53:34
+--- orig/rsync.yo	2005-07-07 23:11:09
 +++ rsync.yo	2005-01-24 01:57:18
-@@ -322,6 +322,7 @@ to the detailed description below for a 
+@@ -311,6 +311,7 @@ to the detailed description below for a 
   -D, --devices               preserve devices (root only)
   -t, --times                 preserve times
   -O, --omit-dir-times        omit directories when preserving times
@@ -270,14 +272,15 @@ command before "make":
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy files whole (without rsync algorithm)
-@@ -659,6 +660,11 @@ it is preserving modification times (see
+@@ -648,6 +649,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
 +dit(bf(-A, --copy-atimes)) This tells rsync to transfer access times
 +along with the files and update them on the remote system.  Note that
-+reading the source file may update the atime and hence repeated rsync
-+copies with --copy-atimes may copy files unnecessarily.
++reading the source file may update the atime, so repeated rsync runs
++with --copy-atimes may be needed if you want the atime values to be
++100% identical.
 +
  dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
  instead it will just report the actions it would have taken.
@@ -304,7 +307,7 @@ command before "make":
 +
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
---- orig/testsuite/rsync.fns	2005-02-21 07:26:59
+--- orig/testsuite/rsync.fns	2005-06-10 21:33:28
 +++ testsuite/rsync.fns	2005-02-21 07:30:11
 @@ -50,7 +50,7 @@ printmsg() {
  
@@ -469,15 +472,20 @@ command before "make":
  
  	return 0;
  }
---- orig/util.c	2005-05-03 16:47:33
-+++ util.c	2005-02-07 21:09:12
-@@ -128,12 +128,17 @@ void overflow(char *str)
+--- orig/util.c	2005-07-27 23:31:12
++++ util.c	2005-07-27 23:37:27
+@@ -128,7 +128,7 @@ void overflow_exit(char *str)
  
  
  
--int set_modtime(char *fname, time_t modtime)
-+int set_times(char *fname, time_t modtime, time_t atime)
+-int set_modtime(char *fname, time_t modtime, mode_t mode)
++int set_times(char *fname, time_t modtime, time_t atime, mode_t mode)
  {
+ #if !defined HAVE_LUTIMES || !defined HAVE_UTIMES
+ 	if (S_ISLNK(mode))
+@@ -136,9 +136,13 @@ int set_modtime(char *fname, time_t modt
+ #endif
+ 
  	if (verbose > 2) {
 -		rprintf(FINFO, "set modtime of %s to (%ld) %s",
 +		char mtimebuf[200];
@@ -487,14 +495,22 @@ command before "make":
 +			"set modtime, atime of %s to (%ld) %s, (%ld) %s\n",
  			safe_fname(fname), (long)modtime,
 -			asctime(localtime(&modtime)));
-+			mtimebuf,
-+			(long)atime, timestring(atime));
++			mtimebuf, (long)atime, timestring(atime));
  	}
  
  	if (dry_run)
-@@ -142,17 +147,17 @@ int set_modtime(char *fname, time_t modt
+@@ -147,7 +151,7 @@ int set_modtime(char *fname, time_t modt
  	{
- #ifdef HAVE_UTIMBUF
+ #ifdef HAVE_UTIMES
+ 		struct timeval t[2];
+-		t[0].tv_sec = time(NULL);
++		t[0].tv_sec = atime;
+ 		t[0].tv_usec = 0;
+ 		t[1].tv_sec = modtime;
+ 		t[1].tv_usec = 0;
+@@ -158,12 +162,12 @@ int set_modtime(char *fname, time_t modt
+ 		return utimes(fname, t);
+ #elif defined HAVE_UTIMBUF
  		struct utimbuf tbuf;
 -		tbuf.actime = time(NULL);
 +		tbuf.actime = atime;
@@ -507,13 +523,7 @@ command before "make":
  		t[1] = modtime;
  		return utime(fname,t);
  #else
- 		struct timeval t[2];
--		t[0].tv_sec = time(NULL);
-+		t[0].tv_sec = atime;
- 		t[0].tv_usec = 0;
- 		t[1].tv_sec = modtime;
- 		t[1].tv_usec = 0;
-@@ -1156,8 +1161,8 @@ int msleep(int t)
+@@ -1167,8 +1171,8 @@ int msleep(int t)
  
  
  /**
@@ -524,7 +534,7 @@ command before "make":
   * --modify-window).
   *
   * @retval 0 if the times should be treated as the same
-@@ -1166,7 +1171,7 @@ int msleep(int t)
+@@ -1177,7 +1181,7 @@ int msleep(int t)
   *
   * @retval -1 if the 2nd is later
   **/
