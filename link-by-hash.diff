@@ -11,9 +11,9 @@ will only store one copy of the unique contents of each file, regardless of
 the file's name.
 
 
---- orig/Makefile.in	2004-11-02 16:47:15
+--- orig/Makefile.in	2005-07-07 23:11:07
 +++ Makefile.in	2004-07-03 20:20:15
-@@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
+@@ -34,7 +34,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
  	fileio.o batch.o clientname.o
@@ -365,7 +365,7 @@ the file's name.
 +}
 +
 +#endif
---- orig/options.c	2005-05-19 08:52:42
+--- orig/options.c	2005-08-27 21:11:26
 +++ options.c	2005-05-19 08:55:42
 @@ -141,6 +141,7 @@ char *log_format = NULL;
  char *password_file = NULL;
@@ -375,7 +375,7 @@ the file's name.
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = 0;
  int compare_dest = 0;
-@@ -321,6 +322,7 @@ void usage(enum logcode F)
+@@ -322,6 +323,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -392,15 +392,15 @@ the file's name.
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_REFUSED_BASE = 9000};
  
-@@ -432,6 +434,7 @@ static struct poptOption long_options[] 
+@@ -446,6 +448,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
 +  {"link-by-hash",     0,  POPT_ARG_STRING, 0, OPT_LINK_BY_HASH, 0, 0},
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
-   /* TODO: Should this take an optional int giving the compression level? */
    {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
-@@ -876,6 +879,21 @@ int parse_arguments(int *argc, const cha
+   {0,                 'P', POPT_ARG_NONE,   0, 'P', 0, 0 },
+@@ -916,6 +919,21 @@ int parse_arguments(int *argc, const cha
  			basis_dir[basis_dir_cnt++] = (char *)arg;
  			break;
  
@@ -422,7 +422,7 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1458,6 +1476,11 @@ void server_options(char **args,int *arg
+@@ -1507,6 +1525,11 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -434,9 +434,9 @@ the file's name.
  	if (files_from && (!am_sender || filesfrom_host)) {
  		if (filesfrom_host) {
  			args[ac++] = "--files-from";
---- orig/receiver.c	2005-04-14 01:53:12
+--- orig/receiver.c	2005-08-17 06:45:08
 +++ receiver.c	2005-01-15 21:29:13
-@@ -52,6 +52,7 @@ extern int delay_updates;
+@@ -53,6 +53,7 @@ extern int delay_updates;
  extern struct stats stats;
  extern char *log_format;
  extern char *tmpdir;
@@ -444,7 +444,7 @@ the file's name.
  extern char *partial_dir;
  extern char *basis_dir[];
  extern struct file_list *the_file_list;
-@@ -185,12 +186,13 @@ static int get_tmpname(char *fnametmp, c
+@@ -186,12 +187,13 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -459,7 +459,7 @@ the file's name.
  	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -210,6 +212,9 @@ static int receive_data(int f_in, char *
+@@ -211,6 +213,9 @@ static int receive_data(int f_in, char *
  	} else
  		mapbuf = NULL;
  
@@ -468,8 +468,8 @@ the file's name.
 +
  	sum_init(checksum_seed);
  
- 	while ((i = recv_token(f_in, &data)) != 0) {
-@@ -226,6 +231,8 @@ static int receive_data(int f_in, char *
+ 	if (append_mode) {
+@@ -253,6 +258,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -478,7 +478,7 @@ the file's name.
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -252,6 +259,8 @@ static int receive_data(int f_in, char *
+@@ -279,6 +286,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -487,7 +487,7 @@ the file's name.
  		}
  
  		if (inplace) {
-@@ -292,6 +301,8 @@ static int receive_data(int f_in, char *
+@@ -319,6 +328,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_end(file_sum1);
@@ -496,7 +496,7 @@ the file's name.
  
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -307,7 +318,7 @@ static int receive_data(int f_in, char *
+@@ -334,7 +345,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -505,7 +505,7 @@ the file's name.
  }
  
  static void handle_delayed_updates(struct file_list *flist, char *local_name)
-@@ -635,8 +646,12 @@ int recv_files(int f_in, struct file_lis
+@@ -663,8 +674,12 @@ int recv_files(int f_in, struct file_lis
  			rprintf(FINFO, "%s\n", safe_fname(fname));
  
  		/* recv file data */
@@ -519,7 +519,7 @@ the file's name.
  
  		if (!log_before_transfer)
  			log_item(file, &initial_stats, iflags, NULL);
---- orig/rsync.c	2005-03-16 02:19:30
+--- orig/rsync.c	2005-07-27 23:31:12
 +++ rsync.c	2005-02-21 11:04:36
 @@ -38,6 +38,7 @@ extern int inplace;
  extern int keep_dirlinks;
@@ -529,7 +529,7 @@ the file's name.
  
  
  /*
-@@ -188,7 +189,12 @@ void finish_transfer(char *fname, char *
+@@ -190,7 +191,12 @@ void finish_transfer(char *fname, char *
  		rprintf(FINFO, "renaming %s to %s\n",
  			safe_fname(fnametmp), safe_fname(fname));
  	}
@@ -543,9 +543,9 @@ the file's name.
  	if (ret < 0) {
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
  		    ret == -2 ? "copy" : "rename",
---- orig/rsync.h	2005-05-03 17:11:01
+--- orig/rsync.h	2005-08-17 06:45:08
 +++ rsync.h	2004-07-03 20:20:15
-@@ -631,6 +631,14 @@ struct stats {
+@@ -639,6 +639,14 @@ struct stats {
  	int current_file_index;
  };
  
@@ -560,7 +560,7 @@ the file's name.
  
  #include "byteorder.h"
  #include "lib/mdfour.h"
---- orig/rsync.yo	2005-05-22 20:53:34
+--- orig/rsync.yo	2005-08-27 21:05:12
 +++ rsync.yo	2005-02-13 06:58:47
 @@ -356,6 +356,7 @@ to the detailed description below for a 
       --compare-dest=DIR      also compare received files relative to DIR
