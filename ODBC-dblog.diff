@@ -125,9 +125,9 @@ This patch adds the following options:
  
  	if (verbose > 2) {
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): about to call exit(%d)\n",
---- orig/clientserver.c	2005-08-17 06:45:07
+--- orig/clientserver.c	2005-09-15 18:09:14
 +++ clientserver.c	2005-05-23 23:29:31
-@@ -348,6 +348,9 @@ static int rsync_module(int f_in, int f_
+@@ -349,6 +349,9 @@ static int rsync_module(int f_in, int f_
  		   XFLG_ANCHORED2ABS | XFLG_OLD_PREFIXES);
  
  	log_init();
@@ -137,7 +137,7 @@ This patch adds the following options:
  
  #ifdef HAVE_PUTENV
  	s = lp_prexfer_exec(i);
-@@ -524,6 +527,9 @@ static int rsync_module(int f_in, int f_
+@@ -535,6 +538,9 @@ static int rsync_module(int f_in, int f_
  			rprintf(FLOG, "rsync %s %s from %s@%s (%s)\n",
  				am_sender ? "on" : "to",
  				request, auth_user, host, addr);
@@ -630,80 +630,142 @@ This patch adds the following options:
 +		rprintf(FERROR,"Error at db_log_exit: Not connected to database!\n");
 +	}
 +}
---- orig/loadparm.c	2005-07-28 17:25:13
-+++ loadparm.c	2005-05-23 23:29:42
-@@ -124,6 +124,17 @@ typedef struct
- 	BOOL list;
- 	BOOL use_chroot;
- 	BOOL transfer_logging;
-+	BOOL database_logging;
-+	char *database_datasource;
-+	char *database_username;
-+	char *database_password;
-+	char *transfer_table_name;
-+	char *exit_table_name;
-+	char *session_table_name;
-+	char *sequence_name;
-+	char *unique_id_method;
+--- orig/loadparm.c	2005-09-16 20:36:31
++++ loadparm.c	2005-09-16 20:39:31
+@@ -120,9 +120,14 @@ typedef struct
+ {
+ 	char *auth_users;
+ 	char *comment;
 +	char *custom_unique_id_select;
++	char *database_datasource;
++	char *database_password;
++	char *database_username;
+ 	char *dont_compress;
+ 	char *exclude;
+ 	char *exclude_from;
++	char *exit_table_name;
+ 	char *filter;
+ 	char *gid;
+ 	char *hosts_allow;
+@@ -137,13 +142,19 @@ typedef struct
+ 	char *prexfer_exec;
+ 	char *refuse_options;
+ 	char *secrets_file;
++	char *sequence_name;
++	char *session_table_name;
+ 	char *temp_dir;
++	char *transfer_table_name;
+ 	char *uid;
++	char *unique_id_method;
+ 
+ 	int max_connections;
+ 	int max_verbosity;
+ 	int timeout;
+ 
++	BOOL database_logging;
 +	BOOL get_custom_id_before_insert;
  	BOOL ignore_errors;
- 	char *uid;
- 	char *gid;
-@@ -161,6 +172,17 @@ static service sDefault =
- 	True,    /* list */
- 	True,    /* use chroot */
- 	False,   /* transfer logging */
-+	False,   /* Database Logging */
-+	NULL,    /* Database datasource */
-+	NULL,    /* Database username */
-+	NULL,    /* Database password */
-+	NULL,    /* Transfer table name */
-+	NULL,    /* Exit table name */
-+	NULL,    /* Session table name */
-+	NULL,    /* sequence name */
-+	NULL,    /* unique method */
-+	NULL,    /* custom unique id select*/
-+	True,    /* get custom id before insert */
- 	False,   /* ignore errors */
- 	NOBODY_USER,/* uid */
- 	NOBODY_GROUP,/* gid */
-@@ -298,6 +320,17 @@ static struct parm_struct parm_table[] =
-   {"include",          P_STRING,  P_LOCAL,  &sDefault.include,     NULL,   0},
-   {"include from",     P_STRING,  P_LOCAL,  &sDefault.include_from,NULL,   0},
-   {"transfer logging", P_BOOL,    P_LOCAL,  &sDefault.transfer_logging,NULL,0},
-+  {"database logging", P_BOOL,    P_LOCAL,  &sDefault.database_logging,NULL,0},
-+  {"database datasource",P_STRING,P_LOCAL,  &sDefault.database_datasource,NULL,0},
-+  {"database username",P_STRING,  P_LOCAL,  &sDefault.database_username,NULL,0},
-+  {"database password",P_STRING,  P_LOCAL,  &sDefault.database_password,NULL,0},
-+  {"transfer table name",P_STRING,P_LOCAL,  &sDefault.transfer_table_name,NULL,0},
-+  {"exit table name",  P_STRING,  P_LOCAL,  &sDefault.exit_table_name,NULL,0},
-+  {"session table name",P_STRING, P_LOCAL,  &sDefault.session_table_name,NULL,0},
-+  {"sequence name",    P_STRING,  P_LOCAL,  &sDefault.sequence_name,NULL,0},
-+  {"unique id method", P_STRING,  P_LOCAL,  &sDefault.unique_id_method,NULL,0},
-+  {"custom unique id select",P_STRING,P_LOCAL,&sDefault.custom_unique_id_select,NULL,0},
-+  {"get custom id before insert",P_BOOL,P_LOCAL,&sDefault.get_custom_id_before_insert,NULL,0},
-   {"ignore errors",    P_BOOL,    P_LOCAL,  &sDefault.ignore_errors,NULL,0},
-   {"log format",       P_STRING,  P_LOCAL,  &sDefault.log_format,  NULL,   0},
-   {"refuse options",   P_STRING,  P_LOCAL,  &sDefault.refuse_options,NULL, 0},
-@@ -370,6 +403,17 @@ FN_LOCAL_BOOL(lp_write_only, write_only)
- FN_LOCAL_BOOL(lp_list, list)
- FN_LOCAL_BOOL(lp_use_chroot, use_chroot)
- FN_LOCAL_BOOL(lp_transfer_logging, transfer_logging)
-+FN_LOCAL_BOOL(lp_database_logging, database_logging)
-+FN_LOCAL_STRING(lp_database_datasource, database_datasource)
-+FN_LOCAL_STRING(lp_database_username, database_username)
-+FN_LOCAL_STRING(lp_database_password, database_password)
-+FN_LOCAL_STRING(lp_transfer_table_name, transfer_table_name)
-+FN_LOCAL_STRING(lp_exit_table_name, exit_table_name)
-+FN_LOCAL_STRING(lp_session_table_name,session_table_name)
-+FN_LOCAL_STRING(lp_sequence_name,sequence_name)
-+FN_LOCAL_STRING(lp_unique_id_method,unique_id_method)
+ 	BOOL ignore_nonreadable;
+ 	BOOL list;
+@@ -160,9 +171,14 @@ static service sDefault =
+ {
+  /* auth_users */		NULL,
+  /* comment */			NULL,
++ /* custom_unique_id_select */	NULL,
++ /* database_datasource */	NULL,
++ /* database_password */	NULL,
++ /* database_username */	NULL,
+  /* dont_compress */		"*.gz *.tgz *.zip *.z *.rpm *.deb *.iso *.bz2 *.tbz",
+  /* exclude */			NULL,
+  /* exclude_from */		NULL,
++ /* exit_table_name */		NULL,
+  /* filter */			NULL,
+  /* gid */			NOBODY_GROUP,
+  /* hosts_allow */		NULL,
+@@ -177,13 +193,19 @@ static service sDefault =
+  /* prexfer_exec */		NULL,
+  /* refuse_options */		NULL,
+  /* secrets_file */		NULL,
++ /* sequence_name */		NULL,
++ /* session_table_name */	NULL,
+  /* temp_dir */ 		NULL,
++ /* transfer_table_name */	NULL,
+  /* uid */			NOBODY_USER,
++ /* unique_id_method */		NULL,
+ 
+  /* max_connections */		0,
+  /* max_verbosity */		1,
+  /* timeout */			0,
+ 
++ /* database_logging */		False,
++ /* get_custom_id_before_insert */ True,
+  /* ignore_errors */		False,
+  /* ignore_nonreadable */	False,
+  /* list */			True,
+@@ -284,10 +306,17 @@ static struct parm_struct parm_table[] =
+ 
+  {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
+  {"comment",           P_STRING, P_LOCAL, &sDefault.comment,           NULL,0},
++ {"custom unique id select",P_STRING,P_LOCAL,&sDefault.custom_unique_id_select,NULL,0},
++ {"database datasource",P_STRING,P_LOCAL, &sDefault.database_datasource,NULL,0},
++ {"database logging",  P_BOOL,   P_LOCAL, &sDefault.database_logging,  NULL,0},
++ {"database password", P_STRING, P_LOCAL, &sDefault.database_password, NULL,0},
++ {"database username", P_STRING, P_LOCAL, &sDefault.database_username, NULL,0},
+  {"dont compress",     P_STRING, P_LOCAL, &sDefault.dont_compress,     NULL,0},
+  {"exclude from",      P_STRING, P_LOCAL, &sDefault.exclude_from,      NULL,0},
+  {"exclude",           P_STRING, P_LOCAL, &sDefault.exclude,           NULL,0},
++ {"exit table name",   P_STRING, P_LOCAL, &sDefault.exit_table_name,   NULL,0},
+  {"filter",            P_STRING, P_LOCAL, &sDefault.filter,            NULL,0},
++ {"get custom id before insert",P_BOOL,P_LOCAL,&sDefault.get_custom_id_before_insert,NULL,0},
+  {"gid",               P_STRING, P_LOCAL, &sDefault.gid,               NULL,0},
+  {"hosts allow",       P_STRING, P_LOCAL, &sDefault.hosts_allow,       NULL,0},
+  {"hosts deny",        P_STRING, P_LOCAL, &sDefault.hosts_deny,        NULL,0},
+@@ -302,6 +331,10 @@ static struct parm_struct parm_table[] =
+  {"max verbosity",     P_INTEGER,P_LOCAL, &sDefault.max_verbosity,     NULL,0},
+  {"name",              P_STRING, P_LOCAL, &sDefault.name,              NULL,0},
+  {"path",              P_PATH,   P_LOCAL, &sDefault.path,              NULL,0},
++ {"sequence name",     P_STRING, P_LOCAL, &sDefault.sequence_name,     NULL,0},
++ {"session table name",P_STRING, P_LOCAL, &sDefault.session_table_name,NULL,0},
++ {"transfer table name",P_STRING,P_LOCAL, &sDefault.transfer_table_name,NULL,0},
++ {"unique id method",  P_STRING, P_LOCAL, &sDefault.unique_id_method,  NULL,0},
+ #ifdef HAVE_PUTENV
+  {"post-xfer exec",    P_STRING, P_LOCAL, &sDefault.postxfer_exec,     NULL,0},
+  {"pre-xfer exec",     P_STRING, P_LOCAL, &sDefault.prexfer_exec,      NULL,0},
+@@ -374,9 +407,14 @@ FN_GLOBAL_INTEGER(lp_syslog_facility, &G
+ 
+ FN_LOCAL_STRING(lp_auth_users, auth_users)
+ FN_LOCAL_STRING(lp_comment, comment)
 +FN_LOCAL_STRING(lp_custom_unique_id_select,custom_unique_id_select)
++FN_LOCAL_STRING(lp_database_datasource, database_datasource)
++FN_LOCAL_STRING(lp_database_password, database_password)
++FN_LOCAL_STRING(lp_database_username, database_username)
+ FN_LOCAL_STRING(lp_dont_compress, dont_compress)
+ FN_LOCAL_STRING(lp_exclude, exclude)
+ FN_LOCAL_STRING(lp_exclude_from, exclude_from)
++FN_LOCAL_STRING(lp_exit_table_name, exit_table_name)
+ FN_LOCAL_STRING(lp_filter, filter)
+ FN_LOCAL_STRING(lp_gid, gid)
+ FN_LOCAL_STRING(lp_hosts_allow, hosts_allow)
+@@ -391,13 +429,19 @@ FN_LOCAL_STRING(lp_postxfer_exec, postxf
+ FN_LOCAL_STRING(lp_prexfer_exec, prexfer_exec)
+ FN_LOCAL_STRING(lp_refuse_options, refuse_options)
+ FN_LOCAL_STRING(lp_secrets_file, secrets_file)
++FN_LOCAL_STRING(lp_sequence_name,sequence_name)
++FN_LOCAL_STRING(lp_session_table_name,session_table_name)
+ FN_LOCAL_STRING(lp_temp_dir, temp_dir)
++FN_LOCAL_STRING(lp_transfer_table_name, transfer_table_name)
+ FN_LOCAL_STRING(lp_uid, uid)
++FN_LOCAL_STRING(lp_unique_id_method,unique_id_method)
+ 
+ FN_LOCAL_INTEGER(lp_max_connections, max_connections)
+ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+ FN_LOCAL_INTEGER(lp_timeout, timeout)
+ 
++FN_LOCAL_BOOL(lp_database_logging, database_logging)
 +FN_LOCAL_BOOL(lp_get_custom_id_before_insert,get_custom_id_before_insert)
  FN_LOCAL_BOOL(lp_ignore_errors, ignore_errors)
  FN_LOCAL_BOOL(lp_ignore_nonreadable, ignore_nonreadable)
- FN_LOCAL_STRING(lp_uid, uid)
+ FN_LOCAL_BOOL(lp_list, list)
 --- orig/log.c	2005-06-10 21:33:28
 +++ log.c	2005-05-23 23:29:54
 @@ -84,7 +84,7 @@ struct {
@@ -715,7 +777,7 @@ This patch adds the following options:
  {
  	int i;
  	for (i = 0; rerr_names[i].name; i++) {
---- orig/main.c	2005-07-27 23:31:12
+--- orig/main.c	2005-09-16 16:38:53
 +++ main.c	2005-05-23 23:30:01
 @@ -139,6 +139,9 @@ static void handle_stats(int f)
  
@@ -727,9 +789,9 @@ This patch adds the following options:
  		if (f == -1 || !am_sender)
  			return;
  	}
---- orig/receiver.c	2005-08-17 06:45:08
+--- orig/receiver.c	2005-09-16 05:41:02
 +++ receiver.c	2005-05-23 23:30:07
-@@ -668,6 +668,9 @@ int recv_files(int f_in, struct file_lis
+@@ -674,6 +674,9 @@ int recv_files(int f_in, struct file_lis
  
  		if (!log_before_transfer)
  			log_item(file, &initial_stats, iflags, NULL);

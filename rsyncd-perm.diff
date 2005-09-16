@@ -1,49 +1,53 @@
---- orig/loadparm.c	2005-07-28 17:25:13
-+++ loadparm.c	2005-07-28 17:27:15
-@@ -145,6 +145,10 @@ typedef struct
- 	int timeout;
+--- orig/loadparm.c	2005-09-16 20:36:31
++++ loadparm.c	2005-09-16 20:41:11
+@@ -140,6 +140,10 @@ typedef struct
+ 	char *temp_dir;
+ 	char *uid;
+ 
++	int create_mask;
++	int directory_mask;
++	int force_create_mode;
++	int force_directory_mode;
  	int max_connections;
  	int max_verbosity;
-+	int create_mask;
-+	int force_create_mode;
-+	int directory_mask;
-+	int force_directory_mode;
- 	BOOL ignore_nonreadable;
- } service;
+ 	int timeout;
+@@ -180,6 +184,10 @@ static service sDefault =
+  /* temp_dir */ 		NULL,
+  /* uid */			NOBODY_USER,
  
-@@ -182,6 +186,10 @@ static service sDefault =
- 	0,        /* timeout */
- 	0,        /* max connections */
- 	1,        /* max verbosity */
-+	CHMOD_BITS,/* create mask */
-+	0,        /* force create mode */
-+	CHMOD_BITS,/* directory mask */
-+	0,        /* force directory mode */
- 	False     /* ignore nonreadable */
- };
++ /* create_mask */		CHMOD_BITS,
++ /* directory_mask */		CHMOD_BITS,
++ /* force_create_mode */	0,
++ /* force_directory_mode */	0,
+  /* max_connections */		0,
+  /* max_verbosity */		1,
+  /* timeout */			0,
+@@ -284,10 +292,14 @@ static struct parm_struct parm_table[] =
  
-@@ -276,6 +284,10 @@ static struct parm_struct parm_table[] =
-   {"timeout",          P_INTEGER, P_LOCAL,  &sDefault.timeout,     NULL,  0},
-   {"max connections",  P_INTEGER, P_LOCAL,  &sDefault.max_connections,NULL, 0},
-   {"max verbosity",    P_INTEGER, P_LOCAL,  &sDefault.max_verbosity,NULL,  0},
-+  {"create mask",      P_OCTAL,   P_LOCAL,  &sDefault.create_mask, NULL, 0},
-+  {"force create mode",P_OCTAL,   P_LOCAL,  &sDefault.force_create_mode, NULL, 0},
-+  {"directory mask",   P_OCTAL,   P_LOCAL,  &sDefault.directory_mask, NULL, 0},
-+  {"force directory mode",P_OCTAL,P_LOCAL,  &sDefault.force_directory_mode, NULL, 0},
-   {"name",             P_STRING,  P_LOCAL,  &sDefault.name,        NULL,   0},
-   {"comment",          P_STRING,  P_LOCAL,  &sDefault.comment,     NULL,   0},
-   {"lock file",        P_STRING,  P_LOCAL,  &sDefault.lock_file,   NULL,   0},
-@@ -392,6 +404,10 @@ FN_LOCAL_STRING(lp_postxfer_exec, postxf
- FN_LOCAL_INTEGER(lp_timeout, timeout)
+  {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
+  {"comment",           P_STRING, P_LOCAL, &sDefault.comment,           NULL,0},
++ {"create mask",       P_OCTAL,  P_LOCAL, &sDefault.create_mask,       NULL,0},
++ {"directory mask",    P_OCTAL,  P_LOCAL, &sDefault.directory_mask,    NULL,0},
+  {"dont compress",     P_STRING, P_LOCAL, &sDefault.dont_compress,     NULL,0},
+  {"exclude from",      P_STRING, P_LOCAL, &sDefault.exclude_from,      NULL,0},
+  {"exclude",           P_STRING, P_LOCAL, &sDefault.exclude,           NULL,0},
+  {"filter",            P_STRING, P_LOCAL, &sDefault.filter,            NULL,0},
++ {"force create mode", P_OCTAL,  P_LOCAL, &sDefault.force_create_mode, NULL,0},
++ {"force directory mode",P_OCTAL,P_LOCAL, &sDefault.force_directory_mode,NULL,0},
+  {"gid",               P_STRING, P_LOCAL, &sDefault.gid,               NULL,0},
+  {"hosts allow",       P_STRING, P_LOCAL, &sDefault.hosts_allow,       NULL,0},
+  {"hosts deny",        P_STRING, P_LOCAL, &sDefault.hosts_deny,        NULL,0},
+@@ -394,6 +406,10 @@ FN_LOCAL_STRING(lp_secrets_file, secrets
+ FN_LOCAL_STRING(lp_temp_dir, temp_dir)
+ FN_LOCAL_STRING(lp_uid, uid)
+ 
++FN_LOCAL_INTEGER(lp_create_mask, create_mask)
++FN_LOCAL_INTEGER(lp_directory_mask, directory_mask)
++FN_LOCAL_INTEGER(lp_force_create_mode, force_create_mode)
++FN_LOCAL_INTEGER(lp_force_directory_mode, force_directory_mode)
  FN_LOCAL_INTEGER(lp_max_connections, max_connections)
  FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
-+FN_LOCAL_INTEGER(lp_create_mask, create_mask)
-+FN_LOCAL_INTEGER(lp_force_create_mode, force_create_mode)
-+FN_LOCAL_INTEGER(lp_directory_mask, directory_mask)
-+FN_LOCAL_INTEGER(lp_force_directory_mode, force_directory_mode)
- 
- /* local prototypes */
- static int    strwicmp(char *psz1, char *psz2);
+ FN_LOCAL_INTEGER(lp_timeout, timeout)
 --- orig/rsync.c	2005-07-27 23:31:12
 +++ rsync.c	2005-07-28 00:54:53
 @@ -32,6 +32,8 @@ extern int am_server;
@@ -85,7 +89,7 @@
  		if (ret < 0) {
  			rsyserr(FERROR, errno,
  				"failed to set permissions on %s",
---- orig/rsyncd.conf.yo	2005-07-28 17:25:13
+--- orig/rsyncd.conf.yo	2005-07-29 02:47:20
 +++ rsyncd.conf.yo	2005-03-31 08:28:41
 @@ -218,6 +218,70 @@ file transfers to and from that module s
  was run as root. This complements the "uid" option. The default is gid -2,
