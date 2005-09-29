@@ -1,6 +1,6 @@
---- orig/generator.c	2005-08-17 06:45:07
-+++ generator.c	2005-04-28 16:19:24
-@@ -59,6 +59,7 @@ extern int make_backups;
+--- orig/generator.c	2005-09-29 18:03:00
++++ generator.c	2005-09-29 18:09:27
+@@ -60,6 +60,7 @@ extern int make_backups;
  extern int csum_length;
  extern int ignore_times;
  extern int size_only;
@@ -8,7 +8,7 @@
  extern OFF_T max_size;
  extern int io_error;
  extern int allowed_lull;
-@@ -864,6 +865,15 @@ static void recv_generator(char *fname, 
+@@ -863,6 +864,15 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -24,19 +24,19 @@
  	if (max_size && file->length > max_size) {
  		if (verbose > 1) {
  			if (the_file_list->count == 1)
-@@ -1269,7 +1279,7 @@ void generate_files(int f_out, struct fi
+@@ -1265,7 +1275,7 @@ void generate_files(int f_out, struct fi
  
  	phase++;
  	csum_length = SUM_LENGTH;
--	only_existing = max_size = opt_ignore_existing = 0;
-+	only_existing = min_size = max_size = opt_ignore_existing = 0;
+-	max_size = ignore_existing = ignore_non_existing = 0;
++	min_size = max_size = ignore_existing = ignore_non_existing = 0;
  	update_only = always_checksum = size_only = 0;
  	ignore_times = 1;
  	if (append_mode)  /* resend w/o append mode */
---- orig/options.c	2005-08-27 21:11:26
-+++ options.c	2005-08-27 21:23:36
-@@ -98,6 +98,7 @@ int only_existing = 0;
- int opt_ignore_existing = 0;
+--- orig/options.c	2005-09-29 18:06:38
++++ options.c	2005-09-29 18:09:56
+@@ -98,6 +98,7 @@ int ignore_existing = 0;
+ int ignore_non_existing = 0;
  int need_messages_from_generator = 0;
  int max_delete = 0;
 +OFF_T min_size = 0;
@@ -52,7 +52,7 @@
  static char partialdir_for_delayupdate[] = ".~tmp~";
  
  /** Local address to bind.  As a character string because it's
-@@ -308,6 +309,7 @@ void usage(enum logcode F)
+@@ -307,6 +308,7 @@ void usage(enum logcode F)
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
    rprintf(F,"     --force                 force deletion of directories even if not empty\n");
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
@@ -60,7 +60,7 @@
    rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
    rprintf(F,"     --partial               keep partially transferred files\n");
    rprintf(F,"     --partial-dir=DIR       put a partially transferred file into DIR\n");
-@@ -362,7 +364,7 @@ void usage(enum logcode F)
+@@ -361,7 +363,7 @@ void usage(enum logcode F)
  
  enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
@@ -69,15 +69,15 @@
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_REFUSED_BASE = 9000};
  
-@@ -417,6 +419,7 @@ static struct poptOption long_options[] 
-   {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
-   {"existing",         0,  POPT_ARG_NONE,   &only_existing, 0, 0, 0 },
-   {"ignore-existing",  0,  POPT_ARG_NONE,   &opt_ignore_existing, 0, 0, 0 },
-+  {"min-size",         0,  POPT_ARG_STRING, &min_size_arg,  OPT_MIN_SIZE, 0, 0 },
+@@ -418,6 +420,7 @@ static struct poptOption long_options[] 
+   {"existing",         0,  POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
+   {"ignore-existing",  0,  POPT_ARG_NONE,   &ignore_existing, 0, 0, 0 },
+   {"ignore-non-existing",0,POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
++  {"min-size",         0,  POPT_ARG_STRING, &min_size_arg, OPT_MIN_SIZE, 0, 0 },
    {"max-size",         0,  POPT_ARG_STRING, &max_size_arg,  OPT_MAX_SIZE, 0, 0 },
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
    {"inplace",          0,  POPT_ARG_NONE,   &inplace, 0, 0, 0 },
-@@ -874,6 +877,15 @@ int parse_arguments(int *argc, const cha
+@@ -886,6 +889,15 @@ int parse_arguments(int *argc, const cha
  			read_batch = 1;
  			break;
  
@@ -93,7 +93,7 @@
  		case OPT_MAX_SIZE:
  			if ((max_size = parse_size_arg(max_size_arg)) <= 0) {
  				snprintf(err_buf, sizeof err_buf,
-@@ -1395,6 +1407,11 @@ void server_options(char **args,int *arg
+@@ -1415,6 +1427,11 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  
@@ -105,9 +105,9 @@
  	if (max_size && am_sender) {
  		args[ac++] = "--max-size";
  		args[ac++] = max_size_arg;
---- orig/rsync.yo	2005-08-27 21:05:12
+--- orig/rsync.yo	2005-09-29 17:02:16
 +++ rsync.yo	2005-05-06 19:12:35
-@@ -342,6 +342,7 @@ to the detailed description below for a 
+@@ -340,6 +340,7 @@ to the detailed description below for a 
       --ignore-errors         delete even if there are I/O errors
       --force                 force deletion of dirs even if not empty
       --max-delete=NUM        don't delete more than NUM files
@@ -115,7 +115,7 @@
       --max-size=SIZE         don't transfer any file larger than SIZE
       --partial               keep partially transferred files
       --partial-dir=DIR       put a partially transferred file into DIR
-@@ -794,10 +795,16 @@ dit(bf(--max-delete=NUM)) This tells rsy
+@@ -797,10 +798,16 @@ dit(bf(--max-delete=NUM)) This tells rsy
  files or directories (NUM must be non-zero).
  This is useful when mirroring very large trees to prevent disasters.
  
