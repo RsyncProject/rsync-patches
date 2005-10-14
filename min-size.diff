@@ -1,17 +1,17 @@
 --- orig/generator.c	2005-09-29 18:03:00
-+++ generator.c	2005-09-29 18:09:27
-@@ -60,6 +60,7 @@ extern int make_backups;
- extern int csum_length;
++++ generator.c	2005-10-14 19:50:15
+@@ -61,6 +61,7 @@ extern int csum_length;
  extern int ignore_times;
  extern int size_only;
-+extern OFF_T min_size;
  extern OFF_T max_size;
++extern OFF_T min_size;
  extern int io_error;
  extern int allowed_lull;
-@@ -863,6 +864,15 @@ static void recv_generator(char *fname, 
+ extern int sock_f_out;
+@@ -872,6 +873,15 @@ static void recv_generator(char *fname, 
+ 		}
  		return;
  	}
- 
 +	if (min_size && file->length < min_size) {
 +		if (verbose > 1) {
 +			if (the_file_list->count == 1)
@@ -21,19 +21,19 @@
 +		}
 +		return;
 +	}
- 	if (max_size && file->length > max_size) {
- 		if (verbose > 1) {
- 			if (the_file_list->count == 1)
+ 
+ 	if (ignore_existing && statret == 0) {
+ 		if (verbose > 1)
 @@ -1265,7 +1275,7 @@ void generate_files(int f_out, struct fi
  
  	phase++;
  	csum_length = SUM_LENGTH;
 -	max_size = ignore_existing = ignore_non_existing = 0;
-+	min_size = max_size = ignore_existing = ignore_non_existing = 0;
++	max_size = min_size = ignore_existing = ignore_non_existing = 0;
  	update_only = always_checksum = size_only = 0;
  	ignore_times = 1;
  	if (append_mode)  /* resend w/o append mode */
---- orig/options.c	2005-10-14 18:50:49
+--- orig/options.c	2005-10-14 19:47:07
 +++ options.c	2005-10-14 19:08:38
 @@ -99,6 +99,7 @@ int ignore_non_existing = 0;
  int need_messages_from_generator = 0;
@@ -77,12 +77,12 @@
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
    {"inplace",          0,  POPT_ARG_NONE,   &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_VAL,    &append_mode, 1, 0, 0 },
-@@ -919,6 +922,15 @@ int parse_arguments(int *argc, const cha
+@@ -923,6 +926,15 @@ int parse_arguments(int *argc, const cha
  			}
  			break;
  
 +		case OPT_MIN_SIZE:
-+			if ((min_size = parse_size_arg(&min_size_arg)) <= 0) {
++			if ((min_size = parse_size_arg(&min_size_arg, 'b')) <= 0) {
 +				snprintf(err_buf, sizeof err_buf,
 +					"--min-size value is invalid: %s\n",
 +					min_size_arg);
@@ -93,7 +93,7 @@
  		case OPT_LINK_DEST:
  #ifdef HAVE_LINK
  			link_dest = 1;
-@@ -1439,6 +1451,11 @@ void server_options(char **args,int *arg
+@@ -1443,6 +1455,11 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  
