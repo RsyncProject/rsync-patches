@@ -86,17 +86,17 @@ After applying this patch, run these commands for a successful build:
  AC_OUTPUT
  
 --- orig/flist.c	2005-07-29 02:49:06
-+++ flist.c	2005-05-12 22:55:41
-@@ -970,6 +970,8 @@ static struct file_struct *send_file_nam
++++ flist.c	2005-10-16 23:03:04
+@@ -968,6 +968,8 @@ static struct file_struct *send_file_nam
  		return NULL;
  	if (MAKE_ACL(file, fname) < 0)
  		return NULL;
-+	if (!MAKE_XATTR(file, fname))
++	if (MAKE_XATTR(file, fname) < 0)
 +		return NULL;
  
  	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
-@@ -979,9 +981,11 @@ static struct file_struct *send_file_nam
+@@ -977,9 +979,11 @@ static struct file_struct *send_file_nam
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f, base_flags);
  		SEND_ACL(file, f);
@@ -108,7 +108,7 @@ After applying this patch, run these commands for a successful build:
  	}
  	return file;
  }
-@@ -1328,6 +1332,7 @@ struct file_list *recv_file_list(int f)
+@@ -1327,6 +1331,7 @@ struct file_list *recv_file_list(int f)
  		file = receive_file_entry(flist, flags, f);
  
  		RECEIVE_ACL(file, f);
@@ -116,7 +116,7 @@ After applying this patch, run these commands for a successful build:
  
  		if (S_ISREG(file->mode))
  			stats.total_size += file->length;
-@@ -1352,6 +1357,7 @@ struct file_list *recv_file_list(int f)
+@@ -1351,6 +1356,7 @@ struct file_list *recv_file_list(int f)
  	clean_flist(flist, relative_paths, 1);
  
  	SORT_FILE_ACL_INDEX_LISTS();
@@ -203,7 +203,7 @@ After applying this patch, run these commands for a successful build:
  int preserve_perms = 0;
  int preserve_devices = 0;
  int preserve_uid = 0;
-@@ -183,6 +184,7 @@ static void print_rsync_version(enum log
+@@ -184,6 +185,7 @@ static void print_rsync_version(enum log
  	char const *have_inplace = "no ";
  	char const *hardlinks = "no ";
  	char const *acls = "no ";
@@ -211,7 +211,7 @@ After applying this patch, run these commands for a successful build:
  	char const *links = "no ";
  	char const *ipv6 = "no ";
  	STRUCT_STAT *dumstat;
-@@ -202,7 +204,9 @@ static void print_rsync_version(enum log
+@@ -203,7 +205,9 @@ static void print_rsync_version(enum log
  #ifdef SUPPORT_ACLS
  	acls = "";
  #endif
@@ -222,7 +222,7 @@ After applying this patch, run these commands for a successful build:
  #ifdef SUPPORT_LINKS
  	links = "";
  #endif
-@@ -217,9 +221,9 @@ static void print_rsync_version(enum log
+@@ -218,9 +222,9 @@ static void print_rsync_version(enum log
  		"Copyright (C) 1996-2005 by Andrew Tridgell and others\n");
  	rprintf(f, "<http://rsync.samba.org/>\n");
  	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
@@ -234,7 +234,7 @@ After applying this patch, run these commands for a successful build:
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -290,6 +294,7 @@ void usage(enum logcode F)
+@@ -291,6 +295,7 @@ void usage(enum logcode F)
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
    rprintf(F," -A, --acls                  preserve ACLs (implies --perms)\n");
@@ -242,7 +242,7 @@ After applying this patch, run these commands for a successful build:
    rprintf(F," -o, --owner                 preserve owner (root only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F," -D, --devices               preserve devices (root only)\n");
-@@ -395,6 +400,9 @@ static struct poptOption long_options[] 
+@@ -397,6 +402,9 @@ static struct poptOption long_options[] 
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
    {"no-A",             0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
@@ -252,7 +252,7 @@ After applying this patch, run these commands for a successful build:
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -954,6 +962,17 @@ int parse_arguments(int *argc, const cha
+@@ -994,6 +1002,17 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif /* SUPPORT_ACLS */
  
@@ -270,7 +270,7 @@ After applying this patch, run these commands for a successful build:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1378,6 +1397,8 @@ void server_options(char **args,int *arg
+@@ -1418,6 +1437,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'H';
  	if (preserve_acls)
  		argstr[x++] = 'A';
@@ -280,25 +280,29 @@ After applying this patch, run these commands for a successful build:
  		argstr[x++] = 'o';
  	if (preserve_gid)
 --- orig/rsync.c	2004-07-03 20:11:58
-+++ rsync.c	2005-03-03 01:31:22
-@@ -146,6 +146,14 @@ int set_perms(char *fname,struct file_st
++++ rsync.c	2005-10-16 23:19:27
+@@ -139,12 +139,15 @@ int set_perms(char *fname,struct file_st
+ 	}
+ #endif
+ 
+-	/* If this is a directory, SET_ACL() will be called on the cleanup
+-	 * receive_generator() pass (if we called it here, we might clobber
+-	 * writability on the directory). Everything else is OK to do now. */
++	/* If this is a directory, SET_ACL() and/or SET_XATTR() will be called
++	 * on the cleanup receive_generator() pass -- if we called it here, we
++	 * might clobber writability on the dir (SELinux security contexts are
++	 * stored in xattrs). Everything else is OK to do now. */
+ 	if (!S_ISDIR(st->st_mode)) {
  		if (SET_ACL(fname, file) == 0)
  			updated = 1;
- 	}
-+	/* If this is a directory, SET_XATTR() will be called on the cleanup
-+	 * receive_generator() pass--if we called it here, we might clobber
-+	 * writability on the directory (SELinux security contexts are stored
-+	 * in xattrs). everything else is OK to do now. */
-+	if (!S_ISDIR(st->st_mode)) {
 +		if (SET_XATTR(fname, file) == 0)
-+		updated = 1;
-+	}
++			updated = 1;
+ 	}
  
  	if (verbose > 1 && flags & PERMS_REPORT) {
- 		enum logcode code = daemon_log_format_has_i || dry_run
 --- orig/rsync.h	2005-07-29 02:25:55
-+++ rsync.h	2005-05-12 23:19:46
-@@ -688,6 +688,38 @@ struct stats {
++++ rsync.h	2005-10-16 23:19:44
+@@ -689,6 +689,38 @@ struct stats {
  #endif /* SUPPORT_ACLS */
  #include "smb_acls.h"
  
@@ -326,12 +330,12 @@ After applying this patch, run these commands for a successful build:
 +#define SEND_XATTR(file, f)
 +#define RECEIVE_XATTR(file, f)
 +#define SORT_FILE_XATTR_INDEX_LISTS()
-+#define SET_XATTR(fname, file)                 0 /* checked return value */
++#define SET_XATTR(fname, file)                 1 /* checked return value */
 +#define NEXT_XATTR_UID()
 +#define XATTR_UID_MAP(uid)
 +#define PUSH_KEEP_BACKUP_XATTR(file, orig, dest)
 +#define CLEANUP_KEEP_BACKUP_XATTR()
-+#define DUP_XATTR(src, orig)           0 /* checked return value */
++#define DUP_XATTR(src, orig)           1 /* checked return value */
 +#endif /* SUPPORT_XATTRS */
 +
  #include "proto.h"
@@ -347,7 +351,7 @@ After applying this patch, run these commands for a successful build:
   -o, --owner                 preserve owner (root only)
   -g, --group                 preserve group
   -D, --devices               preserve devices (root only)
-@@ -671,6 +672,11 @@ ACLs to be the same as the local ACLs.  
+@@ -672,6 +673,11 @@ ACLs to be the same as the local ACLs.  
  remote machine's rsync supports this option also. This is a non-standard
  option.
  
@@ -359,9 +363,9 @@ After applying this patch, run these commands for a successful build:
  dit(bf(-o, --owner)) This option causes rsync to set the owner of the
  destination file to be the same as the source file.  On most systems,
  only the super-user can set file ownership.  By default, the preservation
---- orig/xattr.c	2005-05-13 06:10:34
-+++ xattr.c	2005-05-13 06:10:34
-@@ -0,0 +1,546 @@
+--- orig/xattr.c	2005-10-16 23:25:12
++++ xattr.c	2005-10-16 23:25:12
+@@ -0,0 +1,540 @@
 +/* Extended Attribute support for rsync */
 +/* Copyright (C) 2004 Red Hat, Inc */
 +/* Written by Jay Fenlason, vaguely based on the ACLs patch */
@@ -472,7 +476,7 @@ After applying this patch, run these commands for a successful build:
 +	return strcmp(xa1->name, xa2->name);
 +}
 +
-+static BOOL rsync_xal_get(const char *fname, rsync_xal *x)
++static int rsync_xal_get(const char *fname, rsync_xal *x)
 +{
 +	ssize_t name_size;
 +	ssize_t datum_size;
@@ -497,13 +501,13 @@ After applying this patch, run these commands for a successful build:
 +	}
 +	if (name_size < 0) {
 +		if (errno == ENOTSUP)
-+			return False;
++			return -1;
 +		if (errno == ERANGE) {
 +			name_size = sys_llistxattr(fname, NULL, 0);
 +			if (name_size < 0) {
 +				rprintf(FERROR, "%s: rsync_xal_get: llistxattr: %s\n",
-+	 fname, strerror(errno));
-+				return False;
++					fname, strerror(errno));
++				return -1;
 +			}
 +			namebuf = realloc_array(namebuf, char, name_size + 1);
 +			if (!namebuf)
@@ -514,18 +518,18 @@ After applying this patch, run these commands for a successful build:
 +				rprintf(FERROR,
 +				    "%s: rsync_xal_get: re-llistxattr failed: %s\n",
 +				    fname, strerror(errno));
-+				return False;
++				return -1;
 +			}
 +		} else {
 +			rprintf(FERROR,
 +			    "%s: rsync_xal_get: llistxattr failed: %s\n",
 +			    fname, strerror(errno));
-+			return False;
++			return -1;
 +		}
 +	}
 +	rsync_xal_free(x);
 +	if (name_size == 0)
-+		return True;
++		return 0;
 +	for (left = name_size, name = namebuf; left > 0 ; left -= len, name += len) {
 +		len = strlen(name) + 1;
 +
@@ -547,14 +551,14 @@ After applying this patch, run these commands for a successful build:
 +		}
 +		if (datum_size < 0) {
 +			if (errno == ENOTSUP)
-+				return False;
++				return -1;
 +			if (errno == ERANGE) {
 +				datum_size = sys_lgetxattr(fname, name, NULL, 0);
 +				if (datum_size < 0) {
 +					rprintf(FERROR,
 +					    "%s: rsync_xal_get: lgetxattr %s failed: %s\n",
 +					    fname, name, strerror(errno));
-+					return False;
++					return -1;
 +				}
 +				datumbuf = realloc_array(datumbuf, char, datum_size + 1);
 +				if (!datumbuf)
@@ -565,13 +569,13 @@ After applying this patch, run these commands for a successful build:
 +					rprintf(FERROR,
 +					    "%s: rsync_xal_get: re-lgetxattr of %s failed: %s\n",
 +					    name, fname, strerror(errno));
-+					return False;
++					return -1;
 +				}
 +			} else {
 +				rprintf(FERROR,
 +				    "%s: rsync_xal_get: lgetxattr %s failed: %s\n",
 +				    fname, name, strerror(errno));
-+				return False;
++				return -1;
 +			}
 +		}
 +		ptr = new_array(char, len + datum_size);
@@ -589,20 +593,20 @@ After applying this patch, run these commands for a successful build:
 +	if (x->count > 1) {
 +		qsort(x->rxas, x->count, sizeof (rsync_xa), rsync_xal_compare_names);
 +	}
-+	return True;
++	return 0;
 +}
 +
 +
 +/* generate the xattr(s) for this flist entry;
 + * xattr(s) are either sent or cleaned-up by send_xattr() below */
 +
-+BOOL make_xattr(const struct file_struct *file, const char *fname)
++int make_xattr(const struct file_struct *file, const char *fname)
 +{
 +	if (!preserve_xattrs || !file)
-+		return True;
++		return 1;
 +
 +	rsync_xal_get(fname, &curr_rsync_xal);
-+	return True;
++	return 0; /* TODO:  This needs to return 1 if no xattrs changed! */
 +}
 +
 +static ssize_t rsync_xal_find_matching(void)
@@ -765,7 +769,7 @@ After applying this patch, run these commands for a successful build:
 +		index = read_int(f);
 +		if (index >= rsync_xal_l.count) {
 +			rprintf(FERROR, "%s: receive_xattr: xa index %lu out of range\n",
-+fname, (unsigned long)index);
++				fname, (unsigned long)index);
 +			exit_cleanup(RERR_STREAMIO);
 +		}
 +		fxil.filexalidxs[fxil.count].xalidx = index;
@@ -773,19 +777,17 @@ After applying this patch, run these commands for a successful build:
 +	fxil.count++;
 +}
 +
-+static BOOL rsync_xal_set(const char *fname, rsync_xal *x)
++static int rsync_xal_set(const char *fname, rsync_xal *x)
 +{
 +	size_t i;
-+	int status;
-+	BOOL ret;
++	int ret = 0;
 +
-+	ret = True;
 +	for (i = 0; i < x->count; i++) {
-+		status = sys_lsetxattr(fname, x->rxas[i].name, x->rxas[i].datum, x->rxas[i].datum_len, 0);
++		int status = sys_lsetxattr(fname, x->rxas[i].name, x->rxas[i].datum, x->rxas[i].datum_len, 0);
 +		if (status < 0) {
 +			rprintf(FERROR, "%s: rsync_xal_set: lsetxattr %s failed: %s\n",
 +				fname, x->rxas[i].name, strerror(errno));
-+			ret = False;
++			ret = -1;
 +		}
 +	}
 +	return ret;
@@ -797,13 +799,13 @@ After applying this patch, run these commands for a successful build:
 +{
 +	int ret;
 +
-+	ret = 0;
 +	if (!preserve_xattrs)
-+		return ret;
++		return 1;
 +
-+	ret = rsync_xal_get(orig, &backup_xal);
-+	if (ret == True)
++	if (rsync_xal_get(orig, &backup_xal) < 0)
 +		ret = rsync_xal_set(bak, &backup_xal);
++	else
++		ret = 0;
 +	rsync_xal_free(&backup_xal);
 +	return ret;
 +}
@@ -822,7 +824,7 @@ After applying this patch, run these commands for a successful build:
 +static int set_keep_backup_xal(void)
 +{
 +	if (!preserve_xattrs)
-+		return 0;
++		return 1;
 +	return rsync_xal_set(backup_dest_fname, &backup_xal);
 +}
 +
@@ -885,26 +887,22 @@ After applying this patch, run these commands for a successful build:
 +	return -1;
 +}
 +
-+
 +/* set extended attributes on rsync-ed or keep_backup-ed file */
 +
 +int set_xattr(const char *fname, const struct file_struct *file)
 +{
-+	int updated;
 +	int xalidx;
 +	rsync_xal *x;
 +
-+	updated = 0;
 +	if (dry_run || !preserve_xattrs)
-+		return 0;
++		return 1;
 +	if (file == backup_orig_file) {
 +		if (!strcmp(fname, backup_dest_fname))
 +			return set_keep_backup_xal();
 +	}
 +	xalidx = find_file_xal_index(file);
 +	x = &(rsync_xal_l.rxals[xalidx]);
-+	updated = rsync_xal_set(fname, x);
-+	return updated;
++	return rsync_xal_set(fname, x);
 +}
 +
 +#endif /* SUPPORT_XATTRS */
