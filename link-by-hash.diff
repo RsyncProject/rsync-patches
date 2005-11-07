@@ -11,12 +11,12 @@ will only store one copy of the unique contents of each file, regardless of
 the file's name.
 
 
---- orig/Makefile.in	2005-07-07 23:11:07
-+++ Makefile.in	2004-07-03 20:20:15
+--- orig/Makefile.in	2005-11-07 04:29:00
++++ Makefile.in	2005-11-07 04:37:17
 @@ -34,7 +34,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
- 	fileio.o batch.o clientname.o
+ 	fileio.o batch.o clientname.o chmod.o
 -OBJS3=progress.o pipe.o
 +OBJS3=progress.o pipe.o hashlink.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
@@ -365,25 +365,25 @@ the file's name.
 +}
 +
 +#endif
---- orig/options.c	2005-10-14 20:03:21
-+++ options.c	2005-10-14 20:18:23
-@@ -142,6 +142,7 @@ char *log_format = NULL;
- char *password_file = NULL;
+--- orig/options.c	2005-11-07 04:29:01
++++ options.c	2005-11-07 04:37:30
+@@ -145,6 +145,7 @@ char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
+ char *chmod_mode = NULL;
 +char *link_by_hash_dir = NULL;
  char backup_dir_buf[MAXPATHLEN];
  int rsync_port = 0;
  int compare_dest = 0;
-@@ -323,6 +324,7 @@ void usage(enum logcode F)
+@@ -329,6 +330,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
 +  rprintf(F,"     --link-by-hash=DIR      create hardlinks by hash into DIR\n");
    rprintf(F," -z, --compress              compress file data during the transfer\n");
+   rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
-   rprintf(F," -f, --filter=RULE           add a file-filtering RULE\n");
-@@ -365,7 +367,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -372,7 +374,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -392,15 +392,15 @@ the file's name.
  
  static struct poptOption long_options[] = {
    /* longName, shortName, argInfo, argPtr, value, descrip, argDesc */
-@@ -450,6 +452,7 @@ static struct poptOption long_options[] 
+@@ -458,6 +460,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
 +  {"link-by-hash",     0,  POPT_ARG_STRING, 0, OPT_LINK_BY_HASH, 0, 0},
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
-   {"compress",        'z', POPT_ARG_NONE,   &do_compression, 0, 0, 0 },
-   {0,                 'P', POPT_ARG_NONE,   0, 'P', 0, 0 },
-@@ -968,6 +971,21 @@ int parse_arguments(int *argc, const cha
+   {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
+   {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
+@@ -994,6 +997,21 @@ int parse_arguments(int *argc, const cha
  			basis_dir[basis_dir_cnt++] = (char *)arg;
  			break;
  
@@ -422,8 +422,8 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1573,6 +1591,11 @@ void server_options(char **args,int *arg
- 		}
+@@ -1616,6 +1634,11 @@ void server_options(char **args,int *arg
+ 		args[ac++] = chmod_mode;
  	}
  
 +	if (link_by_hash_dir && am_sender) {
@@ -560,13 +560,13 @@ the file's name.
  
  #include "byteorder.h"
  #include "lib/mdfour.h"
---- orig/rsync.yo	2005-10-14 20:03:01
+--- orig/rsync.yo	2005-11-07 04:29:02
 +++ rsync.yo	2005-02-13 06:58:47
-@@ -355,6 +355,7 @@ to the detailed description below for a 
+@@ -356,6 +356,7 @@ to the detailed description below for a 
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
 +     --link-by-hash=DIR      create hardlinks by hash into DIR
   -z, --compress              compress file data during the transfer
+      --compress-level=NUM    explicitly set compression level
   -C, --cvs-exclude           auto-ignore files in the same way CVS does
-  -f, --filter=RULE           add a file-filtering RULE
