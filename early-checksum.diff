@@ -1,13 +1,14 @@
 This patch changes the way the --checksum option works by having the
 receiving side perform a checksum-read of every file in the file list
-(if the sizes are equal) as the list is received, marking non-matching
+as the list is received (if the sizes are equal), marking non-matching
 items with a flag.  The idea is that the checksum pass on the sender and
 the receiver can then happen in parallel instead of having the reciever
 to its checksum pass during its normal find-the-different-files pass.
 
-I have benchmarked this a little, and it appears to slow things down.
+I have benchmarked this a little, and it appears to slow things down
+for a local copy, so the old algorithm is used for local copies.
 
---- orig/flist.c	2005-11-01 20:09:55
+--- orig/flist.c	2005-11-07 04:29:01
 +++ flist.c	2005-09-16 16:41:25
 @@ -36,6 +36,7 @@ extern int am_daemon;
  extern int am_sender;
@@ -17,7 +18,7 @@ I have benchmarked this a little, and it appears to slow things down.
  extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
-@@ -705,6 +706,16 @@ static struct file_struct *receive_file_
+@@ -707,6 +708,16 @@ static struct file_struct *receive_file_
  			sum = empty_sum;
  		}
  		read_buf(f, sum, slen);
@@ -82,7 +83,7 @@ I have benchmarked this a little, and it appears to slow things down.
  			if (itemizing) {
  				itemize(file, ndx, real_ret, &real_st,
 --- orig/main.c	2005-11-02 07:22:12
-+++ main.c	2005-09-16 16:41:25
++++ main.c	2005-11-07 05:00:49
 @@ -45,6 +45,7 @@ extern int copy_links;
  extern int keep_dirlinks;
  extern int preserve_hard_links;
@@ -115,7 +116,7 @@ I have benchmarked this a little, and it appears to slow things down.
  	}
  
 +	strlcpy(olddir, curr_dir, sizeof olddir);
-+	if (always_checksum && argc > 0)
++	if (always_checksum && !local_server && argc > 0)
 +		pre_checksum = push_dir(argv[0]);
 +
  	flist = recv_file_list(f_in);
@@ -144,7 +145,7 @@ I have benchmarked this a little, and it appears to slow things down.
  	}
  
 +	strlcpy(olddir, curr_dir, sizeof olddir);
-+	if (always_checksum)
++	if (always_checksum && !local_server)
 +		pre_checksum = push_dir(argv[0]);
 +
  	if (write_batch && !am_server)
