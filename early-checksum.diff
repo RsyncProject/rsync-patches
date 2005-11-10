@@ -8,7 +8,7 @@ to its checksum pass during its normal find-the-different-files pass.
 I have benchmarked this a little, and it appears to slow things down
 for a local copy, so the old algorithm is used for local copies.
 
---- orig/flist.c	2005-11-07 04:29:01
+--- orig/flist.c	2005-11-10 16:58:36
 +++ flist.c	2005-09-16 16:41:25
 @@ -36,6 +36,7 @@ extern int am_daemon;
  extern int am_sender;
@@ -21,31 +21,31 @@ for a local copy, so the old algorithm is used for local copies.
 @@ -707,6 +708,16 @@ static struct file_struct *receive_file_
  			sum = empty_sum;
  		}
- 		read_buf(f, sum, slen);
+ 		read_buf(f, sum, checksum_len);
 +		if (pre_checksum) {
 +			char sum2[MD4_SUM_LENGTH];
 +			STRUCT_STAT st;
 +			char *fname = f_name(file);
 +			if (stat(fname, &st) == 0 && st.st_size == file_length) {
 +				file_checksum(fname, sum2, st.st_size);
-+				if (memcmp(sum, sum2, slen) != 0)
++				if (memcmp(sum, sum2, checksum_len) != 0)
 +					file->flags |= FLAG_SUM_DIFFERS;
 +			}
 +		}
  	}
  
  	if (!preserve_perms) {
---- orig/generator.c	2005-10-30 22:30:28
-+++ generator.c	2005-09-16 16:41:25
+--- orig/generator.c	2005-11-10 16:58:36
++++ generator.c	2005-11-10 03:16:39
 @@ -69,6 +69,7 @@ extern int ignore_timeout;
  extern int protocol_version;
  extern int fuzzy_basis;
  extern int always_checksum;
 +extern int pre_checksum;
+ extern int checksum_len;
  extern char *partial_dir;
  extern char *basis_dir[];
- extern int compare_dest;
-@@ -359,7 +360,8 @@ void itemize(struct file_struct *file, i
+@@ -375,7 +376,8 @@ void itemize(struct file_struct *file, i
  
  
  /* Perform our quick-check heuristic for determining if a file is unchanged. */
@@ -55,16 +55,16 @@ for a local copy, so the old algorithm is used for local copies.
  {
  	if (st->st_size != file->length)
  		return 0;
-@@ -368,6 +370,8 @@ static int unchanged_file(char *fn, stru
+@@ -384,6 +386,8 @@ static int unchanged_file(char *fn, stru
  	   of the file time to determine whether to sync */
  	if (always_checksum && S_ISREG(st->st_mode)) {
  		char sum[MD4_SUM_LENGTH];
 +		if (pre_checksum && fnamecmp_type == FNAMECMP_FNAME)
 +			return !(file->flags & FLAG_SUM_DIFFERS);
  		file_checksum(fn, sum, st->st_size);
- 		return memcmp(sum, file->u.sum, protocol_version < 21 ? 2
- 							: MD4_SUM_LENGTH) == 0;
-@@ -923,7 +927,7 @@ static void recv_generator(char *fname, 
+ 		return memcmp(sum, file->u.sum, checksum_len) == 0;
+ 	}
+@@ -940,7 +944,7 @@ static void recv_generator(char *fname, 
  				match_level = 1;
  				/* FALL THROUGH */
  			case 1:
@@ -73,16 +73,16 @@ for a local copy, so the old algorithm is used for local copies.
  					continue;
  				best_match = i;
  				match_level = 2;
-@@ -1051,7 +1055,7 @@ static void recv_generator(char *fname, 
+@@ -1068,7 +1072,7 @@ static void recv_generator(char *fname, 
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
  		;
 -	else if (unchanged_file(fnamecmp, file, &st)) {
 +	else if (unchanged_file(fnamecmp, fnamecmp_type, file, &st)) {
- 		if (fnamecmp_type == FNAMECMP_FNAME) {
- 			if (itemizing) {
- 				itemize(file, ndx, real_ret, &real_st,
---- orig/main.c	2005-11-02 07:22:12
+ 		if (partialptr) {
+ 			do_unlink(partialptr);
+ 			handle_partial_dir(partialptr, PDIR_DELETE);
+--- orig/main.c	2005-11-10 16:58:36
 +++ main.c	2005-11-07 05:00:49
 @@ -45,6 +45,7 @@ extern int copy_links;
  extern int keep_dirlinks;
@@ -111,7 +111,7 @@ for a local copy, so the old algorithm is used for local copies.
  	int save_verbose = verbose;
  
  	if (filesfrom_fd >= 0) {
-@@ -677,6 +681,10 @@ static void do_server_recv(int f_in, int
+@@ -676,6 +680,10 @@ static void do_server_recv(int f_in, int
  		filesfrom_fd = -1;
  	}
  
@@ -122,7 +122,7 @@ for a local copy, so the old algorithm is used for local copies.
  	flist = recv_file_list(f_in);
  	verbose = save_verbose;
  	if (!flist) {
-@@ -685,6 +693,9 @@ static void do_server_recv(int f_in, int
+@@ -684,6 +692,9 @@ static void do_server_recv(int f_in, int
  	}
  	the_file_list = flist;
  
@@ -132,7 +132,7 @@ for a local copy, so the old algorithm is used for local copies.
  	if (argc > 0)
  		local_name = get_local_name(flist,argv[0]);
  
-@@ -733,6 +744,7 @@ int client_run(int f_in, int f_out, pid_
+@@ -732,6 +743,7 @@ int client_run(int f_in, int f_out, pid_
  {
  	struct file_list *flist = NULL;
  	int exit_code = 0, exit_code2 = 0;
@@ -140,7 +140,7 @@ for a local copy, so the old algorithm is used for local copies.
  	char *local_name = NULL;
  
  	cleanup_child_pid = pid;
-@@ -804,11 +816,18 @@ int client_run(int f_in, int f_out, pid_
+@@ -803,11 +815,18 @@ int client_run(int f_in, int f_out, pid_
  		filesfrom_fd = -1;
  	}
  
