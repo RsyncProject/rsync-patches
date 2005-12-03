@@ -5,8 +5,8 @@ groups, even if they weren't returned by getgroups().  E.g.:
 
     rsync -avoogg host:/from/ /to/
 
---- orig/compat.c	2005-03-09 18:53:55
-+++ compat.c	2005-03-11 11:25:46
+--- orig/compat.c	2005-11-14 21:24:47
++++ compat.c	2005-12-03 01:28:51
 @@ -28,11 +28,14 @@
  int remote_protocol = 0;
  
@@ -22,21 +22,21 @@ groups, even if they weren't returned by getgroups().  E.g.:
  extern int checksum_seed;
  extern int basis_dir_cnt;
  extern int protocol_version;
-@@ -106,4 +109,11 @@ void setup_protocol(int f_out,int f_in)
+@@ -107,4 +110,11 @@ void setup_protocol(int f_out,int f_in)
  	} else {
  		checksum_seed = read_int(f_in);
  	}
 +
 +	if (am_root) {
 +		if (preserve_uid)
-+			preserve_uid = 2;
++			preserve_uid = 3;
 +		if (preserve_gid)
-+			preserve_gid = 2;
++			preserve_gid = 3;
 +	}
  }
---- orig/options.c	2005-08-27 21:11:26
-+++ options.c	2005-08-27 21:26:04
-@@ -390,10 +390,10 @@ static struct poptOption long_options[] 
+--- orig/options.c	2005-11-15 18:21:22
++++ options.c	2005-12-03 01:28:45
+@@ -404,10 +404,10 @@ static struct poptOption long_options[] 
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
@@ -49,32 +49,33 @@ groups, even if they weren't returned by getgroups().  E.g.:
    {"no-group",         0,  POPT_ARG_VAL,    &preserve_gid, 0, 0, 0 },
    {"no-g",             0,  POPT_ARG_VAL,    &preserve_gid, 0, 0, 0 },
    {"devices",         'D', POPT_ARG_VAL,    &preserve_devices, 1, 0, 0 },
-@@ -812,7 +812,8 @@ int parse_arguments(int *argc, const cha
+@@ -872,8 +872,8 @@ int parse_arguments(int *argc, const cha
  #endif
  			preserve_perms = 1;
  			preserve_times = 1;
 -			preserve_gid = 1;
+-			preserve_uid = 1;
 +			preserve_uid |= 1;
 +			preserve_gid |= 1;
- 			preserve_uid = 1;
  			preserve_devices = 1;
  			break;
-@@ -821,6 +822,14 @@ int parse_arguments(int *argc, const cha
+ 
+@@ -881,6 +881,14 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
 +		case 'o':
-+			preserve_uid++;
++			preserve_uid += 2;
 +			break;
 +
 +		case 'g':
-+			preserve_gid++;
++			preserve_gid += 2;
 +			break;
 +
  		case 'v':
  			verbose++;
  			break;
-@@ -1329,10 +1338,16 @@ void server_options(char **args,int *arg
+@@ -1432,10 +1440,16 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
@@ -82,19 +83,19 @@ groups, even if they weren't returned by getgroups().  E.g.:
 +	if (preserve_uid) {
  		argstr[x++] = 'o';
 -	if (preserve_gid)
-+		if (preserve_uid > 1)
++		if (preserve_uid > 2)
 +			argstr[x++] = 'o';
 +	}
 +	if (preserve_gid) {
  		argstr[x++] = 'g';
-+		if (preserve_gid > 1)
++		if (preserve_gid > 2)
 +			argstr[x++] = 'g';
 +	}
  	if (preserve_devices)
  		argstr[x++] = 'D';
  	if (preserve_times)
 --- orig/rsync.c	2005-07-27 23:31:12
-+++ rsync.c	2005-02-01 10:46:04
++++ rsync.c	2005-12-03 01:29:17
 @@ -27,7 +27,6 @@ extern int dry_run;
  extern int daemon_log_format_has_i;
  extern int preserve_times;
@@ -108,12 +109,12 @@ groups, even if they weren't returned by getgroups().  E.g.:
  	}
  
 -	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
-+	change_uid = preserve_uid > 1 && st->st_uid != file->uid;
++	change_uid = preserve_uid > 2 && st->st_uid != file->uid;
  	change_gid = preserve_gid && file->gid != GID_NONE
  		&& st->st_gid != file->gid;
  #if !defined HAVE_LCHOWN && !defined CHOWN_MODIFIES_SYMLINK
---- orig/uidlist.c	2005-02-14 00:53:44
-+++ uidlist.c	2004-09-09 01:59:08
+--- orig/uidlist.c	2005-11-10 16:58:36
++++ uidlist.c	2005-12-03 01:29:52
 @@ -35,7 +35,6 @@ extern int verbose;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -127,21 +128,21 @@ groups, even if they weren't returned by getgroups().  E.g.:
  	struct idlist *node;
  
 -	if (!am_root && !is_in_group(id2))
-+	if (preserve_gid < 2 && !is_in_group(id2))
++	if (preserve_gid < 3 && !is_in_group(id2))
  		id2 = GID_NONE;
  	node = add_to_list(&gidlist, id, name, id2);
  
-@@ -339,11 +338,11 @@ void recv_uid_list(int f, struct file_li
+@@ -338,11 +337,11 @@ void recv_uid_list(int f, struct file_li
  
  	/* now convert the uid/gid of all files in the list to the mapped
  	 * uid/gid */
 -	if (am_root && preserve_uid && !numeric_ids) {
-+	if (preserve_uid > 1 && !numeric_ids) {
++	if (preserve_uid > 2 && !numeric_ids) {
  		for (i = 0; i < flist->count; i++)
  			flist->files[i]->uid = match_uid(flist->files[i]->uid);
  	}
 -	if (preserve_gid && (!am_root || !numeric_ids)) {
-+	if (preserve_gid && (preserve_gid < 2 || !numeric_ids)) {
++	if (preserve_gid && (preserve_gid < 3 || !numeric_ids)) {
  		for (i = 0; i < flist->count; i++)
  			flist->files[i]->gid = match_gid(flist->files[i]->gid);
  	}
