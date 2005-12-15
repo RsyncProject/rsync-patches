@@ -35,8 +35,8 @@ for a local copy, so the old algorithm is used for local copies.
  	}
  
  	if (!preserve_perms) {
---- orig/generator.c	2005-11-10 16:58:36
-+++ generator.c	2005-11-10 03:16:39
+--- orig/generator.c	2005-12-15 23:00:49
++++ generator.c	2005-12-15 23:16:48
 @@ -69,6 +69,7 @@ extern int ignore_timeout;
  extern int protocol_version;
  extern int fuzzy_basis;
@@ -45,17 +45,17 @@ for a local copy, so the old algorithm is used for local copies.
  extern int checksum_len;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -375,7 +376,8 @@ void itemize(struct file_struct *file, i
+@@ -376,7 +377,8 @@ void itemize(struct file_struct *file, i
  
  
  /* Perform our quick-check heuristic for determining if a file is unchanged. */
--static int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
-+static int unchanged_file(char *fn, int fnamecmp_type, struct file_struct *file,
-+			  STRUCT_STAT *st)
+-int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
++int unchanged_file(char *fn, int fnamecmp_type, struct file_struct *file,
++		   STRUCT_STAT *st)
  {
  	if (st->st_size != file->length)
  		return 0;
-@@ -384,6 +386,8 @@ static int unchanged_file(char *fn, stru
+@@ -385,6 +387,8 @@ int unchanged_file(char *fn, struct file
  	   of the file time to determine whether to sync */
  	if (always_checksum && S_ISREG(st->st_mode)) {
  		char sum[MD4_SUM_LENGTH];
@@ -64,16 +64,16 @@ for a local copy, so the old algorithm is used for local copies.
  		file_checksum(fn, sum, st->st_size);
  		return memcmp(sum, file->u.sum, checksum_len) == 0;
  	}
-@@ -940,7 +944,7 @@ static void recv_generator(char *fname, 
- 				match_level = 1;
- 				/* FALL THROUGH */
- 			case 1:
--				if (!unchanged_file(fnamecmpbuf, file, &st))
-+				if (!unchanged_file(fnamecmpbuf, 0, file, &st))
- 					continue;
- 				best_match = i;
- 				match_level = 2;
-@@ -1068,7 +1072,7 @@ static void recv_generator(char *fname, 
+@@ -622,7 +626,7 @@ static int try_dests_reg(struct file_str
+ 			match_level = 1;
+ 			/* FALL THROUGH */
+ 		case 1:
+-			if (!unchanged_file(cmpbuf, file, stp))
++			if (!unchanged_file(cmpbuf, 0, file, stp))
+ 				continue;
+ 			best_match = j;
+ 			match_level = 2;
+@@ -1160,7 +1164,7 @@ static void recv_generator(char *fname, 
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
  		;
@@ -82,7 +82,18 @@ for a local copy, so the old algorithm is used for local copies.
  		if (partialptr) {
  			do_unlink(partialptr);
  			handle_partial_dir(partialptr, PDIR_DELETE);
---- orig/main.c	2005-11-10 16:58:36
+--- orig/hlink.c	2005-12-15 23:00:49
++++ hlink.c	2005-12-15 23:17:31
+@@ -210,7 +210,7 @@ int hard_link_check(struct file_struct *
+ 							itemizing = code = 0;
+ 						break;
+ 					}
+-					if (!unchanged_file(cmpbuf, file, &st3))
++					if (!unchanged_file(cmpbuf, 0, file, &st3))
+ 						continue;
+ 					statret = 1;
+ 					st = &st3;
+--- orig/main.c	2005-12-15 07:55:39
 +++ main.c	2005-11-07 05:00:49
 @@ -45,6 +45,7 @@ extern int copy_links;
  extern int keep_dirlinks;
@@ -103,7 +114,7 @@ for a local copy, so the old algorithm is used for local copies.
  struct file_list *the_file_list;
  
  /* There's probably never more than at most 2 outstanding child processes,
-@@ -633,6 +636,7 @@ static void do_server_recv(int f_in, int
+@@ -659,6 +662,7 @@ static void do_server_recv(int f_in, int
  	struct file_list *flist;
  	char *local_name = NULL;
  	char *dir = NULL;
@@ -111,7 +122,7 @@ for a local copy, so the old algorithm is used for local copies.
  	int save_verbose = verbose;
  
  	if (filesfrom_fd >= 0) {
-@@ -676,6 +680,10 @@ static void do_server_recv(int f_in, int
+@@ -702,6 +706,10 @@ static void do_server_recv(int f_in, int
  		filesfrom_fd = -1;
  	}
  
@@ -122,7 +133,7 @@ for a local copy, so the old algorithm is used for local copies.
  	flist = recv_file_list(f_in);
  	verbose = save_verbose;
  	if (!flist) {
-@@ -684,6 +692,9 @@ static void do_server_recv(int f_in, int
+@@ -710,6 +718,9 @@ static void do_server_recv(int f_in, int
  	}
  	the_file_list = flist;
  
@@ -132,7 +143,7 @@ for a local copy, so the old algorithm is used for local copies.
  	if (argc > 0)
  		local_name = get_local_name(flist,argv[0]);
  
-@@ -732,6 +743,7 @@ int client_run(int f_in, int f_out, pid_
+@@ -758,6 +769,7 @@ int client_run(int f_in, int f_out, pid_
  {
  	struct file_list *flist = NULL;
  	int exit_code = 0, exit_code2 = 0;
@@ -140,7 +151,7 @@ for a local copy, so the old algorithm is used for local copies.
  	char *local_name = NULL;
  
  	cleanup_child_pid = pid;
-@@ -803,11 +815,18 @@ int client_run(int f_in, int f_out, pid_
+@@ -829,11 +841,18 @@ int client_run(int f_in, int f_out, pid_
  		filesfrom_fd = -1;
  	}
  
@@ -159,7 +170,7 @@ for a local copy, so the old algorithm is used for local copies.
  	if (flist && flist->count > 0) {
  		local_name = get_local_name(flist, argv[0]);
  
---- orig/rsync.h	2005-10-14 18:45:50
+--- orig/rsync.h	2005-12-15 23:00:49
 +++ rsync.h	2005-09-16 16:41:26
 @@ -64,6 +64,7 @@
  #define FLAG_DEL_HERE (1<<3)	/* receiver/generator */
