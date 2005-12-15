@@ -1,0 +1,1227 @@
+This patch changes the receiving side to have the receiving code use a thread
+instead of a forked process.  This extra thread does read from the socket, but
+it sends any stdout/stderr messages to the generator (main thread) to output.
+
+** This is very new code. **  Yes, it passes the "make test" testsuite, but
+there may still be some problems, especially in some of the untested features.
+(For one thing, I haven't yet added code to properly handle any keep-alive
+messages that arrive on the receiving side during the --delete-after phase!)
+
+This code just uses pthread.h directly, so configure changes will probably be
+needed to make this compatible with more systems.  I have also tested that
+this code works fine using the GNU pth library without any code changes if
+you configured it with --enable-syscall-soft --enable-pthread (you may need
+to twiddle the Makefile options if you didn't install the library, though).
+
+If you try this out, please send some email to wayned@samba.org or the rsync
+mailing list with your results, build changes, bug reports, etc.  Thanks!
+
+Be sure to run "make proto" before running "make".
+
+--- orig/Makefile.in	2005-11-07 04:29:00
++++ Makefile.in	2005-12-10 18:35:39
+@@ -6,7 +6,7 @@ exec_prefix=@exec_prefix@
+ bindir=@bindir@
+ mandir=@mandir@
+ 
+-LIBS=@LIBS@
++LIBS=@LIBS@ -lpthread
+ CC=@CC@
+ CFLAGS=@CFLAGS@
+ CPPFLAGS=@CPPFLAGS@
+--- orig/cleanup.c	2005-11-10 16:58:36
++++ cleanup.c	2005-12-08 23:17:08
+@@ -94,9 +94,6 @@ void _exit_cleanup(int code, const char 
+ 	}
+ 	inside_cleanup++;
+ 
+-	signal(SIGUSR1, SIG_IGN);
+-	signal(SIGUSR2, SIG_IGN);
+-
+ 	if (verbose > 3) {
+ 		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): entered\n",
+ 			code, safe_fname(file), line);
+@@ -127,8 +124,6 @@ void _exit_cleanup(int code, const char 
+ 	io_flush(FULL_FLUSH);
+ 	if (cleanup_fname)
+ 		do_unlink(cleanup_fname);
+-	if (code)
+-		kill_all(SIGUSR1);
+ 	if (cleanup_pid && cleanup_pid == getpid()) {
+ 		char *pidf = lp_pid_file();
+ 		if (pidf && *pidf)
+--- orig/generator.c	2005-11-12 20:31:04
++++ generator.c	2005-12-08 23:17:08
+@@ -65,7 +65,6 @@ extern OFF_T min_size;
+ extern int io_error;
+ extern int allowed_lull;
+ extern int sock_f_out;
+-extern int ignore_timeout;
+ extern int protocol_version;
+ extern int fuzzy_basis;
+ extern int always_checksum;
+@@ -94,6 +93,11 @@ extern struct filter_list_struct server_
+ 
+ static int deletion_count = 0; /* used to implement --max-delete */
+ 
++/* These vars are local copies so that the receiver can use the originals. */
++static int GEN_append_mode;
++static int GEN_make_backups;
++static int GEN_csum_length;
++
+ /* For calling delete_file() */
+ #define DEL_FORCE_RECURSE	(1<<1) /* recurse even w/o --force */
+ #define DEL_TERSE		(1<<3)
+@@ -446,8 +450,8 @@ static void sum_sizes_sqroot(struct sum_
+ 	}
+ 
+ 	if (protocol_version < 27) {
+-		s2length = csum_length;
+-	} else if (csum_length == SUM_LENGTH) {
++		s2length = GEN_csum_length;
++	} else if (GEN_csum_length == SUM_LENGTH) {
+ 		s2length = SUM_LENGTH;
+ 	} else {
+ 		int32 c;
+@@ -457,7 +461,7 @@ static void sum_sizes_sqroot(struct sum_
+ 		for (c = blength; c >>= 1 && b; b--) {}
+ 		/* add a bit, subtract rollsum, round up. */
+ 		s2length = (b + 1 - 32 + 7) / 8; /* --optimize in compiler-- */
+-		s2length = MAX(s2length, csum_length);
++		s2length = MAX(s2length, GEN_csum_length);
+ 		s2length = MIN(s2length, SUM_LENGTH);
+ 	}
+ 
+@@ -491,7 +495,7 @@ static void generate_and_send_sums(int f
+ 	sum_sizes_sqroot(&sum, len);
+ 	write_sum_head(f_out, &sum);
+ 
+-	if (append_mode > 0 && f_copy < 0)
++	if (GEN_append_mode > 0 && f_copy < 0)
+ 		return;
+ 
+ 	if (len > 0)
+@@ -510,7 +514,7 @@ static void generate_and_send_sums(int f
+ 
+ 		if (f_copy >= 0) {
+ 			full_write(f_copy, map, n1);
+-			if (append_mode > 0)
++			if (GEN_append_mode > 0)
+ 				continue;
+ 		}
+ 
+@@ -1063,7 +1067,7 @@ static void recv_generator(char *fname, 
+ 		return;
+ 	}
+ 
+-	if (append_mode && st.st_size > file->length)
++	if (GEN_append_mode && st.st_size > file->length)
+ 		return;
+ 
+ 	if (!compare_dest && fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
+@@ -1124,7 +1128,7 @@ static void recv_generator(char *fname, 
+ 		goto notify_others;
+ 	}
+ 
+-	if (inplace && make_backups && fnamecmp_type == FNAMECMP_FNAME) {
++	if (inplace && GEN_make_backups && fnamecmp_type == FNAMECMP_FNAME) {
+ 		if (!(backupptr = get_backup_name(fname))) {
+ 			close(fd);
+ 			return;
+@@ -1214,7 +1218,10 @@ void generate_files(int f_out, struct fi
+ 	int save_ignore_existing = ignore_existing;
+ 	int save_ignore_non_existing = ignore_non_existing;
+ 	int save_do_progress = do_progress;
+-	int save_make_backups = make_backups;
++	int save_make_backups = GEN_make_backups = make_backups;
++
++	GEN_append_mode = append_mode;
++	GEN_csum_length = csum_length;
+ 
+ 	if (protocol_version >= 29) {
+ 		itemizing = 1;
+@@ -1243,7 +1250,7 @@ void generate_files(int f_out, struct fi
+ 		do_delete_pass(flist);
+ 	do_progress = 0;
+ 
+-	if (append_mode || whole_file < 0)
++	if (GEN_append_mode || whole_file < 0)
+ 		whole_file = 0;
+ 	if (verbose >= 2) {
+ 		rprintf(FINFO, "delta-transmission %s\n",
+@@ -1252,12 +1259,6 @@ void generate_files(int f_out, struct fi
+ 			: "enabled");
+ 	}
+ 
+-	/* Since we often fill up the outgoing socket and then just sit around
+-	 * waiting for the other 2 processes to do their thing, we don't want
+-	 * to exit on a timeout.  If the data stops flowing, the receiver will
+-	 * notice that and let us know via the redo pipe (or its closing). */
+-	ignore_timeout = 1;
+-
+ 	for (i = 0; i < flist->count; i++) {
+ 		struct file_struct *file = flist->files[i];
+ 
+@@ -1301,23 +1302,34 @@ void generate_files(int f_out, struct fi
+ 		delete_in_dir(NULL, NULL, NULL);
+ 
+ 	phase++;
+-	csum_length = SUM_LENGTH;
++	GEN_csum_length = SUM_LENGTH; /* csum_length is set by the receiver */
+ 	max_size = min_size = ignore_existing = ignore_non_existing = 0;
+ 	update_only = always_checksum = size_only = 0;
+ 	ignore_times = 1;
+-	if (append_mode)  /* resend w/o append mode */
+-		append_mode = -1; /* ... but only longer files */
+-	make_backups = 0; /* avoid a duplicate backup for inplace processing */
++	if (GEN_append_mode)  /* resend w/o append mode */
++		GEN_append_mode = -1; /* ... but only longer files */
++	GEN_make_backups = 0; /* avoid a duplicate backup for inplace processing */
+ 
+ 	if (verbose > 2)
+ 		rprintf(FINFO,"generate_files phase=%d\n",phase);
+ 
+ 	write_int(f_out, -1);
++	io_flush(NORMAL_FLUSH);
+ 
+ 	/* files can cycle through the system more than once
+ 	 * to catch initial checksum errors */
+-	while ((i = get_redo_num(itemizing, code)) != -1) {
+-		struct file_struct *file = flist->files[i];
++	while (1) {
++		struct file_struct *file;
++		if (preserve_hard_links)
++			check_for_finished_hlinks(itemizing, code);
++		if ((i = get_redo_num()) < 0) {
++			if (i == -2)
++				break;
++			io_flush(NORMAL_FLUSH);
++			msleep(20);
++			continue;
++		}
++		file = flist->files[i];
+ 		if (local_name)
+ 			strlcpy(fbuf, local_name, sizeof fbuf);
+ 		else
+@@ -1329,27 +1341,43 @@ void generate_files(int f_out, struct fi
+ 	phase++;
+ 	ignore_non_existing = save_ignore_non_existing;
+ 	ignore_existing = save_ignore_existing;
+-	make_backups = save_make_backups;
++	GEN_make_backups = save_make_backups;
+ 
+ 	if (verbose > 2)
+ 		rprintf(FINFO,"generate_files phase=%d\n",phase);
+ 
+ 	write_int(f_out, -1);
++	io_flush(NORMAL_FLUSH);
++
+ 	/* Reduce round-trip lag-time for a useless delay-updates phase. */
+-	if (protocol_version >= 29 && !delay_updates)
++	if (protocol_version >= 29 && !delay_updates) {
+ 		write_int(f_out, -1);
++		io_flush(NORMAL_FLUSH);
++	}
+ 
+-	/* Read MSG_DONE for the redo phase (and any prior messages). */
+-	get_redo_num(itemizing, code);
++	/* Read end marker for the redo phase (and any prior messages). */
++	while (1) {
++		if (preserve_hard_links)
++			check_for_finished_hlinks(itemizing, code);
++		if (get_redo_num() == -2)
++			break;
++		io_flush(NORMAL_FLUSH);
++		msleep(20);
++	}
+ 
+ 	if (protocol_version >= 29) {
+ 		phase++;
+ 		if (verbose > 2)
+ 			rprintf(FINFO, "generate_files phase=%d\n", phase);
+-		if (delay_updates)
++		if (delay_updates) {
+ 			write_int(f_out, -1);
+-		/* Read MSG_DONE for delay-updates phase & prior messages. */
+-		get_redo_num(itemizing, code);
++			io_flush(NORMAL_FLUSH);
++		}
++		/* Read end marker for delay-updates phase & prior messages. */
++		while (get_redo_num() != -2) {
++			io_flush(NORMAL_FLUSH);
++			msleep(20);
++		}
+ 	}
+ 
+ 	do_progress = save_do_progress;
+--- orig/io.c	2005-12-08 21:19:31
++++ io.c	2005-12-10 19:03:08
+@@ -47,7 +47,6 @@ extern int allowed_lull;
+ extern int am_server;
+ extern int am_daemon;
+ extern int am_sender;
+-extern int am_generator;
+ extern int eol_nulls;
+ extern int read_batch;
+ extern int csum_length;
+@@ -60,7 +59,6 @@ extern struct stats stats;
+ extern struct file_list *the_file_list;
+ 
+ const char phase_unknown[] = "unknown";
+-int ignore_timeout = 0;
+ int batch_fd = -1;
+ int batch_gen_fd = -1;
+ 
+@@ -84,7 +82,6 @@ const char *io_read_phase = phase_unknow
+ int kluge_around_eof = 0;
+ 
+ int msg_fd_in = -1;
+-int msg_fd_out = -1;
+ int sock_f_in = -1;
+ int sock_f_out = -1;
+ 
+@@ -109,27 +106,32 @@ static int select_timeout = SELECT_TIMEO
+ static void read_loop(int fd, char *buf, size_t len);
+ 
+ struct flist_ndx_item {
+-	struct flist_ndx_item *next;
++	volatile struct flist_ndx_item *next;
+ 	int ndx;
+ };
+ 
+ struct flist_ndx_list {
+-	struct flist_ndx_item *head, *tail;
++	volatile struct flist_ndx_item *head, *tail;
++	pthread_mutex_t mutex;
+ };
+ 
+-static struct flist_ndx_list redo_list, hlink_list;
++static struct flist_ndx_list redo_list = { NULL, NULL, PTHREAD_MUTEX_INITIALIZER };
++static struct flist_ndx_list hlink_list = { NULL, NULL, PTHREAD_MUTEX_INITIALIZER };
+ 
+ struct msg_list_item {
+-	struct msg_list_item *next;
++	volatile struct msg_list_item *next;
++	pthread_mutex_t mutex;
+ 	char *buf;
+ 	int len;
++	enum msgcode code;
+ };
+ 
+ struct msg_list {
+-	struct msg_list_item *head, *tail;
++	volatile struct msg_list_item *head, *tail;
++	pthread_mutex_t mutex;
+ };
+ 
+-static struct msg_list msg_list;
++static struct msg_list msg_list = { NULL, NULL, PTHREAD_MUTEX_INITIALIZER };
+ 
+ static void flist_ndx_push(struct flist_ndx_list *lp, int ndx)
+ {
+@@ -139,27 +141,31 @@ static void flist_ndx_push(struct flist_
+ 		out_of_memory("flist_ndx_push");
+ 	item->next = NULL;
+ 	item->ndx = ndx;
++	pthread_mutex_lock(&redo_list.mutex);
+ 	if (lp->tail)
+ 		lp->tail->next = item;
+ 	else
+ 		lp->head = item;
+ 	lp->tail = item;
++	pthread_mutex_unlock(&redo_list.mutex);
+ }
+ 
+ static int flist_ndx_pop(struct flist_ndx_list *lp)
+ {
+-	struct flist_ndx_item *next;
++	struct flist_ndx_item *head, *next;
+ 	int ndx;
+ 
+ 	if (!lp->head)
+ 		return -1;
+ 
+-	ndx = lp->head->ndx;
+-	next = lp->head->next;
+-	free(lp->head);
+-	lp->head = next;
+-	if (!next)
++	pthread_mutex_lock(&hlink_list.mutex);
++	head = (struct flist_ndx_item *)lp->head;
++	next = (struct flist_ndx_item *)head->next;
++	ndx = head->ndx;
++	if (!(lp->head = next))
+ 		lp->tail = NULL;
++	pthread_mutex_unlock(&hlink_list.mutex);
++	free(head);
+ 
+ 	return ndx;
+ }
+@@ -168,7 +174,7 @@ static void check_timeout(void)
+ {
+ 	time_t t;
+ 
+-	if (!io_timeout || ignore_timeout)
++	if (!io_timeout)
+ 		return;
+ 
+ 	if (!last_io_in) {
+@@ -209,45 +215,40 @@ void set_io_timeout(int secs)
+ 
+ /* Setup the fd used to receive MSG_* messages.  Only needed during the
+  * early stages of being a local sender (up through the sending of the
+- * file list) or when we're the generator (to fetch the messages from
+- * the receiver). */
++ * file list). */
+ void set_msg_fd_in(int fd)
+ {
+ 	msg_fd_in = fd;
+ }
+ 
+-/* Setup the fd used to send our MSG_* messages.  Only needed when
+- * we're the receiver (to send our messages to the generator). */
+-void set_msg_fd_out(int fd)
+-{
+-	msg_fd_out = fd;
+-	set_nonblocking(msg_fd_out);
+-}
+-
+ /* Add a message to the pending MSG_* list. */
+ static void msg_list_add(int code, char *buf, int len)
+ {
+ 	struct msg_list_item *ml;
+ 
++	assert(am_receiver());
+ 	if (!(ml = new(struct msg_list_item)))
+ 		out_of_memory("msg_list_add");
+ 	ml->next = NULL;
+-	if (!(ml->buf = new_array(char, len+4)))
++	/* NOTE: the "+ 1" allows rwrite() to use the buf! */
++	if (!(ml->buf = new_array(char, len + 1)))
+ 		out_of_memory("msg_list_add");
+-	SIVAL(ml->buf, 0, ((code+MPLEX_BASE)<<24) | len);
+-	memcpy(ml->buf+4, buf, len);
+-	ml->len = len+4;
++	memcpy(ml->buf, buf, len);
++	ml->len = len;
++	ml->code = code;
++
++	pthread_mutex_lock(&msg_list.mutex);
+ 	if (msg_list.tail)
+ 		msg_list.tail->next = ml;
+ 	else
+ 		msg_list.head = ml;
+ 	msg_list.tail = ml;
++	pthread_mutex_unlock(&msg_list.mutex);
+ }
+ 
+-/* Read a message from the MSG_* fd and handle it.  This is called either
++/* Read a message from the MSG_* fd and handle it.  This is only called
+  * during the early stages of being a local sender (up through the sending
+- * of the file list) or when we're the generator (to fetch the messages
+- * from the receiver). */
++ * of the file list). */
+ static void read_msg_fd(void)
+ {
+ 	char buf[2048];
+@@ -266,40 +267,6 @@ static void read_msg_fd(void)
+ 	tag = (tag >> 24) - MPLEX_BASE;
+ 
+ 	switch (tag) {
+-	case MSG_DONE:
+-		if (len != 0 || !am_generator) {
+-			rprintf(FERROR, "invalid message %d:%d\n", tag, len);
+-			exit_cleanup(RERR_STREAMIO);
+-		}
+-		flist_ndx_push(&redo_list, -1);
+-		break;
+-	case MSG_REDO:
+-		if (len != 4 || !am_generator) {
+-			rprintf(FERROR, "invalid message %d:%d\n", tag, len);
+-			exit_cleanup(RERR_STREAMIO);
+-		}
+-		read_loop(fd, buf, 4);
+-		flist_ndx_push(&redo_list, IVAL(buf,0));
+-		break;
+-	case MSG_DELETED:
+-		if (len >= (int)sizeof buf || !am_generator) {
+-			rprintf(FERROR, "invalid message %d:%d\n", tag, len);
+-			exit_cleanup(RERR_STREAMIO);
+-		}
+-		read_loop(fd, buf, len);
+-		io_multiplex_write(MSG_DELETED, buf, len);
+-		break;
+-	case MSG_SUCCESS:
+-		if (len != 4 || !am_generator) {
+-			rprintf(FERROR, "invalid message %d:%d\n", tag, len);
+-			exit_cleanup(RERR_STREAMIO);
+-		}
+-		read_loop(fd, buf, len);
+-		if (remove_sent_files)
+-			io_multiplex_write(MSG_SUCCESS, buf, len);
+-		if (preserve_hard_links)
+-			flist_ndx_push(&hlink_list, IVAL(buf,0));
+-		break;
+ 	case MSG_INFO:
+ 	case MSG_ERROR:
+ 	case MSG_LOG:
+@@ -320,71 +287,72 @@ static void read_msg_fd(void)
+ 	msg_fd_in = fd;
+ }
+ 
+-/* Try to push messages off the list onto the wire.  If we leave with more
++/* Try to pop messages off the list onto the wire.  If we leave with more
+  * to do, return 0.  On error, return -1.  If everything flushed, return 1.
+- * This is only active in the receiver. */
++ * This is only called by the generator. */
+ static int msg_list_flush(int flush_it_all)
+ {
+-	static int written = 0;
+-	struct timeval tv;
+-	fd_set fds;
+-
+-	if (msg_fd_out < 0)
+-		return -1;
+-
++	assert(am_generator());
++	no_flush++;
+ 	while (msg_list.head) {
+-		struct msg_list_item *ml = msg_list.head;
+-		int n = write(msg_fd_out, ml->buf + written, ml->len - written);
+-		if (n < 0) {
+-			if (errno == EINTR)
+-				continue;
+-			if (errno != EWOULDBLOCK && errno != EAGAIN)
+-				return -1;
+-			if (!flush_it_all)
+-				return 0;
+-			FD_ZERO(&fds);
+-			FD_SET(msg_fd_out, &fds);
+-			tv.tv_sec = select_timeout;
+-			tv.tv_usec = 0;
+-			if (!select(msg_fd_out+1, NULL, &fds, NULL, &tv))
+-				check_timeout();
+-		} else if ((written += n) == ml->len) {
+-			free(ml->buf);
+-			msg_list.head = ml->next;
+-			if (!msg_list.head)
+-				msg_list.tail = NULL;
+-			free(ml);
+-			written = 0;
++		struct msg_list_item *ml = (struct msg_list_item *)msg_list.head;
++		switch (ml->code) {
++		case MSG_INFO:
++		case MSG_ERROR:
++		case MSG_LOG:
++			rwrite(ml->code, ml->buf, ml->len);
++			break;
++		default:
++			io_multiplex_write(ml->code, ml->buf, ml->len);
++			break;
+ 		}
++		pthread_mutex_lock(&msg_list.mutex);
++		if (!(msg_list.head = ml->next))
++			msg_list.tail = NULL;
++		pthread_mutex_unlock(&msg_list.mutex);
++		free(ml->buf);
++		free(ml);
++		if (!flush_it_all)
++			break;
+ 	}
++	no_flush--;
++
+ 	return 1;
+ }
+ 
+ void send_msg(enum msgcode code, char *buf, int len)
+ {
+-	if (msg_fd_out < 0) {
++	if (am_receiver())
++		msg_list_add(code, buf, len);
++	else
+ 		io_multiplex_write(code, buf, len);
+-		return;
+-	}
+-	msg_list_add(code, buf, len);
+-	msg_list_flush(NORMAL_FLUSH);
+ }
+ 
+-int get_redo_num(int itemizing, enum logcode code)
++/* This is only used by the receiver. */
++void push_redo_num(int ndx)
+ {
+-	while (1) {
+-		if (hlink_list.head)
+-			check_for_finished_hlinks(itemizing, code);
+-		if (redo_list.head)
+-			break;
+-		read_msg_fd();
+-	}
++	assert(am_receiver());
++	flist_ndx_push(&redo_list, ndx);
++}
+ 
++/* This is only used by the generator. */
++int get_redo_num(void)
++{
++	assert(am_generator());
+ 	return flist_ndx_pop(&redo_list);
+ }
+ 
++/* This is only used by the receiver. */
++void push_hlink_num(int ndx)
++{
++	assert(am_receiver());
++	flist_ndx_push(&hlink_list, ndx);
++}
++
++/* This is only used by the generator. */
+ int get_hlink_num(void)
+ {
++	assert(am_generator());
+ 	return flist_ndx_pop(&hlink_list);
+ }
+ 
+@@ -465,11 +433,6 @@ static int read_timeout(int fd, char *bu
+ 		FD_ZERO(&r_fds);
+ 		FD_ZERO(&w_fds);
+ 		FD_SET(fd, &r_fds);
+-		if (msg_list.head) {
+-			FD_SET(msg_fd_out, &w_fds);
+-			if (msg_fd_out > maxfd)
+-				maxfd = msg_fd_out;
+-		}
+ 		if (io_filesfrom_f_out >= 0) {
+ 			int new_fd;
+ 			if (io_filesfrom_buflen == 0) {
+@@ -502,9 +465,6 @@ static int read_timeout(int fd, char *bu
+ 			continue;
+ 		}
+ 
+-		if (msg_list.head && FD_ISSET(msg_fd_out, &w_fds))
+-			msg_list_flush(NORMAL_FLUSH);
+-
+ 		if (io_filesfrom_f_out >= 0) {
+ 			if (io_filesfrom_buflen) {
+ 				if (FD_ISSET(io_filesfrom_f_out, &w_fds)) {
+@@ -832,6 +792,8 @@ static void readfd(int fd, char *buffer,
+ 	}
+ 
+ 	if (fd == write_batch_monitor_in) {
++		if (am_generator())
++		    rprintf(FINFO, "writing %d bytes to batch file from generator\n", total);
+ 		if ((size_t)write(batch_fd, buffer, total) != total)
+ 			exit_cleanup(RERR_FILEIO);
+ 	}
+@@ -1091,7 +1053,6 @@ static void writefd_unbuffered(int fd,ch
+ 			 * to grab any messages they sent before they died. */
+ 			while (fd == sock_f_out && io_multiplexing_in) {
+ 				set_io_timeout(30);
+-				ignore_timeout = 0;
+ 				readfd_unbuffered(sock_f_in, io_filesfrom_buf,
+ 						  sizeof io_filesfrom_buf);
+ 			}
+@@ -1101,7 +1062,7 @@ static void writefd_unbuffered(int fd,ch
+ 		total += ret;
+ 
+ 		if (fd == sock_f_out) {
+-			if (io_timeout || am_generator)
++			if (io_timeout || am_generator())
+ 				last_io_out = time(NULL);
+ 			sleep_for_bwlimit(ret);
+ 		}
+@@ -1126,7 +1087,7 @@ static void mplex_write(enum msgcode cod
+ 	 * cause output to occur down the socket.  Setting contiguous_write_len
+ 	 * prevents the reading of msg_fd_in once we actually start to write
+ 	 * this sequence of data (though we might read it before the start). */
+-	if (am_generator && msg_fd_in >= 0)
++	if (am_generator() && msg_fd_in >= 0)
+ 		contiguous_write_len = len + 4;
+ 
+ 	if (n > sizeof buffer - 4)
+@@ -1141,33 +1102,31 @@ static void mplex_write(enum msgcode cod
+ 	if (len)
+ 		writefd_unbuffered(sock_f_out, buf, len);
+ 
+-	if (am_generator && msg_fd_in >= 0)
++	if (am_generator() && msg_fd_in >= 0)
+ 		contiguous_write_len = 0;
+ }
+ 
+ 
+ void io_flush(int flush_it_all)
+ {
+-	msg_list_flush(flush_it_all);
+-
+-	if (!iobuf_out_cnt || no_flush)
++	if (no_flush)
+ 		return;
+ 
+-	if (io_multiplexing_out)
+-		mplex_write(MSG_DATA, iobuf_out, iobuf_out_cnt);
+-	else
+-		writefd_unbuffered(sock_f_out, iobuf_out, iobuf_out_cnt);
+-	iobuf_out_cnt = 0;
++	if (iobuf_out_cnt) {
++		if (io_multiplexing_out)
++			mplex_write(MSG_DATA, iobuf_out, iobuf_out_cnt);
++		else
++			writefd_unbuffered(sock_f_out, iobuf_out, iobuf_out_cnt);
++		iobuf_out_cnt = 0;
++	}
++
++	if (am_generator())
++		msg_list_flush(flush_it_all);
+ }
+ 
+ 
+ static void writefd(int fd,char *buf,size_t len)
+ {
+-	if (fd == msg_fd_out) {
+-		rprintf(FERROR, "Internal error: wrong write used in receiver.\n");
+-		exit_cleanup(RERR_PROTOCOL);
+-	}
+-
+ 	if (fd == sock_f_out)
+ 		stats.total_written += len;
+ 
+@@ -1387,9 +1346,3 @@ void start_write_batch(int fd)
+ 	else
+ 		write_batch_monitor_in = fd;
+ }
+-
+-void stop_write_batch(void)
+-{
+-	write_batch_monitor_out = -1;
+-	write_batch_monitor_in = -1;
+-}
+--- orig/log.c	2005-10-26 16:49:08
++++ log.c	2005-12-08 23:17:09
+@@ -35,7 +35,6 @@ extern int am_sender;
+ extern int local_server;
+ extern int quiet;
+ extern int module_id;
+-extern int msg_fd_out;
+ extern int protocol_version;
+ extern int preserve_times;
+ extern int log_format_has_o_or_i;
+@@ -67,7 +66,7 @@ struct {
+ 	{ RERR_IPC        , "error in IPC code" },
+ 	{ RERR_CRASHED    , "sibling process crashed" },
+ 	{ RERR_TERMINATED , "sibling process terminated abnormally" },
+-	{ RERR_SIGNAL     , "received SIGUSR1 or SIGINT" },
++	{ RERR_SIGNAL     , "received SIGINT, SIGHUP, or SIGTERM" },
+ 	{ RERR_WAITCHILD  , "waitpid() failed" },
+ 	{ RERR_MALLOC     , "error allocating core memory buffers" },
+ 	{ RERR_PARTIAL    , "some files could not be transferred" },
+@@ -204,8 +203,8 @@ void rwrite(enum logcode code, char *buf
+ 
+ 	buf[len] = 0;
+ 
+-	if (am_server && msg_fd_out >= 0) {
+-		/* Pass the message to our sibling. */
++	if (am_receiver()) {
++		/* Pass the message to the generator thread. */
+ 		send_msg((enum msgcode)code, buf, len);
+ 		return;
+ 	}
+--- orig/main.c	2005-12-15 07:55:39
++++ main.c	2005-12-10 19:02:56
+@@ -30,7 +30,6 @@ extern int list_only;
+ extern int am_root;
+ extern int am_server;
+ extern int am_sender;
+-extern int am_generator;
+ extern int am_daemon;
+ extern int blocking_io;
+ extern int remove_sent_files;
+@@ -75,9 +74,20 @@ struct pid_status {
+ 
+ static time_t starttime, endtime;
+ static int64 total_read, total_written;
++static pthread_t receiver_tid;
+ 
+ static void show_malloc_stats(void);
+ 
++int am_generator()
++{
++	return receiver_tid != 0 && pthread_self() != receiver_tid;
++}
++
++int am_receiver()
++{
++	return receiver_tid != 0 && pthread_self() == receiver_tid;
++}
++
+ /* Works like waitpid(), but if we already harvested the child pid in our
+  * sigchld_handler(), we succeed instead of returning an error. */
+ pid_t wait_process(pid_t pid, int *status_ptr, int flags)
+@@ -154,7 +164,7 @@ static void handle_stats(int f)
+ 		show_flist_stats();
+ 	}
+ 
+-	if (am_generator)
++	if (am_generator())
+ 		return;
+ 
+ 	if (am_daemon) {
+@@ -558,12 +568,30 @@ static void do_server_sender(int f_in, i
+ 	exit_cleanup(0);
+ }
+ 
++struct thread_args {
++    struct file_list *flist;
++    char *local_name;
++    int f_in;
++};
++
++static void *start_receiver_thread(void *arg)
++{
++	static int exit_code;
++	struct thread_args *ta = (struct thread_args *)arg;
++
++	recv_files(ta->f_in, ta->flist, ta->local_name);
++	handle_stats(ta->f_in);
++
++	push_redo_num(-2);
++
++	exit_code = log_got_error ? RERR_PARTIAL : 0;
++	return &exit_code;
++}
+ 
+ static int do_recv(int f_in,int f_out,struct file_list *flist,char *local_name)
+ {
+-	int pid;
+-	int exit_code = 0;
+-	int error_pipe[2];
++	void *value_ptr;
++	struct thread_args args;
+ 
+ 	/* The receiving side mustn't obey this, or an existing symlink that
+ 	 * points to an identical file won't be replaced by the referent. */
+@@ -572,70 +600,16 @@ static int do_recv(int f_in,int f_out,st
+ 	if (preserve_hard_links)
+ 		init_hard_links();
+ 
+-	if (fd_pair(error_pipe) < 0) {
+-		rsyserr(FERROR, errno, "pipe failed in do_recv");
++	args.f_in = f_in;
++	args.flist = flist;
++	args.local_name = local_name;
++	if (pthread_create(&receiver_tid, NULL, start_receiver_thread, &args) < 0) {
++		rsyserr(FERROR, errno, "pthread_create failed in do_recv");
+ 		exit_cleanup(RERR_IPC);
+ 	}
+ 
+-	io_flush(NORMAL_FLUSH);
+-
+-	if ((pid = do_fork()) == -1) {
+-		rsyserr(FERROR, errno, "fork failed in do_recv");
+-		exit_cleanup(RERR_IPC);
+-	}
+-
+-	if (pid == 0) {
+-		close(error_pipe[0]);
+-		if (f_in != f_out)
+-			close(f_out);
+-
+-		/* we can't let two processes write to the socket at one time */
+-		close_multiplexing_out();
+-
+-		/* set place to send errors */
+-		set_msg_fd_out(error_pipe[1]);
+-
+-		recv_files(f_in, flist, local_name);
+-		io_flush(FULL_FLUSH);
+-		handle_stats(f_in);
+-
+-		send_msg(MSG_DONE, "", 0);
+-		io_flush(FULL_FLUSH);
+-
+-		/* Handle any keep-alive packets from the post-processing work
+-		 * that the generator does. */
+-		if (protocol_version >= 29) {
+-			kluge_around_eof = -1;
+-
+-			/* This should only get stopped via a USR2 signal. */
+-			while (read_int(f_in) == flist->count
+-			    && read_shortint(f_in) == ITEM_IS_NEW) {}
+-
+-			rprintf(FERROR, "Invalid packet at end of run [%s]\n",
+-				who_am_i());
+-			exit_cleanup(RERR_PROTOCOL);
+-		}
+-
+-		/* Finally, we go to sleep until our parent kills us with a
+-		 * USR2 signal.  We sleep for a short time, as on some OSes
+-		 * a signal won't interrupt a sleep! */
+-		while (1)
+-			msleep(20);
+-	}
+-
+-	am_generator = 1;
+-	close_multiplexing_in();
+-	if (write_batch && !am_server)
+-		stop_write_batch();
+-
+-	close(error_pipe[1]);
+-	if (f_in != f_out)
+-		close(f_in);
+-
+ 	io_start_buffering_out();
+ 
+-	set_msg_fd_in(error_pipe[0]);
+-
+ 	generate_files(f_out, flist, local_name);
+ 
+ 	handle_stats(-1);
+@@ -646,10 +620,13 @@ static int do_recv(int f_in,int f_out,st
+ 	}
+ 	io_flush(FULL_FLUSH);
+ 
+-	set_msg_fd_in(-1);
+-	kill(pid, SIGUSR2);
+-	wait_process_with_flush(pid, &exit_code);
+-	return exit_code;
++	pthread_join(receiver_tid, &value_ptr);
++	if (!am_server)
++		output_summary();
++
++	close_all();
++
++	return *(int*)value_ptr;
+ }
+ 
+ 
+@@ -1011,22 +988,6 @@ static int start_client(int argc, char *
+ 	return ret;
+ }
+ 
+-
+-static RETSIGTYPE sigusr1_handler(UNUSED(int val))
+-{
+-	exit_cleanup(RERR_SIGNAL);
+-}
+-
+-static RETSIGTYPE sigusr2_handler(UNUSED(int val))
+-{
+-	if (!am_server)
+-		output_summary();
+-	close_all();
+-	if (log_got_error)
+-		_exit(RERR_PARTIAL);
+-	_exit(0);
+-}
+-
+ static RETSIGTYPE sigchld_handler(UNUSED(int val))
+ {
+ #ifdef WNOHANG
+@@ -1109,8 +1070,6 @@ int main(int argc,char *argv[])
+ 	int orig_argc = argc;
+ 	char **orig_argv = argv;
+ 
+-	signal(SIGUSR1, sigusr1_handler);
+-	signal(SIGUSR2, sigusr2_handler);
+ 	signal(SIGCHLD, sigchld_handler);
+ #ifdef MAINTAINER_MODE
+ 	signal(SIGSEGV, rsync_panic_handler);
+--- orig/match.c	2005-11-10 16:58:36
++++ match.c	2005-12-08 23:17:09
+@@ -21,7 +21,7 @@
+ 
+ extern int verbose;
+ extern int am_server;
+-extern int do_progress;
++extern int recv_progress;
+ extern int checksum_seed;
+ extern int append_mode;
+ 
+@@ -133,7 +133,7 @@ static void matched(int f, struct sum_st
+ 	else
+ 		last_match = offset;
+ 
+-	if (buf && do_progress)
++	if (buf && recv_progress)
+ 		show_progress(last_match, buf->file_size);
+ }
+ 
+@@ -333,7 +333,7 @@ void match_sums(int f, struct sum_struct
+ 	if (append_mode) {
+ 		OFF_T j = 0;
+ 		for (j = CHUNK_SIZE; j < s->flength; j += CHUNK_SIZE) {
+-			if (buf && do_progress)
++			if (buf && recv_progress)
+ 				show_progress(last_match, buf->file_size);
+ 			sum_update(map_ptr(buf, last_match, CHUNK_SIZE),
+ 				   CHUNK_SIZE);
+@@ -341,7 +341,7 @@ void match_sums(int f, struct sum_struct
+ 		}
+ 		if (last_match < s->flength) {
+ 			int32 len = s->flength - last_match;
+-			if (buf && do_progress)
++			if (buf && recv_progress)
+ 				show_progress(last_match, buf->file_size);
+ 			sum_update(map_ptr(buf, last_match, len), len);
+ 			last_match = s->flength;
+--- orig/options.c	2005-11-15 18:21:22
++++ options.c	2005-12-08 23:17:09
+@@ -69,7 +69,6 @@ int def_compress_level = Z_DEFAULT_COMPR
+ int am_root = 0;
+ int am_server = 0;
+ int am_sender = 0;
+-int am_generator = 0;
+ int am_starting_up = 1;
+ int orig_umask = 0;
+ int relative_paths = -1;
+@@ -89,6 +88,7 @@ int am_daemon = 0;
+ int daemon_over_rsh = 0;
+ int do_stats = 0;
+ int do_progress = 0;
++int recv_progress = 0;
+ int keep_partial = 0;
+ int safe_symlinks = 0;
+ int copy_unsafe_links = 0;
+@@ -1232,6 +1232,7 @@ int parse_arguments(int *argc, const cha
+ 	if ((do_progress || dry_run) && !verbose && !log_before_transfer
+ 	    && !am_server)
+ 		verbose = 1;
++	recv_progress = do_progress;
+ 
+ 	if (dry_run)
+ 		do_xfers = 0;
+--- orig/pipe.c	2005-10-24 21:04:45
++++ pipe.c	2005-12-08 23:17:09
+@@ -55,7 +55,7 @@ pid_t piped_child(char **command, int *f
+ 		exit_cleanup(RERR_IPC);
+ 	}
+ 
+-	pid = do_fork();
++	pid = fork();
+ 	if (pid == -1) {
+ 		rsyserr(FERROR, errno, "fork");
+ 		exit_cleanup(RERR_IPC);
+@@ -117,7 +117,7 @@ pid_t local_child(int argc, char **argv,
+ 		exit_cleanup(RERR_IPC);
+ 	}
+ 
+-	pid = do_fork();
++	pid = fork();
+ 	if (pid == -1) {
+ 		rsyserr(FERROR, errno, "fork");
+ 		exit_cleanup(RERR_IPC);
+--- orig/receiver.c	2005-11-10 16:58:36
++++ receiver.c	2005-12-08 23:17:10
+@@ -24,7 +24,7 @@ extern int verbose;
+ extern int do_xfers;
+ extern int am_daemon;
+ extern int am_server;
+-extern int do_progress;
++extern int recv_progress;
+ extern int log_before_transfer;
+ extern int log_format_has_i;
+ extern int daemon_log_format_has_i;
+@@ -220,7 +220,7 @@ static int receive_data(int f_in, char *
+ 		if (sum.remainder)
+ 			sum.flength -= sum.blength - sum.remainder;
+ 		for (j = CHUNK_SIZE; j < sum.flength; j += CHUNK_SIZE) {
+-			if (do_progress)
++			if (recv_progress)
+ 				show_progress(offset, total_size);
+ 			sum_update(map_ptr(mapbuf, offset, CHUNK_SIZE),
+ 				   CHUNK_SIZE);
+@@ -228,7 +228,7 @@ static int receive_data(int f_in, char *
+ 		}
+ 		if (offset < sum.flength) {
+ 			int32 len = sum.flength - offset;
+-			if (do_progress)
++			if (recv_progress)
+ 				show_progress(offset, total_size);
+ 			sum_update(map_ptr(mapbuf, offset, len), len);
+ 			offset = sum.flength;
+@@ -241,7 +241,7 @@ static int receive_data(int f_in, char *
+ 	}
+ 
+ 	while ((i = recv_token(f_in, &data)) != 0) {
+-		if (do_progress)
++		if (recv_progress)
+ 			show_progress(offset, total_size);
+ 
+ 		if (i > 0) {
+@@ -309,7 +309,7 @@ static int receive_data(int f_in, char *
+ 		ftruncate(fd, offset);
+ #endif
+ 
+-	if (do_progress)
++	if (recv_progress)
+ 		end_progress(total_size);
+ 
+ 	if (fd != -1 && offset > 0 && sparse_end(fd) != 0) {
+@@ -362,14 +362,13 @@ static void handle_delayed_updates(struc
+ 					full_fname(fname),
+ 					safe_fname(partialptr));
+ 			} else {
+-				if (remove_sent_files
+-				    || (preserve_hard_links
+-				     && file->link_u.links)) {
++				if (remove_sent_files) {
+ 					SIVAL(numbuf, 0, i);
+ 					send_msg(MSG_SUCCESS,numbuf,4);
+ 				}
+-				handle_partial_dir(partialptr,
+-						   PDIR_DELETE);
++				if (preserve_hard_links && file->link_u.links)
++					push_hlink_num(i);
++				handle_partial_dir(partialptr, PDIR_DELETE);
+ 			}
+ 		}
+ 	}
+@@ -419,11 +418,6 @@ int recv_files(int f_in, struct file_lis
+ 	if (verbose > 2)
+ 		rprintf(FINFO,"recv_files(%d) starting\n",flist->count);
+ 
+-	if (flist->hlink_pool) {
+-		pool_destroy(flist->hlink_pool);
+-		flist->hlink_pool = NULL;
+-	}
+-
+ 	if (delay_updates)
+ 		init_delayed_bits(flist->count);
+ 
+@@ -444,7 +438,7 @@ int recv_files(int f_in, struct file_lis
+ 				rprintf(FINFO, "recv_files phase=%d\n", phase);
+ 			if (phase == 2 && delay_updates)
+ 				handle_delayed_updates(flist, local_name);
+-			send_msg(MSG_DONE, "", 0);
++			push_redo_num(-2);
+ 			if (keep_partial && !partial_dir)
+ 				make_backups = 0; /* prevents double backup */
+ 			if (append_mode) {
+@@ -665,7 +659,7 @@ int recv_files(int f_in, struct file_lis
+ 		/* log the transfer */
+ 		if (log_before_transfer)
+ 			log_item(file, &initial_stats, iflags, NULL);
+-		else if (!am_server && verbose && do_progress)
++		else if (!am_server && verbose && recv_progress)
+ 			rprintf(FINFO, "%s\n", safe_fname(fname));
+ 
+ 		/* recv file data */
+@@ -705,11 +699,12 @@ int recv_files(int f_in, struct file_lis
+ 		cleanup_disable();
+ 
+ 		if (recv_ok > 0) {
+-			if (remove_sent_files
+-			    || (preserve_hard_links && file->link_u.links)) {
++			if (remove_sent_files) {
+ 				SIVAL(numbuf, 0, i);
+ 				send_msg(MSG_SUCCESS, numbuf, 4);
+ 			}
++			if (preserve_hard_links && file->link_u.links)
++				push_hlink_num(i);
+ 		} else if (!recv_ok) {
+ 			int msgtype = phase || read_batch ? FERROR : FINFO;
+ 			if (msgtype == FERROR || verbose) {
+@@ -732,10 +727,8 @@ int recv_files(int f_in, struct file_lis
+ 					errstr, safe_fname(fname),
+ 					keptstr, redostr);
+ 			}
+-			if (!phase) {
+-				SIVAL(numbuf, 0, i);
+-				send_msg(MSG_REDO, numbuf, 4);
+-			}
++			if (!phase)
++				push_redo_num(i);
+ 		}
+ 	}
+ 	make_backups = save_make_backups;
+--- orig/rsync.c	2005-07-27 23:31:12
++++ rsync.c	2005-12-08 23:17:10
+@@ -30,7 +30,6 @@ extern int omit_dir_times;
+ extern int am_root;
+ extern int am_server;
+ extern int am_sender;
+-extern int am_generator;
+ extern int am_starting_up;
+ extern int preserve_uid;
+ extern int preserve_gid;
+@@ -210,5 +209,5 @@ const char *who_am_i(void)
+ {
+ 	if (am_starting_up)
+ 		return am_server ? "server" : "client";
+-	return am_sender ? "sender" : am_generator ? "generator" : "receiver";
++	return am_sender ? "sender" : am_generator() ? "generator" : "receiver";
+ }
+--- orig/rsync.h	2005-11-12 20:31:04
++++ rsync.h	2005-12-10 19:02:58
+@@ -166,10 +166,8 @@ enum msgcode {
+ 	MSG_DATA=0,	/* raw data on the multiplexed stream */
+ 	MSG_ERROR=FERROR, MSG_INFO=FINFO, /* remote logging */
+ 	MSG_LOG=FLOG, MSG_FCLIENT=FCLIENT, /* sibling logging */
+-	MSG_REDO=9,	/* reprocess indicated flist index */
+ 	MSG_SUCCESS=100,/* successfully updated indicated flist index */
+ 	MSG_DELETED=101,/* successfully deleted a file on receiving side */
+-	MSG_DONE=86	/* current phase is done */
+ };
+ 
+ #include "errcode.h"
+@@ -320,6 +318,7 @@ enum msgcode {
+ #endif
+ 
+ #include <assert.h>
++#include <pthread.h>
+ 
+ #include "lib/pool_alloc.h"
+ 
+--- orig/util.c	2005-11-12 20:13:05
++++ util.c	2005-12-08 23:17:10
+@@ -405,51 +405,6 @@ int robust_rename(char *from, char *to, 
+ 	return -1;
+ }
+ 
+-
+-static pid_t all_pids[10];
+-static int num_pids;
+-
+-/** Fork and record the pid of the child. **/
+-pid_t do_fork(void)
+-{
+-	pid_t newpid = fork();
+-
+-	if (newpid != 0  &&  newpid != -1) {
+-		all_pids[num_pids++] = newpid;
+-	}
+-	return newpid;
+-}
+-
+-/**
+- * Kill all children.
+- *
+- * @todo It would be kind of nice to make sure that they are actually
+- * all our children before we kill them, because their pids may have
+- * been recycled by some other process.  Perhaps when we wait for a
+- * child, we should remove it from this array.  Alternatively we could
+- * perhaps use process groups, but I think that would not work on
+- * ancient Unix versions that don't support them.
+- **/
+-void kill_all(int sig)
+-{
+-	int i;
+-
+-	for (i = 0; i < num_pids; i++) {
+-		/* Let's just be a little careful where we
+-		 * point that gun, hey?  See kill(2) for the
+-		 * magic caused by negative values. */
+-		pid_t p = all_pids[i];
+-
+-		if (p == getpid())
+-			continue;
+-		if (p <= 0)
+-			continue;
+-
+-		kill(p, sig);
+-	}
+-}
+-
+-
+ /** Turn a user name into a uid */
+ int name_to_uid(char *name, uid_t *uid)
+ {
