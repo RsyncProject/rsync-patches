@@ -58,7 +58,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
---- orig/cleanup.c	2005-03-05 18:58:38
+--- orig/cleanup.c	2005-11-10 16:58:36
 +++ cleanup.c	2005-01-10 10:40:51
 @@ -25,6 +25,7 @@ extern int io_error;
  extern int keep_partial;
@@ -87,7 +87,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  #define RERR_SIGNAL     20      /* status returned when sent SIGUSR1, SIGINT */
  #define RERR_WAITCHILD  21      /* some error returned by waitpid() */
---- orig/flist.c	2005-11-07 04:29:01
+--- orig/flist.c	2005-11-10 16:58:36
 +++ flist.c	2005-03-05 00:29:08
 @@ -57,6 +57,7 @@ extern int copy_unsafe_links;
  extern int protocol_version;
@@ -97,7 +97,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  extern struct stats stats;
  extern struct file_list *the_file_list;
  
-@@ -334,7 +335,10 @@ void send_file_entry(struct file_struct 
+@@ -336,7 +337,10 @@ void send_file_entry(struct file_struct 
  
  	io_write_phase = "send_file_entry";
  
@@ -109,7 +109,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	flags = base_flags;
  
-@@ -543,6 +547,9 @@ static struct file_struct *receive_file_
+@@ -544,6 +548,9 @@ static struct file_struct *receive_file_
  
  	strlcpy(lastname, thisname, MAXPATHLEN);
  
@@ -119,7 +119,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	clean_fname(thisname, 0);
  
  	if (sanitize_paths)
-@@ -1073,6 +1080,9 @@ struct file_list *send_file_list(int f, 
+@@ -1074,6 +1081,9 @@ struct file_list *send_file_list(int f, 
  	start_write = stats.total_written;
  	gettimeofday(&start_tv, NULL);
  
@@ -129,7 +129,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	flist = flist_new(WITH_HLINK, "send_file_list");
  
  	io_start_buffering_out();
-@@ -1285,6 +1295,9 @@ struct file_list *send_file_list(int f, 
+@@ -1286,6 +1296,9 @@ struct file_list *send_file_list(int f, 
  	stats.flist_size = stats.total_written - start_write;
  	stats.num_files = flist->count;
  
@@ -139,7 +139,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	if (verbose > 3)
  		output_flist(flist);
  
-@@ -1305,6 +1318,9 @@ struct file_list *recv_file_list(int f)
+@@ -1306,6 +1319,9 @@ struct file_list *recv_file_list(int f)
  
  	start_read = stats.total_read;
  
@@ -382,10 +382,10 @@ Note that you'll need to run 'make proto' after applying this patch.
 +	if (verbose > 2)
 +		rprintf(FINFO, "Converted filename: %s -> %s\n", src, dest);
 +}
---- orig/generator.c	2005-10-30 22:30:28
+--- orig/generator.c	2005-12-16 04:03:06
 +++ generator.c	2005-03-05 00:29:37
-@@ -594,7 +594,13 @@ static int phase = 0;
-  * start sending checksums.
+@@ -761,7 +761,13 @@ static int phase = 0;
+  * When fname is non-null, it must point to a MAXPATHLEN buffer!
   *
   * Note that f_out is set to -1 when doing final directory-permission and
 - * modification-time repair. */
@@ -399,19 +399,19 @@ Note that you'll need to run 'make proto' after applying this patch.
  static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			   int itemizing, int maybe_PERMS_REPORT,
  			   enum logcode code, int f_out)
---- orig/log.c	2005-10-26 16:49:08
-+++ log.c	2005-09-29 17:23:54
-@@ -67,6 +67,7 @@ struct {
+--- orig/log.c	2005-12-16 04:03:06
++++ log.c	2005-12-16 04:03:49
+@@ -68,6 +68,7 @@ struct {
  	{ RERR_IPC        , "error in IPC code" },
  	{ RERR_CRASHED    , "sibling process crashed" },
  	{ RERR_TERMINATED , "sibling process terminated abnormally" },
 +	{ RERR_FNAMECONV  , "error in filename conversion" },
- 	{ RERR_SIGNAL     , "received SIGUSR1 or SIGINT" },
+ 	{ RERR_SIGNAL     , "received SIGINT, SIGTERM, SIGHUP, or SIGUSR1" },
  	{ RERR_WAITCHILD  , "waitpid() failed" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
---- orig/main.c	2005-11-02 07:22:12
+--- orig/main.c	2005-12-15 07:55:39
 +++ main.c	2004-07-22 00:31:47
-@@ -388,7 +388,7 @@ static pid_t do_cmd(char *cmd, char *mac
+@@ -414,7 +414,7 @@ static pid_t do_cmd(char *cmd, char *mac
  			whole_file = 1;
  		ret = local_child(argc, args, f_in, f_out, child_main);
  	} else
@@ -420,9 +420,9 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	if (dir)
  		free(dir);
---- orig/options.c	2005-11-07 04:29:01
+--- orig/options.c	2005-11-15 18:21:22
 +++ options.c	2005-10-26 16:49:33
-@@ -141,6 +141,7 @@ char *basis_dir[MAX_BASIS_DIRS+1];
+@@ -142,6 +142,7 @@ char *basis_dir[MAX_BASIS_DIRS+1];
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *log_format = NULL;
@@ -430,7 +430,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
-@@ -329,6 +330,7 @@ void usage(enum logcode F)
+@@ -330,6 +331,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -438,7 +438,7 @@ Note that you'll need to run 'make proto' after applying this patch.
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
-@@ -459,6 +461,7 @@ static struct poptOption long_options[] 
+@@ -464,6 +466,7 @@ static struct poptOption long_options[] 
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
@@ -514,9 +514,9 @@ Note that you'll need to run 'make proto' after applying this patch.
 +
 +	return result;
 +}
---- orig/util.c	2005-10-16 22:38:40
+--- orig/util.c	2005-11-12 20:13:05
 +++ util.c	2004-07-03 20:18:02
-@@ -1353,3 +1353,55 @@ uint32 fuzzy_distance(const char *s1, in
+@@ -1411,3 +1411,55 @@ uint32 fuzzy_distance(const char *s1, in
  
  	return a[len2-1];
  }
