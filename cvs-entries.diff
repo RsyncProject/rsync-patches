@@ -3,7 +3,7 @@ in each dir's CVS/Entries file as per-dir includes before the dir's list
 of excludes taken from the .cvsignore file.
 
 --- orig/exclude.c	2005-10-14 18:45:50
-+++ exclude.c	2005-04-07 18:06:34
++++ exclude.c	2005-12-17 19:52:48
 @@ -446,6 +446,14 @@ void *push_local_filters(const char *dir
  				set_filter_dir(dir, dirlen);
  		}
@@ -27,46 +27,50 @@ of excludes taken from the .cvsignore file.
  
  	if (!fname || !*fname)
  		return;
-@@ -1006,6 +1015,29 @@ void parse_filter_file(struct filter_lis
+@@ -1006,6 +1015,24 @@ void parse_filter_file(struct filter_lis
  					continue;
  				break;
  			}
-+			switch (slash_parse) {
-+			case 1:
-+				if (ch == '/') {
-+					s = line;
++			switch (slash_parse) { /* CVS/Entries parsing: */
++			case 1: /* Ignore starting chars until first slash. */
++				if (ch == '/')
 +					slash_parse = 2;
-+					continue;
-+				}
-+				break;
-+			case 2:
++				continue;
++			case 2: /* Name ends at 2nd slash on the line. */
 +				if (ch == '/') {
 +					slash_parse = 3;
 +					continue;
 +				}
 +				break;
-+			case 3:
++			case 3: /* Ignore trailing chars until EOL. */
 +				if (ch == '\n' || ch == '\r') {
 +					slash_parse = 1;
-+					goto double_break;
++					goto end_the_line;
 +				}
 +				continue;
-+			default:
-+				break;
 +			}
  			if (word_split && isspace(ch))
  				break;
  			if (eol_nulls? !ch : (ch == '\n' || ch == '\r'))
-@@ -1015,6 +1047,7 @@ void parse_filter_file(struct filter_lis
+@@ -1015,13 +1042,15 @@ void parse_filter_file(struct filter_lis
  			else
  				overflow = 1;
  		}
-+	    double_break:
++	  end_the_line:
  		if (overflow) {
  			rprintf(FERROR, "discarding over-long filter: %s...\n", line);
  			s = line;
---- orig/rsync.h	2005-10-14 18:45:50
-+++ rsync.h	2005-10-14 19:17:51
+ 		}
+ 		*s = '\0';
+ 		/* Skip an empty token and (when line parsing) comments. */
+-		if (*line && (word_split || (*line != ';' && *line != '#')))
++		if (*line && (word_split || slash_parse
++			   || (*line != ';' && *line != '#')))
+ 			parse_rule(listp, line, mflags, xflags);
+ 		if (ch == EOF)
+ 			break;
+--- orig/rsync.h	2005-12-15 23:00:49
++++ rsync.h	2005-12-17 19:52:48
 @@ -116,6 +116,7 @@
  #define XFLG_OLD_PREFIXES	(1<<1)
  #define XFLG_ANCHORED2ABS	(1<<2)
@@ -75,3 +79,67 @@ of excludes taken from the .cvsignore file.
  
  #define PERMS_REPORT		(1<<0)
  #define PERMS_SKIP_MTIME	(1<<1)
+--- orig/testsuite/exclude.test	2005-02-26 19:47:43
++++ testsuite/exclude.test	2005-12-17 19:52:49
+@@ -21,6 +21,7 @@ set -x
+ # Build some files/dirs/links to copy
+ 
+ makepath "$fromdir/foo/down/to/you"
++makepath "$fromdir/bar/down/to/CVS"
+ makepath "$fromdir/bar/down/to/foo/too"
+ makepath "$fromdir/bar/down/to/bar/baz"
+ makepath "$fromdir/mid/for/foo/and/that/is/who"
+@@ -56,6 +57,9 @@ echo cvsout >"$fromdir/bar/down/to/foo/f
+ echo gone >"$fromdir/bar/down/to/foo/file3"
+ echo lost >"$fromdir/bar/down/to/foo/file4"
+ echo weird >"$fromdir/bar/down/to/foo/+ file3"
++echo cvsin >"$fromdir/bar/down/to/not.junk"
++echo cvsout >"$fromdir/bar/down/to/not.good"
++echo cvsout >"$fromdir/bar/down/to/D"
+ echo cvsout-but-filtin >"$fromdir/bar/down/to/foo/file4.junk"
+ echo smashed >"$fromdir/bar/down/to/foo/to"
+ cat >"$fromdir/bar/down/to/bar/.filt2" <<EOF
+@@ -98,7 +102,18 @@ cat >"$excl" <<EOF
+ EOF
+ 
+ cat >"$scratchdir/.cvsignore" <<EOF
+-home-cvs-exclude
++home-cvs-exclude D
++EOF
++cat >"$fromdir/bar/down/to/CVS/Entries" <<EOF
++/not.junk/1.1/Mon Jan  1 11:11:11 2001//
++filt2
++/another.file/1.1/Tue Jan  1 22:22:22 2002//
++invalid lines should just be ignored...
++D/directory////
++D
++EOF
++cat >"$fromdir/bar/down/to/.cvsignore" <<EOF
++not.good
+ EOF
+ 
+ # Create the chk dir with what we expect to be excluded
+@@ -125,6 +140,10 @@ checkit "$RSYNC -avv --exclude-from=\"$e
+ # Modify the chk dir by removing cvs-ignored files and then tweaking the dir times.
+ 
+ rm "$chkdir"/foo/*.old
++rm "$chkdir"/bar/down/to/D
++rm "$chkdir"/bar/down/to/CVS/Entries
++rmdir "$chkdir"/bar/down/to/CVS
++rm "$chkdir"/bar/down/to/not.good
+ rm "$chkdir"/bar/down/to/foo/*.bak
+ rm "$chkdir"/bar/down/to/foo/*.junk
+ rm "$chkdir"/bar/down/to/home-cvs-exclude
+@@ -140,8 +159,12 @@ checkit "$RSYNC -avvC --filter=\"merge $
+ 
+ # Modify the chk dir for our merge-exclude test and then tweak the dir times.
+ 
++makepath "$chkdir/bar/down/to/CVS"
+ rm "$chkdir"/foo/file1
+ rm "$chkdir"/bar/down/to/bar/baz/*.deep
++cp -p "$fromdir"/bar/down/to/D "$chkdir"/bar/down/to/D
++cp -p "$fromdir"/bar/down/to/not.good "$chkdir"/bar/down/to/not.good
++cp -p "$fromdir"/bar/down/to/CVS/Entries "$chkdir"/bar/down/to/CVS/Entries
+ cp -p "$fromdir"/bar/down/to/foo/*.junk "$chkdir"/bar/down/to/foo
+ cp -p "$fromdir"/bar/down/to/foo/to "$chkdir"/bar/down/to/foo
+ 
