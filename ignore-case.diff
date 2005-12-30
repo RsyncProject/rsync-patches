@@ -1,8 +1,8 @@
 This adds the --ignore-case option, which makes rsync compare filenames
 in a case-insensitive manner.
 
---- orig/lib/wildmatch.c	2005-01-28 21:01:21
-+++ lib/wildmatch.c	2004-08-13 16:43:27
+--- orig/lib/wildmatch.c	2005-12-30 07:31:41
++++ lib/wildmatch.c	2005-12-30 07:38:42
 @@ -53,6 +53,8 @@
  #define ISUPPER(c) (ISASCII(c) && isupper(c))
  #define ISXDIGIT(c) (ISASCII(c) && isxdigit(c))
@@ -12,30 +12,31 @@ in a case-insensitive manner.
  #ifdef WILD_TEST_ITERATIONS
  int wildmatch_iteration_count;
  #endif
-@@ -76,9 +78,19 @@ static int domatch(const uchar *p, const
- 	    ch = *++p;
- 	    /* FALLTHROUGH */
- 	  default:
--	    if (*text != ch)
--		return FALSE;
--	    continue;
-+	    if (*text == ch)
-+		continue;
-+	    if (ignore_case) {
-+		if (ISUPPER(*text)) {
-+		    if (tolower(*text) == ch)
-+			continue;
-+		}
-+		else if (ISUPPER(ch)) {
-+		    if (*text == tolower(ch))
-+			continue;
-+		}
-+	    }
-+	    return FALSE;
- 	  case '?':
- 	    /* Match anything but '/'. */
- 	    if (*text == '/')
---- orig/options.c	2005-11-12 20:13:05
+@@ -71,6 +73,8 @@ static int dowild(const uchar *p, const 
+     for ( ; (p_ch = *p) != '\0'; text++, p++) {
+ 	int matched, special;
+ 	uchar t_ch, prev_ch;
++	if (ignore_case && ISUPPER(p_ch))
++	    p_ch = tolower(p_ch);
+ 	if ((t_ch = *text) == '\0' && p_ch != '*')
+ 	    return ABORT_ALL;
+ 	if (force_lower_case && ISUPPER(t_ch))
+@@ -211,10 +215,13 @@ static int dowild(const uchar *p, const 
+ /* Match the "pattern" against the "text" string. */
+ int wildmatch(const char *pattern, const char *text)
+ {
++    int ret;
+ #ifdef WILD_TEST_ITERATIONS
+     wildmatch_iteration_count = 0;
+ #endif
+-    return dowild((const uchar*)pattern, (const uchar*)text) == TRUE;
++    force_lower_case = ignore_case;
++    ret = dowild((const uchar*)pattern, (const uchar*)text) == TRUE;
++    force_lower_case = 0;
+ }
+ 
+ /* Match the "pattern" against the forced-to-lower-case "text" string. */
+--- orig/options.c	2005-12-24 07:49:26
 +++ options.c	2005-10-14 19:19:18
 @@ -105,6 +105,7 @@ OFF_T max_size = 0;
  OFF_T min_size = 0;
@@ -61,7 +62,7 @@ in a case-insensitive manner.
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, 0, 0, 0 },
    {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
-@@ -1563,6 +1566,9 @@ void server_options(char **args,int *arg
+@@ -1575,6 +1578,9 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  
