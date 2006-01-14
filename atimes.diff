@@ -4,7 +4,7 @@ command before "make":
     make proto
 
 
---- orig/batch.c	2005-10-26 16:49:08
+--- orig/batch.c	2006-01-14 08:14:29
 +++ batch.c	2004-07-03 20:15:41
 @@ -225,6 +225,8 @@ void show_flist(int index, struct file_s
  		rprintf(FINFO, "flist->flags=%#x\n", fptr[i]->flags);
@@ -15,8 +15,8 @@ command before "make":
  		rprintf(FINFO, "flist->length=%.0f\n",
  			(double) fptr[i]->length);
  		rprintf(FINFO, "flist->mode=%#o\n", (int) fptr[i]->mode);
---- orig/flist.c	2005-11-10 16:58:36
-+++ flist.c	2005-07-28 00:16:34
+--- orig/flist.c	2006-01-14 08:14:30
++++ flist.c	2006-01-14 08:19:03
 @@ -50,6 +50,7 @@ extern int preserve_perms;
  extern int preserve_devices;
  extern int preserve_uid;
@@ -34,7 +34,7 @@ command before "make":
  			perms,
  			(double)f->length, timestring(f->modtime),
 +			timestring(f->atime),
- 			safe_fname(f_name(f)), safe_fname(f->u.link));
+ 			f_name(f), f->u.link);
  	} else
  #endif
  	{
@@ -43,7 +43,7 @@ command before "make":
  			perms,
  			(double)f->length, timestring(f->modtime),
 +			timestring(f->atime),
- 			safe_fname(f_name(f)));
+ 			f_name(f));
  	}
  }
 @@ -311,6 +314,7 @@ void send_file_entry(struct file_struct 
@@ -119,7 +119,7 @@ command before "make":
  	file->length = file_length;
  	file->mode = mode;
  	file->uid = uid;
-@@ -867,6 +883,7 @@ struct file_struct *make_file(char *fnam
+@@ -866,6 +882,7 @@ struct file_struct *make_file(char *fnam
  
  	file->flags = flags;
  	file->modtime = st.st_mtime;
@@ -127,7 +127,7 @@ command before "make":
  	file->length = st.st_size;
  	if (chmod_modes && am_sender && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)))
  		file->mode = tweak_mode(st.st_mode, chmod_modes);
---- orig/generator.c	2005-12-15 23:00:49
+--- orig/generator.c	2006-01-14 08:14:30
 +++ generator.c	2005-12-15 23:05:32
 @@ -44,6 +44,7 @@ extern int preserve_uid;
  extern int preserve_gid;
@@ -177,16 +177,16 @@ command before "make":
  			if (verbose > 4) {
  				rprintf(FINFO,
  					"fuzzy size/modtime match for %s\n",
-@@ -1086,7 +1095,7 @@ static void recv_generator(char *fname, 
+@@ -1068,7 +1077,7 @@ static void recv_generator(char *fname, 
  	}
  
  	if (update_only && statret == 0
 -	    && cmp_modtime(st.st_mtime, file->modtime) > 0) {
 +	    && cmp_time(st.st_mtime, file->modtime) > 0) {
  		if (verbose > 1)
- 			rprintf(FINFO, "%s is newer\n", safe_fname(fname));
+ 			rprintf(FINFO, "%s is newer\n", fname);
  		return;
---- orig/log.c	2005-12-15 23:00:49
+--- orig/log.c	2006-01-14 08:14:30
 +++ log.c	2005-12-15 23:05:44
 @@ -38,6 +38,7 @@ extern int module_id;
  extern int msg_fd_out;
@@ -196,7 +196,7 @@ command before "make":
  extern int log_format_has_i;
  extern int log_format_has_o_or_i;
  extern int daemon_log_format_has_o_or_i;
-@@ -504,11 +505,14 @@ static void log_formatted(enum logcode c
+@@ -517,11 +518,14 @@ static void log_formatted(enum logcode c
  			n[4] = !(iflags & ITEM_REPORT_TIME) ? '.'
  			     : !preserve_times || IS_DEVICE(file->mode)
  					       || S_ISLNK(file->mode) ? 'T' : 't';
@@ -216,7 +216,7 @@ command before "make":
  
  			if (iflags & (ITEM_IS_NEW|ITEM_MISSING_DATA)) {
  				char ch = iflags & ITEM_IS_NEW ? '+' : '?';
---- orig/options.c	2005-11-15 18:21:22
+--- orig/options.c	2006-01-14 08:14:30
 +++ options.c	2005-11-07 04:32:19
 @@ -50,6 +50,7 @@ int preserve_uid = 0;
  int preserve_gid = 0;
@@ -248,7 +248,7 @@ command before "make":
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"owner",           'o', POPT_ARG_VAL,    &preserve_uid, 1, 0, 0 },
-@@ -1440,6 +1445,8 @@ void server_options(char **args,int *arg
+@@ -1442,6 +1447,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -257,7 +257,7 @@ command before "make":
  	if (omit_dir_times == 2 && am_sender)
  		argstr[x++] = 'O';
  	if (preserve_perms)
---- orig/rsync.c	2005-07-27 23:31:12
+--- orig/rsync.c	2006-01-14 08:14:31
 +++ rsync.c	2005-07-28 00:17:37
 @@ -27,6 +27,7 @@ extern int dry_run;
  extern int daemon_log_format_has_i;
@@ -309,7 +309,7 @@ command before "make":
  	}
  
  	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
---- orig/rsync.h	2005-12-15 23:00:49
+--- orig/rsync.h	2006-01-14 08:14:31
 +++ rsync.h	2005-07-28 00:04:51
 @@ -54,6 +54,7 @@
  #define XMIT_HAS_IDEV_DATA (1<<9)
@@ -343,7 +343,7 @@ command before "make":
  	uid_t uid;
  	gid_t gid;
  	mode_t mode;
---- orig/rsync.yo	2005-12-15 07:55:39
+--- orig/rsync.yo	2006-01-14 08:14:31
 +++ rsync.yo	2005-11-07 04:34:55
 @@ -319,8 +319,9 @@ to the detailed description below for a 
   -o, --owner                 preserve owner (root only)
@@ -357,7 +357,7 @@ command before "make":
       --chmod=CHMOD           change destination permissions
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
-@@ -702,6 +703,12 @@ it is preserving modification times (see
+@@ -711,6 +712,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -370,7 +370,7 @@ command before "make":
  dit(bf(--chmod)) This options tells rsync to apply the listed "chmod" pattern
  to the permission of the files on the destination.  In addition to the normal
  parsing rules specified in the chmod manpage, you can specify an item that
-@@ -1153,7 +1160,7 @@ changes that are being made to each file
+@@ -1160,7 +1167,7 @@ changes that are being made to each file
  This is exactly the same as specifying bf(--log-format='%i %n%L').
  
  The "%i" escape has a cryptic output that is 9 letters long.  The general
@@ -379,7 +379,7 @@ command before "make":
  kind of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -1192,17 +1199,22 @@ quote(itemize(
+@@ -1199,17 +1206,22 @@ quote(itemize(
    by the file transfer.
    it() A bf(t) means the modification time is different and is being updated
    to the sender's value (requires bf(--times)).  An alternate value of bf(T)
@@ -814,8 +814,8 @@ command before "make":
  
  	return 0;
  }
---- orig/util.c	2005-11-12 20:13:05
-+++ util.c	2005-07-27 23:37:27
+--- orig/util.c	2006-01-14 08:14:31
++++ util.c	2006-01-14 08:20:29
 @@ -130,7 +130,7 @@ void overflow_exit(char *str)
  
  
@@ -835,7 +835,7 @@ command before "make":
 +		strlcpy(mtimebuf, timestring(modtime), sizeof mtimebuf);
 +		rprintf(FINFO,
 +			"set modtime, atime of %s to (%ld) %s, (%ld) %s\n",
- 			safe_fname(fname), (long)modtime,
+ 			fname, (long)modtime,
 -			asctime(localtime(&modtime)));
 +			mtimebuf, (long)atime, timestring(atime));
  	}
@@ -865,7 +865,7 @@ command before "make":
  		t[1] = modtime;
  		return utime(fname,t);
  #else
-@@ -1229,8 +1233,8 @@ int msleep(int t)
+@@ -1191,8 +1195,8 @@ int msleep(int t)
  
  
  /**
@@ -876,7 +876,7 @@ command before "make":
   * --modify-window).
   *
   * @retval 0 if the times should be treated as the same
-@@ -1239,7 +1243,7 @@ int msleep(int t)
+@@ -1201,7 +1205,7 @@ int msleep(int t)
   *
   * @retval -1 if the 2nd is later
   **/
