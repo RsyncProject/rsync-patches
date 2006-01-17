@@ -47,7 +47,7 @@ some utility functions.
 Note that you'll need to run 'make proto' after applying this patch.
 
 
---- orig/Makefile.in	2005-11-07 04:29:00
+--- orig/Makefile.in	2006-01-14 08:14:29
 +++ Makefile.in	2005-11-07 04:36:50
 @@ -34,7 +34,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
@@ -58,7 +58,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
---- orig/cleanup.c	2005-11-10 16:58:36
+--- orig/cleanup.c	2006-01-14 08:14:29
 +++ cleanup.c	2005-01-10 10:40:51
 @@ -25,6 +25,7 @@ extern int io_error;
  extern int keep_partial;
@@ -87,7 +87,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  #define RERR_SIGNAL1    19      /* status returned when sent SIGUSR1 */
  #define RERR_SIGNAL     20      /* status returned when sent SIGINT, SIGTERM, SIGHUP */
---- orig/flist.c	2005-11-10 16:58:36
+--- orig/flist.c	2006-01-17 02:15:59
 +++ flist.c	2005-03-05 00:29:08
 @@ -57,6 +57,7 @@ extern int copy_unsafe_links;
  extern int protocol_version;
@@ -97,19 +97,19 @@ Note that you'll need to run 'make proto' after applying this patch.
  extern struct stats stats;
  extern struct file_list *the_file_list;
  
-@@ -336,7 +337,10 @@ void send_file_entry(struct file_struct 
+@@ -335,7 +336,10 @@ void send_file_entry(struct file_struct 
  
  	io_write_phase = "send_file_entry";
  
--	f_name_to(file, fname);
+-	f_name(file, fname);
 +	if (fname_convert_cmd && !am_server) /* fname conversion always done on client */
-+		convert_fname(fname, f_name(file), MAXPATHLEN);
++		convert_fname(fname, f_name(file, NULL), MAXPATHLEN);
 +	else
-+		f_name_to(file, fname);
++		f_name(file, fname);
  
  	flags = base_flags;
  
-@@ -544,6 +548,9 @@ static struct file_struct *receive_file_
+@@ -543,6 +547,9 @@ static struct file_struct *receive_file_
  
  	strlcpy(lastname, thisname, MAXPATHLEN);
  
@@ -119,7 +119,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	clean_fname(thisname, 0);
  
  	if (sanitize_paths)
-@@ -1074,6 +1081,9 @@ struct file_list *send_file_list(int f, 
+@@ -1072,6 +1079,9 @@ struct file_list *send_file_list(int f, 
  	start_write = stats.total_written;
  	gettimeofday(&start_tv, NULL);
  
@@ -129,7 +129,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	flist = flist_new(WITH_HLINK, "send_file_list");
  
  	io_start_buffering_out();
-@@ -1286,6 +1296,9 @@ struct file_list *send_file_list(int f, 
+@@ -1283,6 +1293,9 @@ struct file_list *send_file_list(int f, 
  	stats.flist_size = stats.total_written - start_write;
  	stats.num_files = flist->count;
  
@@ -139,7 +139,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	if (verbose > 3)
  		output_flist(flist);
  
-@@ -1306,6 +1319,9 @@ struct file_list *recv_file_list(int f)
+@@ -1303,6 +1316,9 @@ struct file_list *recv_file_list(int f)
  
  	start_read = stats.total_read;
  
@@ -149,7 +149,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	flist = flist_new(WITH_HLINK, "recv_file_list");
  
  	flist->count = 0;
-@@ -1357,6 +1373,9 @@ struct file_list *recv_file_list(int f)
+@@ -1354,6 +1370,9 @@ struct file_list *recv_file_list(int f)
  			io_error |= read_int(f);
  	}
  
@@ -382,7 +382,7 @@ Note that you'll need to run 'make proto' after applying this patch.
 +	if (verbose > 2)
 +		rprintf(FINFO, "Converted filename: %s -> %s\n", src, dest);
 +}
---- orig/generator.c	2005-12-16 04:03:06
+--- orig/generator.c	2006-01-14 20:27:09
 +++ generator.c	2005-03-05 00:29:37
 @@ -761,7 +761,13 @@ static int phase = 0;
   * When fname is non-null, it must point to a MAXPATHLEN buffer!
@@ -399,7 +399,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			   int itemizing, int maybe_PERMS_REPORT,
  			   enum logcode code, int f_out)
---- orig/log.c	2005-12-16 23:48:44
+--- orig/log.c	2006-01-17 02:16:40
 +++ log.c	2005-12-16 23:49:07
 @@ -68,6 +68,7 @@ struct {
  	{ RERR_IPC        , "error in IPC code" },
@@ -409,7 +409,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  	{ RERR_SIGNAL1    , "received SIGUSR1" },
  	{ RERR_SIGNAL     , "received SIGINT, SIGTERM, or SIGHUP" },
  	{ RERR_WAITCHILD  , "waitpid() failed" },
---- orig/main.c	2005-12-16 23:48:44
+--- orig/main.c	2006-01-15 14:46:15
 +++ main.c	2004-07-22 00:31:47
 @@ -414,7 +414,7 @@ static pid_t do_cmd(char *cmd, char *mac
  			whole_file = 1;
@@ -420,7 +420,7 @@ Note that you'll need to run 'make proto' after applying this patch.
  
  	if (dir)
  		free(dir);
---- orig/options.c	2005-12-16 23:48:44
+--- orig/options.c	2006-01-14 08:14:30
 +++ options.c	2005-10-26 16:49:33
 @@ -142,6 +142,7 @@ char *basis_dir[MAX_BASIS_DIRS+1];
  char *config_file = NULL;
@@ -446,7 +446,7 @@ Note that you'll need to run 'make proto' after applying this patch.
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
    {0,                 'P', POPT_ARG_NONE,   0, 'P', 0, 0 },
---- orig/pipe.c	2005-10-24 21:04:45
+--- orig/pipe.c	2006-01-14 08:14:31
 +++ pipe.c	2004-07-03 20:18:02
 @@ -23,7 +23,6 @@
  
@@ -514,9 +514,9 @@ Note that you'll need to run 'make proto' after applying this patch.
 +
 +	return result;
 +}
---- orig/util.c	2005-11-12 20:13:05
+--- orig/util.c	2006-01-14 08:14:31
 +++ util.c	2004-07-03 20:18:02
-@@ -1411,3 +1411,55 @@ uint32 fuzzy_distance(const char *s1, in
+@@ -1373,3 +1373,55 @@ uint32 fuzzy_distance(const char *s1, in
  
  	return a[len2-1];
  }

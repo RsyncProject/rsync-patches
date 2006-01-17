@@ -60,7 +60,7 @@ Be sure to run "make proto" before running "make".
  #define RERR_SIGNAL     20      /* status returned when sent SIGINT, SIGTERM, SIGHUP */
  #define RERR_WAITCHILD  21      /* some error returned by waitpid() */
  #define RERR_MALLOC     22      /* error allocating core memory buffers */
---- orig/generator.c	2006-01-14 08:14:30
+--- orig/generator.c	2006-01-14 20:27:09
 +++ generator.c	2005-12-08 23:17:08
 @@ -65,7 +65,6 @@ extern OFF_T min_size;
  extern int io_error;
@@ -705,7 +705,7 @@ Be sure to run "make proto" before running "make".
 -	write_batch_monitor_out = -1;
 -	write_batch_monitor_in = -1;
 -}
---- orig/log.c	2006-01-14 08:14:30
+--- orig/log.c	2006-01-17 02:16:40
 +++ log.c	2005-12-16 23:49:57
 @@ -35,7 +35,6 @@ extern int am_sender;
  extern int local_server;
@@ -723,9 +723,9 @@ Be sure to run "make proto" before running "make".
  	{ RERR_SIGNAL     , "received SIGINT, SIGTERM, or SIGHUP" },
  	{ RERR_WAITCHILD  , "waitpid() failed" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
-@@ -206,8 +204,8 @@ void rwrite(enum logcode code, char *buf
- 
- 	buf[len] = 0;
+@@ -224,8 +222,8 @@ void rwrite(enum logcode code, char *buf
+ 	if (len < 0)
+ 		exit_cleanup(RERR_MESSAGEIO);
  
 -	if (am_server && msg_fd_out >= 0) {
 -		/* Pass the message to our sibling. */
@@ -734,7 +734,7 @@ Be sure to run "make proto" before running "make".
  		send_msg((enum msgcode)code, buf, len);
  		return;
  	}
---- orig/main.c	2006-01-14 08:14:30
+--- orig/main.c	2006-01-15 14:46:15
 +++ main.c	2005-12-16 23:50:33
 @@ -30,7 +30,6 @@ extern int list_only;
  extern int am_root;
@@ -774,7 +774,7 @@ Be sure to run "make proto" before running "make".
  		return;
  
  	if (am_daemon) {
-@@ -558,12 +568,30 @@ static void do_server_sender(int f_in, i
+@@ -609,12 +619,30 @@ static void do_server_sender(int f_in, i
  	exit_cleanup(0);
  }
  
@@ -808,7 +808,7 @@ Be sure to run "make proto" before running "make".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
-@@ -572,70 +600,16 @@ static int do_recv(int f_in,int f_out,st
+@@ -623,70 +651,16 @@ static int do_recv(int f_in,int f_out,st
  	if (preserve_hard_links)
  		init_hard_links();
  
@@ -884,7 +884,7 @@ Be sure to run "make proto" before running "make".
  	generate_files(f_out, flist, local_name);
  
  	handle_stats(-1);
-@@ -646,10 +620,13 @@ static int do_recv(int f_in,int f_out,st
+@@ -697,10 +671,13 @@ static int do_recv(int f_in,int f_out,st
  	}
  	io_flush(FULL_FLUSH);
  
@@ -902,7 +902,7 @@ Be sure to run "make proto" before running "make".
  }
  
  
-@@ -1011,22 +988,6 @@ static int start_client(int argc, char *
+@@ -1062,22 +1039,6 @@ static int start_client(int argc, char *
  	return ret;
  }
  
@@ -925,7 +925,7 @@ Be sure to run "make proto" before running "make".
  static RETSIGTYPE sigchld_handler(UNUSED(int val))
  {
  #ifdef WNOHANG
-@@ -1109,8 +1070,6 @@ int main(int argc,char *argv[])
+@@ -1160,8 +1121,6 @@ int main(int argc,char *argv[])
  	int orig_argc = argc;
  	char **orig_argv = argv;
  
@@ -1018,7 +1018,7 @@ Be sure to run "make proto" before running "make".
  	if (pid == -1) {
  		rsyserr(FERROR, errno, "fork");
  		exit_cleanup(RERR_IPC);
---- orig/receiver.c	2006-01-14 08:14:31
+--- orig/receiver.c	2006-01-14 20:27:09
 +++ receiver.c	2006-01-14 08:30:29
 @@ -24,7 +24,7 @@ extern int verbose;
  extern int do_xfers;
@@ -1156,12 +1156,12 @@ Be sure to run "make proto" before running "make".
 -	return am_sender ? "sender" : am_generator ? "generator" : "receiver";
 +	return am_sender ? "sender" : am_generator() ? "generator" : "receiver";
  }
---- orig/rsync.h	2006-01-14 08:14:31
-+++ rsync.h	2005-12-10 19:02:58
-@@ -165,10 +165,8 @@ enum msgcode {
+--- orig/rsync.h	2006-01-14 20:27:10
++++ rsync.h	2006-01-17 02:46:03
+@@ -166,10 +166,8 @@ enum msgcode {
  	MSG_DATA=0,	/* raw data on the multiplexed stream */
  	MSG_ERROR=FERROR, MSG_INFO=FINFO, /* remote logging */
- 	MSG_LOG=FLOG, MSG_FCLIENT=FCLIENT, /* sibling logging */
+ 	MSG_LOG=FLOG,	/* sibling logging */
 -	MSG_REDO=9,	/* reprocess indicated flist index */
  	MSG_SUCCESS=100,/* successfully updated indicated flist index */
  	MSG_DELETED=101,/* successfully deleted a file on receiving side */
@@ -1169,7 +1169,7 @@ Be sure to run "make proto" before running "make".
  };
  
  #include "errcode.h"
-@@ -319,6 +317,7 @@ enum msgcode {
+@@ -320,6 +318,7 @@ enum msgcode {
  #endif
  
  #include <assert.h>
