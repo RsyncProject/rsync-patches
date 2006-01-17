@@ -15,8 +15,8 @@ command before "make":
  		rprintf(FINFO, "flist->length=%.0f\n",
  			(double) fptr[i]->length);
  		rprintf(FINFO, "flist->mode=%#o\n", (int) fptr[i]->mode);
---- orig/flist.c	2006-01-14 08:14:30
-+++ flist.c	2006-01-14 08:19:03
+--- orig/flist.c	2006-01-17 02:15:59
++++ flist.c	2006-01-17 02:42:04
 @@ -50,6 +50,7 @@ extern int preserve_perms;
  extern int preserve_devices;
  extern int preserve_uid;
@@ -25,7 +25,7 @@ command before "make":
  extern int relative_paths;
  extern int implied_dirs;
  extern int copy_links;
-@@ -140,16 +141,18 @@ static void list_file_entry(struct file_
+@@ -139,16 +140,18 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -34,7 +34,7 @@ command before "make":
  			perms,
  			(double)f->length, timestring(f->modtime),
 +			timestring(f->atime),
- 			f_name(f), f->u.link);
+ 			f_name(f, NULL), f->u.link);
  	} else
  #endif
  	{
@@ -43,10 +43,10 @@ command before "make":
  			perms,
  			(double)f->length, timestring(f->modtime),
 +			timestring(f->atime),
- 			f_name(f));
+ 			f_name(f, NULL));
  	}
  }
-@@ -311,6 +314,7 @@ void send_file_entry(struct file_struct 
+@@ -310,6 +313,7 @@ void send_file_entry(struct file_struct 
  {
  	unsigned short flags;
  	static time_t modtime;
@@ -54,7 +54,7 @@ command before "make":
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -326,7 +330,7 @@ void send_file_entry(struct file_struct 
+@@ -325,7 +329,7 @@ void send_file_entry(struct file_struct 
  
  	if (!file) {
  		write_byte(f, 0);
@@ -63,7 +63,7 @@ command before "make":
  		dev = 0, rdev = makedev(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -375,6 +379,12 @@ void send_file_entry(struct file_struct 
+@@ -374,6 +378,12 @@ void send_file_entry(struct file_struct 
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -76,7 +76,7 @@ command before "make":
  
  #ifdef SUPPORT_HARD_LINKS
  	if (file->link_u.idev) {
-@@ -428,6 +438,8 @@ void send_file_entry(struct file_struct 
+@@ -427,6 +437,8 @@ void send_file_entry(struct file_struct 
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -85,7 +85,7 @@ command before "make":
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -495,6 +507,7 @@ static struct file_struct *receive_file_
+@@ -494,6 +506,7 @@ static struct file_struct *receive_file_
  					      unsigned short flags, int f)
  {
  	static time_t modtime;
@@ -93,7 +93,7 @@ command before "make":
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -513,7 +526,7 @@ static struct file_struct *receive_file_
+@@ -512,7 +525,7 @@ static struct file_struct *receive_file_
  	struct file_struct *file;
  
  	if (!flist) {
@@ -102,7 +102,7 @@ command before "make":
  		dev = 0, rdev = makedev(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -569,6 +582,8 @@ static struct file_struct *receive_file_
+@@ -568,6 +581,8 @@ static struct file_struct *receive_file_
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -111,7 +111,7 @@ command before "make":
  
  	if (preserve_uid && !(flags & XMIT_SAME_UID))
  		uid = (uid_t)read_int(f);
-@@ -619,6 +634,7 @@ static struct file_struct *receive_file_
+@@ -618,6 +633,7 @@ static struct file_struct *receive_file_
  
  	file->flags = 0;
  	file->modtime = modtime;
@@ -119,7 +119,7 @@ command before "make":
  	file->length = file_length;
  	file->mode = mode;
  	file->uid = uid;
-@@ -866,6 +882,7 @@ struct file_struct *make_file(char *fnam
+@@ -864,6 +880,7 @@ struct file_struct *make_file(char *fnam
  
  	file->flags = flags;
  	file->modtime = st.st_mtime;
@@ -127,7 +127,7 @@ command before "make":
  	file->length = st.st_size;
  	if (chmod_modes && am_sender && (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode)))
  		file->mode = tweak_mode(st.st_mode, chmod_modes);
---- orig/generator.c	2006-01-14 08:14:30
+--- orig/generator.c	2006-01-14 20:27:09
 +++ generator.c	2005-12-15 23:05:32
 @@ -44,6 +44,7 @@ extern int preserve_uid;
  extern int preserve_gid;
@@ -186,7 +186,7 @@ command before "make":
  		if (verbose > 1)
  			rprintf(FINFO, "%s is newer\n", fname);
  		return;
---- orig/log.c	2006-01-14 08:14:30
+--- orig/log.c	2006-01-17 02:16:40
 +++ log.c	2005-12-15 23:05:44
 @@ -38,6 +38,7 @@ extern int module_id;
  extern int msg_fd_out;
@@ -196,7 +196,7 @@ command before "make":
  extern int log_format_has_i;
  extern int log_format_has_o_or_i;
  extern int daemon_log_format_has_o_or_i;
-@@ -517,11 +518,14 @@ static void log_formatted(enum logcode c
+@@ -542,11 +543,14 @@ static void log_formatted(enum logcode c
  			n[4] = !(iflags & ITEM_REPORT_TIME) ? '.'
  			     : !preserve_times || IS_DEVICE(file->mode)
  					       || S_ISLNK(file->mode) ? 'T' : 't';
@@ -309,7 +309,7 @@ command before "make":
  	}
  
  	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
---- orig/rsync.h	2006-01-14 08:14:31
+--- orig/rsync.h	2006-01-14 20:27:10
 +++ rsync.h	2005-07-28 00:04:51
 @@ -54,6 +54,7 @@
  #define XMIT_HAS_IDEV_DATA (1<<9)
@@ -335,7 +335,7 @@ command before "make":
  #define ITEM_REPORT_CHECKSUM (1<<1)
  #define ITEM_REPORT_SIZE (1<<2)
  #define ITEM_REPORT_TIME (1<<3)
-@@ -516,6 +519,7 @@ struct file_struct {
+@@ -517,6 +520,7 @@ struct file_struct {
  		struct hlink *links;
  	} link_u;
  	time_t modtime;
