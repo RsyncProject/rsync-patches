@@ -62,7 +62,7 @@ After applying this patch, run these commands for a successful build:
 +AC_MSG_CHECKING(whether to support extended attributes)
 +AC_ARG_ENABLE(xattr-support,
 +AC_HELP_STRING([--enable-xattr-support], [Include extended attribute support (default=no)]),
-+[ case "$withval" in
++[ case "$enableval" in
 +  yes)
 +      case "$host_os" in
 +      *linux*)
@@ -85,20 +85,20 @@ After applying this patch, run these commands for a successful build:
  AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
  AC_OUTPUT
  
---- orig/flist.c	2005-07-29 02:49:06
+--- orig/flist.c	2006-01-21 08:04:42
 +++ flist.c	2005-10-16 23:03:04
-@@ -960,6 +960,8 @@ static struct file_struct *send_file_nam
+@@ -972,6 +972,8 @@ static struct file_struct *send_file_nam
  		return NULL;
  	if (MAKE_ACL(file, fname) < 0)
  		return NULL;
 +	if (MAKE_XATTR(file, fname) < 0)
 +		return NULL;
  
- 	maybe_emit_filelist_progress(flist->count + flist_count_offset);
- 
-@@ -969,9 +971,11 @@ static struct file_struct *send_file_nam
+ 	if (chmod_modes && !S_ISLNK(file->mode))
+ 		file->mode = tweak_mode(file->mode, chmod_modes);
+@@ -984,9 +986,11 @@ static struct file_struct *send_file_nam
  		flist->files[flist->count++] = file;
- 		send_file_entry(file, f, base_flags);
+ 		send_file_entry(file, f);
  		SEND_ACL(file, f);
 +		SEND_XATTR(file, f);
  	} else {
@@ -108,7 +108,7 @@ After applying this patch, run these commands for a successful build:
  	}
  	return file;
  }
-@@ -1327,6 +1331,7 @@ struct file_list *recv_file_list(int f)
+@@ -1378,6 +1382,7 @@ struct file_list *recv_file_list(int f)
  		file = receive_file_entry(flist, flags, f);
  
  		RECEIVE_ACL(file, f);
@@ -116,7 +116,7 @@ After applying this patch, run these commands for a successful build:
  
  		if (S_ISREG(file->mode))
  			stats.total_size += file->length;
-@@ -1351,6 +1356,7 @@ struct file_list *recv_file_list(int f)
+@@ -1402,6 +1407,7 @@ struct file_list *recv_file_list(int f)
  	clean_flist(flist, relative_paths, 1);
  
  	SORT_FILE_ACL_INDEX_LISTS();
@@ -126,7 +126,7 @@ After applying this patch, run these commands for a successful build:
  		/* Now send the uid/gid list. This was introduced in
 --- orig/generator.c	2006-01-14 08:17:25
 +++ generator.c	2005-05-12 23:21:08
-@@ -894,6 +894,10 @@ static void recv_generator(char *fname, 
+@@ -897,6 +897,10 @@ static void recv_generator(char *fname, 
  		if (f_out == -1)
  			SET_ACL(fname, file);
  #endif
@@ -136,7 +136,7 @@ After applying this patch, run these commands for a successful build:
 +#endif
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
  		    && (file->flags & FLAG_DEL_HERE))
- 			delete_in_dir(the_file_list, fname, file);
+ 			delete_in_dir(the_file_list, fname, file, &st);
 --- orig/lib/sysxattr.c	2005-05-12 23:23:15
 +++ lib/sysxattr.c	2005-05-12 23:23:15
 @@ -0,0 +1,41 @@
@@ -203,7 +203,7 @@ After applying this patch, run these commands for a successful build:
  int preserve_perms = 0;
  int preserve_devices = 0;
  int preserve_uid = 0;
-@@ -190,6 +191,7 @@ static void print_rsync_version(enum log
+@@ -191,6 +192,7 @@ static void print_rsync_version(enum log
  	char const *have_inplace = "no ";
  	char const *hardlinks = "no ";
  	char const *acls = "no ";
@@ -211,7 +211,7 @@ After applying this patch, run these commands for a successful build:
  	char const *links = "no ";
  	char const *ipv6 = "no ";
  	STRUCT_STAT *dumstat;
-@@ -209,7 +211,9 @@ static void print_rsync_version(enum log
+@@ -210,7 +212,9 @@ static void print_rsync_version(enum log
  #ifdef SUPPORT_ACLS
  	acls = "";
  #endif
@@ -223,7 +223,7 @@ After applying this patch, run these commands for a successful build:
  	links = "";
  #endif
 @@ -224,9 +228,9 @@ static void print_rsync_version(enum log
- 		"Copyright (C) 1996-2005 by Andrew Tridgell and others\n");
+ 	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
  	rprintf(f, "<http://rsync.samba.org/>\n");
  	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
 -		"%shard links, %sACLs, %ssymlinks, batchfiles, \n",
@@ -234,7 +234,7 @@ After applying this patch, run these commands for a successful build:
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -297,6 +301,7 @@ void usage(enum logcode F)
+@@ -295,6 +299,7 @@ void usage(enum logcode F)
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
    rprintf(F," -A, --acls                  preserve ACLs (implies --perms)\n");
@@ -242,7 +242,7 @@ After applying this patch, run these commands for a successful build:
    rprintf(F," -o, --owner                 preserve owner (root only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F," -D, --devices               preserve devices (root only)\n");
-@@ -409,6 +414,9 @@ static struct poptOption long_options[] 
+@@ -407,6 +412,9 @@ static struct poptOption long_options[] 
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
    {"no-A",             0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
@@ -252,7 +252,7 @@ After applying this patch, run these commands for a successful build:
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1027,6 +1035,17 @@ int parse_arguments(int *argc, const cha
+@@ -1054,6 +1062,17 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif /* SUPPORT_ACLS */
  
@@ -270,7 +270,7 @@ After applying this patch, run these commands for a successful build:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1464,6 +1483,8 @@ void server_options(char **args,int *arg
+@@ -1490,6 +1509,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'H';
  	if (preserve_acls)
  		argstr[x++] = 'A';
