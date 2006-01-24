@@ -4,31 +4,8 @@ command before "make":
     make proto
 
 
---- orig/batch.c	2006-01-14 08:14:29
-+++ batch.c	2006-01-24 19:18:36
-@@ -23,6 +23,7 @@ extern int do_compression;
- extern int def_compress_level;
- extern int protocol_version;
- extern char *batch_name;
-+extern unsigned int file_struct_len;
- 
- extern struct filter_list_struct filter_list;
- 
-@@ -222,9 +223,11 @@ void show_flist(int index, struct file_s
- 
- 	int i;
- 	for (i = 0; i < index; i++) {
--		rprintf(FINFO, "flist->flags=%#x\n", fptr[i]->flags);
-+		rprintf(FINFO, "flist->flags=%#x\n", FFLAGS(fptr[i]));
- 		rprintf(FINFO, "flist->modtime=%#lx\n",
- 			(long unsigned) fptr[i]->modtime);
-+		rprintf(FINFO, "flist->atime=%#lx\n",
-+			(long unsigned) fptr[i]->atime);
- 		rprintf(FINFO, "flist->length=%.0f\n",
- 			(double) fptr[i]->length);
- 		rprintf(FINFO, "flist->mode=%#o\n", (int) fptr[i]->mode);
 --- orig/flist.c	2006-01-24 19:03:06
-+++ flist.c	2006-01-24 19:32:19
++++ flist.c	2006-01-24 22:40:04
 @@ -50,6 +50,7 @@ extern int preserve_perms;
  extern int preserve_devices;
  extern int preserve_uid;
@@ -37,20 +14,22 @@ command before "make":
  extern int relative_paths;
  extern int implied_dirs;
  extern int copy_links;
-@@ -83,7 +84,11 @@ void init_flist(void)
+@@ -83,7 +84,13 @@ void init_flist(void)
  	struct file_struct f;
  
  	/* Figure out how big the file_struct is without trailing padding */
 -	file_struct_len = offsetof(struct file_struct, flags) + sizeof f.flags;
 +	if (preserve_atimes)
-+		file_struct_len = offsetof(struct file_struct, flags);
++		file_struct_len = offsetof(struct file_struct, fl4g5);
 +	else
 +		file_struct_len = offsetof(struct file_struct, atime);
-+	file_struct_len += sizeof f.flags;
++	/* The "flags" uchar is no longer accessed directly, so I
++	 * mangled the name to fl4g5 as a reminder. */
++	file_struct_len += sizeof f.fl4g5;
  	checksum_len = protocol_version < 21 ? 2 : MD4_SUM_LENGTH;
  }
  
-@@ -139,16 +144,18 @@ static void list_file_entry(struct file_
+@@ -139,16 +146,18 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -71,7 +50,7 @@ command before "make":
  			f_name(f, NULL));
  	}
  }
-@@ -310,6 +317,7 @@ static void send_file_entry(struct file_
+@@ -310,6 +319,7 @@ static void send_file_entry(struct file_
  {
  	unsigned short flags;
  	static time_t modtime;
@@ -79,7 +58,7 @@ command before "make":
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -325,7 +333,7 @@ static void send_file_entry(struct file_
+@@ -325,7 +335,7 @@ static void send_file_entry(struct file_
  
  	if (!file) {
  		write_byte(f, 0);
@@ -88,7 +67,7 @@ command before "make":
  		dev = 0, rdev = makedev(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -337,7 +345,7 @@ static void send_file_entry(struct file_
+@@ -337,7 +347,7 @@ static void send_file_entry(struct file_
  
  	f_name(file, fname);
  
@@ -97,7 +76,7 @@ command before "make":
  
  	if (file->mode == mode)
  		flags |= XMIT_SAME_MODE;
-@@ -374,6 +382,12 @@ static void send_file_entry(struct file_
+@@ -374,6 +384,12 @@ static void send_file_entry(struct file_
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -110,7 +89,7 @@ command before "make":
  
  #ifdef SUPPORT_HARD_LINKS
  	if (file->link_u.idev) {
-@@ -427,6 +441,8 @@ static void send_file_entry(struct file_
+@@ -427,6 +443,8 @@ static void send_file_entry(struct file_
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -119,7 +98,7 @@ command before "make":
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -494,6 +510,7 @@ static struct file_struct *receive_file_
+@@ -494,6 +512,7 @@ static struct file_struct *receive_file_
  					      unsigned short flags, int f)
  {
  	static time_t modtime;
@@ -127,7 +106,7 @@ command before "make":
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -512,7 +529,7 @@ static struct file_struct *receive_file_
+@@ -512,7 +531,7 @@ static struct file_struct *receive_file_
  	struct file_struct *file;
  
  	if (!flist) {
@@ -136,7 +115,7 @@ command before "make":
  		dev = 0, rdev = makedev(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -568,6 +585,8 @@ static struct file_struct *receive_file_
+@@ -568,6 +587,8 @@ static struct file_struct *receive_file_
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -145,7 +124,7 @@ command before "make":
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -623,6 +642,8 @@ static struct file_struct *receive_file_
+@@ -623,6 +644,8 @@ static struct file_struct *receive_file_
  	file->length = file_length;
  	file->mode = mode;
  	file->ids = id_pair(uid, gid);
@@ -154,7 +133,7 @@ command before "make":
  
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
-@@ -648,12 +669,12 @@ static struct file_struct *receive_file_
+@@ -648,12 +671,12 @@ static struct file_struct *receive_file_
  			    && lastname[del_hier_name_len-1] == '.'
  			    && lastname[del_hier_name_len-2] == '/')
  				del_hier_name_len -= 2;
@@ -169,7 +148,7 @@ command before "make":
  			else
  				in_del_hier = 0;
  		}
-@@ -874,11 +895,13 @@ struct file_struct *make_file(char *fnam
+@@ -874,11 +897,13 @@ struct file_struct *make_file(char *fnam
  	memset(bp, 0, file_struct_len);
  	bp += file_struct_len;
  
@@ -184,7 +163,7 @@ command before "make":
  
  #ifdef SUPPORT_HARD_LINKS
  	if (flist && flist->hlink_pool) {
-@@ -989,7 +1012,7 @@ static void send_if_directory(int f, str
+@@ -989,7 +1014,7 @@ static void send_if_directory(int f, str
  	char is_dot_dir = fbuf[ol-1] == '.' && (ol == 1 || fbuf[ol-2] == '/');
  
  	if (S_ISDIR(file->mode)
@@ -193,7 +172,7 @@ command before "make":
  		void *save_filters;
  		unsigned int len = strlen(fbuf);
  		if (len > 1 && fbuf[len-1] == '/')
-@@ -1567,8 +1590,9 @@ static void clean_flist(struct file_list
+@@ -1567,8 +1592,9 @@ static void clean_flist(struct file_list
  			}
  			/* Make sure that if we unduplicate '.', that we don't
  			 * lose track of a user-specified top directory. */
@@ -205,7 +184,7 @@ command before "make":
  
  			clear_file(drop, flist);
  
-@@ -1630,7 +1654,7 @@ static void output_flist(struct file_lis
+@@ -1630,7 +1656,7 @@ static void output_flist(struct file_lis
  			file->dirname ? file->dirname : "",
  			file->dirname ? "/" : "", NS(file->basename),
  			S_ISDIR(file->mode) ? "/" : "", (int)file->mode,
@@ -215,15 +194,15 @@ command before "make":
  }
  
 --- orig/generator.c	2006-01-24 19:03:07
-+++ generator.c	2006-01-24 19:19:42
-@@ -44,6 +44,7 @@ extern int preserve_uid;
++++ generator.c	2006-01-24 22:29:56
+@@ -43,6 +43,7 @@ extern int preserve_perms;
+ extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_times;
- extern int omit_dir_times;
 +extern int preserve_atimes;
+ extern int omit_dir_times;
  extern int delete_before;
  extern int delete_during;
- extern int delete_after;
 @@ -89,6 +90,7 @@ extern dev_t filesystem_dev;
  extern char *backup_dir;
  extern char *backup_suffix;
@@ -273,29 +252,20 @@ command before "make":
  			rprintf(FINFO, "deleting in %s\n", fbuf);
  
  		if (link_stat(fbuf, &st, keep_dirlinks) < 0
-@@ -344,10 +346,18 @@ void itemize(struct file_struct *file, i
- 
- 		if (S_ISREG(file->mode) && file->length != st->st_size)
+@@ -346,8 +348,11 @@ void itemize(struct file_struct *file, i
  			iflags |= ITEM_REPORT_SIZE;
--		if ((iflags & (ITEM_TRANSFER|ITEM_LOCAL_CHANGE) && !keep_time
--		     && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
+ 		if ((iflags & (ITEM_TRANSFER|ITEM_LOCAL_CHANGE) && !keep_time
+ 		     && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
 -		    || (keep_time && cmp_modtime(file->modtime, st->st_mtime) != 0))
-+		if (iflags & (ITEM_TRANSFER|ITEM_LOCAL_CHANGE) && !keep_time
-+		     && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname)) {
++		    || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
-+			if (!preserve_atimes && !S_ISDIR(file->mode))
-+				iflags |= ITEM_REPORT_ATIME;
-+		} else {
-+			if (keep_time && cmp_time(file->modtime, st->st_mtime) != 0)
-+				iflags |= ITEM_REPORT_TIME;
-+			if (preserve_atimes && !S_ISDIR(file->mode)
-+			 && cmp_time(file->atime, st->st_atime) != 0)
-+				iflags |= ITEM_REPORT_ATIME;
-+		}
++		if (preserve_atimes && !S_ISDIR(file->mode) && !S_ISLNK(file->mode)
++		 && cmp_time(file->atime, st->st_atime) != 0)
++			iflags |= ITEM_REPORT_ATIME;
  		if (preserve_perms
  		 && (file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
-@@ -396,7 +406,7 @@ int unchanged_file(char *fn, struct file
+@@ -396,7 +401,7 @@ int unchanged_file(char *fn, struct file
  	if (ignore_times)
  		return 0;
  
@@ -304,7 +274,7 @@ command before "make":
  }
  
  
-@@ -550,13 +560,13 @@ static int find_fuzzy(struct file_struct
+@@ -550,13 +555,13 @@ static int find_fuzzy(struct file_struct
  		uint32 dist;
  
  		if (!S_ISREG(fp->mode) || !fp->length
@@ -320,7 +290,7 @@ command before "make":
  			if (verbose > 4) {
  				rprintf(FINFO,
  					"fuzzy size/modtime match for %s\n",
-@@ -632,7 +642,7 @@ static int try_dests_reg(struct file_str
+@@ -632,7 +637,7 @@ static int try_dests_reg(struct file_str
  			if (!unchanged_attrs(file, stp))
  				continue;
  			if ((always_checksum || ignore_times)
@@ -329,7 +299,7 @@ command before "make":
  				continue;
  			best_match = j;
  			match_level = 3;
-@@ -894,7 +904,7 @@ static void recv_generator(char *fname, 
+@@ -894,7 +899,7 @@ static void recv_generator(char *fname, 
  		    && verbose && code && f_out != -1)
  			rprintf(code, "%s/\n", fname);
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
@@ -338,7 +308,7 @@ command before "make":
  			delete_in_dir(the_file_list, fname, file, &st);
  		return;
  	}
-@@ -1071,7 +1081,7 @@ static void recv_generator(char *fname, 
+@@ -1071,7 +1076,7 @@ static void recv_generator(char *fname, 
  	}
  
  	if (update_only && statret == 0
@@ -347,7 +317,7 @@ command before "make":
  		if (verbose > 1)
  			rprintf(FINFO, "%s is newer\n", fname);
  		return;
-@@ -1174,7 +1184,7 @@ static void recv_generator(char *fname, 
+@@ -1174,7 +1179,7 @@ static void recv_generator(char *fname, 
  	if (fuzzy_basis) {
  		int j = flist_find(fuzzy_dirlist, file);
  		if (j >= 0) /* don't use changing file as future fuzzy basis */
@@ -407,8 +377,8 @@ command before "make":
 +	} while (!(FFLAGS(file) & FLAG_HLINK_EOL));
  #endif
  }
---- orig/log.c	2006-01-24 17:00:34
-+++ log.c	2005-12-15 23:05:44
+--- orig/log.c	2006-01-24 22:24:32
++++ log.c	2006-01-24 22:50:01
 @@ -38,6 +38,7 @@ extern int module_id;
  extern int msg_fd_out;
  extern int protocol_version;
@@ -417,28 +387,25 @@ command before "make":
  extern int log_format_has_i;
  extern int log_format_has_o_or_i;
  extern int daemon_log_format_has_o_or_i;
-@@ -543,11 +544,14 @@ static void log_formatted(enum logcode c
+@@ -542,10 +543,12 @@ static void log_formatted(enum logcode c
+ 			n[3] = !(iflags & ITEM_REPORT_SIZE) ? '.' : 's';
  			n[4] = !(iflags & ITEM_REPORT_TIME) ? '.'
- 			     : !preserve_times || IS_DEVICE(file->mode)
- 					       || S_ISLNK(file->mode) ? 'T' : 't';
+ 			     : !preserve_times || S_ISLNK(file->mode) ? 'T' : 't';
 -			n[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
 -			n[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
 -			n[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
--			n[8] = !(iflags & ITEM_REPORT_XATTRS) ? '.' : 'a';
--			n[9] = '\0';
+-			n[8] = '\0';
 +			n[5] = !(iflags & ITEM_REPORT_ATIME) ? '.'
-+			     : !preserve_atimes || IS_DEVICE(file->mode)
-+					        || S_ISLNK(file->mode) ? 'A' : 'a';
++			     : S_ISLNK(file->mode) ? 'U' : 'u';
 +			n[6] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
 +			n[7] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
 +			n[8] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
-+			n[9] = !(iflags & ITEM_REPORT_XATTRS) ? '.' : 'a';
-+			n[10] = '\0';
++			n[9] = '\0';
  
  			if (iflags & (ITEM_IS_NEW|ITEM_MISSING_DATA)) {
  				char ch = iflags & ITEM_IS_NEW ? '+' : '?';
 --- orig/options.c	2006-01-23 18:48:23
-+++ options.c	2005-11-07 04:32:19
++++ options.c	2006-01-24 22:53:18
 @@ -50,6 +50,7 @@ int preserve_uid = 0;
  int preserve_gid = 0;
  int preserve_times = 0;
@@ -455,7 +422,7 @@ command before "make":
 -  rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
 +  rprintf(F," -t, --times                 preserve modify times\n");
 +  rprintf(F," -O, --omit-dir-times        omit directories when preserving modify times\n");
-+  rprintf(F," -k, --atimes                preserve (keep) access times\n");
++  rprintf(F," -U, --atimes                preserve access (use) times\n");
    rprintf(F,"     --chmod=CHMOD           change destination permissions\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
@@ -463,7 +430,7 @@ command before "make":
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-+  {"atimes",          'k', POPT_ARG_VAL,    &preserve_atimes, 1, 0, 0 },
++  {"atimes",          'U', POPT_ARG_VAL,    &preserve_atimes, 1, 0, 0 },
 +  {"no-atimes",        0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
 +  {"no-k",             0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
@@ -474,7 +441,7 @@ command before "make":
  	if (preserve_times)
  		argstr[x++] = 't';
 +	if (preserve_atimes)
-+		argstr[x++] = 'k';
++		argstr[x++] = 'U';
  	if (omit_dir_times == 2 && am_sender)
  		argstr[x++] = 'O';
  	if (preserve_perms)
@@ -531,7 +498,7 @@ command before "make":
  
  	change_uid = am_root && preserve_uid && st->st_uid != file->ids->uid;
 --- orig/rsync.h	2006-01-24 19:03:07
-+++ rsync.h	2006-01-24 19:32:22
++++ rsync.h	2006-01-24 22:38:08
 @@ -54,6 +54,7 @@
  #define XMIT_HAS_IDEV_DATA (1<<9)
  #define XMIT_SAME_DEV (1<<10)
@@ -560,8 +527,9 @@ command before "make":
  	struct id_pair *ids;
  	time_t modtime;
  	mode_t mode;
+-	uchar flags;	/* this item MUST remain last */
 +	time_t atime;   /* this MUST be second to last */
- 	uchar flags;	/* this item MUST remain last */
++	uchar fl4g5;	/* this item MUST remain last */
  };
  
 +#define FFLAGS(f) ((uchar*)(f))[file_struct_len-1]
@@ -569,8 +537,8 @@ command before "make":
  /*
   * Start the flist array at FLIST_START entries and grow it
   * by doubling until FLIST_LINEAR then grow by FLIST_LINEAR
---- orig/rsync.yo	2006-01-24 19:03:08
-+++ rsync.yo	2005-11-07 04:34:55
+--- orig/rsync.yo	2006-01-24 22:19:58
++++ rsync.yo	2006-01-24 22:54:23
 @@ -319,8 +319,9 @@ to the detailed description below for a 
   -o, --owner                 preserve owner (root only)
   -g, --group                 preserve group
@@ -579,7 +547,7 @@ command before "make":
 - -O, --omit-dir-times        omit directories when preserving times
 + -t, --times                 preserve modify times
 + -O, --omit-dir-times        omit directories when preserving mod-times
-+ -k, --atimes                preserve access times
++ -U, --atimes                preserve access (use) times
       --chmod=CHMOD           change destination permissions
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
@@ -587,8 +555,8 @@ command before "make":
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
-+dit(bf(-k, --atimes)) This tells rsync to keep the access times of the
-+destination files the same value as the source files.  Note that the
++dit(bf(-U, --atimes)) This tells rsync to set the access (use) times of the
++destination files to the same value as the source files.  Note that the
 +reading of the source file may update the atime of the source files, so
 +repeated rsync runs with --atimes may be needed if you want to force the
 +access-time values to be 100% identical on the two systems.
@@ -596,16 +564,7 @@ command before "make":
  dit(bf(--chmod)) This options tells rsync to apply the listed "chmod" pattern
  to the permission of the files on the destination.  In addition to the normal
  parsing rules specified in the chmod manpage, you can specify an item that
-@@ -1180,7 +1187,7 @@ with older versions of rsync, but that a
- verbose messages).
- 
- The "%i" escape has a cryptic output that is 9 letters long.  The general
--format is like the string bf(UXcstpoga)), where bf(U) is replaced by the
-+format is like the string bf(UXcstapogx)), where bf(U) is replaced by the
- kind of update being done, bf(X) is replaced by the file-type, and the
- other letters represent attributes that may be output if they are being
- modified.
-@@ -1219,17 +1226,22 @@ quote(itemize(
+@@ -1219,9 +1226,13 @@ quote(itemize(
    by the file transfer.
    it() A bf(t) means the modification time is different and is being updated
    to the sender's value (requires bf(--times)).  An alternate value of bf(T)
@@ -613,24 +572,13 @@ command before "make":
 +  means that the modify time will be set to the transfer time, which happens
    anytime a symlink is transferred, or when a file or device is transferred
    without bf(--times).
-+  it() A bf(a) means the access time is different and is being updated to
-+  the sender's value (requires bf(--atimes)).  An alternate value of bf(A)
-+  means that the access time  will be set to the transfer time, which happens
-+  anytime a symlink is transferred, or when a file or device is transferred
-+  without bf(--atimes).
++  it() A bf(u) means the access (use) time is different and is being updated to
++  the sender's value (requires bf(--atimes)).  An alternate value of bf(U)
++  means that the access time will be set to the transfer time, which happens
++  anytime a symlink is transferred.
    it() A bf(p) means the permissions are different and are being updated to
    the sender's value (requires bf(--perms)).
    it() An bf(o) means the owner is different and is being updated to the
-   sender's value (requires bf(--owner) and root privileges).
-   it() A bf(g) means the group is different and is being updated to the
-   sender's value (requires bf(--group) and the authority to set the group).
--  it() The bf(a) is reserved for a future enhanced version that supports
--  extended file attributes, such as ACLs.
-+  it() The bf(x) is reserved for a future enhanced version that supports
-+  extended file attributes.
- ))
- 
- One other output is possible:  when deleting files, the "%i" will output
 --- orig/sender.c	2006-01-14 20:27:10
 +++ sender.c	2006-01-24 18:10:23
 @@ -38,6 +38,7 @@ extern int do_progress;
@@ -659,8 +607,8 @@ command before "make":
  	}
  	make_backups = save_make_backups;
  
---- orig/testsuite/atimes.test	2006-01-24 19:30:25
-+++ testsuite/atimes.test	2006-01-24 19:30:25
+--- orig/testsuite/atimes.test	2006-01-24 22:54:53
++++ testsuite/atimes.test	2006-01-24 22:54:53
 @@ -0,0 +1,19 @@
 +#! /bin/sh
 +
@@ -677,32 +625,85 @@ command before "make":
 +
 +TLS_ARGS=--atime
 +
-+checkit "$RSYNC -rtkgvvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
++checkit "$RSYNC -rtUgvvv \"$fromdir/\" \"$todir/\"" "$fromdir" "$todir"
 +
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
---- orig/testsuite/itemize.test	2005-12-15 23:00:49
-+++ testsuite/itemize.test	2006-01-24 19:29:18
+--- orig/testsuite/devices.test	2006-01-24 22:24:32
++++ testsuite/devices.test	2006-01-24 22:32:30
+@@ -55,14 +55,14 @@ touch -r "$fromdir/block" "$fromdir/bloc
+ $RSYNC -ai "$fromdir/block" "$todir/block2" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-cD++++++ block
++cD+++++++ block
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 1 failed"
+ 
+ $RSYNC -ai "$fromdir/block2" "$todir/block" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-cD++++++ block2
++cD+++++++ block2
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 2 failed"
+ 
+@@ -71,7 +71,7 @@ sleep 1
+ $RSYNC -Di "$fromdir/block3" "$todir/block" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-cD..T... block3
++cD..T.... block3
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
+ 
+@@ -79,15 +79,15 @@ $RSYNC -aiHvv "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ filter_outfile
+ cat <<EOT >"$chkfile"
+-.d..t... ./
+-cD..t... block
+-cD...... block2
+-cD++++++ block3
+-hD++++++ block2.5 => block3
+-cD++++++ char
+-cD++++++ char2
+-cD++++++ char3
+-cD++++++ fifo
++.d..t.... ./
++cD..t.... block
++cD....... block2
++cD+++++++ block3
++hD+++++++ block2.5 => block3
++cD+++++++ char
++cD+++++++ char2
++cD+++++++ char3
++cD+++++++ fifo
+ EOT
+ if test ! -b "$fromdir/block2.5"; then
+     sed -e '/block2\.5/d' \
+--- orig/testsuite/itemize.test	2006-01-24 22:24:32
++++ testsuite/itemize.test	2006-01-24 22:32:03
 @@ -44,14 +44,14 @@ ln "$fromdir/foo/config1" "$fromdir/foo/
  $RSYNC -iplr "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
--cd+++++++ bar/
--cd+++++++ bar/baz/
-->f+++++++ bar/baz/rsync
--cd+++++++ foo/
-->f+++++++ foo/config1
-->f+++++++ foo/config2
-->f+++++++ foo/extra
--cL+++++++ foo/sym -> ../bar/baz/rsync
-+cd++++++++ bar/
-+cd++++++++ bar/baz/
-+>f++++++++ bar/baz/rsync
-+cd++++++++ foo/
-+>f++++++++ foo/config1
-+>f++++++++ foo/config2
-+>f++++++++ foo/extra
-+cL++++++++ foo/sym -> ../bar/baz/rsync
+-cd++++++ bar/
+-cd++++++ bar/baz/
+->f++++++ bar/baz/rsync
+-cd++++++ foo/
+->f++++++ foo/config1
+->f++++++ foo/config2
+->f++++++ foo/extra
+-cL++++++ foo/sym -> ../bar/baz/rsync
++cd+++++++ bar/
++cd+++++++ bar/baz/
++>f+++++++ bar/baz/rsync
++cd+++++++ foo/
++>f+++++++ foo/config1
++>f+++++++ foo/config2
++>f+++++++ foo/extra
++cL+++++++ foo/sym -> ../bar/baz/rsync
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 1 failed"
  
@@ -710,14 +711,14 @@ command before "make":
  $RSYNC -iplrH "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
-->f..T.... bar/baz/rsync
-->f..T.... foo/config1
-->f.sTp... foo/config2
--hf..T.... foo/extra => foo/config1
-+>f..TA.... bar/baz/rsync
-+>f..TA.... foo/config1
-+>f.sTAp... foo/config2
-+hf..TA.... foo/extra => foo/config1
+->f..T... bar/baz/rsync
+->f..T... foo/config1
+->f.sTp.. foo/config2
+-hf..T... foo/extra => foo/config1
++>f..T.... bar/baz/rsync
++>f..T.... foo/config1
++>f.sT.p.. foo/config2
++hf..T.... foo/extra => foo/config1
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 2 failed"
  
@@ -725,16 +726,16 @@ command before "make":
  $RSYNC -iplrtc "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
--.f..tp... bar/baz/rsync
--.d..t.... foo/
--.f..t.... foo/config1
-->fcstp... foo/config2
--cL..T.... foo/sym -> ../bar/baz/rsync
-+.f..t.p... bar/baz/rsync
-+.d..t..... foo/
-+.f..t..... foo/config1
-+>fcst.p... foo/config2
-+cL..TA.... foo/sym -> ../bar/baz/rsync
+-.f..tp.. bar/baz/rsync
+-.d..t... foo/
+-.f..t... foo/config1
+->fcstp.. foo/config2
+-cL..T... foo/sym -> ../bar/baz/rsync
++.f..t.p.. bar/baz/rsync
++.d..t.... foo/
++.f..t.... foo/config1
++>fcst.p.. foo/config2
++cL..T.... foo/sym -> ../bar/baz/rsync
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
  
@@ -742,24 +743,24 @@ command before "make":
      | tee "$outfile"
  filter_outfile
  cat <<EOT >"$chkfile"
--.d        ./
--.d        bar/
--.d        bar/baz/
--.f...p... bar/baz/rsync
--.d        foo/
--.f        foo/config1
-->f..t.... foo/config2
--hf        foo/extra
--.L        foo/sym -> ../bar/baz/rsync
-+.d         ./
-+.d         bar/
-+.d         bar/baz/
-+.f....p... bar/baz/rsync
-+.d         foo/
-+.f         foo/config1
-+>f..t..... foo/config2
-+hf         foo/extra
-+.L         foo/sym -> ../bar/baz/rsync
+-.d       ./
+-.d       bar/
+-.d       bar/baz/
+-.f...p.. bar/baz/rsync
+-.d       foo/
+-.f       foo/config1
+->f..t... foo/config2
+-hf       foo/extra
+-.L       foo/sym -> ../bar/baz/rsync
++.d        ./
++.d        bar/
++.d        bar/baz/
++.f....p.. bar/baz/rsync
++.d        foo/
++.f        foo/config1
++>f..t.... foo/config2
++hf        foo/extra
++.L        foo/sym -> ../bar/baz/rsync
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 5 failed"
  
@@ -767,10 +768,10 @@ command before "make":
  $RSYNC -iplrtH "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
--.f...p... foo/config1
-->f..t.... foo/config2
-+.f....p... foo/config1
-+>f..t..... foo/config2
+-.f...p.. foo/config1
+->f..t... foo/config2
++.f....p.. foo/config1
++>f..t.... foo/config2
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 7 failed"
  
@@ -778,24 +779,24 @@ command before "make":
      | tee "$outfile"
  filter_outfile
  cat <<EOT >"$chkfile"
--.d..t.... ./
--cd+++++++ bar/
--cd+++++++ bar/baz/
--cf        bar/baz/rsync
--cd+++++++ foo/
--cf        foo/config1
--cf        foo/config2
--hf        foo/extra => foo/config1
--cL..T.... foo/sym -> ../bar/baz/rsync
-+.d..t..... ./
-+cd++++++++ bar/
-+cd++++++++ bar/baz/
-+cf         bar/baz/rsync
-+cd++++++++ foo/
-+cf         foo/config1
-+cf         foo/config2
-+hf         foo/extra => foo/config1
-+cL..TA.... foo/sym -> ../bar/baz/rsync
+-.d..t... ./
+-cd++++++ bar/
+-cd++++++ bar/baz/
+-cf       bar/baz/rsync
+-cd++++++ foo/
+-cf       foo/config1
+-cf       foo/config2
+-hf       foo/extra => foo/config1
+-cL..T... foo/sym -> ../bar/baz/rsync
++.d..t.... ./
++cd+++++++ bar/
++cd+++++++ bar/baz/
++cf        bar/baz/rsync
++cd+++++++ foo/
++cf        foo/config1
++cf        foo/config2
++hf        foo/extra => foo/config1
++cL..T.... foo/sym -> ../bar/baz/rsync
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 8 failed"
  
@@ -803,16 +804,16 @@ command before "make":
  $RSYNC -iplrtH --copy-dest="$lddir" "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
--.d..t.... ./
--cd+++++++ bar/
--cd+++++++ bar/baz/
--cd+++++++ foo/
--hf        foo/extra => foo/config1
-+.d..t..... ./
-+cd++++++++ bar/
-+cd++++++++ bar/baz/
-+cd++++++++ foo/
-+hf         foo/extra => foo/config1
+-.d..t... ./
+-cd++++++ bar/
+-cd++++++ bar/baz/
+-cd++++++ foo/
+-hf       foo/extra => foo/config1
++.d..t.... ./
++cd+++++++ bar/
++cd+++++++ bar/baz/
++cd+++++++ foo/
++hf        foo/extra => foo/config1
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 9 failed"
  
@@ -820,24 +821,24 @@ command before "make":
      | tee "$outfile"
  filter_outfile
  cat <<EOT >"$chkfile"
--.d..t.... ./
--cd+++++++ bar/
--cd+++++++ bar/baz/
--hf        bar/baz/rsync
--cd+++++++ foo/
--hf        foo/config1
--hf        foo/config2
--hf        foo/extra => foo/config1
--hL        foo/sym -> ../bar/baz/rsync
-+.d..t..... ./
-+cd++++++++ bar/
-+cd++++++++ bar/baz/
-+hf         bar/baz/rsync
-+cd++++++++ foo/
-+hf         foo/config1
-+hf         foo/config2
-+hf         foo/extra => foo/config1
-+hL         foo/sym -> ../bar/baz/rsync
+-.d..t... ./
+-cd++++++ bar/
+-cd++++++ bar/baz/
+-hf       bar/baz/rsync
+-cd++++++ foo/
+-hf       foo/config1
+-hf       foo/config2
+-hf       foo/extra => foo/config1
+-hL       foo/sym -> ../bar/baz/rsync
++.d..t.... ./
++cd+++++++ bar/
++cd+++++++ bar/baz/
++hf        bar/baz/rsync
++cd+++++++ foo/
++hf        foo/config1
++hf        foo/config2
++hf        foo/extra => foo/config1
++hL        foo/sym -> ../bar/baz/rsync
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 11 failed"
  
@@ -845,14 +846,14 @@ command before "make":
  $RSYNC -iplrtH --link-dest="$lddir" "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
--.d..t.... ./
--cd+++++++ bar/
--cd+++++++ bar/baz/
--cd+++++++ foo/
-+.d..t..... ./
-+cd++++++++ bar/
-+cd++++++++ bar/baz/
-+cd++++++++ foo/
+-.d..t... ./
+-cd++++++ bar/
+-cd++++++ bar/baz/
+-cd++++++ foo/
++.d..t.... ./
++cd+++++++ bar/
++cd+++++++ bar/baz/
++cd+++++++ foo/
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 12 failed"
  
@@ -860,22 +861,22 @@ command before "make":
  # TODO fix really-old problem when combining -H with --compare-dest:
  # missing output for foo/extra hard-link (and it might not be updated)!
  cat <<EOT >"$chkfile"
--.d..t.... ./
--cd+++++++ bar/
--cd+++++++ bar/baz/
--.f        bar/baz/rsync
--cd+++++++ foo/
--.f        foo/config1
--.f        foo/config2
--.L        foo/sym -> ../bar/baz/rsync
-+.d..t..... ./
-+cd++++++++ bar/
-+cd++++++++ bar/baz/
-+.f         bar/baz/rsync
-+cd++++++++ foo/
-+.f         foo/config1
-+.f         foo/config2
-+.L         foo/sym -> ../bar/baz/rsync
+-.d..t... ./
+-cd++++++ bar/
+-cd++++++ bar/baz/
+-.f       bar/baz/rsync
+-cd++++++ foo/
+-.f       foo/config1
+-.f       foo/config2
+-.L       foo/sym -> ../bar/baz/rsync
++.d..t.... ./
++cd+++++++ bar/
++cd+++++++ bar/baz/
++.f        bar/baz/rsync
++cd+++++++ foo/
++.f        foo/config1
++.f        foo/config2
++.L        foo/sym -> ../bar/baz/rsync
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 14 failed"
  
@@ -883,14 +884,14 @@ command before "make":
  $RSYNC -iplrtH --compare-dest="$lddir" "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
--.d..t.... ./
--cd+++++++ bar/
--cd+++++++ bar/baz/
--cd+++++++ foo/
-+.d..t..... ./
-+cd++++++++ bar/
-+cd++++++++ bar/baz/
-+cd++++++++ foo/
+-.d..t... ./
+-cd++++++ bar/
+-cd++++++ bar/baz/
+-cd++++++ foo/
++.d..t.... ./
++cd+++++++ bar/
++cd+++++++ bar/baz/
++cd+++++++ foo/
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 15 failed"
  
