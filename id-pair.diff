@@ -1,0 +1,303 @@
+This attempts to accomplish some per-file memory-savings by moving the
+uid+gid items out of the file-list (since their values are common to
+multiple file-list entries) and replacing them with an index to an
+array of structures.
+
+This only saves 4 bytes per file (not counting the overhead of the array).
+
+This probably needs a hashing algorithm to be added if the uid+gid list
+gets to be really large.
+
+--- orig/flist.c	2006-01-25 17:15:12
++++ flist.c	2006-01-25 17:38:28
+@@ -58,6 +58,7 @@ extern int protocol_version;
+ extern int sanitize_paths;
+ extern int orig_umask;
+ extern struct stats stats;
++extern struct id_pair *id_pairs;
+ extern struct file_list *the_file_list;
+ 
+ extern char curr_dir[MAXPATHLEN];
+@@ -362,14 +363,14 @@ static void send_file_entry(struct file_
+ 				flags |= XMIT_RDEV_MINOR_IS_SMALL;
+ 		}
+ 	}
+-	if (file->uid == uid)
++	if (id_pairs[file->id_ndx].uid == uid)
+ 		flags |= XMIT_SAME_UID;
+ 	else
+-		uid = file->uid;
+-	if (file->gid == gid)
++		uid = id_pairs[file->id_ndx].uid;
++	if (id_pairs[file->id_ndx].gid == gid)
+ 		flags |= XMIT_SAME_GID;
+ 	else
+-		gid = file->gid;
++		gid = id_pairs[file->id_ndx].gid;
+ 	if (file->modtime == modtime)
+ 		flags |= XMIT_SAME_TIME;
+ 	else
+@@ -622,8 +623,7 @@ static struct file_struct *receive_file_
+ 	file->modtime = modtime;
+ 	file->length = file_length;
+ 	file->mode = mode;
+-	file->uid = uid;
+-	file->gid = gid;
++	file->id_ndx = id_pair(uid, gid);
+ 
+ 	if (dirname_len) {
+ 		file->dirname = lastdir = bp;
+@@ -879,8 +879,7 @@ struct file_struct *make_file(char *fnam
+ 	file->modtime = st.st_mtime;
+ 	file->length = st.st_size;
+ 	file->mode = st.st_mode;
+-	file->uid = st.st_uid;
+-	file->gid = st.st_gid;
++	file->id_ndx = id_pair(st.st_uid, st.st_gid);
+ 
+ #ifdef SUPPORT_HARD_LINKS
+ 	if (flist && flist->hlink_pool) {
+@@ -947,8 +946,7 @@ struct file_struct *make_file(char *fnam
+ 			file->modtime = st2.st_mtime;
+ 			file->length = st2.st_size;
+ 			file->mode = st2.st_mode;
+-			file->uid = st2.st_uid;
+-			file->gid = st2.st_gid;
++			file->id_ndx = id_pair(st2.st_uid, st2.st_gid);
+ 			file->u.link = NULL;
+ 		} else
+ 			file->mode = save_mode;
+@@ -1392,7 +1390,7 @@ struct file_list *recv_file_list(int f)
+ 	clean_flist(flist, relative_paths, 1);
+ 
+ 	if (f >= 0) {
+-		recv_uid_list(f, flist);
++		recv_uid_list(f);
+ 
+ 		/* Recv the io_error flag */
+ 		if (lp_ignore_errors(module_id) || ignore_errors)
+@@ -1618,13 +1616,15 @@ static void output_flist(struct file_lis
+ 
+ 	for (i = 0; i < flist->count; i++) {
+ 		file = flist->files[i];
+-		if ((am_root || am_sender) && preserve_uid)
+-			sprintf(uidbuf, " uid=%ld", (long)file->uid);
+-		else
++		if ((am_root || am_sender) && preserve_uid) {
++			sprintf(uidbuf, " uid=%ld",
++				(long)id_pairs[file->id_ndx].uid);
++		} else
+ 			*uidbuf = '\0';
+-		if (preserve_gid && file->gid != GID_NONE)
+-			sprintf(gidbuf, " gid=%ld", (long)file->gid);
+-		else
++		if (preserve_gid && id_pairs[file->id_ndx].gid != GID_NONE) {
++			sprintf(gidbuf, " gid=%ld",
++				(long)id_pairs[file->id_ndx].gid);
++		} else
+ 			*gidbuf = '\0';
+ 		if (!am_sender)
+ 			sprintf(depthbuf, "%d", file->dir.depth);
+--- orig/generator.c	2006-01-25 17:15:12
++++ generator.c	2006-01-25 17:39:42
+@@ -89,6 +89,7 @@ extern dev_t filesystem_dev;
+ extern char *backup_dir;
+ extern char *backup_suffix;
+ extern int backup_suffix_len;
++extern struct id_pair *id_pairs;
+ extern struct file_list *the_file_list;
+ extern struct filter_list_struct server_filter_list;
+ 
+@@ -325,10 +326,12 @@ int unchanged_attrs(struct file_struct *
+ 	 && (st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS))
+ 		return 0;
+ 
+-	if (am_root && preserve_uid && st->st_uid != file->uid)
++	if (am_root && preserve_uid
++	 && st->st_uid != id_pairs[file->id_ndx].uid)
+ 		return 0;
+ 
+-	if (preserve_gid && file->gid != GID_NONE && st->st_gid != file->gid)
++	if (preserve_gid && id_pairs[file->id_ndx].gid != GID_NONE
++	 && st->st_gid != id_pairs[file->id_ndx].gid)
+ 		return 0;
+ 
+ 	return 1;
+@@ -341,6 +344,8 @@ void itemize(struct file_struct *file, i
+ 		int keep_time = !preserve_times ? 0
+ 		    : S_ISDIR(file->mode) ? !omit_dir_times
+ 		    : !S_ISLNK(file->mode);
++		uid_t uid = id_pairs[file->id_ndx].uid;
++		gid_t gid = id_pairs[file->id_ndx].gid;
+ 
+ 		if (S_ISREG(file->mode) && file->length != st->st_size)
+ 			iflags |= ITEM_REPORT_SIZE;
+@@ -351,10 +356,10 @@ void itemize(struct file_struct *file, i
+ 		if (preserve_perms
+ 		 && (file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
+ 			iflags |= ITEM_REPORT_PERMS;
+-		if (preserve_uid && am_root && file->uid != st->st_uid)
++		if (preserve_uid && am_root && uid != st->st_uid)
+ 			iflags |= ITEM_REPORT_OWNER;
+-		if (preserve_gid && file->gid != GID_NONE
+-		    && st->st_gid != file->gid)
++		if (preserve_gid && gid != GID_NONE
++		    && st->st_gid != gid)
+ 			iflags |= ITEM_REPORT_GROUP;
+ 	} else
+ 		iflags |= ITEM_IS_NEW;
+--- orig/rsync.c	2006-01-25 17:15:12
++++ rsync.c	2006-01-25 17:26:06
+@@ -38,6 +38,7 @@ extern int inplace;
+ extern int keep_dirlinks;
+ extern int make_backups;
+ extern struct stats stats;
++extern struct id_pair *id_pairs;
+ 
+ 
+ /*
+@@ -56,6 +57,8 @@ int set_perms(char *fname,struct file_st
+ 	int updated = 0;
+ 	STRUCT_STAT st2;
+ 	int change_uid, change_gid;
++	uid_t uid;
++	gid_t gid;
+ 
+ 	if (!st) {
+ 		if (dry_run)
+@@ -82,9 +85,11 @@ int set_perms(char *fname,struct file_st
+ 			updated = 1;
+ 	}
+ 
+-	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
+-	change_gid = preserve_gid && file->gid != GID_NONE
+-		&& st->st_gid != file->gid;
++	uid = id_pairs[file->id_ndx].uid;
++	gid = id_pairs[file->id_ndx].gid;
++	change_uid = am_root && preserve_uid && st->st_uid != uid;
++	change_gid = preserve_gid && gid != GID_NONE
++		&& st->st_gid != gid;
+ #if !defined HAVE_LCHOWN && !defined CHOWN_MODIFIES_SYMLINK
+ 	if (S_ISLNK(st->st_mode))
+ 		;
+@@ -96,18 +101,18 @@ int set_perms(char *fname,struct file_st
+ 				rprintf(FINFO,
+ 					"set uid of %s from %ld to %ld\n",
+ 					fname,
+-					(long)st->st_uid, (long)file->uid);
++					(long)st->st_uid, (long)uid);
+ 			}
+ 			if (change_gid) {
+ 				rprintf(FINFO,
+ 					"set gid of %s from %ld to %ld\n",
+ 					fname,
+-					(long)st->st_gid, (long)file->gid);
++					(long)st->st_gid, (long)gid);
+ 			}
+ 		}
+ 		if (do_lchown(fname,
+-		    change_uid ? file->uid : st->st_uid,
+-		    change_gid ? file->gid : st->st_gid) != 0) {
++		    change_uid ? uid : st->st_uid,
++		    change_gid ? gid : st->st_gid) != 0) {
+ 			/* shouldn't have attempted to change uid or gid
+ 			 * unless have the privilege */
+ 			rsyserr(FERROR, errno, "%s %s failed",
+--- orig/rsync.h	2006-01-25 17:34:58
++++ rsync.h	2006-01-25 17:15:44
+@@ -493,6 +493,11 @@ struct hlink {
+ 	int hlindex;
+ };
+ 
++struct id_pair {
++	uid_t uid;
++	gid_t gid;
++};
++
+ #define F_DEV	link_u.idev->dev
+ #define F_INODE	link_u.idev->inode
+ 
+@@ -517,8 +522,7 @@ struct file_struct {
+ 		struct hlink *links;
+ 	} link_u;
+ 	time_t modtime;
+-	uid_t uid;
+-	gid_t gid;
++	int id_ndx;
+ 	mode_t mode;
+ 	uchar flags;	/* this item MUST remain last */
+ };
+--- orig/uidlist.c	2006-01-25 17:15:13
++++ uidlist.c	2006-01-25 17:31:20
+@@ -37,6 +37,8 @@ extern int preserve_gid;
+ extern int numeric_ids;
+ extern int am_root;
+ 
++struct id_pair *id_pairs;
++
+ struct idlist {
+ 	struct idlist *next;
+ 	int id, id2;
+@@ -46,6 +48,8 @@ struct idlist {
+ static struct idlist *uidlist;
+ static struct idlist *gidlist;
+ 
++static int pair_cnt = 0, pair_alloc = 0;
++
+ static struct idlist *add_to_list(struct idlist **root, int id, char *name,
+ 				  int id2)
+ {
+@@ -307,7 +311,7 @@ void send_uid_list(int f)
+ 
+ /* recv a complete uid/gid mapping from the peer and map the uid/gid
+  * in the file list to local names */
+-void recv_uid_list(int f, struct file_list *flist)
++void recv_uid_list(int f)
+ {
+ 	int id, i;
+ 	char *name;
+@@ -338,11 +342,40 @@ void recv_uid_list(int f, struct file_li
+ 
+ 	/* Now convert all the uids/gids from sender values to our values. */
+ 	if (am_root && preserve_uid && !numeric_ids) {
+-		for (i = 0; i < flist->count; i++)
+-			flist->files[i]->uid = match_uid(flist->files[i]->uid);
++		for (i = 0; i < pair_cnt; i++)
++			id_pairs[i].uid = match_uid(id_pairs[i].uid);
+ 	}
+ 	if (preserve_gid && (!am_root || !numeric_ids)) {
+-		for (i = 0; i < flist->count; i++)
+-			flist->files[i]->gid = match_gid(flist->files[i]->gid);
++		for (i = 0; i < pair_cnt; i++)
++			id_pairs[i].gid = match_gid(id_pairs[i].gid);
+ 	}
+ }
++
++int id_pair(uid_t uid, gid_t gid)
++{
++	static int j = 0;
++
++	if (pair_cnt) {
++		int start = j;
++		/* We start our search where we left off because
++		 * the IDs usually come in clumps. */
++		do {
++			if (uid == id_pairs[j].uid && gid == id_pairs[j].gid)
++				return j;
++			if (++j == pair_cnt)
++				j = 0;
++		} while (j != start);
++	}
++
++	if (pair_cnt == pair_alloc) {
++		pair_alloc += 128;
++		id_pairs = realloc_array(id_pairs, struct id_pair,
++					  pair_alloc);
++	}
++
++	j = pair_cnt++;
++	id_pairs[j].uid = uid;
++	id_pairs[j].gid = gid;
++
++	return j;
++}
