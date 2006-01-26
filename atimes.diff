@@ -4,8 +4,8 @@ command before "make":
     make proto
 
 
---- orig/flist.c	2006-01-24 19:03:06
-+++ flist.c	2006-01-24 22:40:04
+--- orig/flist.c	2006-01-25 17:15:12
++++ flist.c	2006-01-25 17:46:37
 @@ -50,6 +50,7 @@ extern int preserve_perms;
  extern int preserve_devices;
  extern int preserve_uid;
@@ -124,16 +124,16 @@ command before "make":
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -623,6 +644,8 @@ static struct file_struct *receive_file_
- 	file->length = file_length;
+@@ -624,6 +645,8 @@ static struct file_struct *receive_file_
  	file->mode = mode;
- 	file->ids = id_pair(uid, gid);
+ 	file->uid = uid;
+ 	file->gid = gid;
 +	if (preserve_atimes)
 +		file->atime = atime;
  
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
-@@ -648,12 +671,12 @@ static struct file_struct *receive_file_
+@@ -649,12 +672,12 @@ static struct file_struct *receive_file_
  			    && lastname[del_hier_name_len-1] == '.'
  			    && lastname[del_hier_name_len-2] == '/')
  				del_hier_name_len -= 2;
@@ -148,7 +148,7 @@ command before "make":
  			else
  				in_del_hier = 0;
  		}
-@@ -874,11 +897,13 @@ struct file_struct *make_file(char *fnam
+@@ -875,12 +898,14 @@ struct file_struct *make_file(char *fnam
  	memset(bp, 0, file_struct_len);
  	bp += file_struct_len;
  
@@ -157,13 +157,14 @@ command before "make":
  	file->modtime = st.st_mtime;
  	file->length = st.st_size;
  	file->mode = st.st_mode;
- 	file->ids = id_pair(st.st_uid, st.st_gid);
+ 	file->uid = st.st_uid;
+ 	file->gid = st.st_gid;
 +	if (preserve_atimes)
 +		file->atime = st.st_atime;
  
  #ifdef SUPPORT_HARD_LINKS
  	if (flist && flist->hlink_pool) {
-@@ -989,7 +1014,7 @@ static void send_if_directory(int f, str
+@@ -992,7 +1017,7 @@ static void send_if_directory(int f, str
  	char is_dot_dir = fbuf[ol-1] == '.' && (ol == 1 || fbuf[ol-2] == '/');
  
  	if (S_ISDIR(file->mode)
@@ -172,7 +173,7 @@ command before "make":
  		void *save_filters;
  		unsigned int len = strlen(fbuf);
  		if (len > 1 && fbuf[len-1] == '/')
-@@ -1567,8 +1592,9 @@ static void clean_flist(struct file_list
+@@ -1570,8 +1595,9 @@ static void clean_flist(struct file_list
  			}
  			/* Make sure that if we unduplicate '.', that we don't
  			 * lose track of a user-specified top directory. */
@@ -184,7 +185,7 @@ command before "make":
  
  			clear_file(drop, flist);
  
-@@ -1630,7 +1656,7 @@ static void output_flist(struct file_lis
+@@ -1633,7 +1659,7 @@ static void output_flist(struct file_lis
  			file->dirname ? file->dirname : "",
  			file->dirname ? "/" : "", NS(file->basename),
  			S_ISDIR(file->mode) ? "/" : "", (int)file->mode,
@@ -193,8 +194,8 @@ command before "make":
  	}
  }
  
---- orig/generator.c	2006-01-24 19:03:07
-+++ generator.c	2006-01-24 22:29:56
+--- orig/generator.c	2006-01-25 17:15:12
++++ generator.c	2006-01-26 09:15:22
 @@ -43,6 +43,7 @@ extern int preserve_perms;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -299,7 +300,16 @@ command before "make":
  				continue;
  			best_match = j;
  			match_level = 3;
-@@ -894,7 +899,7 @@ static void recv_generator(char *fname, 
+@@ -659,6 +664,8 @@ static int try_dests_reg(struct file_str
+ 					  itemizing && verbose > 1,
+ 					  code) < 0)
+ 				goto try_a_copy;
++			if (preserve_atimes)
++				set_perms(fname, file, stp, 0);
+ 			if (preserve_hard_links && file->link_u.links)
+ 				hard_link_cluster(file, ndx, itemizing, code);
+ 		} else if (itemizing)
+@@ -894,7 +901,7 @@ static void recv_generator(char *fname, 
  		    && verbose && code && f_out != -1)
  			rprintf(code, "%s/\n", fname);
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
@@ -308,7 +318,7 @@ command before "make":
  			delete_in_dir(the_file_list, fname, file, &st);
  		return;
  	}
-@@ -1071,7 +1076,7 @@ static void recv_generator(char *fname, 
+@@ -1071,7 +1078,7 @@ static void recv_generator(char *fname, 
  	}
  
  	if (update_only && statret == 0
@@ -317,7 +327,7 @@ command before "make":
  		if (verbose > 1)
  			rprintf(FINFO, "%s is newer\n", fname);
  		return;
-@@ -1174,7 +1179,7 @@ static void recv_generator(char *fname, 
+@@ -1174,7 +1181,7 @@ static void recv_generator(char *fname, 
  	if (fuzzy_basis) {
  		int j = flist_find(fuzzy_dirlist, file);
  		if (j >= 0) /* don't use changing file as future fuzzy basis */
@@ -445,8 +455,8 @@ command before "make":
  	if (omit_dir_times == 2 && am_sender)
  		argstr[x++] = 'O';
  	if (preserve_perms)
---- orig/rsync.c	2006-01-24 19:03:07
-+++ rsync.c	2005-07-28 00:17:37
+--- orig/rsync.c	2006-01-25 17:15:12
++++ rsync.c	2006-01-26 09:19:43
 @@ -27,6 +27,7 @@ extern int dry_run;
  extern int daemon_log_format_has_i;
  extern int preserve_times;
@@ -463,8 +473,12 @@ command before "make":
  
  	if (!st) {
  		if (dry_run)
-@@ -70,16 +72,29 @@ int set_perms(char *fname,struct file_st
+@@ -68,18 +70,33 @@ int set_perms(char *fname,struct file_st
+ 		st = &st2;
+ 	}
  
++	/* This code must be the first update in the function due to
++	 * how it uses the "updated" variable. */
  	if (!preserve_times || (S_ISDIR(st->st_mode) && omit_dir_times))
  		flags |= PERMS_SKIP_MTIME;
 +	if (!preserve_atimes || S_ISDIR(st->st_mode))
@@ -496,8 +510,8 @@ command before "make":
 +			updated = 0;
  	}
  
- 	change_uid = am_root && preserve_uid && st->st_uid != file->ids->uid;
---- orig/rsync.h	2006-01-24 19:03:07
+ 	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
+--- orig/rsync.h	2006-01-25 17:34:58
 +++ rsync.h	2006-01-24 22:38:08
 @@ -54,6 +54,7 @@
  #define XMIT_HAS_IDEV_DATA (1<<9)
@@ -523,9 +537,9 @@ command before "make":
  #define ITEM_REPORT_CHECKSUM (1<<1)
  #define ITEM_REPORT_SIZE (1<<2)
  #define ITEM_REPORT_TIME (1<<3)
-@@ -524,9 +527,12 @@ struct file_struct {
- 	struct id_pair *ids;
- 	time_t modtime;
+@@ -520,9 +523,12 @@ struct file_struct {
+ 	uid_t uid;
+ 	gid_t gid;
  	mode_t mode;
 -	uchar flags;	/* this item MUST remain last */
 +	time_t atime;   /* this MUST be second to last */
