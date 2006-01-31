@@ -28,7 +28,7 @@ After applying this patch, run these commands for a successful build:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- orig/backup.c	2004-10-06 00:13:09
 +++ backup.c	2005-03-03 01:20:46
-@@ -135,6 +135,7 @@ static int make_bak_dir(char *fullpath)
+@@ -136,6 +136,7 @@ static int make_bak_dir(char *fullpath)
  				do_lchown(fullpath, st.st_uid, st.st_gid);
  				do_chmod(fullpath, st.st_mode);
  				(void)DUP_ACL(end, fullpath, st.st_mode);
@@ -36,17 +36,17 @@ After applying this patch, run these commands for a successful build:
  			}
  		}
  		*p = '/';
-@@ -188,6 +189,7 @@ static int keep_backup(char *fname)
+@@ -190,6 +191,7 @@ static int keep_backup(char *fname)
  		return 0;
  
  	PUSH_KEEP_BACKUP_ACL(file, fname, buf);
 +	PUSH_KEEP_BACKUP_XATTR(file, fname, buf);
  
  	/* Check to see if this is a device file, or link */
- 	if (IS_DEVICE(file->mode) && am_root && preserve_devices) {
-@@ -264,6 +266,7 @@ static int keep_backup(char *fname)
+ 	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
+@@ -267,6 +269,7 @@ static int keep_backup(char *fname)
  	}
- 	set_perms(buf, file, NULL, 0);
+ 	set_file_attrs(buf, file, NULL, 0);
  	CLEANUP_KEEP_BACKUP_ACL();
 +	CLEANUP_KEEP_BACKUP_XATTR();
  	free(file);
@@ -85,9 +85,9 @@ After applying this patch, run these commands for a successful build:
  AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
  AC_OUTPUT
  
---- orig/flist.c	2006-01-21 08:04:42
+--- orig/flist.c	2006-01-31 02:37:33
 +++ flist.c	2005-10-16 23:03:04
-@@ -972,6 +972,8 @@ static struct file_struct *send_file_nam
+@@ -969,6 +969,8 @@ static struct file_struct *send_file_nam
  		return NULL;
  	if (MAKE_ACL(file, fname) < 0)
  		return NULL;
@@ -96,7 +96,7 @@ After applying this patch, run these commands for a successful build:
  
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
-@@ -984,9 +986,11 @@ static struct file_struct *send_file_nam
+@@ -981,9 +983,11 @@ static struct file_struct *send_file_nam
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f);
  		SEND_ACL(file, f);
@@ -108,7 +108,7 @@ After applying this patch, run these commands for a successful build:
  	}
  	return file;
  }
-@@ -1378,6 +1382,7 @@ struct file_list *recv_file_list(int f)
+@@ -1373,6 +1377,7 @@ struct file_list *recv_file_list(int f)
  		file = receive_file_entry(flist, flags, f);
  
  		RECEIVE_ACL(file, f);
@@ -116,17 +116,17 @@ After applying this patch, run these commands for a successful build:
  
  		if (S_ISREG(file->mode))
  			stats.total_size += file->length;
-@@ -1402,6 +1407,7 @@ struct file_list *recv_file_list(int f)
+@@ -1397,6 +1402,7 @@ struct file_list *recv_file_list(int f)
  	clean_flist(flist, relative_paths, 1);
  
  	SORT_FILE_ACL_INDEX_LISTS();
 +	SORT_FILE_XATTR_INDEX_LISTS();
  
  	if (f >= 0) {
- 		/* Now send the uid/gid list. This was introduced in
---- orig/generator.c	2006-01-14 08:17:25
+ 		recv_uid_list(f, flist);
+--- orig/generator.c	2006-01-31 02:35:44
 +++ generator.c	2005-05-12 23:21:08
-@@ -897,6 +897,10 @@ static void recv_generator(char *fname, 
+@@ -899,6 +899,10 @@ static void recv_generator(char *fname, 
  		if (f_out == -1)
  			SET_ACL(fname, file);
  #endif
@@ -193,17 +193,17 @@ After applying this patch, run these commands for a successful build:
 +#else
 +
 +#endif /* No xattrs */
---- orig/options.c	2005-08-27 21:15:29
-+++ options.c	2005-08-27 21:29:40
+--- orig/options.c	2006-01-31 03:11:18
++++ options.c	2006-01-31 03:16:24
 @@ -45,6 +45,7 @@ int copy_links = 0;
  int preserve_links = 0;
  int preserve_hard_links = 0;
  int preserve_acls = 0;
 +int preserve_xattrs = 0;
  int preserve_perms = 0;
+ int preserve_executability = 0;
  int preserve_devices = 0;
- int preserve_uid = 0;
-@@ -191,6 +192,7 @@ static void print_rsync_version(enum log
+@@ -195,6 +196,7 @@ static void print_rsync_version(enum log
  	char const *have_inplace = "no ";
  	char const *hardlinks = "no ";
  	char const *acls = "no ";
@@ -211,7 +211,7 @@ After applying this patch, run these commands for a successful build:
  	char const *links = "no ";
  	char const *ipv6 = "no ";
  	STRUCT_STAT *dumstat;
-@@ -210,7 +212,9 @@ static void print_rsync_version(enum log
+@@ -214,7 +216,9 @@ static void print_rsync_version(enum log
  #ifdef SUPPORT_ACLS
  	acls = "";
  #endif
@@ -222,7 +222,7 @@ After applying this patch, run these commands for a successful build:
  #ifdef SUPPORT_LINKS
  	links = "";
  #endif
-@@ -224,9 +228,9 @@ static void print_rsync_version(enum log
+@@ -228,9 +232,9 @@ static void print_rsync_version(enum log
  	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
  	rprintf(f, "<http://rsync.samba.org/>\n");
  	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
@@ -234,15 +234,15 @@ After applying this patch, run these commands for a successful build:
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -295,6 +299,7 @@ void usage(enum logcode F)
-   rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
+@@ -300,6 +304,7 @@ void usage(enum logcode F)
    rprintf(F," -p, --perms                 preserve permissions\n");
+   rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F," -A, --acls                  preserve ACLs (implies --perms)\n");
 +  rprintf(F," -X, --xattrs                preserve extended attributes (implies --perms)\n");
-   rprintf(F," -o, --owner                 preserve owner (root only)\n");
+   rprintf(F,"     --chmod=CHMOD           change destination permissions\n");
+   rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
-   rprintf(F," -D, --devices               preserve devices (root only)\n");
-@@ -407,6 +412,9 @@ static struct poptOption long_options[] 
+@@ -419,6 +424,9 @@ static struct poptOption long_options[] 
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
    {"no-A",             0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
@@ -252,7 +252,7 @@ After applying this patch, run these commands for a successful build:
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1054,6 +1062,17 @@ int parse_arguments(int *argc, const cha
+@@ -1084,6 +1092,17 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif /* SUPPORT_ACLS */
  
@@ -270,7 +270,7 @@ After applying this patch, run these commands for a successful build:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1490,6 +1509,8 @@ void server_options(char **args,int *arg
+@@ -1527,6 +1546,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'H';
  	if (preserve_acls)
  		argstr[x++] = 'A';
@@ -279,9 +279,9 @@ After applying this patch, run these commands for a successful build:
  	if (preserve_uid)
  		argstr[x++] = 'o';
  	if (preserve_gid)
---- orig/rsync.c	2004-07-03 20:11:58
+--- orig/rsync.c	2006-01-31 02:33:51
 +++ rsync.c	2005-10-16 23:19:27
-@@ -139,12 +139,15 @@ int set_perms(char *fname,struct file_st
+@@ -163,12 +163,15 @@ int set_file_attrs(char *fname, struct f
  	}
  #endif
  
@@ -299,10 +299,10 @@ After applying this patch, run these commands for a successful build:
 +			updated = 1;
  	}
  
- 	if (verbose > 1 && flags & PERMS_REPORT) {
---- orig/rsync.h	2005-07-29 02:25:55
+ 	if (verbose > 1 && flags & ATTRS_REPORT) {
+--- orig/rsync.h	2006-01-23 21:24:53
 +++ rsync.h	2005-10-16 23:19:44
-@@ -685,6 +685,38 @@ struct stats {
+@@ -688,6 +688,38 @@ struct chmod_mode_struct;
  #endif /* SUPPORT_ACLS */
  #include "smb_acls.h"
  
@@ -341,28 +341,28 @@ After applying this patch, run these commands for a successful build:
  #include "proto.h"
  
  /* We have replacement versions of these if they're missing. */
---- orig/rsync.yo	2004-07-03 20:11:58
-+++ rsync.yo	2005-03-03 01:33:53
-@@ -317,6 +317,7 @@ to the detailed description below for a 
-  -K, --keep-dirlinks         treat symlinked dir on receiver as dir
+--- orig/rsync.yo	2006-01-31 03:14:05
++++ rsync.yo	2006-01-31 03:16:46
+@@ -318,6 +318,7 @@ to the detailed description below for a 
   -p, --perms                 preserve permissions
-  -A, --acls                  preserve ACLs (implies -p) [local option]
-+ -X, --xattrs                preserve extended attributes (implies -p) [local option]
-  -o, --owner                 preserve owner (root only)
+  -E, --executability         preserve executability
+  -A, --acls                  preserve ACLs (implies -p) [non-standard]
++ -X, --xattrs                preserve extended attrs (implies -p) [n.s.]
+      --chmod=CHMOD           change destination permissions
+  -o, --owner                 preserve owner (super-user only)
   -g, --group                 preserve group
-  -D, --devices               preserve devices (root only)
-@@ -687,6 +688,11 @@ ACLs to be the same as the local ACLs.  
- remote machine's rsync supports this option also. This is a non-standard
- option.
+@@ -727,6 +728,11 @@ dit(bf(-A, --acls)) This option causes r
+ ACLs to be the same as the source ACLs.  This nonstandard option only
+ works if the remote rsync also supports it.  bf(--acls) implies bf(--perms).
  
 +dit(bf(-X, --xattrs)) This option causes rsync to update the remote
 +extended attributes to be the same as the local ones.  This will work
 +only if the remote machine's rsync supports this option also. This is
 +a non-standard option.
 +
- dit(bf(-o, --owner)) This option causes rsync to set the owner of the
- destination file to be the same as the source file.  On most systems,
- only the super-user can set file ownership.  By default, the preservation
+ dit(bf(--chmod)) This option tells rsync to apply one or more
+ comma-separated "chmod" strings to the permission of the files in the
+ transfer.  The resulting value is treated as though it was the permissions
 --- orig/xattr.c	2005-10-16 23:25:12
 +++ xattr.c	2005-10-16 23:25:12
 @@ -0,0 +1,540 @@

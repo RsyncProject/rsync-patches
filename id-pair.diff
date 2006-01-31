@@ -8,20 +8,20 @@ This only saves 4 bytes per file (not counting the overhead of the array).
 This probably needs a hashing algorithm to be added if the uid+gid list
 gets to be really large.
 
---- orig/flist.c	2006-01-25 17:15:12
-+++ flist.c	2006-01-25 17:38:28
-@@ -58,6 +58,7 @@ extern int protocol_version;
+--- orig/flist.c	2006-01-31 02:30:18
++++ flist.c	2006-01-26 10:56:31
+@@ -60,6 +60,7 @@ extern int protocol_version;
  extern int sanitize_paths;
- extern int orig_umask;
+ extern const char *io_write_phase;
  extern struct stats stats;
 +extern struct id_pair *id_pairs;
  extern struct file_list *the_file_list;
  
  extern char curr_dir[MAXPATHLEN];
-@@ -362,14 +363,14 @@ static void send_file_entry(struct file_
- 				flags |= XMIT_RDEV_MINOR_IS_SMALL;
+@@ -363,14 +364,14 @@ static void send_file_entry(struct file_
  		}
- 	}
+ 	} else if (protocol_version < 28)
+ 		rdev = makedev(0, 0);
 -	if (file->uid == uid)
 +	if (id_pairs[file->id_ndx].uid == uid)
  		flags |= XMIT_SAME_UID;
@@ -37,7 +37,7 @@ gets to be really large.
  	if (file->modtime == modtime)
  		flags |= XMIT_SAME_TIME;
  	else
-@@ -622,8 +623,7 @@ static struct file_struct *receive_file_
+@@ -623,8 +624,7 @@ static struct file_struct *receive_file_
  	file->modtime = modtime;
  	file->length = file_length;
  	file->mode = mode;
@@ -47,7 +47,7 @@ gets to be really large.
  
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
-@@ -879,8 +879,7 @@ struct file_struct *make_file(char *fnam
+@@ -875,8 +875,7 @@ struct file_struct *make_file(char *fnam
  	file->modtime = st.st_mtime;
  	file->length = st.st_size;
  	file->mode = st.st_mode;
@@ -57,7 +57,7 @@ gets to be really large.
  
  #ifdef SUPPORT_HARD_LINKS
  	if (flist && flist->hlink_pool) {
-@@ -947,8 +946,7 @@ struct file_struct *make_file(char *fnam
+@@ -944,8 +943,7 @@ struct file_struct *make_file(char *fnam
  			file->modtime = st2.st_mtime;
  			file->length = st2.st_size;
  			file->mode = st2.st_mode;
@@ -67,7 +67,7 @@ gets to be really large.
  			file->u.link = NULL;
  		} else
  			file->mode = save_mode;
-@@ -1392,7 +1390,7 @@ struct file_list *recv_file_list(int f)
+@@ -1389,7 +1387,7 @@ struct file_list *recv_file_list(int f)
  	clean_flist(flist, relative_paths, 1);
  
  	if (f >= 0) {
@@ -76,7 +76,7 @@ gets to be really large.
  
  		/* Recv the io_error flag */
  		if (lp_ignore_errors(module_id) || ignore_errors)
-@@ -1618,13 +1616,15 @@ static void output_flist(struct file_lis
+@@ -1705,13 +1703,15 @@ static void output_flist(struct file_lis
  
  	for (i = 0; i < flist->count; i++) {
  		file = flist->files[i];
@@ -98,9 +98,9 @@ gets to be really large.
  			*gidbuf = '\0';
  		if (!am_sender)
  			sprintf(depthbuf, "%d", file->dir.depth);
---- orig/generator.c	2006-01-25 17:15:12
+--- orig/generator.c	2006-01-31 02:30:18
 +++ generator.c	2006-01-25 17:39:42
-@@ -89,6 +89,7 @@ extern dev_t filesystem_dev;
+@@ -91,6 +91,7 @@ extern dev_t filesystem_dev;
  extern char *backup_dir;
  extern char *backup_suffix;
  extern int backup_suffix_len;
@@ -108,7 +108,7 @@ gets to be really large.
  extern struct file_list *the_file_list;
  extern struct filter_list_struct server_filter_list;
  
-@@ -325,10 +326,12 @@ int unchanged_attrs(struct file_struct *
+@@ -326,10 +327,12 @@ int unchanged_attrs(struct file_struct *
  	 && (st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS))
  		return 0;
  
@@ -123,7 +123,7 @@ gets to be really large.
  		return 0;
  
  	return 1;
-@@ -341,6 +344,8 @@ void itemize(struct file_struct *file, i
+@@ -342,6 +345,8 @@ void itemize(struct file_struct *file, i
  		int keep_time = !preserve_times ? 0
  		    : S_ISDIR(file->mode) ? !omit_dir_times
  		    : !S_ISLNK(file->mode);
@@ -132,7 +132,7 @@ gets to be really large.
  
  		if (S_ISREG(file->mode) && file->length != st->st_size)
  			iflags |= ITEM_REPORT_SIZE;
-@@ -351,10 +356,10 @@ void itemize(struct file_struct *file, i
+@@ -352,10 +357,10 @@ void itemize(struct file_struct *file, i
  		if (preserve_perms
  		 && (file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
@@ -146,9 +146,9 @@ gets to be really large.
  			iflags |= ITEM_REPORT_GROUP;
  	} else
  		iflags |= ITEM_IS_NEW;
---- orig/rsync.c	2006-01-25 17:15:12
+--- orig/rsync.c	2006-01-31 02:30:18
 +++ rsync.c	2006-01-25 17:26:06
-@@ -38,6 +38,7 @@ extern int inplace;
+@@ -40,6 +40,7 @@ extern int inplace;
  extern int keep_dirlinks;
  extern int make_backups;
  extern struct stats stats;
@@ -156,7 +156,7 @@ gets to be really large.
  
  
  /*
-@@ -56,6 +57,8 @@ int set_perms(char *fname,struct file_st
+@@ -78,6 +79,8 @@ int set_file_attrs(char *fname, struct f
  	int updated = 0;
  	STRUCT_STAT st2;
  	int change_uid, change_gid;
@@ -165,7 +165,7 @@ gets to be really large.
  
  	if (!st) {
  		if (dry_run)
-@@ -82,9 +85,11 @@ int set_perms(char *fname,struct file_st
+@@ -104,9 +107,11 @@ int set_file_attrs(char *fname, struct f
  			updated = 1;
  	}
  
@@ -180,7 +180,7 @@ gets to be really large.
  #if !defined HAVE_LCHOWN && !defined CHOWN_MODIFIES_SYMLINK
  	if (S_ISLNK(st->st_mode))
  		;
-@@ -96,18 +101,18 @@ int set_perms(char *fname,struct file_st
+@@ -118,18 +123,18 @@ int set_file_attrs(char *fname, struct f
  				rprintf(FINFO,
  					"set uid of %s from %ld to %ld\n",
  					fname,
@@ -203,7 +203,7 @@ gets to be really large.
  			/* shouldn't have attempted to change uid or gid
  			 * unless have the privilege */
  			rsyserr(FERROR, errno, "%s %s failed",
---- orig/rsync.h	2006-01-25 17:34:58
+--- orig/rsync.h	2006-01-30 20:39:09
 +++ rsync.h	2006-01-25 17:15:44
 @@ -493,6 +493,11 @@ struct hlink {
  	int hlindex;

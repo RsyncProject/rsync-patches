@@ -365,9 +365,9 @@ the file's name.
 +}
 +
 +#endif
---- orig/options.c	2006-01-21 21:02:30
-+++ options.c	2006-01-21 21:12:04
-@@ -141,6 +141,7 @@ char *backup_suffix = NULL;
+--- orig/options.c	2006-01-31 03:11:30
++++ options.c	2006-01-26 10:57:21
+@@ -144,6 +144,7 @@ char *backup_suffix = NULL;
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
@@ -375,7 +375,7 @@ the file's name.
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *log_format = NULL;
-@@ -328,6 +329,7 @@ void usage(enum logcode F)
+@@ -337,6 +338,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -383,15 +383,16 @@ the file's name.
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
-@@ -373,6 +375,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -383,7 +385,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
-+      OPT_LINK_BY_HASH,
+-      OPT_NO_D,
++      OPT_NO_D, OPT_LINK_BY_HASH,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -461,6 +464,7 @@ static struct poptOption long_options[] 
+@@ -478,6 +480,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -399,7 +400,7 @@ the file's name.
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
-@@ -1027,6 +1031,21 @@ int parse_arguments(int *argc, const cha
+@@ -1057,6 +1060,21 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
@@ -421,7 +422,7 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1660,6 +1679,11 @@ void server_options(char **args,int *arg
+@@ -1706,6 +1724,11 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -433,7 +434,7 @@ the file's name.
  	if (files_from && (!am_sender || filesfrom_host)) {
  		if (filesfrom_host) {
  			args[ac++] = "--files-from";
---- orig/receiver.c	2006-01-14 20:27:09
+--- orig/receiver.c	2006-01-31 02:30:18
 +++ receiver.c	2005-01-15 21:29:13
 @@ -54,6 +54,7 @@ extern int delay_updates;
  extern struct stats stats;
@@ -518,9 +519,9 @@ the file's name.
  
  		if (!log_before_transfer)
  			log_item(file, &initial_stats, iflags, NULL);
---- orig/rsync.c	2006-01-14 08:14:31
-+++ rsync.c	2006-01-14 08:26:01
-@@ -38,6 +38,7 @@ extern int inplace;
+--- orig/rsync.c	2006-01-31 02:30:18
++++ rsync.c	2006-01-30 07:19:44
+@@ -40,6 +40,7 @@ extern int inplace;
  extern int keep_dirlinks;
  extern int make_backups;
  extern struct stats stats;
@@ -528,22 +529,26 @@ the file's name.
  
  
  /*
-@@ -188,7 +189,12 @@ void finish_transfer(char *fname, char *
+@@ -213,8 +214,15 @@ void finish_transfer(char *fname, char *
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
--	ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
+-	ret = robust_rename(fnametmp, fname, partialptr,
+-			    file->mode & INITACCESSPERMS);
 +#if HAVE_LINK
 +	if (link_by_hash_dir)
 +		ret = link_by_hash(fnametmp, fname, file);
 +	else
 +#endif
-+		ret = robust_rename(fnametmp, fname, file->mode & INITACCESSPERMS);
++	{
++		ret = robust_rename(fnametmp, fname, partialptr,
++				    file->mode & INITACCESSPERMS);
++	}
  	if (ret < 0) {
  		rsyserr(FERROR, errno, "%s %s -> \"%s\"",
  			ret == -2 ? "copy" : "rename",
---- orig/rsync.h	2006-01-21 21:02:30
-+++ rsync.h	2004-07-03 20:20:15
+--- orig/rsync.h	2006-01-30 20:39:09
++++ rsync.h	2006-01-30 20:42:44
 @@ -640,6 +640,14 @@ struct stats {
  	int current_file_index;
  };
@@ -556,12 +561,12 @@ the file's name.
 +	uint32 nlink;
 +};
 +
+ struct chmod_mode_struct;
  
  #include "byteorder.h"
- #include "lib/mdfour.h"
---- orig/rsync.yo	2006-01-21 21:02:31
+--- orig/rsync.yo	2006-01-31 03:05:44
 +++ rsync.yo	2005-02-13 06:58:47
-@@ -356,6 +356,7 @@ to the detailed description below for a 
+@@ -361,6 +361,7 @@ to the detailed description below for a 
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged

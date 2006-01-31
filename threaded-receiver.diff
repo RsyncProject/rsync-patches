@@ -13,6 +13,8 @@ this code works fine using the GNU pth library without any code changes if
 you configured it with --enable-syscall-soft --enable-pthread (you may need
 to twiddle the Makefile options if you didn't install the library, though).
 
+NOTE: we still need to duplicate the partial_fname static in util.c!
+
 If you try this out, please send some email to wayned@samba.org or the rsync
 mailing list with your results, build changes, bug reports, etc.  Thanks!
 
@@ -29,7 +31,7 @@ Be sure to run "make proto" before running "make".
  CC=@CC@
  CFLAGS=@CFLAGS@
  CPPFLAGS=@CPPFLAGS@
---- orig/cleanup.c	2006-01-14 08:14:29
+--- orig/cleanup.c	2006-01-30 07:18:27
 +++ cleanup.c	2005-12-08 23:17:08
 @@ -94,9 +94,6 @@ void _exit_cleanup(int code, const char 
  	}
@@ -60,9 +62,9 @@ Be sure to run "make proto" before running "make".
  #define RERR_SIGNAL     20      /* status returned when sent SIGINT, SIGTERM, SIGHUP */
  #define RERR_WAITCHILD  21      /* some error returned by waitpid() */
  #define RERR_MALLOC     22      /* error allocating core memory buffers */
---- orig/generator.c	2006-01-14 20:27:09
+--- orig/generator.c	2006-01-31 02:30:18
 +++ generator.c	2005-12-08 23:17:08
-@@ -65,7 +65,6 @@ extern OFF_T min_size;
+@@ -67,7 +67,6 @@ extern OFF_T min_size;
  extern int io_error;
  extern int allowed_lull;
  extern int sock_f_out;
@@ -70,7 +72,7 @@ Be sure to run "make proto" before running "make".
  extern int protocol_version;
  extern int fuzzy_basis;
  extern int always_checksum;
-@@ -96,6 +95,11 @@ static int deletion_count = 0; /* used t
+@@ -98,6 +97,11 @@ static int deletion_count = 0; /* used t
  static int can_link_symlinks = 1; /* start out optimistic */
  static int can_link_devices = 1;
  
@@ -82,7 +84,7 @@ Be sure to run "make proto" before running "make".
  /* For calling delete_file() */
  #define DEL_FORCE_RECURSE	(1<<1) /* recurse even w/o --force */
  #define DEL_TERSE		(1<<3)
-@@ -445,8 +449,8 @@ static void sum_sizes_sqroot(struct sum_
+@@ -447,8 +451,8 @@ static void sum_sizes_sqroot(struct sum_
  	}
  
  	if (protocol_version < 27) {
@@ -93,7 +95,7 @@ Be sure to run "make proto" before running "make".
  		s2length = SUM_LENGTH;
  	} else {
  		int32 c;
-@@ -456,7 +460,7 @@ static void sum_sizes_sqroot(struct sum_
+@@ -458,7 +462,7 @@ static void sum_sizes_sqroot(struct sum_
  		for (c = blength; c >>= 1 && b; b--) {}
  		/* add a bit, subtract rollsum, round up. */
  		s2length = (b + 1 - 32 + 7) / 8; /* --optimize in compiler-- */
@@ -102,7 +104,7 @@ Be sure to run "make proto" before running "make".
  		s2length = MIN(s2length, SUM_LENGTH);
  	}
  
-@@ -490,7 +494,7 @@ static void generate_and_send_sums(int f
+@@ -492,7 +496,7 @@ static void generate_and_send_sums(int f
  	sum_sizes_sqroot(&sum, len);
  	write_sum_head(f_out, &sum);
  
@@ -111,7 +113,7 @@ Be sure to run "make proto" before running "make".
  		return;
  
  	if (len > 0)
-@@ -509,7 +513,7 @@ static void generate_and_send_sums(int f
+@@ -511,7 +515,7 @@ static void generate_and_send_sums(int f
  
  		if (f_copy >= 0) {
  			full_write(f_copy, map, n1);
@@ -120,7 +122,7 @@ Be sure to run "make proto" before running "make".
  				continue;
  		}
  
-@@ -1135,7 +1139,7 @@ static void recv_generator(char *fname, 
+@@ -1141,7 +1145,7 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -129,7 +131,7 @@ Be sure to run "make proto" before running "make".
  		return;
  
  	if (fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
-@@ -1190,7 +1194,7 @@ static void recv_generator(char *fname, 
+@@ -1196,7 +1200,7 @@ static void recv_generator(char *fname, 
  		goto notify_others;
  	}
  
@@ -138,7 +140,7 @@ Be sure to run "make proto" before running "make".
  		if (!(backupptr = get_backup_name(fname))) {
  			close(fd);
  			return;
-@@ -1280,7 +1284,10 @@ void generate_files(int f_out, struct fi
+@@ -1285,7 +1289,10 @@ void generate_files(int f_out, struct fi
  	int save_ignore_existing = ignore_existing;
  	int save_ignore_non_existing = ignore_non_existing;
  	int save_do_progress = do_progress;
@@ -150,7 +152,7 @@ Be sure to run "make proto" before running "make".
  
  	if (protocol_version >= 29) {
  		itemizing = 1;
-@@ -1309,7 +1316,7 @@ void generate_files(int f_out, struct fi
+@@ -1314,7 +1321,7 @@ void generate_files(int f_out, struct fi
  		do_delete_pass(flist);
  	do_progress = 0;
  
@@ -159,7 +161,7 @@ Be sure to run "make proto" before running "make".
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1318,12 +1325,6 @@ void generate_files(int f_out, struct fi
+@@ -1323,12 +1330,6 @@ void generate_files(int f_out, struct fi
  			: "enabled");
  	}
  
@@ -172,8 +174,8 @@ Be sure to run "make proto" before running "make".
  	for (i = 0; i < flist->count; i++) {
  		struct file_struct *file = flist->files[i];
  
-@@ -1367,23 +1368,34 @@ void generate_files(int f_out, struct fi
- 		delete_in_dir(NULL, NULL, NULL);
+@@ -1372,23 +1373,34 @@ void generate_files(int f_out, struct fi
+ 		delete_in_dir(NULL, NULL, NULL, NULL);
  
  	phase++;
 -	csum_length = SUM_LENGTH;
@@ -213,7 +215,7 @@ Be sure to run "make proto" before running "make".
  		if (local_name)
  			strlcpy(fbuf, local_name, sizeof fbuf);
  		else
-@@ -1395,27 +1407,43 @@ void generate_files(int f_out, struct fi
+@@ -1400,27 +1412,43 @@ void generate_files(int f_out, struct fi
  	phase++;
  	ignore_non_existing = save_ignore_non_existing;
  	ignore_existing = save_ignore_existing;
@@ -705,7 +707,7 @@ Be sure to run "make proto" before running "make".
 -	write_batch_monitor_out = -1;
 -	write_batch_monitor_in = -1;
 -}
---- orig/log.c	2006-01-17 02:16:40
+--- orig/log.c	2006-01-26 10:45:39
 +++ log.c	2005-12-16 23:49:57
 @@ -35,7 +35,6 @@ extern int am_sender;
  extern int local_server;
@@ -972,9 +974,9 @@ Be sure to run "make proto" before running "make".
  				show_progress(last_match, buf->file_size);
  			sum_update(map_ptr(buf, last_match, len), len);
  			last_match = s->flength;
---- orig/options.c	2006-01-14 08:14:30
+--- orig/options.c	2006-01-31 03:11:30
 +++ options.c	2005-12-08 23:17:09
-@@ -69,7 +69,6 @@ int def_compress_level = Z_DEFAULT_COMPR
+@@ -73,7 +73,6 @@ int def_compress_level = Z_DEFAULT_COMPR
  int am_root = 0;
  int am_server = 0;
  int am_sender = 0;
@@ -982,7 +984,7 @@ Be sure to run "make proto" before running "make".
  int am_starting_up = 1;
  int orig_umask = 0;
  int relative_paths = -1;
-@@ -89,6 +88,7 @@ int am_daemon = 0;
+@@ -94,6 +93,7 @@ int am_daemon = 0;
  int daemon_over_rsh = 0;
  int do_stats = 0;
  int do_progress = 0;
@@ -990,7 +992,7 @@ Be sure to run "make proto" before running "make".
  int keep_partial = 0;
  int safe_symlinks = 0;
  int copy_unsafe_links = 0;
-@@ -1234,6 +1234,7 @@ int parse_arguments(int *argc, const cha
+@@ -1290,6 +1290,7 @@ int parse_arguments(int *argc, const cha
  	if ((do_progress || dry_run) && !verbose && !log_before_transfer
  	    && !am_server)
  		verbose = 1;
@@ -998,9 +1000,9 @@ Be sure to run "make proto" before running "make".
  
  	if (dry_run)
  		do_xfers = 0;
---- orig/pipe.c	2006-01-14 08:14:31
+--- orig/pipe.c	2006-01-21 08:03:40
 +++ pipe.c	2005-12-08 23:17:09
-@@ -55,7 +55,7 @@ pid_t piped_child(char **command, int *f
+@@ -56,7 +56,7 @@ pid_t piped_child(char **command, int *f
  		exit_cleanup(RERR_IPC);
  	}
  
@@ -1009,7 +1011,7 @@ Be sure to run "make proto" before running "make".
  	if (pid == -1) {
  		rsyserr(FERROR, errno, "fork");
  		exit_cleanup(RERR_IPC);
-@@ -116,7 +116,7 @@ pid_t local_child(int argc, char **argv,
+@@ -120,7 +120,7 @@ pid_t local_child(int argc, char **argv,
  		exit_cleanup(RERR_IPC);
  	}
  
@@ -1018,7 +1020,7 @@ Be sure to run "make proto" before running "make".
  	if (pid == -1) {
  		rsyserr(FERROR, errno, "fork");
  		exit_cleanup(RERR_IPC);
---- orig/receiver.c	2006-01-14 20:27:09
+--- orig/receiver.c	2006-01-31 02:30:18
 +++ receiver.c	2006-01-14 08:30:29
 @@ -24,7 +24,7 @@ extern int verbose;
  extern int do_xfers;
@@ -1111,7 +1113,7 @@ Be sure to run "make proto" before running "make".
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
-@@ -702,11 +697,12 @@ int recv_files(int f_in, struct file_lis
+@@ -705,11 +700,12 @@ int recv_files(int f_in, struct file_lis
  		cleanup_disable();
  
  		if (recv_ok > 0) {
@@ -1126,7 +1128,7 @@ Be sure to run "make proto" before running "make".
  		} else if (!recv_ok) {
  			int msgtype = phase || read_batch ? FERROR : FINFO;
  			if (msgtype == FERROR || verbose) {
-@@ -728,10 +724,8 @@ int recv_files(int f_in, struct file_lis
+@@ -731,10 +727,8 @@ int recv_files(int f_in, struct file_lis
  					"%s: %s failed verification -- update %s%s.\n",
  					errstr, fname, keptstr, redostr);
  			}
@@ -1139,9 +1141,9 @@ Be sure to run "make proto" before running "make".
  		}
  	}
  	make_backups = save_make_backups;
---- orig/rsync.c	2006-01-14 08:14:31
+--- orig/rsync.c	2006-01-31 02:30:18
 +++ rsync.c	2005-12-08 23:17:10
-@@ -30,7 +30,6 @@ extern int omit_dir_times;
+@@ -32,7 +32,6 @@ extern int orig_umask;
  extern int am_root;
  extern int am_server;
  extern int am_sender;
@@ -1149,14 +1151,14 @@ Be sure to run "make proto" before running "make".
  extern int am_starting_up;
  extern int preserve_uid;
  extern int preserve_gid;
-@@ -208,5 +207,5 @@ const char *who_am_i(void)
+@@ -247,5 +246,5 @@ const char *who_am_i(void)
  {
  	if (am_starting_up)
  		return am_server ? "server" : "client";
 -	return am_sender ? "sender" : am_generator ? "generator" : "receiver";
 +	return am_sender ? "sender" : am_generator() ? "generator" : "receiver";
  }
---- orig/rsync.h	2006-01-14 20:27:10
+--- orig/rsync.h	2006-01-30 20:39:09
 +++ rsync.h	2006-01-17 02:46:03
 @@ -166,10 +166,8 @@ enum msgcode {
  	MSG_DATA=0,	/* raw data on the multiplexed stream */
@@ -1177,9 +1179,9 @@ Be sure to run "make proto" before running "make".
  
  #include "lib/pool_alloc.h"
  
---- orig/util.c	2006-01-14 08:14:31
+--- orig/util.c	2006-01-30 07:18:28
 +++ util.c	2005-12-08 23:17:10
-@@ -405,51 +405,6 @@ int robust_rename(char *from, char *to, 
+@@ -413,51 +413,6 @@ int robust_rename(char *from, char *to, 
  	return -1;
  }
  
