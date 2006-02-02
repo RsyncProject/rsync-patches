@@ -31,19 +31,30 @@ Be sure to run "make proto" before running "make".
  CC=@CC@
  CFLAGS=@CFLAGS@
  CPPFLAGS=@CPPFLAGS@
---- orig/cleanup.c	2006-02-01 19:37:05
-+++ cleanup.c	2005-12-08 23:17:08
-@@ -94,9 +94,6 @@ void _exit_cleanup(int code, const char 
+--- orig/cleanup.c	2006-02-02 02:41:08
++++ cleanup.c	2006-02-02 02:43:34
+@@ -26,10 +26,6 @@ extern int keep_partial;
+ extern int log_got_error;
+ extern char *partial_dir;
+ 
+-#if defined HAVE_SIGACTION && defined HAVE_SIGPROCMASK
+-static struct sigaction sigact;
+-#endif
+-
+ /**
+  * Close all open sockets and files, allowing a (somewhat) graceful
+  * shutdown() of socket connections.  This eliminates the abortive
+@@ -98,9 +94,6 @@ void _exit_cleanup(int code, const char 
  	}
  	inside_cleanup++;
  
--	signal(SIGUSR1, SIG_IGN);
--	signal(SIGUSR2, SIG_IGN);
+-	SIGACTION(SIGUSR1, SIG_IGN);
+-	SIGACTION(SIGUSR2, SIG_IGN);
 -
  	if (verbose > 3) {
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): entered\n",
  			code, file, line);
-@@ -128,8 +125,6 @@ void _exit_cleanup(int code, const char 
+@@ -132,8 +125,6 @@ void _exit_cleanup(int code, const char 
  	io_flush(FULL_FLUSH);
  	if (cleanup_fname)
  		do_unlink(cleanup_fname);
@@ -744,8 +755,8 @@ Be sure to run "make proto" before running "make".
  		send_msg((enum msgcode)code, buf, len);
  		return;
  	}
---- orig/main.c	2006-01-15 14:46:15
-+++ main.c	2005-12-16 23:50:33
+--- orig/main.c	2006-02-02 02:41:09
++++ main.c	2006-02-02 02:43:44
 @@ -30,7 +30,6 @@ extern int list_only;
  extern int am_root;
  extern int am_server;
@@ -754,7 +765,7 @@ Be sure to run "make proto" before running "make".
  extern int am_daemon;
  extern int blocking_io;
  extern int remove_sent_files;
-@@ -75,9 +74,20 @@ struct pid_status {
+@@ -80,9 +79,20 @@ struct pid_status {
  
  static time_t starttime, endtime;
  static int64 total_read, total_written;
@@ -775,7 +786,7 @@ Be sure to run "make proto" before running "make".
  /* Works like waitpid(), but if we already harvested the child pid in our
   * sigchld_handler(), we succeed instead of returning an error. */
  pid_t wait_process(pid_t pid, int *status_ptr, int flags)
-@@ -154,7 +164,7 @@ static void handle_stats(int f)
+@@ -159,7 +169,7 @@ static void handle_stats(int f)
  		show_flist_stats();
  	}
  
@@ -784,7 +795,7 @@ Be sure to run "make proto" before running "make".
  		return;
  
  	if (am_daemon) {
-@@ -609,12 +619,30 @@ static void do_server_sender(int f_in, i
+@@ -614,12 +624,30 @@ static void do_server_sender(int f_in, i
  	exit_cleanup(0);
  }
  
@@ -818,7 +829,7 @@ Be sure to run "make proto" before running "make".
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
-@@ -623,70 +651,16 @@ static int do_recv(int f_in,int f_out,st
+@@ -628,70 +656,16 @@ static int do_recv(int f_in,int f_out,st
  	if (preserve_hard_links)
  		init_hard_links();
  
@@ -894,7 +905,7 @@ Be sure to run "make proto" before running "make".
  	generate_files(f_out, flist, local_name);
  
  	handle_stats(-1);
-@@ -697,10 +671,13 @@ static int do_recv(int f_in,int f_out,st
+@@ -702,10 +676,13 @@ static int do_recv(int f_in,int f_out,st
  	}
  	io_flush(FULL_FLUSH);
  
@@ -912,7 +923,7 @@ Be sure to run "make proto" before running "make".
  }
  
  
-@@ -1062,22 +1039,6 @@ static int start_client(int argc, char *
+@@ -1067,22 +1044,6 @@ static int start_client(int argc, char *
  	return ret;
  }
  
@@ -935,15 +946,15 @@ Be sure to run "make proto" before running "make".
  static RETSIGTYPE sigchld_handler(UNUSED(int val))
  {
  #ifdef WNOHANG
-@@ -1160,8 +1121,6 @@ int main(int argc,char *argv[])
- 	int orig_argc = argc;
- 	char **orig_argv = argv;
- 
--	signal(SIGUSR1, sigusr1_handler);
--	signal(SIGUSR2, sigusr2_handler);
- 	signal(SIGCHLD, sigchld_handler);
+@@ -1172,8 +1133,6 @@ int main(int argc,char *argv[])
+ 	sigemptyset(&sigmask);
+ 	sigact.sa_flags = SA_NOCLDSTOP;
+ #endif
+-	SIGACTMASK(SIGUSR1, sigusr1_handler);
+-	SIGACTMASK(SIGUSR2, sigusr2_handler);
+ 	SIGACTMASK(SIGCHLD, sigchld_handler);
  #ifdef MAINTAINER_MODE
- 	signal(SIGSEGV, rsync_panic_handler);
+ 	SIGACTMASK(SIGSEGV, rsync_panic_handler);
 --- orig/match.c	2005-11-10 16:58:36
 +++ match.c	2005-12-08 23:17:09
 @@ -21,7 +21,7 @@
@@ -1149,7 +1160,7 @@ Be sure to run "make proto" before running "make".
  		}
  	}
  	make_backups = save_make_backups;
---- orig/rsync.c	2006-01-31 02:30:18
+--- orig/rsync.c	2006-02-02 02:41:09
 +++ rsync.c	2005-12-08 23:17:10
 @@ -32,7 +32,6 @@ extern int orig_umask;
  extern int am_root;
@@ -1166,7 +1177,7 @@ Be sure to run "make proto" before running "make".
 -	return am_sender ? "sender" : am_generator ? "generator" : "receiver";
 +	return am_sender ? "sender" : am_generator() ? "generator" : "receiver";
  }
---- orig/rsync.h	2006-02-01 19:37:05
+--- orig/rsync.h	2006-02-02 02:41:09
 +++ rsync.h	2006-01-17 02:46:03
 @@ -166,10 +166,8 @@ enum msgcode {
  	MSG_DATA=0,	/* raw data on the multiplexed stream */
