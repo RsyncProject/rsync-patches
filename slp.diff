@@ -1,0 +1,520 @@
+This adds Service Location Protocol support.
+
+After applying this patch, run these commands for a successful build:
+
+    autoconf
+    autoheader
+    ./configure --enable-slp
+    make proto
+    make
+
+--- orig/Makefile.in	2006-01-14 08:14:29
++++ Makefile.in	2006-02-02 00:00:00
+@@ -12,6 +12,8 @@ CFLAGS=@CFLAGS@
+ CPPFLAGS=@CPPFLAGS@
+ EXEEXT=@EXEEXT@
+ LDFLAGS=@LDFLAGS@
++LIBSLP=@LIBSLP@
++SLPOBJ=@SLPOBJ@
+ 
+ INSTALLCMD=@INSTALL@
+ INSTALLMAN=@INSTALL@
+@@ -35,7 +37,7 @@ OBJS1=rsync.o generator.o receiver.o cle
+ OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
+ 	fileio.o batch.o clientname.o chmod.o
+ OBJS3=progress.o pipe.o
+-DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
++DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o $(SLPOBJ)
+ popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
+ 	popt/popthelp.o popt/poptparse.o
+ OBJS=$(OBJS1) $(OBJS2) $(OBJS3) $(DAEMON_OBJ) $(LIBOBJ) $(ZLIBOBJ) @BUILD_POPT@
+@@ -69,7 +71,7 @@ install-strip:
+ 	$(MAKE) INSTALL_STRIP='-s' install
+ 
+ rsync$(EXEEXT): $(OBJS)
+-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS) $(LIBSLP)
+ 
+ $(OBJS): $(HEADERS)
+ 
+--- orig/clientserver.c	2006-02-01 19:37:05
++++ clientserver.c	2006-02-02 11:32:24
+@@ -832,6 +832,13 @@ int daemon_main(void)
+ 	 * address too.  In fact, why not just do inet_ntop on the
+ 	 * local address??? */
+ 
++#ifdef HAVE_LIBSLP
++	if (register_services()) {
++		rprintf(FINFO,
++		    "Couldn't register with service discovery protocol, continuing anyway\n");
++	}
++#endif
++
+ 	if (((pid_file = lp_pid_file()) != NULL) && (*pid_file != '\0')) {
+ 		char pidbuf[16];
+ 		int fd;
+--- orig/configure.in	2006-02-02 02:41:09
++++ configure.in	2006-02-02 11:30:00
+@@ -535,6 +535,29 @@ if test $rsync_cv_chown_follows_symlink 
+   AC_DEFINE(CHOWN_MODIFIES_SYMLINK, 1, [Define to 1 if chown modifies symlinks.])
+ fi
+ 
++AC_ARG_ENABLE(slp, [  --disable-slp           turn off SLP support, defaults to on])
++AC_ARG_WITH(openslp-libs, [  --with-openslp-libs     set directory for OpenSLP library],
++    LDFLAGS="-L$withval $LDFLAGS"
++    DSOFLAGS="-L$withval $DSOFLAGS",)
++AC_ARG_WITH(openslp-includes, [  --with-openslp-includes set directory for OpenSLP includes],
++    CFLAGS="-I$withval $CFLAGS"
++    CXXFLAGS="-I$withval $CXXFLAGS"
++    CPPFLAGS="-I$withval $CPPFLAGS",)
++
++LIBSLP=""
++SLPOBJ=""
++
++if test x$enable_slp != xno; then
++    AC_CHECK_HEADER(slp.h,
++        AC_CHECK_LIB(slp, SLPOpen,
++	    AC_DEFINE(HAVE_LIBSLP, 1, [Define to 1 for SLP support])
++	    SLPOBJ="srvreg.o srvloc.o"
++            LIBSLP="-lslp"))
++fi
++
++AC_SUBST(LIBSLP)
++AC_SUBST(SLPOBJ)
++
+ AC_CACHE_CHECK([for working socketpair],rsync_cv_HAVE_SOCKETPAIR,[
+ AC_TRY_RUN([
+ #include <sys/types.h>
+--- orig/loadparm.c	2006-01-30 21:47:45
++++ loadparm.c	2006-02-02 10:38:12
+@@ -105,6 +105,7 @@ typedef struct
+ 	char *socket_options;
+ 
+ 	int rsync_port;
++	int slp_refresh;
+ 	int syslog_facility;
+ } global;
+ 
+@@ -286,6 +287,7 @@ static struct parm_struct parm_table[] =
+  {"motd file",         P_STRING, P_GLOBAL,&Globals.motd_file,          NULL,0},
+  {"pid file",          P_STRING, P_GLOBAL,&Globals.pid_file,           NULL,0},
+  {"port",              P_INTEGER,P_GLOBAL,&Globals.rsync_port,         NULL,0},
++ {"slp refresh",       P_INTEGER,P_GLOBAL,&Globals.slp_refresh,        NULL,0},
+  {"socket options",    P_STRING, P_GLOBAL,&Globals.socket_options,     NULL,0},
+  {"syslog facility",   P_ENUM,   P_GLOBAL,&Globals.syslog_facility,enum_facilities,0},
+ 
+@@ -379,6 +381,7 @@ FN_GLOBAL_STRING(lp_pid_file, &Globals.p
+ FN_GLOBAL_STRING(lp_socket_options, &Globals.socket_options)
+ 
+ FN_GLOBAL_INTEGER(lp_rsync_port, &Globals.rsync_port)
++FN_GLOBAL_INTEGER(lp_slp_refresh, &Globals.slp_refresh)
+ FN_GLOBAL_INTEGER(lp_syslog_facility, &Globals.syslog_facility)
+ 
+ FN_LOCAL_STRING(lp_auth_users, auth_users)
+--- orig/main.c	2006-02-02 02:41:09
++++ main.c	2006-02-02 11:33:24
+@@ -952,6 +952,18 @@ static int start_client(int argc, char *
+ 	if (!read_batch) { /* for read_batch, NO source is specified */
+ 		argc--;
+ 		shell_path = check_for_hostspec(argv[0], &shell_machine, &rsync_port);
++
++		if (shell_machine && !shell_machine[0]) {
++#ifdef HAVE_LIBSLP
++			/* User entered just rsync:// URI */
++			print_service_list();
++			exit_cleanup(0);
++#else /* No SLP, die here */
++			rprintf(FINFO, "No SLP support, cannot browse\n");
++			exit_cleanup(RERR_SYNTAX);
++#endif
++		}
++
+ 		if (shell_path) { /* source is remote */
+ 			char *dummy1;
+ 			int dummy2;
+--- orig/options.c	2006-02-02 11:40:45
++++ options.c	2006-02-02 11:41:16
+@@ -195,6 +195,7 @@ static void print_rsync_version(enum log
+ 	char const *hardlinks = "no ";
+ 	char const *links = "no ";
+ 	char const *ipv6 = "no ";
++	char const *slp = "no ";
+ 	STRUCT_STAT *dumstat;
+ 
+ #ifdef HAVE_SOCKETPAIR
+@@ -217,6 +218,10 @@ static void print_rsync_version(enum log
+ 	ipv6 = "";
+ #endif
+ 
++#if HAVE_LIBSLP
++	slp = "";
++#endif
++
+ 	rprintf(f, "%s  version %s  protocol version %d\n",
+ 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
+ 	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
+@@ -229,9 +234,9 @@ static void print_rsync_version(enum log
+ 	/* Note that this field may not have type ino_t.  It depends
+ 	 * on the complicated interaction between largefile feature
+ 	 * macros. */
+-	rprintf(f, "              %sinplace, %sIPv6, "
++	rprintf(f, "              %sinplace, %sIPv6, %sSLP, "
+ 		"%d-bit system inums, %d-bit internal inums\n",
+-		have_inplace, ipv6,
++		have_inplace, ipv6, slp,
+ 		(int) (sizeof dumstat->st_ino * 8),
+ 		(int) (sizeof (int64) * 8));
+ #ifdef MAINTAINER_MODE
+--- orig/rsync.h	2006-02-02 02:41:09
++++ rsync.h	2006-02-02 00:00:00
+@@ -154,6 +154,9 @@
+ #define SIGNIFICANT_ITEM_FLAGS (~(\
+ 	ITEM_BASIS_TYPE_FOLLOWS | ITEM_XNAME_FOLLOWS | ITEM_LOCAL_CHANGE))
+ 
++/* this is the minimum we'll use, irrespective of config setting */
++/* definately don't set to less than about 30 seconds */
++#define SLP_MIN_TIMEOUT 120
+ 
+ /* Log-message categories.  Only FERROR and FINFO get sent over the socket.
+  * FLOG and FCLIENT are only used on the daemon side for custom logging,
+--- orig/rsync.yo	2006-01-31 03:05:44
++++ rsync.yo	2006-02-02 10:44:29
+@@ -137,7 +137,12 @@ particular rsync daemon by leaving off t
+ 
+ quote(tt(rsync somehost.mydomain.com::))
+ 
+-See the following section for more details.
++And, if Service Location Protocol is available, the following will list the
++available rsync servers:
++
++quote(tt(rsync rsync://))
++
++See the following section for even more usage details.
+ 
+ manpagesection(ADVANCED USAGE)
+ 
+--- orig/rsyncd.conf	2006-02-02 00:00:00
++++ rsyncd.conf	2006-02-02 00:00:00
+@@ -0,0 +1,3 @@
++
++slp refresh = 300
++
+--- orig/rsyncd.conf.yo	2006-01-31 02:30:18
++++ rsyncd.conf.yo	2006-02-02 10:40:24
+@@ -119,6 +119,15 @@ details on some of the options you may b
+ special socket options are set.  These settings are superseded by the
+ bf(--sockopts) command-line option.
+ 
++dit(bf(slp refresh)) This option is used to determine how long service
++advertisements are valid (measured in seconds), and is only applicable if
++you have Service Location Protocol support compiled in. If this option is
++not set or is set to zero, then service advertisements never time out. If
++this is set to less than 120 seconds, then 120 seconds is used. If it is
++set to more than 65535, then 65535 is used (which is a limitation of SLP).
++Using 3600 (one hour) is a good number if you tend to change your
++configuration.
++
+ enddit()
+ 
+ 
+@@ -540,6 +549,7 @@ use chroot = no
+ max connections = 4
+ syslog facility = local5
+ pid file = /var/run/rsyncd.pid
++slp refresh = 3600
+ 
+ [ftp]
+         path = /var/ftp/pub
+--- orig/socket.c	2006-02-02 02:41:09
++++ socket.c	2006-02-02 10:28:15
+@@ -447,6 +447,14 @@ void start_accept_loop(int port, int (*f
+ {
+ 	fd_set deffds;
+ 	int *sp, maxfd, i;
++	time_t next_slp_refresh;
++	short slp_timeout = lp_slp_refresh();
++	if (slp_timeout) {
++		if (slp_timeout < SLP_MIN_TIMEOUT)
++			slp_timeout = SLP_MIN_TIMEOUT;
++		/* re-register before slp times out */
++		slp_timeout -= 15;
++	}
+ 
+ #if defined HAVE_SIGACTION && defined HAVE_SIGPROCMASK
+ 	sigact.sa_flags = SA_NOCLDSTOP;
+@@ -475,14 +483,20 @@ void start_accept_loop(int port, int (*f
+ 			maxfd = sp[i];
+ 	}
+ 
++	next_slp_refresh = time(NULL) + slp_timeout;
++
+ 	/* now accept incoming connections - forking a new process
+ 	 * for each incoming connection */
+ 	while (1) {
+ 		fd_set fds;
+ 		pid_t pid;
+ 		int fd;
++		int sel_ret;
++		struct timeval slp_tv;
+ 		struct sockaddr_storage addr;
+ 		socklen_t addrlen = sizeof addr;
++		slp_tv.tv_sec = 10;
++		slp_tv.tv_usec = 0;
+ 
+ 		/* close log file before the potentially very long select so
+ 		 * file can be trimmed by another process instead of growing
+@@ -494,8 +508,13 @@ void start_accept_loop(int port, int (*f
+ #else
+ 		fds = deffds;
+ #endif
+-
+-		if (select(maxfd + 1, &fds, NULL, NULL, NULL) != 1)
++		sel_ret = select(maxfd + 1, &fds, NULL, NULL, slp_timeout ? &slp_tv: NULL);
++		if (sel_ret == 0 && slp_timeout && time(NULL) > next_slp_refresh) {
++		    rprintf(FINFO, "Service registration expired, refreshing it\n");
++		    register_services();
++		    next_slp_refresh = time(NULL) + slp_timeout;
++		}
++		if (sel_ret != 1)
+ 			continue;
+ 
+ 		for (i = 0, fd = -1; sp[i] >= 0; i++) {
+--- orig/srvloc.c	2006-02-02 11:19:54
++++ srvloc.c	2006-02-02 11:19:54
+@@ -0,0 +1,105 @@
++/* -*- c-file-style: "linux"; -*-
++
++   Copyright (C) 2002 by Brad Hards <bradh@frogmouth.net>
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++*/
++
++/* This file implements the service location functionality */
++/* Basically, it uses normal Service Location Protocol API */
++
++/* It is really a cheap hack - just to show how it might work
++   in a real application.
++*/
++
++#include "rsync.h"
++
++#include <slp.h>
++#include <stdio.h>
++#include <string.h>
++
++/* This one just prints out the attributes */
++static SLPBoolean getAttrCallback(UNUSED(SLPHandle hslp), const char *attrlist,
++				  SLPError errcode, UNUSED(void *cookie))
++{
++	char *cleanstr;
++
++	if (errcode == SLP_OK) {
++		if (!strcmp(attrlist, "(comment=)")) {
++			rprintf(FINFO, "\t(No description)\n");
++		} else {
++			cleanstr = strrchr(attrlist, ')') ;
++			*cleanstr = ' '; /* remove last ')' */
++			rprintf(FINFO, "\t%s\n", strchr(attrlist, '=') + 1);
++		}
++	}
++	return SLP_FALSE;
++}
++
++SLPBoolean getSLPSrvURLCallback(UNUSED(SLPHandle hslp), const char *srvurl,
++                                UNUSED(unsigned short lifetime), SLPError errcode,
++                                void *cookie)
++{
++	SLPError    result;
++	SLPHandle   attrhslp;
++
++	if (errcode == SLP_OK) {
++		/* chop service: off the front */
++		rprintf(FINFO, "  %s  ", (strchr(srvurl, ':') + 1));
++		/* check for any attributes */
++		if (SLPOpen("en", SLP_FALSE,&attrhslp) == SLP_OK) {
++			result = SLPFindAttrs(attrhslp, srvurl,
++					      "", /* return all attributes */
++					      "", /* use configured scopes */
++					      getAttrCallback, NULL);
++			if (result != SLP_OK) {
++				rprintf(FERROR, "errorcode: %i\n",result);
++			}
++			SLPClose(attrhslp);
++		}
++		*(SLPError*)cookie = SLP_OK;
++	} else {
++		*(SLPError*)cookie = errcode;
++	}
++
++
++	/* Return SLP_TRUE because we want to be called again
++	 * if more services were found. */
++
++	return SLP_TRUE;
++}
++
++int print_service_list(void)
++{
++	SLPError err;
++	SLPError callbackerr;
++	SLPHandle hslp;
++
++	err = SLPOpen("en",SLP_FALSE,&hslp);
++	if (err != SLP_OK) {
++		rprintf(FERROR, "Error opening slp handle %i\n", err);
++		return err;
++	}
++
++	SLPFindSrvs(hslp, "rsync",
++		    0, /* use configured scopes */
++		    0, /* no attr filter        */
++		    getSLPSrvURLCallback, &callbackerr);
++
++	/* Now that we're done using slp, close the slp handle */
++	SLPClose(hslp);
++
++	return 0;
++}
+--- orig/srvreg.c	2006-02-02 11:20:37
++++ srvreg.c	2006-02-02 11:20:37
+@@ -0,0 +1,128 @@
++/* -*- c-file-style: "linux"; -*-
++
++   Copyright (C) 2002 by Brad Hards <bradh@frogmouth.net>
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++*/
++
++/* This file implements the service registration functionality */
++
++/* Basically, it uses normal Service Location Protocol API */
++
++#include "rsync.h"
++#include "slp.h"
++#include "netdb.h"
++
++extern int rsync_port;
++
++static void slp_callback(UNUSED(SLPHandle hslp), SLPError errcode, void *cookie)
++{
++	/* return the error code in the cookie */
++	*(SLPError*)cookie = errcode;
++
++	/* You could do something else here like print out
++	 * the errcode, etc.  Remember, as a general rule,
++	 * do not try to do too much in a callback because
++	 * it is being executed by the same thread that is
++	 * reading slp packets from the wire. */
++}
++
++int register_services(void)
++{
++	SLPError err, callbackerr;
++	SLPHandle hslp;
++	int n;
++	int i;
++	char srv[120];
++	char attr[120];
++	char localhost[256];
++	extern char *config_file;
++	short timeout;
++	struct addrinfo aih, *ai = 0;
++
++	if (!lp_load(config_file, 0)) {
++		exit_cleanup(RERR_SYNTAX);
++	}
++
++	n = lp_numservices();
++
++	if (0 == lp_slp_refresh())
++		timeout = SLP_LIFETIME_MAXIMUM; /* don't expire, ever */
++	else if (SLP_MIN_TIMEOUT > lp_slp_refresh())
++		timeout = SLP_MIN_TIMEOUT; /* use a reasonable minimum */
++	else if (SLP_LIFETIME_MAXIMUM <= lp_slp_refresh())
++		timeout = (SLP_LIFETIME_MAXIMUM - 1); /* as long as possible */
++	else
++		timeout = lp_slp_refresh();
++
++	rprintf(FINFO, "rsyncd registering %d service%s with slpd for %d seconds:\n", n, ((n==1)? "":"s"), timeout);
++	err = SLPOpen("en",SLP_FALSE,&hslp);
++	if (err != SLP_OK) {
++		rprintf(FINFO, "Error opening slp handle %i\n",err);
++		return err;
++	}
++	if (gethostname(localhost, sizeof localhost)) {
++	       rprintf(FINFO, "Could not get hostname: %s\n", strerror(errno));
++	       return err;
++	}
++	memset(&aih, 0, sizeof aih);
++	aih.ai_family = PF_UNSPEC;
++	aih.ai_flags = AI_CANONNAME;
++	if (0 != (err = getaddrinfo(localhost, 0, &aih, &ai)) || !ai) {
++	       rprintf(FINFO, "Could not resolve hostname: %s\n", gai_strerror(err));
++	       return err;
++	}
++	/* Register each service with SLP */
++	for (i = 0; i < n; i++) {
++		if (!lp_list(i))
++			continue;
++
++		snprintf(srv, sizeof srv, "service:rsync://%s:%d/%s",
++			 ai->ai_canonname,
++			 rsync_port,
++			 lp_name(i));
++		rprintf(FINFO, "    %s\n", srv);
++		if (lp_comment(i)) {
++			snprintf(attr, sizeof attr, "(comment=%s)",
++				 lp_comment(i));
++		}
++		err = SLPReg(hslp,
++			     srv, /* service to register */
++			     timeout,
++			     0,  /* this is ignored */
++			     attr, /* attributes */
++			     SLP_TRUE, /* new registration - don't change this */
++			     slp_callback, /* callback */
++			     &callbackerr);
++
++		/* err may contain an error code that occurred as the slp library
++		 * _prepared_ to make the call. */
++		if (err != SLP_OK || callbackerr != SLP_OK)
++			rprintf(FINFO, "Error registering service with slp %i\n", err);
++
++		/* callbackerr may contain an error code (that was assigned through
++		 * the callback cookie) that occurred as slp packets were sent on
++		 * the wire. */
++		if (callbackerr != SLP_OK)
++			rprintf(FINFO, "Error registering service with slp %i\n",callbackerr);
++	}
++
++	/* Now that we're done using slp, close the slp handle */
++	freeaddrinfo(ai);
++	SLPClose(hslp);
++
++	/* refresh is done in main select loop */
++	return 0;
++}
