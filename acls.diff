@@ -5305,9 +5305,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +#endif /* No ACLs. */
 +#endif /* _SMB_ACLS_H */
---- orig/testsuite/default-acls-obey.test	2005-10-15 16:08:45
-+++ testsuite/default-acls-obey.test	2005-10-15 16:08:45
-@@ -0,0 +1,51 @@
+--- orig/testsuite/default-acls-obey.test	2006-02-03 17:57:15
++++ testsuite/default-acls-obey.test	2006-02-03 17:57:15
+@@ -0,0 +1,49 @@
 +#! /bin/sh
 +
 +# This program is distributable under the terms of the GNU GPL see
@@ -5317,15 +5317,8 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +. $srcdir/testsuite/rsync.fns
 +
-+set -x
-+
-+$RSYNC --help | grep -q "ACLs" || test_skipped "Rsync is configured without ACL support"
++$RSYNC --help | grep "ACLs" >/dev/null || test_skipped "Rsync is configured without ACL support"
 +setfacl -dm u::rwx,g::---,o::--- "$scratchdir" || test_skipped "Your filesystem has ACLs disabled"
-+
-+echo "File!" >"$scratchdir/file"
-+echo "#!/bin/bash" >"$scratchdir/program"
-+chmod 666 "$scratchdir/file"
-+chmod 777 "$scratchdir/program"
 +
 +# Call as: testit <dirname> <default-acl> <file-expected> <program-expected>
 +function testit {
@@ -5337,25 +5330,30 @@ ACLs to a non-ACL-supporting disk should complain.
 +    # Make sure we obey ACLs when creating a directory to hold multiple transferred files,
 +    # even though the directory itself is outside the transfer
 +    $RSYNC -rvv "$scratchdir/file" "$scratchdir/program" "$todir/to/"
-+    [ `stat --format=%a "$todir/to"` == $4 ] || test_fail "Target $1: to should have $4 permissions"
-+    [ `stat --format=%a "$todir/to/file"` == $3 ] || test_fail "Target $1: to/file should have $3 permissions"
-+    [ `stat --format=%a "$todir/to/program"` == $4 ] || test_fail "Target $1: to/program should have $4 permissions"
++    check_perms "$todir/to" $4 "Target $1"
++    check_perms "$todir/to/file" $3 "Target $1"
++    check_perms "$todir/to/program" $4 "Target $1"
 +    # Make sure get_local_name doesn't mess us up when transferring only one file
 +    $RSYNC -rvv "$scratchdir/file" "$todir/to/anotherfile"
-+    [ `stat --format=%a "$todir/to/anotherfile"` == $3 ] || test_fail "Target $1: to/anotherfile should have $3 permissions"
++    check_perms "$todir/to/anotherfile" $3 "Target $1"
 +}
++
++echo "File!" >"$scratchdir/file"
++echo "#!/bin/bash" >"$scratchdir/program"
++chmod 666 "$scratchdir/file"
++chmod 777 "$scratchdir/program"
 +
 +# Test some target directories
 +umask 0077
-+testit da777 u::rwx,g::rwx,o::rwx 666 777
-+testit da775 u::rwx,g::rwx,o::r-x 664 775
-+testit da750 u::rwx,g::r-x,o::--- 640 750
-+testit da770mask u::rwx,g::---,m::rwx,o::--- 660 770
-+testit noda1 '' 600 700
++testit da777 u::rwx,g::rwx,o::rwx rw-rw-rw- rwxrwxrwx
++testit da775 u::rwx,g::rwx,o::r-x rw-rw-r-- rwxrwxr-x
++testit da750 u::rwx,g::r-x,o::--- rw-r----- rwxr-x---
++testit da770mask u::rwx,g::---,m::rwx,o::--- rw-rw---- rwxrwx---
++testit noda1 '' rw------- rwx------
 +umask 0000
-+testit noda2 '' 666 777
++testit noda2 '' rw-rw-rw- rwxrwxrwx
 +umask 0022
-+testit noda3 '' 644 755
++testit noda3 '' rw-r--r-- rwxr-xr-x
 +
 +# Hooray
 +exit 0
