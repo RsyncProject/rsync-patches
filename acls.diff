@@ -1397,16 +1397,8 @@ ACLs to a non-ACL-supporting disk should complain.
  		recv_uid_list(f, flist);
  
 --- orig/generator.c	2006-01-31 18:59:39
-+++ generator.c	2006-01-31 19:36:04
-@@ -42,6 +42,7 @@ extern int preserve_specials;
- extern int preserve_hard_links;
- extern int preserve_perms;
- extern int preserve_executability;
-+extern int preserve_acls;
- extern int preserve_uid;
- extern int preserve_gid;
- extern int preserve_times;
-@@ -756,6 +757,7 @@ static int try_dests_non(struct file_str
++++ generator.c	2006-02-03 05:44:04
+@@ -756,6 +756,7 @@ static int try_dests_non(struct file_str
  }
  
  static int phase = 0;
@@ -1414,7 +1406,7 @@ ACLs to a non-ACL-supporting disk should complain.
  
  /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
   * make sure it exists, and has the right permissions/timestamp info.  For
-@@ -772,7 +774,7 @@ static void recv_generator(char *fname, 
+@@ -772,7 +773,7 @@ static void recv_generator(char *fname, 
  			   enum logcode code, int f_out)
  {
  	static int missing_below = -1, excluded_below = -1;
@@ -1423,7 +1415,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	static struct file_list *fuzzy_dirlist = NULL;
  	struct file_struct *fuzzy_file = NULL;
  	int fd = -1, f_copy = -1;
-@@ -791,12 +793,12 @@ static void recv_generator(char *fname, 
+@@ -791,12 +792,12 @@ static void recv_generator(char *fname, 
  		if (fuzzy_dirlist) {
  			flist_free(fuzzy_dirlist);
  			fuzzy_dirlist = NULL;
@@ -1437,12 +1429,12 @@ ACLs to a non-ACL-supporting disk should complain.
  		return;
  	}
  
-@@ -831,15 +833,20 @@ static void recv_generator(char *fname, 
+@@ -831,15 +832,20 @@ static void recv_generator(char *fname, 
  		statret = -1;
  		stat_errno = ENOENT;
  	} else {
 -		if (fuzzy_basis && S_ISREG(file->mode)) {
-+		if ((fuzzy_basis || preserve_acls) && S_ISREG(file->mode)) {
++		if ((fuzzy_basis || !preserve_perms) && S_ISREG(file->mode)) {
  			char *dn = file->dirname ? file->dirname : ".";
 -			if (fuzzy_dirname != dn
 -			    && strcmp(fuzzy_dirname, dn) != 0) {
@@ -1454,7 +1446,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +				if (fuzzy_basis)
 +					fuzzy_dirlist = get_dirlist(dn, -1, 1);
 +#ifdef SUPPORT_ACLS
-+				if (preserve_acls)
++				if (!preserve_perms)
 +					dflt_perms = default_perms_for_dir(dn);
 +#endif
  			}
@@ -1463,7 +1455,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		}
  
  		statret = link_stat(fname, &st,
-@@ -861,7 +868,8 @@ static void recv_generator(char *fname, 
+@@ -861,7 +867,8 @@ static void recv_generator(char *fname, 
  	if (!preserve_perms) {
  		int exists = statret == 0
  			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
@@ -1473,7 +1465,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -895,6 +903,10 @@ static void recv_generator(char *fname, 
+@@ -895,6 +902,10 @@ static void recv_generator(char *fname, 
  		if (set_file_attrs(fname, file, statret ? NULL : &st, 0)
  		    && verbose && code && f_out != -1)
  			rprintf(code, "%s/\n", fname);
@@ -1484,7 +1476,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
  		    && (file->flags & FLAG_DEL_HERE))
  			delete_in_dir(the_file_list, fname, file, &st);
-@@ -1330,6 +1342,8 @@ void generate_files(int f_out, struct fi
+@@ -1330,6 +1341,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
@@ -4874,37 +4866,29 @@ ACLs to a non-ACL-supporting disk should complain.
  		argstr[x++] = 'o';
  	if (preserve_gid)
 --- orig/receiver.c	2006-01-31 02:30:18
-+++ receiver.c	2006-01-31 19:36:48
-@@ -37,6 +37,7 @@ extern int relative_paths;
- extern int keep_dirlinks;
- extern int preserve_hard_links;
- extern int preserve_perms;
-+extern int preserve_acls;
- extern int io_error;
- extern int basis_dir_cnt;
- extern int make_backups;
-@@ -410,6 +411,8 @@ int recv_files(int f_in, struct file_lis
++++ receiver.c	2006-02-03 05:46:43
+@@ -410,6 +410,10 @@ int recv_files(int f_in, struct file_lis
  	int itemizing = am_daemon ? daemon_log_format_has_i
  		      : !am_server && log_format_has_i;
  	int max_phase = protocol_version >= 29 ? 2 : 1;
 +	int dflt_perms = (ACCESSPERMS & ~orig_umask);
++#ifdef SUPPORT_ACLS
 +	char *parent_dirname = "";
++#endif
  	int i, recv_ok;
  
  	if (verbose > 2)
-@@ -607,7 +610,18 @@ int recv_files(int f_in, struct file_lis
+@@ -607,7 +611,16 @@ int recv_files(int f_in, struct file_lis
  		 * mode based on the local permissions and some heuristics. */
  		if (!preserve_perms) {
  			int exists = fd1 != -1;
 -			file->mode = dest_mode(file->mode, st.st_mode, exists);
 +#ifdef SUPPORT_ACLS
-+			if (preserve_acls) {
-+				char *dn = file->dirname ? file->dirname : ".";
-+				if (parent_dirname != dn
-+				 && strcmp(parent_dirname, dn) != 0) {
-+					dflt_perms = default_perms_for_dir(dn);
-+					parent_dirname = dn;
-+				}
++			char *dn = file->dirname ? file->dirname : ".";
++			if (parent_dirname != dn
++			 && strcmp(parent_dirname, dn) != 0) {
++				dflt_perms = default_perms_for_dir(dn);
++				parent_dirname = dn;
 +			}
 +#endif
 +			file->mode = dest_mode(file->mode, st.st_mode,
@@ -4948,9 +4932,9 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (verbose > 1 && flags & ATTRS_REPORT) {
  		enum logcode code = daemon_log_format_has_i || dry_run
  				  ? FCLIENT : FINFO;
---- orig/rsync.h	2006-02-02 02:41:09
+--- orig/rsync.h	2006-02-03 05:40:23
 +++ rsync.h	2006-01-31 19:27:00
-@@ -650,6 +650,44 @@ struct chmod_mode_struct;
+@@ -657,6 +657,44 @@ struct chmod_mode_struct;
  
  #define UNUSED(x) x __attribute__((__unused__))
  
@@ -5041,18 +5025,6 @@ ACLs to a non-ACL-supporting disk should complain.
  dit(bf(--chmod)) This option tells rsync to apply one or more
  comma-separated "chmod" strings to the permission of the files in the
  transfer.  The resulting value is treated as though it was the permissions
---- orig/runtests.sh	2005-08-17 06:45:08
-+++ runtests.sh	2006-01-31 19:09:40
-@@ -195,6 +195,9 @@ export scratchdir suitedir
- prep_scratch() {
-     [ -d "$scratchdir" ] && rm -rf "$scratchdir"
-     mkdir "$scratchdir"
-+    # Get rid of default ACLs and directory setgid because they confuse some tests.
-+    setfacl -k "$scratchdir" 2>/dev/null || true
-+    chmod g-s "$scratchdir"
-     return 0
- }
- 
 --- orig/smb_acls.h	2004-06-30 00:04:07
 +++ smb_acls.h	2004-06-30 00:04:07
 @@ -0,0 +1,277 @@
