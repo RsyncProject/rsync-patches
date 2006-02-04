@@ -124,9 +124,9 @@ After applying this patch, run these commands for a successful build:
  
  	if (f >= 0) {
  		recv_uid_list(f, flist);
---- orig/generator.c	2006-01-31 19:36:04
+--- orig/generator.c	2006-02-03 05:44:04
 +++ generator.c	2005-05-12 23:21:08
-@@ -907,6 +907,10 @@ static void recv_generator(char *fname, 
+@@ -906,6 +906,10 @@ static void recv_generator(char *fname, 
  		if (f_out == -1)
  			SET_ACL(fname, file);
  #endif
@@ -193,8 +193,8 @@ After applying this patch, run these commands for a successful build:
 +#else
 +
 +#endif /* No xattrs */
---- orig/options.c	2006-02-02 11:45:46
-+++ options.c	2006-01-31 03:16:24
+--- orig/options.c	2006-02-04 19:58:53
++++ options.c	2006-02-04 20:05:35
 @@ -45,6 +45,7 @@ int copy_links = 0;
  int preserve_links = 0;
  int preserve_hard_links = 0;
@@ -234,15 +234,17 @@ After applying this patch, run these commands for a successful build:
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -300,6 +304,7 @@ void usage(enum logcode F)
-   rprintf(F," -p, --perms                 preserve permissions\n");
-   rprintf(F," -E, --executability         preserve the file's executability\n");
+@@ -302,6 +306,9 @@ void usage(enum logcode F)
+ #ifdef SUPPORT_ACLS
    rprintf(F," -A, --acls                  preserve ACLs (implies --perms)\n");
+ #endif
++#ifdef SUPPORT_XATTRS
 +  rprintf(F," -X, --xattrs                preserve extended attributes (implies --perms)\n");
++#endif
    rprintf(F,"     --chmod=CHMOD           change destination permissions\n");
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
-@@ -419,6 +424,9 @@ static struct poptOption long_options[] 
+@@ -421,6 +428,9 @@ static struct poptOption long_options[] 
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
    {"no-A",             0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
@@ -252,9 +254,9 @@ After applying this patch, run these commands for a successful build:
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1084,6 +1092,17 @@ int parse_arguments(int *argc, const cha
+@@ -1085,6 +1095,17 @@ int parse_arguments(int *argc, const cha
  			return 0;
- #endif /* SUPPORT_ACLS */
+ #endif
  
 +		case 'X':
 +#ifdef SUPPORT_XATTRS
@@ -270,18 +272,20 @@ After applying this patch, run these commands for a successful build:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1527,6 +1546,8 @@ void server_options(char **args,int *arg
- 		argstr[x++] = 'H';
+@@ -1530,6 +1551,10 @@ void server_options(char **args,int *arg
  	if (preserve_acls)
  		argstr[x++] = 'A';
+ #endif
++#ifdef SUPPORT_XATTRS
 +	if (preserve_xattrs)
 +		argstr[x++] = 'X';
++#endif
  	if (preserve_uid)
  		argstr[x++] = 'o';
  	if (preserve_gid)
---- orig/rsync.c	2006-01-31 19:35:44
+--- orig/rsync.c	2006-02-04 19:53:13
 +++ rsync.c	2005-10-16 23:19:27
-@@ -162,12 +162,15 @@ int set_file_attrs(char *fname, struct f
+@@ -169,12 +169,15 @@ int set_file_attrs(char *fname, struct f
  	}
  #endif
  
@@ -302,7 +306,7 @@ After applying this patch, run these commands for a successful build:
  	if (verbose > 1 && flags & ATTRS_REPORT) {
 --- orig/rsync.h	2006-01-31 19:27:00
 +++ rsync.h	2005-10-16 23:19:44
-@@ -688,6 +688,38 @@ struct chmod_mode_struct;
+@@ -695,6 +695,38 @@ struct chmod_mode_struct;
  #endif /* SUPPORT_ACLS */
  #include "smb_acls.h"
  
