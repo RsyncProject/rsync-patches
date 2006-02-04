@@ -4772,8 +4772,8 @@ ACLs to a non-ACL-supporting disk should complain.
    next;
  }
  
---- orig/options.c	2006-02-02 11:40:45
-+++ options.c	2006-02-02 11:45:46
+--- orig/options.c	2006-02-03 23:51:57
++++ options.c	2006-02-04 19:58:53
 @@ -44,6 +44,7 @@ int keep_dirlinks = 0;
  int copy_links = 0;
  int preserve_links = 0;
@@ -4813,15 +4813,17 @@ ACLs to a non-ACL-supporting disk should complain.
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -293,6 +299,7 @@ void usage(enum logcode F)
+@@ -293,6 +299,9 @@ void usage(enum logcode F)
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
    rprintf(F," -E, --executability         preserve the file's executability\n");
++#ifdef SUPPORT_ACLS
 +  rprintf(F," -A, --acls                  preserve ACLs (implies --perms)\n");
++#endif
    rprintf(F,"     --chmod=CHMOD           change destination permissions\n");
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
-@@ -409,6 +416,9 @@ static struct poptOption long_options[] 
+@@ -409,6 +418,9 @@ static struct poptOption long_options[] 
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
@@ -4831,14 +4833,13 @@ ACLs to a non-ACL-supporting disk should complain.
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1057,6 +1067,24 @@ int parse_arguments(int *argc, const cha
+@@ -1057,6 +1069,23 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
 +		case 'A':
 +#ifdef SUPPORT_ACLS
-+			preserve_acls = 1;
-+			preserve_perms = 1;
++			preserve_acls = preserve_perms = 1;
 +			break;
 +#else
 +			/* FIXME: this should probably be ignored with a
@@ -4850,18 +4851,20 @@ ACLs to a non-ACL-supporting disk should complain.
 +                                 "ACLs are not supported on this %s\n",
 +				 am_server ? "server" : "client");
 +			return 0;
-+#endif /* SUPPORT_ACLS */
++#endif
 +
 +
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1497,6 +1525,8 @@ void server_options(char **args,int *arg
+@@ -1497,6 +1526,10 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
++#ifdef SUPPORT_ACLS
 +	if (preserve_acls)
 +		argstr[x++] = 'A';
++#endif
  	if (preserve_uid)
  		argstr[x++] = 'o';
  	if (preserve_gid)
@@ -4896,9 +4899,9 @@ ACLs to a non-ACL-supporting disk should complain.
  		}
  
  		/* We now check to see if we are writing file "inplace" */
---- orig/rsync.c	2006-02-02 02:41:09
-+++ rsync.c	2006-01-31 19:35:44
-@@ -53,7 +53,8 @@ void free_sums(struct sum_struct *s)
+--- orig/rsync.c	2006-02-04 19:52:05
++++ rsync.c	2006-02-04 19:53:13
+@@ -54,7 +54,8 @@ void free_sums(struct sum_struct *s)
  
  /* This is only called when we aren't preserving permissions.  Figure out what
   * the permissions should be and return them merged back into the mode. */
@@ -4906,18 +4909,18 @@ ACLs to a non-ACL-supporting disk should complain.
 +mode_t dest_mode(mode_t flist_mode, mode_t dest_mode, int dflt_perms,
 +		 int exists)
  {
- 	/* If the file already exists we'll return the local permissions,
+ 	/* If the file already exists, we'll return the local permissions,
  	 * possibly tweaked by the --executability option. */
-@@ -68,7 +69,7 @@ mode_t dest_mode(mode_t flist_mode, mode
+@@ -69,7 +70,7 @@ mode_t dest_mode(mode_t flist_mode, mode
  				dest_mode |= (dest_mode & 0444) >> 2;
  		}
  	} else
--		dest_mode = flist_mode & ~orig_umask;
-+		dest_mode = ((flist_mode & CHMOD_BITS) & dflt_perms) | S_IWUSR;
+-		dest_mode = flist_mode & ACCESSPERMS & ~orig_umask;
++		dest_mode = (flist_mode & ACCESSPERMS & dflt_perms) | S_IWUSR;
  	return (flist_mode & ~CHMOD_BITS) | (dest_mode & CHMOD_BITS);
  }
  
-@@ -161,6 +162,14 @@ int set_file_attrs(char *fname, struct f
+@@ -168,6 +169,14 @@ int set_file_attrs(char *fname, struct f
  	}
  #endif
  
@@ -4932,7 +4935,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (verbose > 1 && flags & ATTRS_REPORT) {
  		enum logcode code = daemon_log_format_has_i || dry_run
  				  ? FCLIENT : FINFO;
---- orig/rsync.h	2006-02-03 05:40:23
+--- orig/rsync.h	2006-02-03 20:00:36
 +++ rsync.h	2006-01-31 19:27:00
 @@ -657,6 +657,44 @@ struct chmod_mode_struct;
  
@@ -4979,7 +4982,7 @@ ACLs to a non-ACL-supporting disk should complain.
  #include "proto.h"
  
  /* We have replacement versions of these if they're missing. */
---- orig/rsync.yo	2006-01-31 03:05:44
+--- orig/rsync.yo	2006-02-03 23:51:58
 +++ rsync.yo	2006-01-31 03:14:05
 @@ -317,6 +317,7 @@ to the detailed description below for a 
   -K, --keep-dirlinks         treat symlinked dir on receiver as dir
@@ -5305,9 +5308,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +#endif /* No ACLs. */
 +#endif /* _SMB_ACLS_H */
---- orig/testsuite/default-acls-obey.test	2006-02-03 17:57:15
-+++ testsuite/default-acls-obey.test	2006-02-03 17:57:15
-@@ -0,0 +1,49 @@
+--- orig/testsuite/default-acls.test	2006-02-04 19:56:21
++++ testsuite/default-acls.test	2006-02-04 19:56:21
+@@ -0,0 +1,52 @@
 +#! /bin/sh
 +
 +# This program is distributable under the terms of the GNU GPL see
@@ -5317,20 +5320,21 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +. $srcdir/testsuite/rsync.fns
 +
-+$RSYNC --help | grep "ACLs" >/dev/null || test_skipped "Rsync is configured without ACL support"
++$RSYNC --version | grep ", ACLs" >/dev/null || test_skipped "Rsync is configured without ACL support"
 +setfacl -dm u::rwx,g::---,o::--- "$scratchdir" || test_skipped "Your filesystem has ACLs disabled"
 +
 +# Call as: testit <dirname> <default-acl> <file-expected> <program-expected>
-+function testit {
++testit() {
 +    todir="$scratchdir/$1"
 +    mkdir "$todir"
++    # FIXME This doesn't work on solaris...
 +    setfacl -k "$todir"
-+    chmod g-s "$todir" ### Don't let directory setgid interfere
 +    [ "$2" ] && setfacl -dm "$2" "$todir"
 +    # Make sure we obey ACLs when creating a directory to hold multiple transferred files,
 +    # even though the directory itself is outside the transfer
-+    $RSYNC -rvv "$scratchdir/file" "$scratchdir/program" "$todir/to/"
++    $RSYNC -rvv "$scratchdir/dir" "$scratchdir/file" "$scratchdir/program" "$todir/to/"
 +    check_perms "$todir/to" $4 "Target $1"
++    check_perms "$todir/to/dir" $4 "Target $1"
 +    check_perms "$todir/to/file" $3 "Target $1"
 +    check_perms "$todir/to/program" $4 "Target $1"
 +    # Make sure get_local_name doesn't mess us up when transferring only one file
@@ -5338,8 +5342,10 @@ ACLs to a non-ACL-supporting disk should complain.
 +    check_perms "$todir/to/anotherfile" $3 "Target $1"
 +}
 +
++mkdir "$scratchdir/dir"
 +echo "File!" >"$scratchdir/file"
-+echo "#!/bin/bash" >"$scratchdir/program"
++echo "#!/bin/sh" >"$scratchdir/program"
++chmod 777 "$scratchdir/dir"
 +chmod 666 "$scratchdir/file"
 +chmod 777 "$scratchdir/program"
 +
