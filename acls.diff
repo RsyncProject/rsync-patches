@@ -1397,7 +1397,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		recv_uid_list(f, flist);
  
 --- orig/generator.c	2006-01-31 18:59:39
-+++ generator.c	2006-02-03 05:44:04
++++ generator.c	2006-02-04 20:12:42
 @@ -756,6 +756,7 @@ static int try_dests_non(struct file_str
  }
  
@@ -1429,12 +1429,16 @@ ACLs to a non-ACL-supporting disk should complain.
  		return;
  	}
  
-@@ -831,15 +832,20 @@ static void recv_generator(char *fname, 
+@@ -831,15 +832,24 @@ static void recv_generator(char *fname, 
  		statret = -1;
  		stat_errno = ENOENT;
  	} else {
 -		if (fuzzy_basis && S_ISREG(file->mode)) {
-+		if ((fuzzy_basis || !preserve_perms) && S_ISREG(file->mode)) {
++		if ((fuzzy_basis && S_ISREG(file->mode))
++#ifdef SUPPORT_ACLS
++		 || (!preserve_perms && !S_ISDIR(file->mode))
++#endif
++		) {
  			char *dn = file->dirname ? file->dirname : ".";
 -			if (fuzzy_dirname != dn
 -			    && strcmp(fuzzy_dirname, dn) != 0) {
@@ -1443,7 +1447,7 @@ ACLs to a non-ACL-supporting disk should complain.
  				if (fuzzy_dirlist)
  					flist_free(fuzzy_dirlist);
 -				fuzzy_dirlist = get_dirlist(dn, -1, 1);
-+				if (fuzzy_basis)
++				if (fuzzy_basis && S_ISREG(file->mode))
 +					fuzzy_dirlist = get_dirlist(dn, -1, 1);
 +#ifdef SUPPORT_ACLS
 +				if (!preserve_perms)
@@ -1455,7 +1459,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		}
  
  		statret = link_stat(fname, &st,
-@@ -861,7 +867,8 @@ static void recv_generator(char *fname, 
+@@ -861,7 +871,8 @@ static void recv_generator(char *fname, 
  	if (!preserve_perms) {
  		int exists = statret == 0
  			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
@@ -1465,7 +1469,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -895,6 +902,10 @@ static void recv_generator(char *fname, 
+@@ -895,6 +906,10 @@ static void recv_generator(char *fname, 
  		if (set_file_attrs(fname, file, statret ? NULL : &st, 0)
  		    && verbose && code && f_out != -1)
  			rprintf(code, "%s/\n", fname);
@@ -1476,7 +1480,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
  		    && (file->flags & FLAG_DEL_HERE))
  			delete_in_dir(the_file_list, fname, file, &st);
-@@ -1330,6 +1341,8 @@ void generate_files(int f_out, struct fi
+@@ -1330,6 +1345,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
