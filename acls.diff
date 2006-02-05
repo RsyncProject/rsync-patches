@@ -1396,9 +1396,9 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (f >= 0) {
  		recv_uid_list(f, flist);
  
---- orig/generator.c	2006-01-31 18:59:39
+--- orig/generator.c	2006-02-05 06:40:40
 +++ generator.c	2006-02-04 22:26:45
-@@ -756,6 +756,7 @@ static int try_dests_non(struct file_str
+@@ -754,6 +754,7 @@ static int try_dests_non(struct file_str
  }
  
  static int phase = 0;
@@ -1406,7 +1406,7 @@ ACLs to a non-ACL-supporting disk should complain.
  
  /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
   * make sure it exists, and has the right permissions/timestamp info.  For
-@@ -772,7 +773,7 @@ static void recv_generator(char *fname, 
+@@ -770,7 +771,7 @@ static void recv_generator(char *fname, 
  			   enum logcode code, int f_out)
  {
  	static int missing_below = -1, excluded_below = -1;
@@ -1415,7 +1415,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	static struct file_list *fuzzy_dirlist = NULL;
  	struct file_struct *fuzzy_file = NULL;
  	int fd = -1, f_copy = -1;
-@@ -791,12 +792,12 @@ static void recv_generator(char *fname, 
+@@ -789,12 +790,12 @@ static void recv_generator(char *fname, 
  		if (fuzzy_dirlist) {
  			flist_free(fuzzy_dirlist);
  			fuzzy_dirlist = NULL;
@@ -1429,7 +1429,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		return;
  	}
  
-@@ -831,15 +832,24 @@ static void recv_generator(char *fname, 
+@@ -829,15 +830,24 @@ static void recv_generator(char *fname, 
  		statret = -1;
  		stat_errno = ENOENT;
  	} else {
@@ -1459,7 +1459,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		}
  
  		statret = link_stat(fname, &st,
-@@ -861,7 +871,8 @@ static void recv_generator(char *fname, 
+@@ -859,7 +869,8 @@ static void recv_generator(char *fname, 
  	if (!preserve_perms) {
  		int exists = statret == 0
  			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
@@ -1469,7 +1469,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -895,6 +906,10 @@ static void recv_generator(char *fname, 
+@@ -893,6 +904,10 @@ static void recv_generator(char *fname, 
  		if (set_file_attrs(fname, file, statret ? NULL : &st, 0)
  		    && verbose && code && f_out != -1)
  			rprintf(code, "%s/\n", fname);
@@ -1480,7 +1480,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
  		    && (file->flags & FLAG_DEL_HERE))
  			delete_in_dir(the_file_list, fname, file, &st);
-@@ -1330,6 +1345,8 @@ void generate_files(int f_out, struct fi
+@@ -1328,6 +1343,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
@@ -4986,8 +4986,8 @@ ACLs to a non-ACL-supporting disk should complain.
  #include "proto.h"
  
  /* We have replacement versions of these if they're missing. */
---- orig/rsync.yo	2006-02-03 23:51:58
-+++ rsync.yo	2006-01-31 03:14:05
+--- orig/rsync.yo	2006-02-05 06:58:50
++++ rsync.yo	2006-02-05 06:55:30
 @@ -317,6 +317,7 @@ to the detailed description below for a 
   -K, --keep-dirlinks         treat symlinked dir on receiver as dir
   -p, --perms                 preserve permissions
@@ -4996,32 +4996,33 @@ ACLs to a non-ACL-supporting disk should complain.
       --chmod=CHMOD           change destination permissions
   -o, --owner                 preserve owner (super-user only)
   -g, --group                 preserve group
-@@ -691,14 +692,23 @@ quote(itemize(
+@@ -691,7 +692,9 @@ quote(itemize(
    permissions, though the bf(--executability) option might change just
    the execute permission for the file.
-   it() Each new file gets its permissions set based on the source file's
--  permissions, but masked by the receiving end's umask setting (including
-+  permissions, but masked by the receiving end's destination-default
-+  permissions (which is either based on the ACL of the destination
-+  directory, if available, or the receiving end's umask setting) and
-+  includes
-   the stripping of the three special permission bits).
-+  Hint: Using bf(--chmod=ugo=rwX) without bf(--perms) will cause new
-+  files to get all the destination-default permissions.
+   it() New files get their "normal" permission bits set to the source
+-  file's permissions masked with the receiving end's umask setting, and
++  file's permissions masked with the receiving directory's default
++  permissions (either the receiving process's umask, or the permissions
++  specified via the destination directory's default ACL), and
+   their special permission bits disabled except in the case where a new
+   directory inherits a setgid bit from its parent directory.
  ))
-   
- Thus, when bf(--perms) and bf(--executability) are both disabled,
- rsync's behavior is the same as that of other file-copy utilities,
- such as bf(cp)(1) and bf(tar)(1).
+@@ -718,9 +721,11 @@ The preservation of the destination's se
+ directories when bf(--perms) is off was added in rsync 2.6.7.  Older rsync
+ versions erroneously preserved the three special permission bits for
+ newly-created files when bf(--perms) was off, while overriding the
+-destination's setgid bit setting on a newly-created directory.  (Keep in
+-mind that it is the version of the receiving rsync that affects this
+-behavior.)
++destination's setgid bit setting on a newly-created directory.  Default ACL
++observance was added to the ACL patch for rsync 2.6.7, so older (or
++non-ACL-enabled) rsyncs use the umask even if default ACLs are present.
++(Keep in mind that it is the version of the receiving rsync that affects
++these behaviors.)
  
-+This version of rsync observes default ACLs; patched versions of rsync only
-+applied the umask, and could thus set wrong permissions in the presence of
-+default ACLs.
-+
  dit(bf(-E, --executability)) This option causes rsync to preserve the
  executability (or non-executability) of regular files when bf(--perms) is
- not enabled.  A regular file is considered to be executable if at least one
-@@ -713,6 +723,10 @@ quote(itemize(
+@@ -738,6 +743,10 @@ quote(itemize(
  
  If bf(--perms) is enabled, this option is ignored.
  
