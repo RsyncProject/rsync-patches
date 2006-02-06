@@ -46,10 +46,7 @@ chdir('tmp') or die "Unable to chdir to 'tmp'";
 
 mkdir('workdir') unless -d 'workdir';
 open(OUT, '>exclude') or die $!;
-print OUT "CVS\n";
-if (!$prepare_source) {
-    print OUT join("\n", @generated_files), "\n";
-}
+print OUT join("\n", 'CVS', @generated_files), "\n";
 close OUT;
 
 unless ($no_cvs) {
@@ -79,6 +76,7 @@ foreach my $diff (@ARGV) {
 		&restore_cvsdir;
 		next DIFF;
 	    }
+	    sleep(1) if $prepare_source; # Ensure later diffs get later times.
 	}
 	if (!defined($conf_opts) && m#^\s*\./configure( .+)#) {
 	    $conf_opts = $1;
@@ -202,6 +200,19 @@ sub apply_patch
     'N';
 }
 
+sub filter_diff
+{
+    my($cmd) = @_;
+    open(IN, '-|', $cmd) or die $!;
+    while (<IN>) {
+	next if /^(diff -|Index: |Only in )/;
+	s#^\Q--- cvsdir/\E([^\t]+).*#--- old/$1#;
+	s#^\Q+++ workdir/\E([^\t]+).*#+++ new/$1#;
+	print OUT $_;
+    }
+    close IN;
+}
+
 sub generate_new_patch
 {
     my($diff) = @_;
@@ -216,14 +227,14 @@ sub generate_new_patch
 	print OUT $_;
     }
     close IN;
-    open(IN, 'diff --exclude-from=exclude -upr cvsdir workdir |') or die $!;
-    while (<IN>) {
-	next if /^(diff -|Index: |Only in )/;
-	s#^\Q--- cvsdir/\E([^\t]+).*#--- old/$1#;
-	s#^\Q+++ workdir/\E([^\t]+).*#+++ new/$1#;
-	print OUT $_;
+    &filter_diff('diff --exclude-from=exclude -upr cvsdir workdir');
+    if ($prepare_source) {
+	# These are not included in the diff above so that patch will give
+	# generated files a later timestamp than the source files.
+	foreach my $fn (@generated_files) {
+	    &filter_diff("diff -up cvsdir/$fn workdir");
+	}
     }
-    close IN;
     close OUT;
     foreach (@new) {
 	unlink("cvsdir/$_");
