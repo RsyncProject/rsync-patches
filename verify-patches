@@ -3,13 +3,7 @@
 use strict;
 use Getopt::Long;
 
-my %generated_files = (
-    'proto.h' => qr#\.[ch]$#,
-    'configure' => qr#^(configure\.in|aclocal\.m4)$#,
-    'config.h.in' => qr#^(configure\.in|aclocal\.m4)$#,
-    'rsync.1' => qr#^rsync\.yo$#,
-    'rsyncd.conf.5' => qr#^rsyncd\.conf\.yo$#,
-);
+my @generated_files = qw( proto.h configure config.h.in rsync.1 rsyncd.conf.5 );
 
 my($no_cvs, $failures_only, $minor_updates, $prepare_source);
 
@@ -33,14 +27,13 @@ EOT
 }
 
 $| = 1;
-$ENV{'TZ'} = 'UTC';
 my $CONF_OPTS = '-C';
 
 my($has_dependencies, @new, @rejects);
 
 END {
     &restore_cvsdir;
-    system "rsync -a --delete cvsdir/ workdir/" if -d 'cvsdir';
+    system "rsync -a --del cvsdir/ workdir/" if -d 'cvsdir';
 };
 
 my $root;
@@ -55,7 +48,7 @@ mkdir('workdir') unless -d 'workdir';
 open(OUT, '>exclude') or die $!;
 print OUT "CVS\n";
 if (!$prepare_source) {
-    print OUT join("\n", sort keys %generated_files), "\n";
+    print OUT join("\n", @generated_files), "\n";
 }
 close OUT;
 
@@ -72,6 +65,7 @@ foreach my $diff (@ARGV) {
     next if $diff =~ /gzip-rsyncable[-_a-z]*\.diff$/;
     $diff =~ s#^(patches|\.\.)/##;
 
+    my $conf_opts;
     open(IN, "../$diff") or die $!;
     while (<IN>) {
 	last if /^--- /;
@@ -79,50 +73,27 @@ foreach my $diff (@ARGV) {
 	    my $dep = $1;
 	    $has_dependencies = 1;
 	    print "\nApplying dependency patch $dep...\n";
-	    if (system("patch -d cvsdir -p0 -b -Vt -Zf <../$dep") != 0) {
+	    if (system("patch -d cvsdir -p1 -b -Vt <../$dep") != 0) {
 		print "Unable to cleanly apply dependency patch -- skipping $diff\n";
 		system "rm -f cvsdir/*.rej cvsdir/*/*.rej";
 		&restore_cvsdir;
 		next DIFF;
 	    }
 	}
-    }
-    close IN;
-
-    my($conf_opts, %regenerate);
-    open(IN, "../$diff") or die $!;
-    while (<IN>) {
-	if (!defined $conf_opts) {
-	    if (m#^\s*\./configure( .+)#) {
-		$conf_opts = $1;
-		$conf_opts =~ s/\s+\(.*?\)//;
-	    } elsif (/^--- /) {
-		$conf_opts = '';
-	    }
-	}
-	if (m#^--- orig/([^\t]+)#) {
-	    my $patching = $1;
-	    while (my($fn, $re) = each %generated_files) {
-		if ($patching =~ /$re/) {
-		    $regenerate{$fn} = 1;
-		}
-	    }
+	if (!defined($conf_opts) && m#^\s*\./configure( .+)#) {
+	    $conf_opts = $1;
+	    $conf_opts =~ s/\s+\(.*?\)//;
 	}
     }
     close IN;
-    my @regenerate = sort keys %regenerate;
+    $conf_opts = '' unless defined $conf_opts;
 
     my $default = apply_patch($diff);
 
-    if (@regenerate) {
+    if ($prepare_source) {
+	print "\nPreparing the source...\n";
 	chdir('workdir') or die $!;
-	foreach (@regenerate) {
-	    utime(111111111, 111111111, $_);
-	}
-	if ($prepare_source) {
-	    print "\nRegenerating: @regenerate\n";
-	    system "make -f prepare-source.mak @regenerate";
-	}
+	system "./prepare-source";
 	chdir('..') or die $!;
     }
 
@@ -155,14 +126,8 @@ foreach my $diff (@ARGV) {
 		next;
 	    }
 	    if ($cmd eq 'B') {
-		my $regen;
 		chdir('workdir') or die $!;
-		if (@regenerate) {
-		    $regen = "make -f prepare-source.mak @regenerate && ";
-		} else {
-		    $regen = '';
-		}
-		system "$regen./configure $CONF_OPTS $conf_opts && make";
+		system "./prepare-source && ./configure $CONF_OPTS $conf_opts && make";
 		chdir('..') or die $!;
 		$default = '!make test';
 		next;
@@ -215,7 +180,7 @@ sub apply_patch
     print "\nApplying patch $diff...\n";
     undef @rejects;
     my($saw_failure, $saw_offset, $saw_fuzz);
-    open(IN, "patch -d workdir -p0 --no-backup-if-mismatch -Zf <../$diff |") or die $!;
+    open(IN, "patch -d workdir -p1 --no-backup-if-mismatch <../$diff |") or die $!;
     while (<IN>) {
 	print $_;
 	chomp;
@@ -254,9 +219,8 @@ sub generate_new_patch
     open(IN, 'diff --exclude-from=exclude -upr cvsdir workdir |') or die $!;
     while (<IN>) {
 	next if /^(diff -|Index: |Only in )/;
-	s#^\Q--- cvsdir/\E#--- orig/#;
-	s#^\Q+++ workdir/\E#+++ #;
-	s#(\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d)(\.\d\d\d\d\d\d\d\d\d)? \+0000$#$1#;
+	s#^\Q--- cvsdir/\E([^\t]+).*#--- old/$1#;
+	s#^\Q+++ workdir/\E([^\t]+).*#+++ new/$1#;
 	print OUT $_;
     }
     close IN;
