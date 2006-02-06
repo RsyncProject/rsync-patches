@@ -3,13 +3,22 @@
 use strict;
 use Getopt::Long;
 
-my($no_cvs, $failures_only, $minor_updates);
+my %generated_files = (
+    'proto.h' => qr#\.[ch]$#,
+    'configure' => qr#^(configure\.in|aclocal\.m4)$#,
+    'config.h.in' => qr#^(configure\.in|aclocal\.m4)$#,
+    'rsync.1' => qr#^rsync\.yo$#,
+    'rsyncd.conf.5' => qr#^rsyncd\.conf\.yo$#,
+);
+
+my($no_cvs, $failures_only, $minor_updates, $prepare_source);
 
 &Getopt::Long::Configure('bundling');
 GetOptions(
     'no-cvs|n' => \$no_cvs,
     'failures-only|f' => \$failures_only,
     'minor-updates|u' => \$minor_updates,
+    'prepare-source|p' => \$prepare_source,
 ) or &usage;
 
 my $interesting_fuzz = $minor_updates ? '\d' : '[2-9]';
@@ -44,14 +53,10 @@ chdir('tmp') or die "Unable to chdir to 'tmp'";
 
 mkdir('workdir') unless -d 'workdir';
 open(OUT, '>exclude') or die $!;
-print OUT <<EOT;
-CVS
-proto.h
-configure
-config.h.in
-rsync.1
-rsyncd.conf.5
-EOT
+print OUT "CVS\n";
+if (!$prepare_source) {
+    print OUT join("\n", sort keys %generated_files), "\n";
+}
 close OUT;
 
 unless ($no_cvs) {
@@ -84,7 +89,43 @@ foreach my $diff (@ARGV) {
     }
     close IN;
 
+    my($conf_opts, %regenerate);
+    open(IN, "../$diff") or die $!;
+    while (<IN>) {
+	if (!defined $conf_opts) {
+	    if (m#^\s*\./configure( .+)#) {
+		$conf_opts = $1;
+		$conf_opts =~ s/\s+\(.*?\)//;
+	    } elsif (/^--- /) {
+		$conf_opts = '';
+	    }
+	}
+	if (m#^--- orig/([^\t]+)#) {
+	    my $patching = $1;
+	    while (my($fn, $re) = each %generated_files) {
+		if ($patching =~ /$re/) {
+		    $regenerate{$fn} = 1;
+		}
+	    }
+	}
+    }
+    close IN;
+    my @regenerate = sort keys %regenerate;
+
     my $default = apply_patch($diff);
+
+    if (@regenerate) {
+	chdir('workdir') or die $!;
+	foreach (@regenerate) {
+	    utime(111111111, 111111111, $_);
+	}
+	if ($prepare_source) {
+	    print "\nRegenerating: @regenerate\n";
+	    system "make -f prepare-source.mak @regenerate";
+	}
+	chdir('..') or die $!;
+    }
+
     if ($default =~ s/^D,// || $default eq 'N') {
 	my $def = generate_new_patch($diff);
 	$default = 'U,N' if $default eq 'N' && $def eq 'E';
@@ -114,40 +155,14 @@ foreach my $diff (@ARGV) {
 		next;
 	    }
 	    if ($cmd eq 'B') {
-		if (!-f 'workdir/Makefile') {
-		    open(IN, '../../Makefile') or die $!;
-		    open(OUT, '>workdir/Makefile') or die $!;
-		    print OUT "srcdir=.\n\n";
-		    while (<IN>) {
-			last if /^gen:/;
-		    }
-		    print OUT $_;
-		    while (<IN>) {
-			last if /^clean:/;
-			print OUT $_;
-		    }
-		    close IN;
-		    close OUT;
-		}
-		my $need_autoconf;
-		my $conf_opts;
-		open(IN, "../$diff") or die $!;
-		while (<IN>) {
-		    if (!defined $conf_opts) {
-			$conf_opts = '' if /^---/;
-			if (m#^\s*\./configure( .+)#) {
-			    $conf_opts = $1;
-			}
-		    }
-		    if (m#^--- orig/(configure\.in|/aclocal\.m4)#) {
-			$need_autoconf = 1;
-			last;
-		    }
-		}
-		close IN;
+		my $regen;
 		chdir('workdir') or die $!;
-		system "autoconf; autoheader" if $need_autoconf;
-		system "make proto; ./configure $CONF_OPTS $conf_opts; make";
+		if (@regenerate) {
+		    $regen = "make -f prepare-source.mak @regenerate && ";
+		} else {
+		    $regen = '';
+		}
+		system "$regen./configure $CONF_OPTS $conf_opts && make";
 		chdir('..') or die $!;
 		$default = '!make test';
 		next;
@@ -283,7 +298,9 @@ sub usage
 {
     die <<EOT;
 Usage: $0 [OPTS] [DIFF-FILE...]
+ -f, --failures-only   Suggest skipping patches that don't have failing hunks
  -n, --no-cvs          Don't update tmp/cvsdir at the start of the run
+ -p, --prepare-source  Run ./prepare-source and include generated files in diff
  -u, --minor-updates   Suggest 'U' for even minor changes in the diff
 EOT
 }
