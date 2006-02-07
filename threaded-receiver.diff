@@ -737,10 +737,10 @@ After applying this patch, run these commands for a successful build:
  extern int quiet;
  extern int module_id;
 -extern int msg_fd_out;
+ extern int allow_8bit_chars;
  extern int protocol_version;
  extern int preserve_times;
- extern int log_format_has_i;
-@@ -74,7 +73,6 @@ struct {
+@@ -75,7 +74,6 @@ struct {
  	{ RERR_IPC        , "error in IPC code" },
  	{ RERR_CRASHED    , "sibling process crashed" },
  	{ RERR_TERMINATED , "sibling process terminated abnormally" },
@@ -748,7 +748,7 @@ After applying this patch, run these commands for a successful build:
  	{ RERR_SIGNAL     , "received SIGINT, SIGTERM, or SIGHUP" },
  	{ RERR_WAITCHILD  , "waitpid() failed" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
-@@ -234,8 +232,8 @@ void rwrite(enum logcode code, char *buf
+@@ -232,8 +230,8 @@ void rwrite(enum logcode code, char *buf
  	if (quiet && code == FINFO)
  		return;
  
@@ -1007,7 +1007,7 @@ After applying this patch, run these commands for a successful build:
  int am_starting_up = 1;
  int orig_umask = 0;
  int relative_paths = -1;
-@@ -94,6 +93,7 @@ int am_daemon = 0;
+@@ -95,6 +94,7 @@ int am_daemon = 0;
  int daemon_over_rsh = 0;
  int do_stats = 0;
  int do_progress = 0;
@@ -1015,7 +1015,7 @@ After applying this patch, run these commands for a successful build:
  int keep_partial = 0;
  int safe_symlinks = 0;
  int copy_unsafe_links = 0;
-@@ -1290,6 +1290,7 @@ int parse_arguments(int *argc, const cha
+@@ -1293,6 +1293,7 @@ int parse_arguments(int *argc, const cha
  	if ((do_progress || dry_run) && !verbose && !log_before_transfer
  	    && !am_server)
  		verbose = 1;
@@ -1054,7 +1054,7 @@ After applying this patch, run these commands for a successful build:
  extern int log_before_transfer;
  extern int log_format_has_i;
  extern int daemon_log_format_has_i;
-@@ -219,7 +219,7 @@ static int receive_data(int f_in, char *
+@@ -158,7 +158,7 @@ static int receive_data(int f_in, char *
  		if (sum.remainder)
  			sum.flength -= sum.blength - sum.remainder;
  		for (j = CHUNK_SIZE; j < sum.flength; j += CHUNK_SIZE) {
@@ -1063,7 +1063,7 @@ After applying this patch, run these commands for a successful build:
  				show_progress(offset, total_size);
  			sum_update(map_ptr(mapbuf, offset, CHUNK_SIZE),
  				   CHUNK_SIZE);
-@@ -227,7 +227,7 @@ static int receive_data(int f_in, char *
+@@ -166,7 +166,7 @@ static int receive_data(int f_in, char *
  		}
  		if (offset < sum.flength) {
  			int32 len = sum.flength - offset;
@@ -1072,7 +1072,7 @@ After applying this patch, run these commands for a successful build:
  				show_progress(offset, total_size);
  			sum_update(map_ptr(mapbuf, offset, len), len);
  			offset = sum.flength;
-@@ -240,7 +240,7 @@ static int receive_data(int f_in, char *
+@@ -179,7 +179,7 @@ static int receive_data(int f_in, char *
  	}
  
  	while ((i = recv_token(f_in, &data)) != 0) {
@@ -1081,7 +1081,7 @@ After applying this patch, run these commands for a successful build:
  			show_progress(offset, total_size);
  
  		if (i > 0) {
-@@ -308,7 +308,7 @@ static int receive_data(int f_in, char *
+@@ -247,7 +247,7 @@ static int receive_data(int f_in, char *
  		ftruncate(fd, offset);
  #endif
  
@@ -1090,7 +1090,7 @@ After applying this patch, run these commands for a successful build:
  		end_progress(total_size);
  
  	if (fd != -1 && offset > 0 && sparse_end(fd) != 0) {
-@@ -359,12 +359,12 @@ static void handle_delayed_updates(struc
+@@ -298,12 +298,12 @@ static void handle_delayed_updates(struc
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
  			} else {
@@ -1106,7 +1106,7 @@ After applying this patch, run these commands for a successful build:
  				handle_partial_dir(partialptr, PDIR_DELETE);
  			}
  		}
-@@ -415,11 +415,6 @@ int recv_files(int f_in, struct file_lis
+@@ -354,11 +354,6 @@ int recv_files(int f_in, struct file_lis
  	if (verbose > 2)
  		rprintf(FINFO,"recv_files(%d) starting\n",flist->count);
  
@@ -1116,9 +1116,9 @@ After applying this patch, run these commands for a successful build:
 -	}
 -
  	if (delay_updates)
- 		init_delayed_bits(flist->count);
+ 		delayed_bits = bitbag_create(flist->count);
  
-@@ -440,7 +435,7 @@ int recv_files(int f_in, struct file_lis
+@@ -379,7 +374,7 @@ int recv_files(int f_in, struct file_lis
  				rprintf(FINFO, "recv_files phase=%d\n", phase);
  			if (phase == 2 && delay_updates)
  				handle_delayed_updates(flist, local_name);
@@ -1127,7 +1127,7 @@ After applying this patch, run these commands for a successful build:
  			if (keep_partial && !partial_dir)
  				make_backups = 0; /* prevents double backup */
  			if (append_mode) {
-@@ -662,7 +657,7 @@ int recv_files(int f_in, struct file_lis
+@@ -601,7 +596,7 @@ int recv_files(int f_in, struct file_lis
  		/* log the transfer */
  		if (log_before_transfer)
  			log_item(file, &initial_stats, iflags, NULL);
@@ -1136,7 +1136,7 @@ After applying this patch, run these commands for a successful build:
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
-@@ -705,11 +700,12 @@ int recv_files(int f_in, struct file_lis
+@@ -644,11 +639,12 @@ int recv_files(int f_in, struct file_lis
  		cleanup_disable();
  
  		if (recv_ok > 0) {
@@ -1151,7 +1151,7 @@ After applying this patch, run these commands for a successful build:
  		} else if (!recv_ok) {
  			int msgtype = phase || read_batch ? FERROR : FINFO;
  			if (msgtype == FERROR || verbose) {
-@@ -731,10 +727,8 @@ int recv_files(int f_in, struct file_lis
+@@ -670,10 +666,8 @@ int recv_files(int f_in, struct file_lis
  					"%s: %s failed verification -- update %s%s.\n",
  					errstr, fname, keptstr, redostr);
  			}
@@ -1172,9 +1172,9 @@ After applying this patch, run these commands for a successful build:
  extern int am_sender;
 -extern int am_generator;
  extern int am_starting_up;
+ extern int allow_8bit_chars;
  extern int preserve_uid;
- extern int preserve_gid;
-@@ -291,5 +290,5 @@ const char *who_am_i(void)
+@@ -300,5 +299,5 @@ const char *who_am_i(void)
  {
  	if (am_starting_up)
  		return am_server ? "server" : "client";
@@ -1204,11 +1204,10 @@ After applying this patch, run these commands for a successful build:
  
 --- old/util.c
 +++ new/util.c
-@@ -413,51 +413,6 @@ int robust_rename(char *from, char *to, 
+@@ -404,49 +404,6 @@ int robust_rename(char *from, char *to, 
  	return -1;
  }
  
--
 -static pid_t all_pids[10];
 -static int num_pids;
 -
@@ -1251,7 +1250,6 @@ After applying this patch, run these commands for a successful build:
 -		kill(p, sig);
 -	}
 -}
--
 -
  /** Turn a user name into a uid */
  int name_to_uid(char *name, uid_t *uid)
