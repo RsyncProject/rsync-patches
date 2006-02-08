@@ -6,6 +6,7 @@ use Getopt::Long;
 my @generated_files = qw( proto.h configure config.h.in rsync.1 rsyncd.conf.5 );
 
 my($no_cvs, $failures_only, $minor_updates, $prepare_source, $require_quit);
+my $auto_cmd = 'never';
 
 &Getopt::Long::Configure('bundling');
 GetOptions(
@@ -14,6 +15,7 @@ GetOptions(
     'minor-updates|u' => \$minor_updates,
     'prepare-source|p' => \$prepare_source,
     'require-quit|Q' => \$require_quit,
+    'auto-cmd=s' => \$auto_cmd,
 ) or &usage;
 
 my $interesting_fuzz = $minor_updates ? '\d' : '[2-9]';
@@ -107,9 +109,14 @@ foreach my $diff (@ARGV) {
 	print "\n----------- $diff ------------\n",
 	    "\nFix rejects, Diff create, Edit both diffs, Update patch,\n",
 	    "Apply patch again, !(CMD), Build rsync, Next, Quit: [$default] ";
-	my $ans = <STDIN>;
-	chomp $ans;
-	$ans = $default if $ans eq '';
+	my $ans = $default;
+	if ($default eq $auto_cmd) {
+	    print $default, "\n";
+	} else {
+	    my $input = <STDIN>;
+	    chomp $input;
+	    $ans = $input if $input ne '';
+	}
 	while ($ans =~ s/^\s*(!|\w)((?<!!)[^;,]*|[^;]*)[;,]?//) {
 	    my $cmd = "\U$1\E";
 	    if ($cmd eq '!') {
@@ -280,10 +287,11 @@ sub usage
 {
     die <<EOT;
 Usage: $0 [OPTS] [DIFF-FILE...]
+     --auto-cmd=STR    If the suggested command is STR, enter it automatically
  -f, --failures-only   Suggest skipping patches that don't have failing hunks
- -Q, --require-quit    Don't auto-exit at the end of the list
  -n, --no-cvs          Don't update tmp/cvsdir at the start of the run
  -p, --prepare-source  Run ./prepare-source and include generated files in diff
+ -Q, --require-quit    Don't auto-exit at the end of the list
  -u, --minor-updates   Suggest 'U' for even minor changes in the diff
 EOT
 }
