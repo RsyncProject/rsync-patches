@@ -361,23 +361,16 @@ After applying this patch, run these commands for a successful build:
  extern int log_format_has_i;
  extern int log_format_has_o_or_i;
  extern int daemon_log_format_has_o_or_i;
-@@ -605,10 +606,12 @@ static void log_formatted(enum logcode c
- 			n[3] = !(iflags & ITEM_REPORT_SIZE) ? '.' : 's';
- 			n[4] = !(iflags & ITEM_REPORT_TIME) ? '.'
- 			     : !preserve_times || S_ISLNK(file->mode) ? 'T' : 't';
--			n[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
--			n[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
--			n[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
--			n[8] = '\0';
-+			n[5] = !(iflags & ITEM_REPORT_ATIME) ? '.'
+@@ -608,7 +609,8 @@ static void log_formatted(enum logcode c
+ 			n[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
+ 			n[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
+ 			n[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
+-			n[8] = '.';
++			n[8] = !(iflags & ITEM_REPORT_ATIME) ? '.'
 +			     : S_ISLNK(file->mode) ? 'U' : 'u';
-+			n[6] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
-+			n[7] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
-+			n[8] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
-+			n[9] = '\0';
+ 			n[9] = '\0';
  
  			if (iflags & (ITEM_IS_NEW|ITEM_MISSING_DATA)) {
- 				char ch = iflags & ITEM_IS_NEW ? '+' : '?';
 --- old/options.c
 +++ new/options.c
 @@ -52,6 +52,7 @@ int preserve_uid = 0;
@@ -400,7 +393,7 @@ After applying this patch, run these commands for a successful build:
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
-@@ -414,6 +416,9 @@ static struct poptOption long_options[] 
+@@ -412,6 +414,9 @@ static struct poptOption long_options[] 
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
@@ -410,7 +403,7 @@ After applying this patch, run these commands for a successful build:
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
-@@ -1507,6 +1512,8 @@ void server_options(char **args,int *arg
+@@ -1510,6 +1515,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -528,7 +521,7 @@ After applying this patch, run these commands for a successful build:
       --super                 receiver attempts super-user activities
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
-@@ -801,6 +802,12 @@ it is preserving modification times (see
+@@ -800,6 +801,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -541,18 +534,16 @@ After applying this patch, run these commands for a successful build:
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1308,8 +1315,8 @@ if the receiving rsync is at least versi
- with older versions of rsync, but that also turns on the output of other
+@@ -1308,7 +1315,7 @@ with older versions of rsync, but that a
  verbose messages).
  
--The "%i" escape has a cryptic output that is 8 letters long.  The general
--format is like the string bf(YXcstpog), where bf(Y) is replaced by the
-+The "%i" escape has a cryptic output that is 9 letters long.  The general
-+format is like the string bf(YXcstupog), where bf(Y) is replaced by the
- kind of update being done, bf(X) is replaced by the file-type, and the
+ The "%i" escape has a cryptic output that is 9 letters long.  The general
+-format is like the string bf(YXcstpogz), where bf(Y) is replaced by the
++format is like the string bf(YXcstpogu), where bf(Y) is replaced by the
+ type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -1349,9 +1356,13 @@ quote(itemize(
+@@ -1348,7 +1355,7 @@ quote(itemize(
    by the file transfer.
    it() A bf(t) means the modification time is different and is being updated
    to the sender's value (requires bf(--times)).  An alternate value of bf(T)
@@ -560,13 +551,19 @@ After applying this patch, run these commands for a successful build:
 +  means that the modify time will be set to the transfer time, which happens
    anytime a symlink is transferred, or when a file or device is transferred
    without bf(--times).
+   it() A bf(p) means the permissions are different and are being updated to
+@@ -1357,7 +1364,10 @@ quote(itemize(
+   sender's value (requires bf(--owner) and super-user privileges).
+   it() A bf(g) means the group is different and is being updated to the
+   sender's value (requires bf(--group) and the authority to set the group).
+-  it() The bf(z) slot is reserved for future use.
 +  it() A bf(u) means the access (use) time is different and is being updated to
 +  the sender's value (requires bf(--atimes)).  An alternate value of bf(U)
 +  means that the access time will be set to the transfer time, which happens
-+  anytime a symlink is transferred.
-   it() A bf(p) means the permissions are different and are being updated to
-   the sender's value (requires bf(--perms)).
-   it() An bf(o) means the owner is different and is being updated to the
++  when a symlink or directory is updated.
+ ))
+ 
+ One other output is possible:  when deleting files, the "%i" will output
 --- old/sender.c
 +++ new/sender.c
 @@ -38,6 +38,7 @@ extern int do_progress;
@@ -617,272 +614,6 @@ After applying this patch, run these commands for a successful build:
 +
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
---- old/testsuite/devices.test
-+++ new/testsuite/devices.test
-@@ -42,14 +42,14 @@ touch -r "$fromdir/block" "$fromdir/bloc
- $RSYNC -ai "$fromdir/block" "$todir/block2" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--cD++++++ block
-+cD+++++++ block
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 1 failed"
- 
- $RSYNC -ai "$fromdir/block2" "$todir/block" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--cD++++++ block2
-+cD+++++++ block2
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 2 failed"
- 
-@@ -58,7 +58,7 @@ sleep 1
- $RSYNC -Di "$fromdir/block3" "$todir/block" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--cD..T... block3
-+cD..T.... block3
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
- 
-@@ -66,15 +66,15 @@ $RSYNC -aiHvv "$fromdir/" "$todir/" \
-     | tee "$outfile"
- filter_outfile
- cat <<EOT >"$chkfile"
--.d..t... ./
--cD..t... block
--cD...... block2
--cD++++++ block3
--hD++++++ block2.5 => block3
--cD++++++ char
--cD++++++ char2
--cD++++++ char3
--cS++++++ fifo
-+.d..t.... ./
-+cD..t.... block
-+cD....... block2
-+cD+++++++ block3
-+hD+++++++ block2.5 => block3
-+cD+++++++ char
-+cD+++++++ char2
-+cD+++++++ char3
-+cS+++++++ fifo
- EOT
- if test ! -b "$fromdir/block2.5"; then
-     sed -e '/block2\.5/d' \
---- old/testsuite/itemize.test
-+++ new/testsuite/itemize.test
-@@ -29,14 +29,14 @@ ln "$fromdir/foo/config1" "$fromdir/foo/
- $RSYNC -iplr "$fromdir/" "$todir/" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--cd++++++ bar/
--cd++++++ bar/baz/
-->f++++++ bar/baz/rsync
--cd++++++ foo/
-->f++++++ foo/config1
-->f++++++ foo/config2
-->f++++++ foo/extra
--cL++++++ foo/sym -> ../bar/baz/rsync
-+cd+++++++ bar/
-+cd+++++++ bar/baz/
-+>f+++++++ bar/baz/rsync
-+cd+++++++ foo/
-+>f+++++++ foo/config1
-+>f+++++++ foo/config2
-+>f+++++++ foo/extra
-+cL+++++++ foo/sym -> ../bar/baz/rsync
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 1 failed"
- 
-@@ -48,10 +48,10 @@ chmod 601 "$fromdir/foo/config2"
- $RSYNC -iplrH "$fromdir/" "$todir/" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
-->f..T... bar/baz/rsync
-->f..T... foo/config1
-->f.sTp.. foo/config2
--hf..T... foo/extra => foo/config1
-+>f..T.... bar/baz/rsync
-+>f..T.... foo/config1
-+>f.sT.p.. foo/config2
-+hf..T.... foo/extra => foo/config1
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 2 failed"
- 
-@@ -68,11 +68,11 @@ chmod 777 "$todir/bar/baz/rsync"
- $RSYNC -iplrtc "$fromdir/" "$todir/" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--.f..tp.. bar/baz/rsync
--.d..t... foo/
--.f..t... foo/config1
-->fcstp.. foo/config2
--cL..T... foo/sym -> ../bar/baz/rsync
-+.f..t.p.. bar/baz/rsync
-+.d..t.... foo/
-+.f..t.... foo/config1
-+>fcst.p.. foo/config2
-+cL..T.... foo/sym -> ../bar/baz/rsync
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
- 
-@@ -97,15 +97,15 @@ $RSYNC -ivvplrtH "$fromdir/" "$todir/" \
-     | tee "$outfile"
- filter_outfile
- cat <<EOT >"$chkfile"
--.d       ./
--.d       bar/
--.d       bar/baz/
--.f...p.. bar/baz/rsync
--.d       foo/
--.f       foo/config1
-->f..t... foo/config2
--hf       foo/extra
--.L       foo/sym -> ../bar/baz/rsync
-+.d        ./
-+.d        bar/
-+.d        bar/baz/
-+.f....p.. bar/baz/rsync
-+.d        foo/
-+.f        foo/config1
-+>f..t.... foo/config2
-+hf        foo/extra
-+.L        foo/sym -> ../bar/baz/rsync
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 5 failed"
- 
-@@ -124,8 +124,8 @@ touch "$todir/foo/config2"
- $RSYNC -iplrtH "$fromdir/" "$todir/" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--.f...p.. foo/config1
-->f..t... foo/config2
-+.f....p.. foo/config1
-+>f..t.... foo/config2
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 7 failed"
- 
-@@ -134,15 +134,15 @@ $RSYNC -ivvplrtH --copy-dest="$lddir" "$
-     | tee "$outfile"
- filter_outfile
- cat <<EOT >"$chkfile"
--.d..t... ./
--cd++++++ bar/
--cd++++++ bar/baz/
--cf       bar/baz/rsync
--cd++++++ foo/
--cf       foo/config1
--cf       foo/config2
--hf       foo/extra => foo/config1
--cL..T... foo/sym -> ../bar/baz/rsync
-+.d..t.... ./
-+cd+++++++ bar/
-+cd+++++++ bar/baz/
-+cf        bar/baz/rsync
-+cd+++++++ foo/
-+cf        foo/config1
-+cf        foo/config2
-+hf        foo/extra => foo/config1
-+cL..T.... foo/sym -> ../bar/baz/rsync
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 8 failed"
- 
-@@ -150,11 +150,11 @@ rm -rf "$todir"
- $RSYNC -iplrtH --copy-dest="$lddir" "$fromdir/" "$todir/" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--.d..t... ./
--cd++++++ bar/
--cd++++++ bar/baz/
--cd++++++ foo/
--hf       foo/extra => foo/config1
-+.d..t.... ./
-+cd+++++++ bar/
-+cd+++++++ bar/baz/
-+cd+++++++ foo/
-+hf        foo/extra => foo/config1
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 9 failed"
- 
-@@ -181,15 +181,15 @@ $RSYNC -ivvplrtH --link-dest="$lddir" "$
-     | tee "$outfile"
- filter_outfile
- cat <<EOT >"$chkfile"
--.d..t... ./
--cd++++++ bar/
--cd++++++ bar/baz/
--hf       bar/baz/rsync
--cd++++++ foo/
--hf       foo/config1
--hf       foo/config2
--hf       foo/extra => foo/config1
--hL       foo/sym -> ../bar/baz/rsync
-+.d..t.... ./
-+cd+++++++ bar/
-+cd+++++++ bar/baz/
-+hf        bar/baz/rsync
-+cd+++++++ foo/
-+hf        foo/config1
-+hf        foo/config2
-+hf        foo/extra => foo/config1
-+hL        foo/sym -> ../bar/baz/rsync
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 11 failed"
- 
-@@ -197,10 +197,10 @@ rm -rf "$todir"
- $RSYNC -iplrtH --link-dest="$lddir" "$fromdir/" "$todir/" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--.d..t... ./
--cd++++++ bar/
--cd++++++ bar/baz/
--cd++++++ foo/
-+.d..t.... ./
-+cd+++++++ bar/
-+cd+++++++ bar/baz/
-+cd+++++++ foo/
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 12 failed"
- 
-@@ -228,14 +228,14 @@ filter_outfile
- # TODO fix really-old problem when combining -H with --compare-dest:
- # missing output for foo/extra hard-link (and it might not be updated)!
- cat <<EOT >"$chkfile"
--.d..t... ./
--cd++++++ bar/
--cd++++++ bar/baz/
--.f       bar/baz/rsync
--cd++++++ foo/
--.f       foo/config1
--.f       foo/config2
--.L       foo/sym -> ../bar/baz/rsync
-+.d..t.... ./
-+cd+++++++ bar/
-+cd+++++++ bar/baz/
-+.f        bar/baz/rsync
-+cd+++++++ foo/
-+.f        foo/config1
-+.f        foo/config2
-+.L        foo/sym -> ../bar/baz/rsync
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 14 failed"
- 
-@@ -243,10 +243,10 @@ rm -rf "$todir"
- $RSYNC -iplrtH --compare-dest="$lddir" "$fromdir/" "$todir/" \
-     | tee "$outfile"
- cat <<EOT >"$chkfile"
--.d..t... ./
--cd++++++ bar/
--cd++++++ bar/baz/
--cd++++++ foo/
-+.d..t.... ./
-+cd+++++++ bar/
-+cd+++++++ bar/baz/
-+cd+++++++ foo/
- EOT
- diff $diffopt "$chkfile" "$outfile" || test_fail "test 15 failed"
- 
 --- old/testsuite/rsync.fns
 +++ new/testsuite/rsync.fns
 @@ -66,7 +66,7 @@ printmsg() {
