@@ -3,10 +3,12 @@
 use strict;
 use Getopt::Long;
 
+$" = '|'; # NOTE: we auto-join arrays using '|' instead of space!
+
 my @generated_files = qw( proto.h configure config.h.in rsync.1 rsyncd.conf.5 );
 
-my($no_cvs, $failures_only, $minor_updates, $prepare_source, $require_quit);
-my $auto_cmd = 'none';
+my($no_cvs, $failures_only, $minor_updates, $prepare_source);
+my @auto_cmds;
 
 &Getopt::Long::Configure('bundling');
 GetOptions(
@@ -14,13 +16,10 @@ GetOptions(
     'failures-only|f' => \$failures_only,
     'minor-updates|u' => \$minor_updates,
     'prepare-source|p' => \$prepare_source,
-    'require-quit|Q' => \$require_quit,
-    'auto-cmd|a=s' => sub { $auto_cmd .= "|$_[1]" },
+    'auto-cmd|a=s' => sub { push(@auto_cmds, $_[1]) },
 ) or &usage;
 
-$auto_cmd =~ s/none\|//;
-$auto_cmd = qr/^($auto_cmd)$/i;
-
+my $auto_regex = @auto_cmds ? qr/^(@auto_cmds)$/i : qr/^never$/;
 my $interesting_fuzz = $minor_updates ? '\d' : '[2-9]';
 
 chdir('patches') if -d 'patches';
@@ -107,19 +106,26 @@ foreach my $diff (@ARGV) {
 	$default = 'N' if !$minor_updates && $default eq 'U,N';
     }
 
+    my $first_time = 1;
     PROMPT:
     while (1) {
 	print "\n----------- $diff ------------\n",
 	    "\nFix rejects, Diff create, Edit both diffs, Update patch,\n",
 	    "Apply patch again, !(CMD), Build rsync, Next, Quit: [$default] ";
 	my $ans = $default;
-	if ($default =~ /$auto_cmd/) {
+	if ($first_time && $default =~ /$auto_regex/) {
 	    print $default, "\n";
 	} else {
 	    my $input = <STDIN>;
 	    chomp $input;
+	    if ($input =~ s/^(-a|--auto-cmd=?)\s*//) {
+		push(@auto_cmds, $input eq '' ? $default : $input);
+		$auto_regex = qr/^(@auto_cmds)$/i;
+		next;
+	    }
 	    $ans = $input if $input ne '';
 	}
+	$first_time = 0;
 	while ($ans =~ s/^\s*(!|\w)((?<!!)[^;,]*|[^;]*)[;,]?//) {
 	    my $cmd = "\U$1\E";
 	    if ($cmd eq '!') {
@@ -175,12 +181,6 @@ foreach my $diff (@ARGV) {
     }
 
     &restore_cvsdir;
-}
-
-while ($require_quit) {
-    print "\nType 'Q' to quit this session of verify-patches: ";
-    $_ = <STDIN>;
-    exit if /^q/i;
 }
 
 exit;
@@ -294,7 +294,6 @@ Usage: $0 [OPTS] [DIFF-FILE...]
  -f, --failures-only   Suggest skipping patches that don't have failing hunks
  -n, --no-cvs          Don't update tmp/cvsdir at the start of the run
  -p, --prepare-source  Run ./prepare-source and include generated files in diff
- -Q, --require-quit    Don't auto-exit at the end of the list
  -u, --minor-updates   Suggest 'U' for even minor changes in the diff
 EOT
 }
