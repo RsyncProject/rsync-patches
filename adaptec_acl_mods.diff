@@ -1,0 +1,76 @@
+Depends-On-Patch: acls.diff
+
+Philip Lowman wrote:
+> Attached is a small patch which is meant to be applied to a copy of
+> rsync which has already been patched with acl support (the acls.diff
+> file in the patches folder).  It allows the preservation of the delete,
+> chmod, and chown bits which Adaptec has added to XFS on their SnapOS NAS
+> units.  This is nice for backing up files between different NAS units
+> and preserving all of the Samba ACLs.
+> 
+> I'm not sure how useful this patch will be because I'm not sure if any
+> other NAS vendors have standardized on their extensions to POSIX ACLs to
+> support Samba in the same manner that Adaptec has.  FWIW, though, this
+> will allow you to preserve acls when copying between different Adaptec
+> based NAS units running SnapOS.
+
+I (Wayne) tweaked the patch for style and to avoid using SMB_* constants
+with literal values were needed.
+
+--- old/acls.c
++++ new/acls.c
+@@ -146,6 +146,9 @@ static BOOL unpack_smb_acl(rsync_acl *ra
+ 		}
+ 		race->access = (sys_acl_get_perm(permset, SMB_ACL_READ) ? 4 : 0)
+ 			     | (sys_acl_get_perm(permset, SMB_ACL_WRITE) ? 2 : 0)
++			     | (sys_acl_get_perm(permset, SMB_ACL_DELETE) ? 8 : 0)
++			     | (sys_acl_get_perm(permset, SMB_ACL_CHMOD) ? 16 : 0)
++			     | (sys_acl_get_perm(permset, SMB_ACL_CHOWN) ? 32 : 0)
+ 			     | (sys_acl_get_perm(permset, SMB_ACL_EXECUTE) ? 1 : 0);
+ 		switch (race->tag_type) {
+ 		case SMB_ACL_USER:
+@@ -575,6 +578,21 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
+ 				errfun = "sys_acl_add_perm";
+ 				break;
+ 			}
++		if (race->access & 8)
++			if (sys_acl_add_perm(permset, SMB_ACL_DELETE)) {
++				errfun = "sys_acl_add_perm";
++				break;
++			}
++		if (race->access & 16)
++			if (sys_acl_add_perm(permset, SMB_ACL_CHMOD)) {
++				errfun = "sys_acl_add_perm";
++				break;
++			}
++		if (race->access & 32)
++			if (sys_acl_add_perm(permset, SMB_ACL_CHOWN)) {
++				errfun = "sys_acl_add_perm";
++				break;
++			}
+ 		if (sys_acl_set_permset(entry, permset)) {
+ 			errfun = "sys_acl_set_permset";
+ 			break;
+@@ -634,7 +652,7 @@ static void receive_rsync_acl(rsync_acl 
+ 			exit_cleanup(RERR_STREAMIO);
+ 		}
+ 		race->access = read_byte(f);
+-		if (race->access & ~ (4 | 2 | 1)) {
++		if (race->access & ~(32 | 16 | 8 | 4 | 2 | 1)) {
+ 			rprintf(FERROR, "receive_rsync_acl: bogus permset %o\n",
+ 				race->access);
+ 			exit_cleanup(RERR_STREAMIO);
+--- old/smb_acls.h
++++ new/smb_acls.h
+@@ -33,6 +33,11 @@
+ #define SMB_ACL_READ		ACL_READ
+ #define SMB_ACL_WRITE		ACL_WRITE
+ #define SMB_ACL_EXECUTE		ACL_EXECUTE
++/* These are custom ACL bits used by Adaptec's modifications
++ * to XFS on their SnapOS units. */
++#define SMB_ACL_DELETE		0x08
++#define SMB_ACL_CHMOD		0x10
++#define SMB_ACL_CHOWN		0x20
+ 
+ /* Types of ACLs. */
+ #define SMB_ACL_USER		ACL_USER
