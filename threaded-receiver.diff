@@ -155,7 +155,7 @@ After applying this patch, run these commands for a successful build:
  		if (!(backupptr = get_backup_name(fname))) {
  			close(fd);
  			return;
-@@ -1284,7 +1288,10 @@ void generate_files(int f_out, struct fi
+@@ -1286,7 +1290,10 @@ void generate_files(int f_out, struct fi
  	int save_ignore_existing = ignore_existing;
  	int save_ignore_non_existing = ignore_non_existing;
  	int save_do_progress = do_progress;
@@ -167,7 +167,7 @@ After applying this patch, run these commands for a successful build:
  
  	if (protocol_version >= 29) {
  		itemizing = 1;
-@@ -1313,7 +1320,7 @@ void generate_files(int f_out, struct fi
+@@ -1315,7 +1322,7 @@ void generate_files(int f_out, struct fi
  		do_delete_pass(flist);
  	do_progress = 0;
  
@@ -176,7 +176,7 @@ After applying this patch, run these commands for a successful build:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1322,12 +1329,6 @@ void generate_files(int f_out, struct fi
+@@ -1324,12 +1331,6 @@ void generate_files(int f_out, struct fi
  			: "enabled");
  	}
  
@@ -189,7 +189,7 @@ After applying this patch, run these commands for a successful build:
  	for (i = 0; i < flist->count; i++) {
  		struct file_struct *file = flist->files[i];
  
-@@ -1371,23 +1372,34 @@ void generate_files(int f_out, struct fi
+@@ -1373,23 +1374,34 @@ void generate_files(int f_out, struct fi
  		delete_in_dir(NULL, NULL, NULL, NULL);
  
  	phase++;
@@ -230,7 +230,7 @@ After applying this patch, run these commands for a successful build:
  		if (local_name)
  			strlcpy(fbuf, local_name, sizeof fbuf);
  		else
-@@ -1399,27 +1411,43 @@ void generate_files(int f_out, struct fi
+@@ -1401,27 +1413,43 @@ void generate_files(int f_out, struct fi
  	phase++;
  	ignore_non_existing = save_ignore_non_existing;
  	ignore_existing = save_ignore_existing;
@@ -283,7 +283,7 @@ After applying this patch, run these commands for a successful build:
  	do_progress = save_do_progress;
 --- old/io.c
 +++ new/io.c
-@@ -47,7 +47,6 @@ extern int allowed_lull;
+@@ -47,20 +47,17 @@ extern int allowed_lull;
  extern int am_server;
  extern int am_daemon;
  extern int am_sender;
@@ -291,7 +291,12 @@ After applying this patch, run these commands for a successful build:
  extern int eol_nulls;
  extern int read_batch;
  extern int csum_length;
-@@ -60,7 +59,6 @@ extern struct stats stats;
+ extern int checksum_seed;
+ extern int protocol_version;
+-extern int remove_sent_files;
+ extern int preserve_hard_links;
+ extern char *filesfrom_host;
+ extern struct stats stats;
  extern struct file_list *the_file_list;
  
  const char phase_unknown[] = "unknown";
@@ -299,7 +304,7 @@ After applying this patch, run these commands for a successful build:
  int batch_fd = -1;
  int batch_gen_fd = -1;
  
-@@ -84,7 +82,6 @@ const char *io_read_phase = phase_unknow
+@@ -84,7 +81,6 @@ const char *io_read_phase = phase_unknow
  int kluge_around_eof = 0;
  
  int msg_fd_in = -1;
@@ -307,7 +312,7 @@ After applying this patch, run these commands for a successful build:
  int sock_f_in = -1;
  int sock_f_out = -1;
  
-@@ -109,27 +106,32 @@ static int select_timeout = SELECT_TIMEO
+@@ -111,27 +107,32 @@ static OFF_T active_bytecnt = 0;
  static void read_loop(int fd, char *buf, size_t len);
  
  struct flist_ndx_item {
@@ -346,7 +351,7 @@ After applying this patch, run these commands for a successful build:
  
  static void flist_ndx_push(struct flist_ndx_list *lp, int ndx)
  {
-@@ -139,27 +141,31 @@ static void flist_ndx_push(struct flist_
+@@ -141,27 +142,31 @@ static void flist_ndx_push(struct flist_
  		out_of_memory("flist_ndx_push");
  	item->next = NULL;
  	item->ndx = ndx;
@@ -384,7 +389,7 @@ After applying this patch, run these commands for a successful build:
  
  	return ndx;
  }
-@@ -168,7 +174,7 @@ static void check_timeout(void)
+@@ -170,7 +175,7 @@ static void check_timeout(void)
  {
  	time_t t;
  
@@ -393,7 +398,7 @@ After applying this patch, run these commands for a successful build:
  		return;
  
  	if (!last_io_in) {
-@@ -209,45 +215,40 @@ void set_io_timeout(int secs)
+@@ -211,45 +216,40 @@ void set_io_timeout(int secs)
  
  /* Setup the fd used to receive MSG_* messages.  Only needed during the
   * early stages of being a local sender (up through the sending of the
@@ -451,7 +456,7 @@ After applying this patch, run these commands for a successful build:
  static void read_msg_fd(void)
  {
  	char buf[2048];
-@@ -266,47 +267,6 @@ static void read_msg_fd(void)
+@@ -268,51 +268,6 @@ static void read_msg_fd(void)
  	tag = (tag >> 24) - MPLEX_BASE;
  
  	switch (tag) {
@@ -468,6 +473,8 @@ After applying this patch, run these commands for a successful build:
 -			exit_cleanup(RERR_STREAMIO);
 -		}
 -		read_loop(fd, buf, 4);
+-		if (remove_sent_files)
+-			decrement_active_files(IVAL(buf,0));
 -		flist_ndx_push(&redo_list, IVAL(buf,0));
 -		break;
 -	case MSG_DELETED:
@@ -484,8 +491,10 @@ After applying this patch, run these commands for a successful build:
 -			exit_cleanup(RERR_STREAMIO);
 -		}
 -		read_loop(fd, buf, len);
--		if (remove_sent_files)
+-		if (remove_sent_files) {
+-			decrement_active_files(IVAL(buf,0));
 -			io_multiplex_write(MSG_SUCCESS, buf, len);
+-		}
 -		if (preserve_hard_links)
 -			flist_ndx_push(&hlink_list, IVAL(buf,0));
 -		break;
@@ -499,8 +508,8 @@ After applying this patch, run these commands for a successful build:
  	case MSG_INFO:
  	case MSG_ERROR:
  	case MSG_LOG:
-@@ -327,71 +287,75 @@ static void read_msg_fd(void)
- 	msg_fd_in = fd;
+@@ -355,71 +310,75 @@ void decrement_active_files(int ndx)
+ 	active_bytecnt -= the_file_list->files[ndx]->length;
  }
  
 -/* Try to push messages off the list onto the wire.  If we leave with more
@@ -619,7 +628,7 @@ After applying this patch, run these commands for a successful build:
  	return flist_ndx_pop(&hlink_list);
  }
  
-@@ -471,11 +435,6 @@ static int read_timeout(int fd, char *bu
+@@ -499,11 +458,6 @@ static int read_timeout(int fd, char *bu
  		FD_ZERO(&r_fds);
  		FD_ZERO(&w_fds);
  		FD_SET(fd, &r_fds);
@@ -631,7 +640,7 @@ After applying this patch, run these commands for a successful build:
  		if (io_filesfrom_f_out >= 0) {
  			int new_fd;
  			if (io_filesfrom_buflen == 0) {
-@@ -508,9 +467,6 @@ static int read_timeout(int fd, char *bu
+@@ -536,9 +490,6 @@ static int read_timeout(int fd, char *bu
  			continue;
  		}
  
@@ -641,7 +650,7 @@ After applying this patch, run these commands for a successful build:
  		if (io_filesfrom_f_out >= 0) {
  			if (io_filesfrom_buflen) {
  				if (FD_ISSET(io_filesfrom_f_out, &w_fds)) {
-@@ -832,6 +788,8 @@ static void readfd(int fd, char *buffer,
+@@ -860,6 +811,8 @@ static void readfd(int fd, char *buffer,
  	}
  
  	if (fd == write_batch_monitor_in) {
@@ -650,7 +659,7 @@ After applying this patch, run these commands for a successful build:
  		if ((size_t)write(batch_fd, buffer, total) != total)
  			exit_cleanup(RERR_FILEIO);
  	}
-@@ -1087,7 +1045,6 @@ static void writefd_unbuffered(int fd,ch
+@@ -1115,7 +1068,6 @@ static void writefd_unbuffered(int fd,ch
  			 * to grab any messages they sent before they died. */
  			while (fd == sock_f_out && io_multiplexing_in) {
  				set_io_timeout(30);
@@ -658,7 +667,7 @@ After applying this patch, run these commands for a successful build:
  				readfd_unbuffered(sock_f_in, io_filesfrom_buf,
  						  sizeof io_filesfrom_buf);
  			}
-@@ -1097,7 +1054,7 @@ static void writefd_unbuffered(int fd,ch
+@@ -1125,7 +1077,7 @@ static void writefd_unbuffered(int fd,ch
  		total += cnt;
  
  		if (fd == sock_f_out) {
@@ -667,7 +676,7 @@ After applying this patch, run these commands for a successful build:
  				last_io_out = time(NULL);
  			sleep_for_bwlimit(cnt);
  		}
-@@ -1121,7 +1078,7 @@ static void mplex_write(enum msgcode cod
+@@ -1149,7 +1101,7 @@ static void mplex_write(enum msgcode cod
  	 * cause output to occur down the socket.  Setting contiguous_write_len
  	 * prevents the reading of msg_fd_in once we actually start to write
  	 * this sequence of data (though we might read it before the start). */
@@ -676,7 +685,7 @@ After applying this patch, run these commands for a successful build:
  		contiguous_write_len = len + 4;
  
  	if (n > sizeof buffer - 4)
-@@ -1137,31 +1094,29 @@ static void mplex_write(enum msgcode cod
+@@ -1165,31 +1117,29 @@ static void mplex_write(enum msgcode cod
  	if (len)
  		writefd_unbuffered(sock_f_out, buf, len);
  
@@ -720,7 +729,7 @@ After applying this patch, run these commands for a successful build:
  	if (fd == sock_f_out)
  		stats.total_written += len;
  
-@@ -1374,9 +1329,3 @@ void start_write_batch(int fd)
+@@ -1402,9 +1352,3 @@ void start_write_batch(int fd)
  	else
  		write_batch_monitor_in = fd;
  }
@@ -1015,7 +1024,7 @@ After applying this patch, run these commands for a successful build:
  int keep_partial = 0;
  int safe_symlinks = 0;
  int copy_unsafe_links = 0;
-@@ -1292,6 +1292,7 @@ int parse_arguments(int *argc, const cha
+@@ -1295,6 +1295,7 @@ int parse_arguments(int *argc, const cha
  
  	if (do_progress && !verbose && !log_before_transfer && !am_server)
  		verbose = 1;
@@ -1136,13 +1145,14 @@ After applying this patch, run these commands for a successful build:
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
-@@ -644,11 +639,12 @@ int recv_files(int f_in, struct file_lis
+@@ -644,11 +639,13 @@ int recv_files(int f_in, struct file_lis
  		cleanup_disable();
  
  		if (recv_ok > 0) {
 -			if (remove_sent_files
 -			    || (preserve_hard_links && file->link_u.links)) {
 +			if (remove_sent_files) {
++				decrement_active_files(i);
  				SIVAL(numbuf, 0, i);
  				send_msg(MSG_SUCCESS, numbuf, 4);
  			}
@@ -1151,19 +1161,17 @@ After applying this patch, run these commands for a successful build:
  		} else if (!recv_ok) {
  			int msgtype = phase || read_batch ? FERROR : FINFO;
  			if (msgtype == FERROR || verbose) {
-@@ -670,10 +666,8 @@ int recv_files(int f_in, struct file_lis
- 					"%s: %s failed verification -- update %s%s.\n",
+@@ -671,8 +668,8 @@ int recv_files(int f_in, struct file_lis
  					errstr, fname, keptstr, redostr);
  			}
--			if (!phase) {
+ 			if (!phase) {
 -				SIVAL(numbuf, 0, i);
 -				send_msg(MSG_REDO, numbuf, 4);
--			}
-+			if (!phase)
++				decrement_active_files(i);
 +				push_redo_num(i);
+ 			}
  		}
  	}
- 	make_backups = save_make_backups;
 --- old/rsync.c
 +++ new/rsync.c
 @@ -41,7 +41,6 @@ extern int orig_umask;
