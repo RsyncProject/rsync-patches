@@ -1426,7 +1426,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		return;
  	}
  
-@@ -830,18 +832,29 @@ static void recv_generator(char *fname, 
+@@ -830,18 +832,31 @@ static void recv_generator(char *fname, 
  		statret = -1;
  		stat_errno = ENOENT;
  	} else {
@@ -1443,15 +1443,18 @@ ACLs to a non-ACL-supporting disk should complain.
  					flist_free(fuzzy_dirlist);
 -				if (implied_dirs || stat(dn, &st) == 0)
 -					fuzzy_dirlist = get_dirlist(dn, -1, 1);
-+				if (fuzzy_basis
-+				 && (implied_dirs || stat(dn, &st) == 0))
-+					fuzzy_dirlist = need_dirlist;
- 				else
- 					fuzzy_dirlist = NULL;
+-				else
++				if (implied_dirs || stat(dn, &st) == 0) {
++					if (fuzzy_basis)
++						fuzzy_dirlist = need_dirlist;
 +#ifdef SUPPORT_ACLS
-+				if (!preserve_perms)
-+					dflt_perms = default_perms_for_dir(dn);
++					if (!preserve_perms)
++						dflt_perms = default_perms_for_dir(dn);
 +#endif
++				} else {
+ 					fuzzy_dirlist = NULL;
++					dflt_perms = ~orig_umask;
++				}
  			}
  			parent_dirname = dn;
 +			if (fuzzy_dirlist == need_dirlist && S_ISREG(file->mode))
@@ -1459,7 +1462,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		}
  
  		statret = link_stat(fname, &st,
-@@ -863,7 +876,8 @@ static void recv_generator(char *fname, 
+@@ -863,7 +878,8 @@ static void recv_generator(char *fname, 
  	if (!preserve_perms) {
  		int exists = statret == 0
  			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
@@ -1469,7 +1472,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -897,6 +911,10 @@ static void recv_generator(char *fname, 
+@@ -897,6 +913,10 @@ static void recv_generator(char *fname, 
  		if (set_file_attrs(fname, file, statret ? NULL : &st, 0)
  		    && verbose && code && f_out != -1)
  			rprintf(code, "%s/\n", fname);
@@ -1480,7 +1483,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
  		    && (file->flags & FLAG_DEL_HERE))
  			delete_in_dir(the_file_list, fname, file, &st);
-@@ -1334,6 +1352,8 @@ void generate_files(int f_out, struct fi
+@@ -1334,6 +1354,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
