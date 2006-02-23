@@ -1396,7 +1396,7 @@ ACLs to a non-ACL-supporting disk should complain.
  
 --- old/generator.c
 +++ new/generator.c
-@@ -754,6 +754,7 @@ static int try_dests_non(struct file_str
+@@ -755,6 +755,7 @@ static int try_dests_non(struct file_str
  }
  
  static int phase = 0;
@@ -1404,20 +1404,19 @@ ACLs to a non-ACL-supporting disk should complain.
  
  /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
   * make sure it exists, and has the right permissions/timestamp info.  For
-@@ -770,7 +771,7 @@ static void recv_generator(char *fname, 
- 			   enum logcode code, int f_out)
- {
+@@ -773,6 +774,7 @@ static void recv_generator(char *fname, 
  	static int missing_below = -1, excluded_below = -1;
--	static char *fuzzy_dirname = "";
-+	static char *parent_dirname = "";
+ 	static char *parent_dirname = "";
  	static struct file_list *fuzzy_dirlist = NULL;
++	static struct file_list *need_dirlist = (struct file_list *)"";
  	struct file_struct *fuzzy_file = NULL;
  	int fd = -1, f_copy = -1;
-@@ -789,12 +790,12 @@ static void recv_generator(char *fname, 
+ 	STRUCT_STAT st, real_st, partial_st;
+@@ -790,12 +792,12 @@ static void recv_generator(char *fname, 
  		if (fuzzy_dirlist) {
  			flist_free(fuzzy_dirlist);
  			fuzzy_dirlist = NULL;
--			fuzzy_dirname = "";
+-			parent_dirname = "";
  		}
  		if (missing_below >= 0) {
  			dry_run--;
@@ -1427,37 +1426,40 @@ ACLs to a non-ACL-supporting disk should complain.
  		return;
  	}
  
-@@ -829,15 +830,24 @@ static void recv_generator(char *fname, 
+@@ -830,18 +832,29 @@ static void recv_generator(char *fname, 
  		statret = -1;
  		stat_errno = ENOENT;
  	} else {
 -		if (fuzzy_basis && S_ISREG(file->mode)) {
-+		if ((fuzzy_basis && S_ISREG(file->mode))
++		if (fuzzy_basis
 +#ifdef SUPPORT_ACLS
 +		 || !preserve_perms
 +#endif
 +		) {
  			char *dn = file->dirname ? file->dirname : ".";
--			if (fuzzy_dirname != dn
--			    && strcmp(fuzzy_dirname, dn) != 0) {
-+			if (parent_dirname != dn
-+			 && strcmp(parent_dirname, dn) != 0) {
+ 			if (parent_dirname != dn
+ 			    && strcmp(parent_dirname, dn) != 0) {
  				if (fuzzy_dirlist)
  					flist_free(fuzzy_dirlist);
--				fuzzy_dirlist = get_dirlist(dn, -1, 1);
-+				if (fuzzy_basis && S_ISREG(file->mode))
-+					fuzzy_dirlist = get_dirlist(dn, -1, 1);
+-				if (implied_dirs || stat(dn, &st) == 0)
+-					fuzzy_dirlist = get_dirlist(dn, -1, 1);
++				if (fuzzy_basis
++				 && (implied_dirs || stat(dn, &st) == 0))
++					fuzzy_dirlist = need_dirlist;
+ 				else
+ 					fuzzy_dirlist = NULL;
 +#ifdef SUPPORT_ACLS
 +				if (!preserve_perms)
 +					dflt_perms = default_perms_for_dir(dn);
 +#endif
  			}
--			fuzzy_dirname = dn;
-+			parent_dirname = dn;
+ 			parent_dirname = dn;
++			if (fuzzy_dirlist == need_dirlist && S_ISREG(file->mode))
++				fuzzy_dirlist = get_dirlist(dn, -1, 1);
  		}
  
  		statret = link_stat(fname, &st,
-@@ -859,7 +869,8 @@ static void recv_generator(char *fname, 
+@@ -863,7 +876,8 @@ static void recv_generator(char *fname, 
  	if (!preserve_perms) {
  		int exists = statret == 0
  			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
@@ -1467,7 +1469,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -893,6 +904,10 @@ static void recv_generator(char *fname, 
+@@ -897,6 +911,10 @@ static void recv_generator(char *fname, 
  		if (set_file_attrs(fname, file, statret ? NULL : &st, 0)
  		    && verbose && code && f_out != -1)
  			rprintf(code, "%s/\n", fname);
@@ -1478,7 +1480,7 @@ ACLs to a non-ACL-supporting disk should complain.
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
  		    && (file->flags & FLAG_DEL_HERE))
  			delete_in_dir(the_file_list, fname, file, &st);
-@@ -1330,6 +1345,8 @@ void generate_files(int f_out, struct fi
+@@ -1334,6 +1352,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
@@ -4986,7 +4988,7 @@ ACLs to a non-ACL-supporting disk should complain.
  /* We have replacement versions of these if they're missing. */
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -317,6 +317,7 @@ to the detailed description below for a 
+@@ -319,6 +319,7 @@ to the detailed description below for a 
   -K, --keep-dirlinks         treat symlinked dir on receiver as dir
   -p, --perms                 preserve permissions
   -E, --executability         preserve executability
@@ -4994,7 +4996,7 @@ ACLs to a non-ACL-supporting disk should complain.
       --chmod=CHMOD           change destination permissions
   -o, --owner                 preserve owner (super-user only)
   -g, --group                 preserve group
-@@ -703,7 +704,9 @@ quote(itemize(
+@@ -705,7 +706,9 @@ quote(itemize(
    permissions, though the bf(--executability) option might change just
    the execute permission for the file.
    it() New files get their "normal" permission bits set to the source
@@ -5005,7 +5007,7 @@ ACLs to a non-ACL-supporting disk should complain.
    their special permission bits disabled except in the case where a new
    directory inherits a setgid bit from its parent directory.
  ))
-@@ -734,9 +737,11 @@ The preservation of the destination's se
+@@ -736,9 +739,11 @@ The preservation of the destination's se
  directories when bf(--perms) is off was added in rsync 2.6.7.  Older rsync
  versions erroneously preserved the three special permission bits for
  newly-created files when bf(--perms) was off, while overriding the
@@ -5020,7 +5022,7 @@ ACLs to a non-ACL-supporting disk should complain.
  
  dit(bf(-E, --executability)) This option causes rsync to preserve the
  executability (or non-executability) of regular files when bf(--perms) is
-@@ -754,6 +759,10 @@ quote(itemize(
+@@ -756,6 +761,10 @@ quote(itemize(
  
  If bf(--perms) is enabled, this option is ignored.
  
