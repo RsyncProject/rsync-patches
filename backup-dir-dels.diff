@@ -15,11 +15,9 @@ Marc St-Onge
 
 --- old/backup.c
 +++ new/backup.c
-@@ -22,11 +22,17 @@
+@@ -22,10 +22,15 @@
  
  extern int verbose;
- extern int backup_suffix_len;
-+extern int backup_suffix_dels_len;
  extern int backup_dir_len;
 +extern int backup_dir_dels_len;
  extern unsigned int backup_dir_remainder;
@@ -33,8 +31,8 @@ Marc St-Onge
  
  extern int am_root;
  extern int preserve_devices;
-@@ -36,6 +42,8 @@ extern int preserve_hard_links;
- extern int orig_umask;
+@@ -33,6 +38,8 @@ extern int preserve_specials;
+ extern int preserve_links;
  extern int safe_symlinks;
  
 +static int deleting;
@@ -42,7 +40,7 @@ Marc St-Onge
  /* make a complete pathname for backup file */
  char *get_backup_name(char *fname)
  {
-@@ -53,11 +61,28 @@ char *get_backup_name(char *fname)
+@@ -50,11 +57,28 @@ char *get_backup_name(char *fname)
  	return NULL;
  }
  
@@ -72,7 +70,7 @@ Marc St-Onge
  
  	if (!fnamebak)
  		return 0;
-@@ -97,7 +122,8 @@ path
+@@ -94,7 +118,8 @@ path
  static int make_bak_dir(char *fullpath)
  {
  	STRUCT_STAT st;
@@ -82,7 +80,7 @@ Marc St-Onge
  	char *end = rel + strlen(rel);
  	char *p = end;
  
-@@ -185,7 +211,8 @@ static int keep_backup(char *fname)
+@@ -182,7 +207,8 @@ static int keep_backup(char *fname)
  	if (!(file = make_file(fname, NULL, NULL, 0, NO_FILTERS)))
  		return 1; /* the file could have disappeared */
  
@@ -92,7 +90,7 @@ Marc St-Onge
  		return 0;
  
  	/* Check to see if this is a device file, or link */
-@@ -280,3 +307,13 @@ int make_backup(char *fname)
+@@ -277,3 +303,13 @@ int make_backup(char *fname)
  		return keep_backup(fname);
  	return make_simple_backup(fname);
  }
@@ -108,7 +106,7 @@ Marc St-Onge
 +}
 --- old/generator.c
 +++ new/generator.c
-@@ -91,6 +91,9 @@ extern dev_t filesystem_dev;
+@@ -90,6 +90,9 @@ extern dev_t filesystem_dev;
  extern char *backup_dir;
  extern char *backup_suffix;
  extern int backup_suffix_len;
@@ -118,7 +116,7 @@ Marc St-Onge
  extern struct file_list *the_file_list;
  extern struct filter_list_struct server_filter_list;
  
-@@ -103,10 +106,14 @@ static int can_link_devices = 1;
+@@ -102,10 +105,14 @@ static int can_link_devices = 1;
  #define DEL_TERSE		(1<<3)
  
  
@@ -134,7 +132,7 @@ Marc St-Onge
  }
  
  
-@@ -127,8 +134,8 @@ static int delete_item(char *fname, int 
+@@ -126,8 +133,8 @@ static int delete_item(char *fname, int 
  	if (!S_ISDIR(mode)) {
  		if (max_delete && ++deletion_count > max_delete)
  			return 0;
@@ -145,7 +143,7 @@ Marc St-Onge
  		else
  			ok = robust_unlink(fname) == 0;
  		if (ok) {
-@@ -150,9 +157,9 @@ static int delete_item(char *fname, int 
+@@ -149,9 +156,9 @@ static int delete_item(char *fname, int 
  	    || (dry_run && zap_dir)) {
  		ok = 0;
  		errno = ENOTEMPTY;
@@ -193,7 +191,7 @@ Marc St-Onge
    rprintf(F," -u, --update                skip files that are newer on the receiver\n");
    rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
    rprintf(F,"     --append                append data onto shorter files\n");
-@@ -496,7 +504,9 @@ static struct poptOption long_options[] 
+@@ -497,7 +505,9 @@ static struct poptOption long_options[] 
    {"bwlimit",          0,  POPT_ARG_INT,    &bwlimit, 0, 0, 0 },
    {"backup",          'b', POPT_ARG_NONE,   &make_backups, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
@@ -203,7 +201,7 @@ Marc St-Onge
    {"list-only",        0,  POPT_ARG_VAL,    &list_only, 2, 0, 0 },
    {"read-batch",       0,  POPT_ARG_STRING, &batch_name, OPT_READ_BATCH, 0, 0 },
    {"write-batch",      0,  POPT_ARG_STRING, &batch_name, OPT_WRITE_BATCH, 0, 0 },
-@@ -1205,6 +1215,8 @@ int parse_arguments(int *argc, const cha
+@@ -1212,6 +1222,8 @@ int parse_arguments(int *argc, const cha
  			partial_dir = sanitize_path(NULL, partial_dir, NULL, 0);
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0);
@@ -212,7 +210,7 @@ Marc St-Onge
  	}
  	if (server_filter_list.head && !am_sender) {
  		struct filter_list_struct *elp = &server_filter_list;
-@@ -1239,6 +1251,14 @@ int parse_arguments(int *argc, const cha
+@@ -1246,6 +1258,14 @@ int parse_arguments(int *argc, const cha
  				return 0;
  			}
  		}
@@ -227,7 +225,7 @@ Marc St-Onge
  	}
  
  	if (!backup_suffix)
-@@ -1250,6 +1270,16 @@ int parse_arguments(int *argc, const cha
+@@ -1257,6 +1277,16 @@ int parse_arguments(int *argc, const cha
  			backup_suffix);
  		return 0;
  	}
@@ -244,7 +242,7 @@ Marc St-Onge
  	if (backup_dir) {
  		backup_dir_len = strlcpy(backup_dir_buf, backup_dir, sizeof backup_dir_buf);
  		backup_dir_remainder = sizeof backup_dir_buf - backup_dir_len;
-@@ -1273,6 +1303,31 @@ int parse_arguments(int *argc, const cha
+@@ -1280,6 +1310,31 @@ int parse_arguments(int *argc, const cha
  			"P *%s", backup_suffix);
  		parse_rule(&filter_list, backup_dir_buf, 0, 0);
  	}
@@ -276,7 +274,7 @@ Marc St-Onge
  	if (make_backups && !backup_dir)
  		omit_dir_times = 1;
  
-@@ -1614,6 +1669,10 @@ void server_options(char **args,int *arg
+@@ -1624,6 +1679,10 @@ void server_options(char **args,int *arg
  		args[ac++] = "--backup-dir";
  		args[ac++] = backup_dir;
  	}
@@ -287,7 +285,7 @@ Marc St-Onge
  
  	/* Only send --suffix if it specifies a non-default value. */
  	if (strcmp(backup_suffix, backup_dir ? "" : BACKUP_SUFFIX) != 0) {
-@@ -1622,7 +1681,13 @@ void server_options(char **args,int *arg
+@@ -1632,7 +1691,13 @@ void server_options(char **args,int *arg
  			goto oom;
  		args[ac++] = arg;
  	}
