@@ -19,7 +19,7 @@ An extended version of a patch by Shachar Shemesh.
  static int false_alarms;
  static int tag_hits;
  static int matches;
-@@ -42,47 +37,36 @@ static int total_matches;
+@@ -42,47 +37,37 @@ static int total_matches;
  
  extern struct stats stats;
  
@@ -39,7 +39,7 @@ An extended version of a patch by Shachar Shemesh.
 -{
 -	return (int)t1->t - (int)t2->t;
 -}
-+static int32 tablesize;
++static uint32 tablesize;
 +static int32 *sum_table;
  
 +#define gettag2(s1,s2) gettag((s1) + ((s2)<<16))
@@ -47,15 +47,15 @@ An extended version of a patch by Shachar Shemesh.
  
  static void build_hash_table(struct sum_struct *s)
  {
--	int32 i;
-+	int32 i, prior_size = tablesize;
+ 	int32 i;
++	uint32 prior_size = tablesize;
  
 -	if (!tag_table)
 -		tag_table = new_array(int32, TABLESIZE);
 +	/* Dynamically calculate the hash table size so that the hash load
 +	 * for big files is about 80%.  This number must be odd or s2 will
 +	 * not be able to span the entire set. */
-+	tablesize = (s->count/8) * 10 + 11;
++	tablesize = (uint32)(s->count/8) * 10 + 11;
 +	if (tablesize < 65537)
 +		tablesize = 65537; /* a prime number */
 +	if (tablesize != prior_size) {
@@ -73,7 +73,7 @@ An extended version of a patch by Shachar Shemesh.
  	for (i = 0; i < s->count; i++) {
 -		targets[i].i = i;
 -		targets[i].t = gettag(s->sums[i].sum1);
-+		int32 t = gettag(s->sums[i].sum1);
++		uint32 t = gettag(s->sums[i].sum1);
 +		s->sums[i].chain = sum_table[t];
 +		sum_table[t] = i;
  	}
@@ -88,14 +88,15 @@ An extended version of a patch by Shachar Shemesh.
  }
  
  
-@@ -176,20 +160,16 @@ static void hash_search(int f,struct sum
+@@ -176,20 +161,17 @@ static void hash_search(int f,struct sum
  	}
  
  	do {
 -		tag t = gettag2(s1,s2);
-+		int32 i, t = gettag2(s1,s2);
++		uint32 t = gettag2(s1,s2);
  		int done_csum2 = 0;
 -		int32 j = tag_table[t];
++		int32 i;
  
  		if (verbose > 4)
  			rprintf(FINFO,"offset=%.0f sum=%08x\n",(double)offset,sum);
@@ -112,7 +113,7 @@ An extended version of a patch by Shachar Shemesh.
  
  			if (sum != s->sums[i].sum1)
  				continue;
-@@ -205,9 +185,10 @@ static void hash_search(int f,struct sum
+@@ -205,9 +187,10 @@ static void hash_search(int f,struct sum
  			    && !(s->sums[i].flags & SUMFLG_SAME_OFFSET))
  				continue;
  
@@ -126,7 +127,7 @@ An extended version of a patch by Shachar Shemesh.
  
  			if (!done_csum2) {
  				map = (schar *)map_ptr(buf,offset,l);
-@@ -224,23 +205,23 @@ static void hash_search(int f,struct sum
+@@ -224,23 +207,23 @@ static void hash_search(int f,struct sum
  			 * one with an identical offset, so we prefer that over
  			 * the following want_i optimization. */
  			if (updating_basis_file) {
@@ -155,7 +156,7 @@ An extended version of a patch by Shachar Shemesh.
  			}
  
  			/* we've found a match, but now check to see
-@@ -266,9 +247,8 @@ static void hash_search(int f,struct sum
+@@ -266,9 +249,8 @@ static void hash_search(int f,struct sum
  			s2 = sum >> 16;
  			matches++;
  			break;
@@ -166,7 +167,7 @@ An extended version of a patch by Shachar Shemesh.
  		backup = offset - last_match;
  		/* We sometimes read 1 byte prior to last_match... */
  		if (backup < 0)
-@@ -375,11 +355,6 @@ void match_sums(int f, struct sum_struct
+@@ -375,11 +357,6 @@ void match_sums(int f, struct sum_struct
  		rprintf(FINFO,"sending file_sum\n");
  	write_buf(f,file_sum,MD4_SUM_LENGTH);
  
