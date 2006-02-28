@@ -198,7 +198,7 @@ sub apply_patch
     system "rsync -a --delete --exclude='*~' cvsdir/ workdir/";
     print "\nApplying patch $diff...\n";
     undef @rejects;
-    my($saw_failure, $saw_offset, $saw_fuzz);
+    my($saw_offset, $saw_fuzz);
     open(IN, "patch -d workdir -p1 --no-backup-if-mismatch <../$diff |") or die $!;
     while (<IN>) {
 	print $_;
@@ -207,15 +207,13 @@ sub apply_patch
 	    push(@new, $_) unless -f "cvsdir/$_";
 	} elsif (s/.* saving rejects to file //) {
 	    push(@rejects, $_);
-	} elsif (/^Hunk #\d+ FAILED/) {
-	    $saw_failure = 1;
 	} elsif (/^Hunk #\d+ succeeded at \d+( with fuzz $interesting_fuzz)?/o) {
 	    $saw_fuzz ||= defined $1;
 	    $saw_offset = 1;
 	}
     }
     close IN;
-    return 'F,D,E' if $saw_failure;
+    return 'F,D,E' if @rejects;
     return 'D,E' if $saw_fuzz && !$failures_only;
     return 'D,U,N' if $saw_offset && !$failures_only;
     'N';
