@@ -26,7 +26,7 @@ After applying this patch, run these commands for a successful build:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/backup.c
 +++ new/backup.c
-@@ -136,6 +136,7 @@ static int make_bak_dir(char *fullpath)
+@@ -133,6 +133,7 @@ static int make_bak_dir(char *fullpath)
  				do_lchown(fullpath, st.st_uid, st.st_gid);
  				do_chmod(fullpath, st.st_mode);
  				(void)DUP_ACL(end, fullpath, st.st_mode);
@@ -34,7 +34,7 @@ After applying this patch, run these commands for a successful build:
  			}
  		}
  		*p = '/';
-@@ -190,6 +191,7 @@ static int keep_backup(char *fname)
+@@ -187,6 +188,7 @@ static int keep_backup(char *fname)
  		return 0;
  
  	PUSH_KEEP_BACKUP_ACL(file, fname, buf);
@@ -42,7 +42,7 @@ After applying this patch, run these commands for a successful build:
  
  	/* Check to see if this is a device file, or link */
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
-@@ -267,6 +269,7 @@ static int keep_backup(char *fname)
+@@ -264,6 +266,7 @@ static int keep_backup(char *fname)
  	}
  	set_file_attrs(buf, file, NULL, 0);
  	CLEANUP_KEEP_BACKUP_ACL();
@@ -85,7 +85,7 @@ After applying this patch, run these commands for a successful build:
  
 --- old/flist.c
 +++ new/flist.c
-@@ -969,6 +969,8 @@ static struct file_struct *send_file_nam
+@@ -968,6 +968,8 @@ static struct file_struct *send_file_nam
  		return NULL;
  	if (MAKE_ACL(file, fname) < 0)
  		return NULL;
@@ -94,7 +94,7 @@ After applying this patch, run these commands for a successful build:
  
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
-@@ -981,9 +983,11 @@ static struct file_struct *send_file_nam
+@@ -980,9 +982,11 @@ static struct file_struct *send_file_nam
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f);
  		SEND_ACL(file, f);
@@ -106,15 +106,15 @@ After applying this patch, run these commands for a successful build:
  	}
  	return file;
  }
-@@ -1373,6 +1377,7 @@ struct file_list *recv_file_list(int f)
+@@ -1372,6 +1376,7 @@ struct file_list *recv_file_list(int f)
  		file = receive_file_entry(flist, flags, f);
  
  		RECEIVE_ACL(file, f);
 +		RECEIVE_XATTR(file, f );
  
- 		if (S_ISREG(file->mode))
+ 		if (S_ISREG(file->mode) || S_ISLNK(file->mode))
  			stats.total_size += file->length;
-@@ -1397,6 +1402,7 @@ struct file_list *recv_file_list(int f)
+@@ -1396,6 +1401,7 @@ struct file_list *recv_file_list(int f)
  	clean_flist(flist, relative_paths, 1);
  
  	SORT_FILE_ACL_INDEX_LISTS();
@@ -124,7 +124,7 @@ After applying this patch, run these commands for a successful build:
  		recv_uid_list(f, flist);
 --- old/generator.c
 +++ new/generator.c
-@@ -908,6 +908,10 @@ static void recv_generator(char *fname, 
+@@ -916,6 +916,10 @@ static void recv_generator(char *fname, 
  		if (f_out == -1)
  			SET_ACL(fname, file);
  #endif
@@ -193,7 +193,7 @@ After applying this patch, run these commands for a successful build:
 +#endif /* No xattrs */
 --- old/options.c
 +++ new/options.c
-@@ -45,6 +45,7 @@ int copy_links = 0;
+@@ -46,6 +46,7 @@ int copy_links = 0;
  int preserve_links = 0;
  int preserve_hard_links = 0;
  int preserve_acls = 0;
@@ -232,7 +232,7 @@ After applying this patch, run these commands for a successful build:
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -303,6 +307,9 @@ void usage(enum logcode F)
+@@ -304,6 +308,9 @@ void usage(enum logcode F)
  #ifdef SUPPORT_ACLS
    rprintf(F," -A, --acls                  preserve ACLs (implies --perms)\n");
  #endif
@@ -242,7 +242,7 @@ After applying this patch, run these commands for a successful build:
    rprintf(F,"     --chmod=CHMOD           change destination permissions\n");
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
-@@ -423,6 +430,9 @@ static struct poptOption long_options[] 
+@@ -422,6 +429,9 @@ static struct poptOption long_options[] 
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
    {"no-A",             0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
@@ -252,7 +252,7 @@ After applying this patch, run these commands for a successful build:
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1088,6 +1098,17 @@ int parse_arguments(int *argc, const cha
+@@ -1096,6 +1106,17 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -270,7 +270,7 @@ After applying this patch, run these commands for a successful build:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1532,6 +1553,10 @@ void server_options(char **args,int *arg
+@@ -1544,6 +1565,10 @@ void server_options(char **args,int *arg
  	if (preserve_acls)
  		argstr[x++] = 'A';
  #endif
@@ -283,7 +283,7 @@ After applying this patch, run these commands for a successful build:
  	if (preserve_gid)
 --- old/rsync.c
 +++ new/rsync.c
-@@ -215,12 +215,15 @@ int set_file_attrs(char *fname, struct f
+@@ -218,12 +218,15 @@ int set_file_attrs(char *fname, struct f
  	}
  #endif
  
@@ -304,7 +304,7 @@ After applying this patch, run these commands for a successful build:
  	if (verbose > 1 && flags & ATTRS_REPORT) {
 --- old/rsync.h
 +++ new/rsync.h
-@@ -695,6 +695,38 @@ struct chmod_mode_struct;
+@@ -696,6 +696,38 @@ struct chmod_mode_struct;
  #endif /* SUPPORT_ACLS */
  #include "smb_acls.h"
  
@@ -345,7 +345,7 @@ After applying this patch, run these commands for a successful build:
  /* We have replacement versions of these if they're missing. */
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -318,6 +318,7 @@ to the detailed description below for a 
+@@ -322,6 +322,7 @@ to the detailed description below for a 
   -p, --perms                 preserve permissions
   -E, --executability         preserve executability
   -A, --acls                  preserve ACLs (implies -p) [non-standard]
@@ -353,7 +353,7 @@ After applying this patch, run these commands for a successful build:
       --chmod=CHMOD           change destination permissions
   -o, --owner                 preserve owner (super-user only)
   -g, --group                 preserve group
-@@ -752,6 +753,11 @@ dit(bf(-A, --acls)) This option causes r
+@@ -802,6 +803,11 @@ dit(bf(-A, --acls)) This option causes r
  ACLs to be the same as the source ACLs.  This nonstandard option only
  works if the remote rsync also supports it.  bf(--acls) implies bf(--perms).
  
