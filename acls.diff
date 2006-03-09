@@ -1024,7 +1024,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +int set_acl(const char *fname, const struct file_struct *file)
 +{
-+	int updated = 0;
++	int unchanged = 1;
 +	SMB_ACL_TYPE_T *type,
 +		types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
 +	if (dry_run || !preserve_acls || S_ISLNK(file->mode))
@@ -1048,13 +1048,13 @@ ACLs to a non-ACL-supporting disk should complain.
 +		if (!sacl_orig) {
 +			rprintf(FERROR, "set_acl: sys_acl_get_file(%s, %s): %s\n",
 +				fname, str_acl_type(*type), strerror(errno));
-+			updated = -1;
++			unchanged = -1;
 +			continue;
 +		}
 +		ok = unpack_smb_acl(&racl_orig, sacl_orig);
 +		sys_acl_free_acl(sacl_orig);
 +		if (!ok) {
-+			updated = -1;
++			unchanged = -1;
 +			continue;
 +		}
 +		ok = rsync_acls_equal(&racl_orig, racl_new);
@@ -1065,27 +1065,27 @@ ACLs to a non-ACL-supporting disk should complain.
 +			if (-1 == sys_acl_delete_def_file(fname)) {
 +				rprintf(FERROR, "set_acl: sys_acl_delete_def_file(%s): %s\n",
 +					fname, strerror(errno));
-+				updated = -1;
++				unchanged = -1;
 +				continue;
 +			}
 +		} else {
 +			if (!*sacl_new)
 +				if (!pack_smb_acl(sacl_new, racl_new)) {
-+					updated = -1;
++					unchanged = -1;
 +					continue;
 +				}
 +			if (-1 == sys_acl_set_file(fname, *type, *sacl_new)) {
 +				rprintf(FERROR, "set_acl: sys_acl_set_file(%s, %s): %s\n",
 +					fname, str_acl_type(*type),
 +					strerror(errno));
-+				updated = -1;
++				unchanged = -1;
 +				continue;
 +			}
 +		}
-+		if (!updated)
-+			updated = 1;
++		if (unchanged == 1)
++			unchanged = 0;
 +	}
-+	return updated;
++	return unchanged;
 +}
 +
 +/* Enumeration functions for uid mapping: */
@@ -1433,18 +1433,7 @@ ACLs to a non-ACL-supporting disk should complain.
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -905,6 +912,10 @@ static void recv_generator(char *fname, 
- 		if (set_file_attrs(fname, file, statret ? NULL : &st, 0)
- 		    && verbose && code && f_out != -1)
- 			rprintf(code, "%s/\n", fname);
-+#ifdef SUPPORT_ACLS
-+		if (f_out == -1)
-+			SET_ACL(fname, file);
-+#endif
- 		if (delete_during && f_out != -1 && !phase && dry_run < 2
- 		    && (file->flags & FLAG_DEL_HERE))
- 			delete_in_dir(the_file_list, fname, file, &st);
-@@ -1342,6 +1353,8 @@ void generate_files(int f_out, struct fi
+@@ -1342,6 +1349,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
@@ -4892,21 +4881,18 @@ ACLs to a non-ACL-supporting disk should complain.
  		}
  	} else
 -		cur_mode = flist_mode & ACCESSPERMS & ~orig_umask;
-+		cur_mode = (flist_mode & ACCESSPERMS & dflt_perms) | S_IWUSR;
++		cur_mode = flist_mode & ACCESSPERMS & dflt_perms;
  	if (daemon_chmod_modes && !S_ISLNK(flist_mode))
  		cur_mode = tweak_mode(cur_mode, daemon_chmod_modes);
  	return (flist_mode & ~CHMOD_BITS) | (cur_mode & CHMOD_BITS);
-@@ -217,6 +218,14 @@ int set_file_attrs(char *fname, struct f
+@@ -217,6 +218,11 @@ int set_file_attrs(char *fname, struct f
  	}
  #endif
  
-+	/* If this is a directory, SET_ACL() will be called on the cleanup
-+	 * receive_generator() pass (if we called it here, we might clobber
-+	 * writability on the directory). Everything else is OK to do now. */
-+	if (!S_ISDIR(st->st_mode)) {
-+		if (SET_ACL(fname, file) == 0)
-+			updated = 1;
-+	}
++	/* It's fine to call SET_ACL now; the generator will enable
++	 * writability on the directory using chmod if necessary. */
++	if (SET_ACL(fname, file) == 0)
++		updated = 1;
 +
  	if (verbose > 1 && flags & ATTRS_REPORT) {
  		enum logcode code = daemon_log_format_has_i || dry_run
