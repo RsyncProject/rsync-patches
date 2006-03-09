@@ -32,7 +32,7 @@ ACLs to a non-ACL-supporting disk should complain.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1233 @@
+@@ -0,0 +1,1218 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -59,7 +59,6 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +#ifdef SUPPORT_ACLS
 +
-+extern int preserve_acls;
 +extern int am_root;
 +extern int dry_run;
 +extern int orig_umask;
@@ -400,7 +399,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	SMB_ACL_TYPE_T type;
 +	rsync_acl *curr_racl;
 +
-+	if (!preserve_acls || S_ISLNK(file->mode))
++	if (S_ISLNK(file->mode))
 +		return 1;
 +
 +	curr_racl = &_curr_rsync_acls[0];
@@ -438,8 +437,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +	SMB_ACL_TYPE_T type;
 +	rsync_acl *curr_racl;
 +
-+	if (!preserve_acls || S_ISLNK(file->mode))
++	if (S_ISLNK(file->mode))
 +		return;
++
 +	curr_racl = &_curr_rsync_acls[0];
 +	type = SMB_ACL_TYPE_ACCESS;
 +	do {
@@ -785,7 +785,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	SMB_ACL_TYPE_T type;
 +	char *fname;
 +
-+	if (!preserve_acls || S_ISLNK(file->mode))
++	if (S_ISLNK(file->mode))
 +		return;
 +
 +	fname = f_name(file, NULL);
@@ -857,9 +857,6 @@ ACLs to a non-ACL-supporting disk should complain.
 +{
 +	SMB_ACL_TYPE_T type;
 +
-+	if (!preserve_acls)
-+		return;
-+
 +	type = SMB_ACL_TYPE_ACCESS;
 +	do {
 +		file_acl_index_list *fileaclidx_list =
@@ -905,9 +902,6 @@ ACLs to a non-ACL-supporting disk should complain.
 +{
 +	SMB_ACL_TYPE_T type;
 +	int ret = 0;
-+
-+	if (!preserve_acls)
-+		return 1;
 +
 +	type = SMB_ACL_TYPE_ACCESS;
 +	do {
@@ -980,9 +974,6 @@ ACLs to a non-ACL-supporting disk should complain.
 +	SMB_ACL_TYPE_T type;
 +	SMB_ACL_T *sacl;
 +
-+	if (!preserve_acls)
-+		return;
-+
 +	backup_orig_file = file;
 +	backup_orig_fname = orig;
 +	backup_dest_fname = dest;
@@ -1009,9 +1000,6 @@ ACLs to a non-ACL-supporting disk should complain.
 +	SMB_ACL_T *sacl;
 +	int ret = 0;
 +
-+	if (!preserve_acls)
-+		return 1;
-+
 +	sacl = &_backup_sacl[0];
 +	type = SMB_ACL_TYPE_ACCESS;
 +	do {
@@ -1034,9 +1022,6 @@ ACLs to a non-ACL-supporting disk should complain.
 +	SMB_ACL_TYPE_T type;
 +	SMB_ACL_T *sacl;
 +
-+	if (!preserve_acls)
-+		return;
-+
 +	backup_orig_file = NULL;
 +	backup_orig_fname = null_string;
 +	backup_dest_fname = null_string;
@@ -1058,7 +1043,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +	int unchanged = 1;
 +	SMB_ACL_TYPE_T type;
 +
-+	if (dry_run || !preserve_acls || S_ISLNK(file->mode))
++	if (dry_run || S_ISLNK(file->mode))
 +		return 1;
 +
 +	if (file == backup_orig_file) {
@@ -1268,33 +1253,44 @@ ACLs to a non-ACL-supporting disk should complain.
 +#endif /* SUPPORT_ACLS */
 --- old/backup.c
 +++ new/backup.c
-@@ -132,6 +132,9 @@ static int make_bak_dir(char *fullpath)
+@@ -28,6 +28,7 @@ extern char *backup_suffix;
+ extern char *backup_dir;
+ 
+ extern int am_root;
++extern int preserve_acls;
+ extern int preserve_devices;
+ extern int preserve_specials;
+ extern int preserve_links;
+@@ -132,6 +133,10 @@ static int make_bak_dir(char *fullpath)
  			} else {
  				do_lchown(fullpath, st.st_uid, st.st_gid);
  				do_chmod(fullpath, st.st_mode);
 +#ifdef SUPPORT_ACLS
-+				dup_acl(end, fullpath, st.st_mode);
++				if (preserve_acls)
++					dup_acl(end, fullpath, st.st_mode);
 +#endif
  			}
  		}
  		*p = '/';
-@@ -185,6 +188,10 @@ static int keep_backup(char *fname)
+@@ -185,6 +190,11 @@ static int keep_backup(char *fname)
  	if (!(buf = get_backup_name(fname)))
  		return 0;
  
 +#ifdef SUPPORT_ACLS
-+	push_keep_backup_acl(file, fname, buf);
++	if (preserve_acls)
++		push_keep_backup_acl(file, fname, buf);
 +#endif
 +
  	/* Check to see if this is a device file, or link */
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
  	 || (preserve_specials && IS_SPECIAL(file->mode))) {
-@@ -260,6 +267,9 @@ static int keep_backup(char *fname)
+@@ -260,6 +270,10 @@ static int keep_backup(char *fname)
  		}
  	}
  	set_file_attrs(buf, file, NULL, 0);
 +#ifdef SUPPORT_ACLS
-+	cleanup_keep_backup_acl();
++	if (preserve_acls)
++		cleanup_keep_backup_acl();
 +#endif
  	free(file);
  
@@ -1393,47 +1389,61 @@ ACLs to a non-ACL-supporting disk should complain.
  
 --- old/flist.c
 +++ new/flist.c
-@@ -966,6 +966,10 @@ static struct file_struct *send_file_nam
+@@ -44,6 +44,7 @@ extern int filesfrom_fd;
+ extern int one_file_system;
+ extern int copy_dirlinks;
+ extern int keep_dirlinks;
++extern int preserve_acls;
+ extern int preserve_links;
+ extern int preserve_hard_links;
+ extern int preserve_devices;
+@@ -966,6 +967,10 @@ static struct file_struct *send_file_nam
  			 f == -2 ? SERVER_FILTERS : ALL_FILTERS);
  	if (!file)
  		return NULL;
 +#ifdef SUPPORT_ACLS
-+	if (make_acl(file, fname) < 0)
++	if (preserve_acls && make_acl(file, fname) < 0)
 +		return NULL;
 +#endif
  
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
-@@ -977,6 +981,12 @@ static struct file_struct *send_file_nam
+@@ -977,6 +982,16 @@ static struct file_struct *send_file_nam
  	if (file->basename[0]) {
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f);
 +#ifdef SUPPORT_ACLS
-+		send_acl(file, f);
++		if (preserve_acls)
++			send_acl(file, f);
++#endif
 +	} else {
++#ifdef SUPPORT_ACLS
 +		/* Cleanup unsent ACL(s). */
-+		send_acl(file, -1);
++		if (preserve_acls)
++			send_acl(file, -1);
 +#endif
  	}
  	return file;
  }
-@@ -1365,6 +1375,10 @@ struct file_list *recv_file_list(int f)
+@@ -1365,6 +1380,11 @@ struct file_list *recv_file_list(int f)
  			flags |= read_byte(f) << 8;
  		file = receive_file_entry(flist, flags, f);
  
 +#ifdef SUPPORT_ACLS
-+		receive_acl(file, f);
++		if (preserve_acls)
++			receive_acl(file, f);
 +#endif
 +
  		if (S_ISREG(file->mode) || S_ISLNK(file->mode))
  			stats.total_size += file->length;
  
-@@ -1387,6 +1401,10 @@ struct file_list *recv_file_list(int f)
+@@ -1387,6 +1407,11 @@ struct file_list *recv_file_list(int f)
  
  	clean_flist(flist, relative_paths, 1);
  
 +#ifdef SUPPORT_ACLS
-+	sort_file_acl_index_lists();
++	if (preserve_acls)
++		sort_file_acl_index_lists();
 +#endif
 +
  	if (f >= 0) {
@@ -4911,7 +4921,15 @@ ACLs to a non-ACL-supporting disk should complain.
  		/* We now check to see if we are writing file "inplace" */
 --- old/rsync.c
 +++ new/rsync.c
-@@ -101,7 +101,8 @@ void free_sums(struct sum_struct *s)
+@@ -33,6 +33,7 @@
+ extern int verbose;
+ extern int dry_run;
+ extern int daemon_log_format_has_i;
++extern int preserve_acls;
+ extern int preserve_perms;
+ extern int preserve_executability;
+ extern int preserve_times;
+@@ -101,7 +102,8 @@ void free_sums(struct sum_struct *s)
  
  /* This is only called when we aren't preserving permissions.  Figure out what
   * the permissions should be and return them merged back into the mode. */
@@ -4921,7 +4939,7 @@ ACLs to a non-ACL-supporting disk should complain.
  {
  	/* If the file already exists, we'll return the local permissions,
  	 * possibly tweaked by the --executability option. */
-@@ -116,7 +117,7 @@ mode_t dest_mode(mode_t flist_mode, mode
+@@ -116,7 +118,7 @@ mode_t dest_mode(mode_t flist_mode, mode
  				cur_mode |= (cur_mode & 0444) >> 2;
  		}
  	} else
@@ -4930,14 +4948,14 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (daemon_chmod_modes && !S_ISLNK(flist_mode))
  		cur_mode = tweak_mode(cur_mode, daemon_chmod_modes);
  	return (flist_mode & ~CHMOD_BITS) | (cur_mode & CHMOD_BITS);
-@@ -203,6 +204,13 @@ int set_file_attrs(char *fname, struct f
+@@ -203,6 +205,13 @@ int set_file_attrs(char *fname, struct f
  		updated = 1;
  	}
  
 +#ifdef SUPPORT_ACLS
 +	/* It's OK to call set_acl() now, even for a dir, as the generator
 +	 * will enable owner-writability using chmod, if necessary. */
-+	if (set_acl(fname, file) == 0)
++	if (preserve_acls && set_acl(fname, file) == 0)
 +		updated = 1;
 +#endif
 +
@@ -5412,7 +5430,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +		while ((id = next_acl_gid(flist)) != 0)
 +			acl_gid_map(match_gid(id));
 +	}
-+#endif /* SUPPORT_ACLS */
++#endif
 +
  	/* Now convert all the uids/gids from sender values to our values. */
  	if (am_root && preserve_uid && !numeric_ids) {
