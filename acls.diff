@@ -32,7 +32,7 @@ ACLs to a non-ACL-supporting disk should complain.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1230 @@
+@@ -0,0 +1,1233 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -77,7 +77,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +} rsync_acl;
 +
 +static const rsync_acl rsync_acl_initializer = { 0, 0, NULL };
-+static SMB_ACL_TYPE_T types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++
++#define OTHER_TYPE(t) (SMB_ACL_TYPE_ACCESS+SMB_ACL_TYPE_DEFAULT-(t))
++#define BUMP_TYPE(t) ((t = OTHER_TYPE(t)) == SMB_ACL_TYPE_DEFAULT)
 +
 +static void expand_rsync_acl(rsync_acl *racl)
 +{
@@ -395,19 +397,19 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +int make_acl(const struct file_struct *file, const char *fname)
 +{
-+	SMB_ACL_TYPE_T *type;
++	SMB_ACL_TYPE_T type;
 +	rsync_acl *curr_racl;
 +
 +	if (!preserve_acls || S_ISLNK(file->mode))
 +		return 1;
-+	for (type = &types[0], curr_racl = &_curr_rsync_acls[0];
-+	     type < &types[0] + sizeof types / sizeof types[0]
-+		&& (*type == SMB_ACL_TYPE_ACCESS || S_ISDIR(file->mode));
-+	     type++, curr_racl++) {
++
++	curr_racl = &_curr_rsync_acls[0];
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
 +		SMB_ACL_T sacl;
 +		BOOL ok;
 +		*curr_racl = rsync_acl_initializer;
-+		if ((sacl = sys_acl_get_file(fname, *type)) != 0) {
++		if ((sacl = sys_acl_get_file(fname, type)) != 0) {
 +			ok = unpack_smb_acl(curr_racl, sacl);
 +			sys_acl_free_acl(sacl);
 +			if (!ok)
@@ -415,14 +417,16 @@ ACLs to a non-ACL-supporting disk should complain.
 +		} else if (errno == ENOTSUP) {
 +			/* ACLs are not supported.  Invent an access ACL from
 +			 * permissions; let the default ACL default to empty. */
-+			if (*type == SMB_ACL_TYPE_ACCESS)
++			if (type == SMB_ACL_TYPE_ACCESS)
 +				perms_to_acl(file->mode & ACCESSPERMS, curr_racl);
 +		} else {
 +			rprintf(FERROR, "send_acl: sys_acl_get_file(%s, %s): %s\n",
-+				fname, str_acl_type(*type), strerror(errno));
++				fname, str_acl_type(type), strerror(errno));
 +			return -1;
 +		}
-+	}
++		curr_racl++;
++	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
++
 +	return 0;
 +}
 +
@@ -431,33 +435,33 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +void send_acl(const struct file_struct *file, int f)
 +{
-+	SMB_ACL_TYPE_T *type;
++	SMB_ACL_TYPE_T type;
 +	rsync_acl *curr_racl;
 +
 +	if (!preserve_acls || S_ISLNK(file->mode))
 +		return;
-+	for (type = &types[0], curr_racl = &_curr_rsync_acls[0];
-+	     type < &types[0] + sizeof types / sizeof types[0]
-+		&& (*type == SMB_ACL_TYPE_ACCESS || S_ISDIR(file->mode));
-+	     type++, curr_racl++) {
++	curr_racl = &_curr_rsync_acls[0];
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
 +		int index;
-+		rsync_acl_list *racl_list = rsync_acl_lists(*type);
++		rsync_acl_list *racl_list = rsync_acl_lists(type);
 +		if (f == -1) {
 +			rsync_acl_free(curr_racl);
 +			continue;
 +		}
-+		if ((index = find_matching_rsync_acl(*type, racl_list, curr_racl))
++		if ((index = find_matching_rsync_acl(type, racl_list, curr_racl))
 +		    != -1) {
-+			write_byte(f, *type == SMB_ACL_TYPE_ACCESS ? 'a' : 'd');
++			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'a' : 'd');
 +			write_int(f, index);
 +			rsync_acl_free(curr_racl);
 +		} else {
-+			write_byte(f, *type == SMB_ACL_TYPE_ACCESS ? 'A' : 'D');
++			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'A' : 'D');
 +			send_rsync_acl(f, curr_racl);
 +			expand_rsync_acl_list(racl_list);
 +			racl_list->racls[racl_list->count++] = *curr_racl;
 +		}
-+	}
++		curr_racl++;
++	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
 +}
 +
 +/* The below stuff is only used by the receiver: */
@@ -778,31 +782,29 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +void receive_acl(struct file_struct *file, int f)
 +{
-+	SMB_ACL_TYPE_T *type;
++	SMB_ACL_TYPE_T type;
 +	char *fname;
 +
 +	if (!preserve_acls || S_ISLNK(file->mode))
 +		return;
 +
 +	fname = f_name(file, NULL);
-+	for (type = &types[0];
-+	     type < &types[0] + sizeof types / sizeof types[0]
-+		&& (*type == SMB_ACL_TYPE_ACCESS || S_ISDIR(file->mode));
-+	     type++) {
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
 +		file_acl_index_list *fileaclidx_list =
-+			file_acl_index_lists(*type);
++			file_acl_index_lists(type);
 +		uchar tag;
 +		expand_file_acl_index_list(fileaclidx_list);
 +
 +		tag = read_byte(f);
 +		if (tag == 'A' || tag == 'a') {
-+			if (*type != SMB_ACL_TYPE_ACCESS) {
++			if (type != SMB_ACL_TYPE_ACCESS) {
 +				rprintf(FERROR, "receive_acl %s: duplicate access ACL\n",
 +					fname);
 +				exit_cleanup(RERR_STREAMIO);
 +			}
 +		} else if (tag == 'D' || tag == 'd') {
-+			if (*type == SMB_ACL_TYPE_ACCESS) {
++			if (type == SMB_ACL_TYPE_ACCESS) {
 +				rprintf(FERROR, "receive_acl %s: expecting access ACL; got default\n",
 +					fname);
 +				exit_cleanup(RERR_STREAMIO);
@@ -814,8 +816,8 @@ ACLs to a non-ACL-supporting disk should complain.
 +		}
 +		if (tag == 'A' || tag == 'D') {
 +			rsync_acl racl = rsync_acl_initializer;
-+			rsync_acl_list *racl_list = rsync_acl_lists(*type);
-+			smb_acl_list *sacl_list = smb_acl_lists(*type);
++			rsync_acl_list *racl_list = rsync_acl_lists(type);
++			smb_acl_list *sacl_list = smb_acl_lists(type);
 +			fileaclidx_list->fileaclidxs[fileaclidx_list->count].
 +				aclidx = racl_list->count;
 +			fileaclidx_list->fileaclidxs[fileaclidx_list->count++].
@@ -827,11 +829,11 @@ ACLs to a non-ACL-supporting disk should complain.
 +			sacl_list->sacls[sacl_list->count++] = NULL;
 +		} else {
 +			int index = read_int(f);
-+			rsync_acl_list *racl_list = rsync_acl_lists(*type);
++			rsync_acl_list *racl_list = rsync_acl_lists(type);
 +			if ((size_t) index >= racl_list->count) {
 +				rprintf(FERROR, "receive_acl %s: %s ACL index %d out of range\n",
 +					fname,
-+					str_acl_type(*type),
++					str_acl_type(type),
 +					index);
 +				exit_cleanup(RERR_STREAMIO);
 +			}
@@ -840,7 +842,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +			fileaclidx_list->fileaclidxs[fileaclidx_list->count++].
 +				file = file;
 +		}
-+	}
++	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
 +}
 +
 +static int file_acl_index_list_sorter(const void *f1, const void *f2)
@@ -853,22 +855,21 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +void sort_file_acl_index_lists()
 +{
-+	SMB_ACL_TYPE_T *type;
++	SMB_ACL_TYPE_T type;
 +
 +	if (!preserve_acls)
 +		return;
 +
-+	for (type = &types[0];
-+	     type < &types[0] + sizeof types / sizeof types[0];
-+	     type++) {
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
 +		file_acl_index_list *fileaclidx_list =
-+			file_acl_index_lists(*type);
++			file_acl_index_lists(type);
 +		if (!fileaclidx_list->count)
 +			continue;
 +		qsort(fileaclidx_list->fileaclidxs, fileaclidx_list->count,
 +		      sizeof fileaclidx_list->fileaclidxs[0],
 +		      &file_acl_index_list_sorter);
-+	}
++	} while (BUMP_TYPE(type));
 +}
 +
 +static int find_file_acl_index(const file_acl_index_list *fileaclidx_list,
@@ -902,27 +903,25 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +int dup_acl(const char *orig, const char *bak, mode_t mode)
 +{
-+	SMB_ACL_TYPE_T *type;
++	SMB_ACL_TYPE_T type;
 +	int ret = 0;
 +
 +	if (!preserve_acls)
 +		return 1;
 +
-+	for (type = &types[0];
-+	     type < &types[0] + sizeof types / sizeof types[0]
-+		 && (*type == SMB_ACL_TYPE_ACCESS || S_ISDIR(mode));
-+	     type++) {
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
 +		SMB_ACL_T sacl_orig, sacl_bak;
 +		rsync_acl racl_orig, racl_bak;
-+		if (!(sacl_orig = sys_acl_get_file(orig, *type))) {
++		if (!(sacl_orig = sys_acl_get_file(orig, type))) {
 +			rprintf(FERROR, "dup_acl: sys_acl_get_file(%s, %s): %s\n",
-+				orig, str_acl_type(*type), strerror(errno));
++				orig, str_acl_type(type), strerror(errno));
 +			ret = -1;
 +			continue;
 +		}
-+		if (!(sacl_bak = sys_acl_get_file(orig, *type))) {
++		if (!(sacl_bak = sys_acl_get_file(orig, type))) {
 +			rprintf(FERROR, "dup_acl: sys_acl_get_file(%s, %s): %s. ignoring\n",
-+				bak, str_acl_type(*type), strerror(errno));
++				bak, str_acl_type(type), strerror(errno));
 +			ret = -1;
 +			/* try to forge on through */
 +		}
@@ -940,15 +939,15 @@ ACLs to a non-ACL-supporting disk should complain.
 +		} else {
 +			; /* presume they're unequal */
 +		}
-+		if (*type == SMB_ACL_TYPE_DEFAULT && !racl_orig.count) {
++		if (type == SMB_ACL_TYPE_DEFAULT && !racl_orig.count) {
 +			if (sys_acl_delete_def_file(bak) < 0) {
 +				rprintf(FERROR, "dup_acl: sys_acl_delete_def_file(%s): %s\n",
 +					bak, strerror(errno));
 +				ret = -1;
 +			}
-+		} else if (sys_acl_set_file(bak, *type, sacl_bak) < 0) {
++		} else if (sys_acl_set_file(bak, type, sacl_bak) < 0) {
 +			rprintf(FERROR, "dup_acl: sys_acl_set_file(%s, %s): %s\n",
-+				bak, str_acl_type(*type), strerror(errno));
++				bak, str_acl_type(type), strerror(errno));
 +			ret = -1;
 +		}
 +		out_with_all:
@@ -962,7 +961,8 @@ ACLs to a non-ACL-supporting disk should complain.
 +		/* out_with_one_sacl: */
 +			if (sacl_orig)
 +				sys_acl_free_acl(sacl_orig);
-+	}
++	} while (BUMP_TYPE(type) && S_ISDIR(mode));
++
 +	return ret;
 +}
 +
@@ -977,74 +977,78 @@ ACLs to a non-ACL-supporting disk should complain.
 +void push_keep_backup_acl(const struct file_struct *file,
 +			  const char *orig, const char *dest)
 +{
-+	if (preserve_acls) {
-+		SMB_ACL_TYPE_T *type;
-+		SMB_ACL_T *sacl;
++	SMB_ACL_TYPE_T type;
++	SMB_ACL_T *sacl;
 +
-+		backup_orig_file = file;
-+		backup_orig_fname = orig;
-+		backup_dest_fname = dest;
++	if (!preserve_acls)
++		return;
 +
-+		for (type = &types[0], sacl = &_backup_sacl[0];
-+		     type < &types[0] + sizeof types / sizeof types[0];
-+		     type++) {
-+			if (*type == SMB_ACL_TYPE_DEFAULT && !S_ISDIR(file->mode))
-+				*sacl = NULL;
-+			else {
-+				if (!(*sacl = sys_acl_get_file(orig, *type))) {
-+					rprintf(FERROR, "push_keep_backup_acl: sys_acl_get_file(%s, %s): %s\n",
-+						orig, str_acl_type(*type),
-+						strerror(errno));
-+				}
-+			}
++	backup_orig_file = file;
++	backup_orig_fname = orig;
++	backup_dest_fname = dest;
++
++	sacl = &_backup_sacl[0];
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
++		if (type == SMB_ACL_TYPE_DEFAULT && !S_ISDIR(file->mode)) {
++			*sacl = NULL;
++			break;
 +		}
-+	}
++		if (!(*sacl = sys_acl_get_file(orig, type))) {
++			rprintf(FERROR,
++				"push_keep_backup_acl: sys_acl_get_file(%s, %s): %s\n",
++				orig, str_acl_type(type),
++				strerror(errno));
++		}
++	} while (BUMP_TYPE(type));
 +}
 +
 +static int set_keep_backup_acl()
 +{
-+	if (preserve_acls) {
-+		SMB_ACL_TYPE_T *type;
-+		SMB_ACL_T *sacl;
-+		int ret = 0;
++	SMB_ACL_TYPE_T type;
++	SMB_ACL_T *sacl;
++	int ret = 0;
 +
-+		for (type = &types[0], sacl = &_backup_sacl[0];
-+		     type < &types[0] + sizeof types / sizeof types[0];
-+		     type++) {
-+			if (*sacl) {
-+				if (sys_acl_set_file(backup_dest_fname,
-+						     *type, *sacl) < 0) {
-+					rprintf(FERROR, "push_keep_backup_acl: sys_acl_get_file(%s, %s): %s\n",
-+						backup_dest_fname,
-+						str_acl_type(*type),
-+						strerror(errno));
-+					ret = -1;
-+				}
-+			}
++	if (!preserve_acls)
++		return 1;
++
++	sacl = &_backup_sacl[0];
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
++		if (*sacl
++		 && sys_acl_set_file(backup_dest_fname, type, *sacl) < 0) {
++			rprintf(FERROR,
++				"push_keep_backup_acl: sys_acl_get_file(%s, %s): %s\n",
++				backup_dest_fname,
++				str_acl_type(type),
++				strerror(errno));
++			ret = -1;
 +		}
-+		return ret;
-+	}
-+	return 1;
++	} while (BUMP_TYPE(type));
++
++	return ret;
 +}
 +
 +void cleanup_keep_backup_acl()
 +{
-+	if (preserve_acls) {
-+		SMB_ACL_TYPE_T *type;
-+		SMB_ACL_T *sacl;
++	SMB_ACL_TYPE_T type;
++	SMB_ACL_T *sacl;
 +
-+		backup_orig_file = NULL;
-+		backup_orig_fname = null_string;
-+		backup_dest_fname = null_string;
++	if (!preserve_acls)
++		return;
 +
-+		for (type = &types[0], sacl = &_backup_sacl[0];
-+		     type < &types[0] + sizeof types / sizeof types[0];
-+		     type++) {
-+			if (*sacl)
-+				sys_acl_free_acl(*sacl);
++	backup_orig_file = NULL;
++	backup_orig_fname = null_string;
++	backup_dest_fname = null_string;
++
++	sacl = &_backup_sacl[0];
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
++		if (*sacl) {
++			sys_acl_free_acl(*sacl);
 +			*sacl = NULL;
 +		}
-+	}
++	} while (BUMP_TYPE(type));
 +}
 +
 +/* set ACL on rsync-ed or keep_backup-ed file */
@@ -1052,7 +1056,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +int set_acl(const char *fname, const struct file_struct *file)
 +{
 +	int unchanged = 1;
-+	SMB_ACL_TYPE_T *type;
++	SMB_ACL_TYPE_T type;
 +
 +	if (dry_run || !preserve_acls || S_ISLNK(file->mode))
 +		return 1;
@@ -1061,21 +1065,19 @@ ACLs to a non-ACL-supporting disk should complain.
 +		if (!strcmp(fname, backup_dest_fname))
 +			return set_keep_backup_acl();
 +	}
-+	for (type = &types[0];
-+	     type < &types[0] + sizeof  types / sizeof types[0]
-+		&& (*type == SMB_ACL_TYPE_ACCESS || S_ISDIR(file->mode));
-+	     type++) {
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
 +		SMB_ACL_T sacl_orig, *sacl_new;
 +		rsync_acl racl_orig, *racl_new;
-+		int aclidx = find_file_acl_index(file_acl_index_lists(*type),
++		int aclidx = find_file_acl_index(file_acl_index_lists(type),
 +						 file);
 +		BOOL ok;
-+		racl_new = &(rsync_acl_lists(*type)->racls[aclidx]);
-+		sacl_new = &(smb_acl_lists(*type)->sacls[aclidx]);
-+		sacl_orig = sys_acl_get_file(fname, *type);
++		racl_new = &(rsync_acl_lists(type)->racls[aclidx]);
++		sacl_new = &(smb_acl_lists(type)->sacls[aclidx]);
++		sacl_orig = sys_acl_get_file(fname, type);
 +		if (!sacl_orig) {
 +			rprintf(FERROR, "set_acl: sys_acl_get_file(%s, %s): %s\n",
-+				fname, str_acl_type(*type), strerror(errno));
++				fname, str_acl_type(type), strerror(errno));
 +			unchanged = -1;
 +			continue;
 +		}
@@ -1089,7 +1091,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +		rsync_acl_free(&racl_orig);
 +		if (ok)
 +			continue;
-+		if (*type == SMB_ACL_TYPE_DEFAULT && !racl_new->count) {
++		if (type == SMB_ACL_TYPE_DEFAULT && !racl_new->count) {
 +			if (sys_acl_delete_def_file(fname) < 0) {
 +				rprintf(FERROR, "set_acl: sys_acl_delete_def_file(%s): %s\n",
 +					fname, strerror(errno));
@@ -1102,9 +1104,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +					unchanged = -1;
 +					continue;
 +				}
-+			if (sys_acl_set_file(fname, *type, *sacl_new) < 0) {
++			if (sys_acl_set_file(fname, type, *sacl_new) < 0) {
 +				rprintf(FERROR, "set_acl: sys_acl_set_file(%s, %s): %s\n",
-+					fname, str_acl_type(*type),
++					fname, str_acl_type(type),
 +					strerror(errno));
 +				unchanged = -1;
 +				continue;
@@ -1112,7 +1114,8 @@ ACLs to a non-ACL-supporting disk should complain.
 +		}
 +		if (unchanged == 1)
 +			unchanged = 0;
-+	}
++	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
++
 +	return unchanged;
 +}
 +
