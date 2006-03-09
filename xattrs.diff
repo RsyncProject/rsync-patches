@@ -26,27 +26,33 @@ After applying this patch, run these commands for a successful build:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/backup.c
 +++ new/backup.c
-@@ -133,6 +133,7 @@ static int make_bak_dir(char *fullpath)
- 				do_lchown(fullpath, st.st_uid, st.st_gid);
- 				do_chmod(fullpath, st.st_mode);
- 				(void)DUP_ACL(end, fullpath, st.st_mode);
-+				(void)DUP_XATTR(end, fullpath );
+@@ -135,6 +135,9 @@ static int make_bak_dir(char *fullpath)
+ #ifdef SUPPORT_ACLS
+ 				dup_acl(end, fullpath, st.st_mode);
+ #endif
++#ifdef SUPPORT_XATTRS
++				dup_xattr(end, fullpath );
++#endif
  			}
  		}
  		*p = '/';
-@@ -187,6 +188,7 @@ static int keep_backup(char *fname)
- 		return 0;
- 
- 	PUSH_KEEP_BACKUP_ACL(file, fname, buf);
-+	PUSH_KEEP_BACKUP_XATTR(file, fname, buf);
+@@ -191,6 +194,9 @@ static int keep_backup(char *fname)
+ #ifdef SUPPORT_ACLS
+ 	push_keep_backup_acl(file, fname, buf);
+ #endif
++#ifdef SUPPORT_XATTRS
++	push_keep_backup_xattr(file, fname, buf);
++#endif
  
  	/* Check to see if this is a device file, or link */
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
-@@ -264,6 +266,7 @@ static int keep_backup(char *fname)
- 	}
- 	set_file_attrs(buf, file, NULL, 0);
- 	CLEANUP_KEEP_BACKUP_ACL();
-+	CLEANUP_KEEP_BACKUP_XATTR();
+@@ -270,6 +276,9 @@ static int keep_backup(char *fname)
+ #ifdef SUPPORT_ACLS
+ 	cleanup_keep_backup_acl();
+ #endif
++#ifdef SUPPORT_XATTRS
++	cleanup_keep_backup_xattr();
++#endif
  	free(file);
  
  	if (verbose > 1) {
@@ -85,56 +91,56 @@ After applying this patch, run these commands for a successful build:
  
 --- old/flist.c
 +++ new/flist.c
-@@ -968,6 +968,8 @@ static struct file_struct *send_file_nam
+@@ -970,6 +970,10 @@ static struct file_struct *send_file_nam
+ 	if (make_acl(file, fname) < 0)
  		return NULL;
- 	if (MAKE_ACL(file, fname) < 0)
- 		return NULL;
-+	if (MAKE_XATTR(file, fname) < 0)
+ #endif
++#ifdef SUPPORT_XATTRS
++	if (make_xattr(file, fname) < 0)
 +		return NULL;
++#endif
  
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
-@@ -980,9 +982,11 @@ static struct file_struct *send_file_nam
- 		flist->files[flist->count++] = file;
+@@ -983,10 +987,18 @@ static struct file_struct *send_file_nam
  		send_file_entry(file, f);
- 		SEND_ACL(file, f);
-+		SEND_XATTR(file, f);
+ #ifdef SUPPORT_ACLS
+ 		send_acl(file, f);
++#endif
++#ifdef SUPPORT_XATTRS
++		send_xattr(file, f);
++#endif
  	} else {
++#ifdef SUPPORT_ACLS
  		/* Cleanup unsent ACL(s). */
- 		SEND_ACL(file, -1);
-+		SEND_XATTR(file, -1);
+ 		send_acl(file, -1);
+ #endif
++#ifdef SUPPORT_XATTRS
++		send_xattr(file, -1);
++#endif
  	}
  	return file;
  }
-@@ -1372,6 +1376,7 @@ struct file_list *recv_file_list(int f)
- 		file = receive_file_entry(flist, flags, f);
- 
- 		RECEIVE_ACL(file, f);
-+		RECEIVE_XATTR(file, f );
+@@ -1378,6 +1390,9 @@ struct file_list *recv_file_list(int f)
+ #ifdef SUPPORT_ACLS
+ 		receive_acl(file, f);
+ #endif
++#ifdef SUPPORT_XATTRS
++		receive_xattr(file, f );
++#endif
  
  		if (S_ISREG(file->mode) || S_ISLNK(file->mode))
  			stats.total_size += file->length;
-@@ -1396,6 +1401,7 @@ struct file_list *recv_file_list(int f)
- 	clean_flist(flist, relative_paths, 1);
- 
- 	SORT_FILE_ACL_INDEX_LISTS();
-+	SORT_FILE_XATTR_INDEX_LISTS();
+@@ -1404,6 +1419,9 @@ struct file_list *recv_file_list(int f)
+ #ifdef SUPPORT_ACLS
+ 	sort_file_acl_index_lists();
+ #endif
++#ifdef SUPPORT_XATTRS
++	sort_file_xattr_index_lists();
++#endif
  
  	if (f >= 0) {
  		recv_uid_list(f, flist);
---- old/generator.c
-+++ new/generator.c
-@@ -916,6 +916,10 @@ static void recv_generator(char *fname, 
- 		if (f_out == -1)
- 			SET_ACL(fname, file);
- #endif
-+#ifdef SUPPORT_XATTRS
-+		if (f_out == -1)
-+			SET_XATTR(fname, file);
-+#endif
- 		if (delete_during && f_out != -1 && !phase && dry_run < 2
- 		    && (file->flags & FLAG_DEL_HERE))
- 			delete_in_dir(the_file_list, fname, file, &st);
 --- old/lib/sysxattr.c
 +++ new/lib/sysxattr.c
 @@ -0,0 +1,41 @@
@@ -159,7 +165,7 @@ After applying this patch, run these commands for a successful build:
 +
 +#include "rsync.h"
 +
-+#if defined(HAVE_LINUX_XATTRS)
++#if defined HAVE_LINUX_XATTRS
 +
 +ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size)
 +{
@@ -182,7 +188,7 @@ After applying this patch, run these commands for a successful build:
 --- old/lib/sysxattr.h
 +++ new/lib/sysxattr.h
 @@ -0,0 +1,9 @@
-+#if defined(HAVE_LINUX_XATTRS)
++#if defined HAVE_LINUX_XATTRS
 +
 +ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size);
 +int sys_lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags);
@@ -283,62 +289,30 @@ After applying this patch, run these commands for a successful build:
  	if (preserve_gid)
 --- old/rsync.c
 +++ new/rsync.c
-@@ -218,12 +218,15 @@ int set_file_attrs(char *fname, struct f
- 	}
+@@ -224,6 +224,10 @@ int set_file_attrs(char *fname, struct f
+ 	if (set_acl(fname, file) == 0)
+ 		updated = 1;
  #endif
- 
--	/* If this is a directory, SET_ACL() will be called on the cleanup
--	 * receive_generator() pass (if we called it here, we might clobber
--	 * writability on the directory). Everything else is OK to do now. */
-+	/* If this is a directory, SET_ACL() and/or SET_XATTR() will be called
-+	 * on the cleanup receive_generator() pass -- if we called it here, we
-+	 * might clobber writability on the dir (SELinux security contexts are
-+	 * stored in xattrs). Everything else is OK to do now. */
- 	if (!S_ISDIR(st->st_mode)) {
- 		if (SET_ACL(fname, file) == 0)
- 			updated = 1;
-+		if (SET_XATTR(fname, file) == 0)
-+			updated = 1;
- 	}
++#ifdef SUPPORT_XATTRS
++	if (set_xattr(fname, file) == 0)
++		updated = 1;
++#endif
  
  	if (verbose > 1 && flags & ATTRS_REPORT) {
+ 		enum logcode code = daemon_log_format_has_i || dry_run
 --- old/rsync.h
 +++ new/rsync.h
-@@ -696,6 +696,38 @@ struct chmod_mode_struct;
- #endif /* SUPPORT_ACLS */
+@@ -672,6 +672,14 @@ struct chmod_mode_struct;
+ #endif
  #include "smb_acls.h"
  
 +#ifdef HAVE_LINUX_XATTRS
 +#define SUPPORT_XATTRS 1
 +#endif
 +
-+#ifdef SUPPORT_XATTRS
-+#ifdef HAVE_ATTR_XATTR_H
++#if defined SUPPORT_XATTRS && defined HAVE_ATTR_XATTR_H
 +#include <attr/xattr.h>
 +#endif
-+#define MAKE_XATTR(file, fname)                        make_xattr(file, fname)
-+#define SEND_XATTR(file, f)                    send_xattr(file, f)
-+#define RECEIVE_XATTR(file, f)                 receive_xattr(file, f)
-+#define SORT_FILE_XATTR_INDEX_LISTS()          sort_file_xattr_index_lists()
-+#define SET_XATTR(fname, file)                 set_xattr(fname, file)
-+#define NEXT_XATTR_UID()                               next_xattr_uid()
-+#define XATTR_UID_MAP(uid)                     xattr_uid_map(uid)
-+#define PUSH_KEEP_BACKUP_XATTR(file, orig, dest) \
-+  push_keep_backup_xattr(file, orig, dest)
-+#define CLEANUP_KEEP_BACKUP_XATTR()            cleanup_keep_backup_xattr()
-+#define DUP_XATTR(orig, dest)          dup_xattr(orig, dest)
-+#else /* SUPPORT_XATTRS */
-+#define MAKE_XATTR(file, fname)                        1 /* checked return value */
-+#define SEND_XATTR(file, f)
-+#define RECEIVE_XATTR(file, f)
-+#define SORT_FILE_XATTR_INDEX_LISTS()
-+#define SET_XATTR(fname, file)                 1 /* checked return value */
-+#define NEXT_XATTR_UID()
-+#define XATTR_UID_MAP(uid)
-+#define PUSH_KEEP_BACKUP_XATTR(file, orig, dest)
-+#define CLEANUP_KEEP_BACKUP_XATTR()
-+#define DUP_XATTR(src, orig)           1 /* checked return value */
-+#endif /* SUPPORT_XATTRS */
 +
  #include "proto.h"
  
