@@ -32,7 +32,7 @@ ACLs to a non-ACL-supporting disk should complain.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1224 @@
+@@ -0,0 +1,1230 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -77,6 +77,7 @@ ACLs to a non-ACL-supporting disk should complain.
 +} rsync_acl;
 +
 +static const rsync_acl rsync_acl_initializer = { 0, 0, NULL };
++static SMB_ACL_TYPE_T types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
 +
 +static void expand_rsync_acl(rsync_acl *racl)
 +{
@@ -394,9 +395,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +int make_acl(const struct file_struct *file, const char *fname)
 +{
-+	SMB_ACL_TYPE_T *type,
-+		types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++	SMB_ACL_TYPE_T *type;
 +	rsync_acl *curr_racl;
++
 +	if (!preserve_acls || S_ISLNK(file->mode))
 +		return 1;
 +	for (type = &types[0], curr_racl = &_curr_rsync_acls[0];
@@ -430,9 +431,9 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +void send_acl(const struct file_struct *file, int f)
 +{
-+	SMB_ACL_TYPE_T *type,
-+		types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++	SMB_ACL_TYPE_T *type;
 +	rsync_acl *curr_racl;
++
 +	if (!preserve_acls || S_ISLNK(file->mode))
 +		return;
 +	for (type = &types[0], curr_racl = &_curr_rsync_acls[0];
@@ -777,11 +778,12 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +void receive_acl(struct file_struct *file, int f)
 +{
-+	SMB_ACL_TYPE_T *type,
-+		types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++	SMB_ACL_TYPE_T *type;
 +	char *fname;
++
 +	if (!preserve_acls || S_ISLNK(file->mode))
 +		return;
++
 +	fname = f_name(file, NULL);
 +	for (type = &types[0];
 +	     type < &types[0] + sizeof types / sizeof types[0]
@@ -851,14 +853,14 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +void sort_file_acl_index_lists()
 +{
-+	SMB_ACL_TYPE_T *type,
-+		types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++	SMB_ACL_TYPE_T *type;
++
 +	if (!preserve_acls)
 +		return;
++
 +	for (type = &types[0];
 +	     type < &types[0] + sizeof types / sizeof types[0];
-+	     type++)
-+	{
++	     type++) {
 +		file_acl_index_list *fileaclidx_list =
 +			file_acl_index_lists(*type);
 +		if (!fileaclidx_list->count)
@@ -900,11 +902,12 @@ ACLs to a non-ACL-supporting disk should complain.
 +
 +int dup_acl(const char *orig, const char *bak, mode_t mode)
 +{
-+	SMB_ACL_TYPE_T *type,
-+		types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++	SMB_ACL_TYPE_T *type;
 +	int ret = 0;
++
 +	if (!preserve_acls)
 +		return 1;
++
 +	for (type = &types[0];
 +	     type < &types[0] + sizeof types / sizeof types[0]
 +		 && (*type == SMB_ACL_TYPE_ACCESS || S_ISDIR(mode));
@@ -975,12 +978,13 @@ ACLs to a non-ACL-supporting disk should complain.
 +			  const char *orig, const char *dest)
 +{
 +	if (preserve_acls) {
-+		SMB_ACL_TYPE_T *type,
-+			types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++		SMB_ACL_TYPE_T *type;
 +		SMB_ACL_T *sacl;
++
 +		backup_orig_file = file;
 +		backup_orig_fname = orig;
 +		backup_dest_fname = dest;
++
 +		for (type = &types[0], sacl = &_backup_sacl[0];
 +		     type < &types[0] + sizeof types / sizeof types[0];
 +		     type++) {
@@ -1000,10 +1004,10 @@ ACLs to a non-ACL-supporting disk should complain.
 +static int set_keep_backup_acl()
 +{
 +	if (preserve_acls) {
-+		SMB_ACL_TYPE_T *type,
-+			types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++		SMB_ACL_TYPE_T *type;
 +		SMB_ACL_T *sacl;
 +		int ret = 0;
++
 +		for (type = &types[0], sacl = &_backup_sacl[0];
 +		     type < &types[0] + sizeof types / sizeof types[0];
 +		     type++) {
@@ -1026,12 +1030,13 @@ ACLs to a non-ACL-supporting disk should complain.
 +void cleanup_keep_backup_acl()
 +{
 +	if (preserve_acls) {
-+		SMB_ACL_TYPE_T *type,
-+			types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++		SMB_ACL_TYPE_T *type;
 +		SMB_ACL_T *sacl;
++
 +		backup_orig_file = NULL;
 +		backup_orig_fname = null_string;
 +		backup_dest_fname = null_string;
++
 +		for (type = &types[0], sacl = &_backup_sacl[0];
 +		     type < &types[0] + sizeof types / sizeof types[0];
 +		     type++) {
@@ -1047,10 +1052,11 @@ ACLs to a non-ACL-supporting disk should complain.
 +int set_acl(const char *fname, const struct file_struct *file)
 +{
 +	int unchanged = 1;
-+	SMB_ACL_TYPE_T *type,
-+		types[] = {SMB_ACL_TYPE_ACCESS, SMB_ACL_TYPE_DEFAULT};
++	SMB_ACL_TYPE_T *type;
++
 +	if (dry_run || !preserve_acls || S_ISLNK(file->mode))
 +		return 1;
++
 +	if (file == backup_orig_file) {
 +		if (!strcmp(fname, backup_dest_fname))
 +			return set_keep_backup_acl();
@@ -4921,20 +4927,20 @@ ACLs to a non-ACL-supporting disk should complain.
  	if (daemon_chmod_modes && !S_ISLNK(flist_mode))
  		cur_mode = tweak_mode(cur_mode, daemon_chmod_modes);
  	return (flist_mode & ~CHMOD_BITS) | (cur_mode & CHMOD_BITS);
-@@ -217,6 +218,13 @@ int set_file_attrs(char *fname, struct f
+@@ -203,6 +204,13 @@ int set_file_attrs(char *fname, struct f
+ 		updated = 1;
  	}
- #endif
  
 +#ifdef SUPPORT_ACLS
-+	/* It's fine to call set_acl() now; the generator will enable
-+	 * writability on the directory using chmod if necessary. */
++	/* It's OK to call set_acl() now, even for a dir, as the generator
++	 * will enable owner-writability using chmod, if necessary. */
 +	if (set_acl(fname, file) == 0)
 +		updated = 1;
 +#endif
 +
- 	if (verbose > 1 && flags & ATTRS_REPORT) {
- 		enum logcode code = daemon_log_format_has_i || dry_run
- 				  ? FCLIENT : FINFO;
+ #ifdef HAVE_CHMOD
+ 	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
+ 		int ret = do_chmod(fname, file->mode);
 --- old/rsync.h
 +++ new/rsync.h
 @@ -658,6 +658,20 @@ struct chmod_mode_struct;
