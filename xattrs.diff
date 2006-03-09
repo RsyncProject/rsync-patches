@@ -26,32 +26,43 @@ After applying this patch, run these commands for a successful build:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/backup.c
 +++ new/backup.c
-@@ -135,6 +135,9 @@ static int make_bak_dir(char *fullpath)
- #ifdef SUPPORT_ACLS
- 				dup_acl(end, fullpath, st.st_mode);
+@@ -29,6 +29,7 @@ extern char *backup_dir;
+ 
+ extern int am_root;
+ extern int preserve_acls;
++extern int preserve_xattrs;
+ extern int preserve_devices;
+ extern int preserve_specials;
+ extern int preserve_links;
+@@ -137,6 +138,10 @@ static int make_bak_dir(char *fullpath)
+ 				if (preserve_acls)
+ 					dup_acl(end, fullpath, st.st_mode);
  #endif
 +#ifdef SUPPORT_XATTRS
-+				dup_xattr(end, fullpath );
++				if (preserve_xattrs)
++					dup_xattr(end, fullpath );
 +#endif
  			}
  		}
  		*p = '/';
-@@ -191,6 +194,9 @@ static int keep_backup(char *fname)
- #ifdef SUPPORT_ACLS
- 	push_keep_backup_acl(file, fname, buf);
+@@ -194,6 +199,10 @@ static int keep_backup(char *fname)
+ 	if (preserve_acls)
+ 		push_keep_backup_acl(file, fname, buf);
  #endif
 +#ifdef SUPPORT_XATTRS
-+	push_keep_backup_xattr(file, fname, buf);
++	if (preserve_xattrs)
++		push_keep_backup_xattr(file, fname, buf);
 +#endif
  
  	/* Check to see if this is a device file, or link */
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
-@@ -270,6 +276,9 @@ static int keep_backup(char *fname)
- #ifdef SUPPORT_ACLS
- 	cleanup_keep_backup_acl();
+@@ -274,6 +283,10 @@ static int keep_backup(char *fname)
+ 	if (preserve_acls)
+ 		cleanup_keep_backup_acl();
  #endif
 +#ifdef SUPPORT_XATTRS
-+	cleanup_keep_backup_xattr();
++	if (preserve_xattrs)
++		cleanup_keep_backup_xattr();
 +#endif
  	free(file);
  
@@ -91,52 +102,64 @@ After applying this patch, run these commands for a successful build:
  
 --- old/flist.c
 +++ new/flist.c
-@@ -970,6 +970,10 @@ static struct file_struct *send_file_nam
- 	if (make_acl(file, fname) < 0)
+@@ -45,6 +45,7 @@ extern int one_file_system;
+ extern int copy_dirlinks;
+ extern int keep_dirlinks;
+ extern int preserve_acls;
++extern int preserve_xattrs;
+ extern int preserve_links;
+ extern int preserve_hard_links;
+ extern int preserve_devices;
+@@ -971,6 +972,10 @@ static struct file_struct *send_file_nam
+ 	if (preserve_acls && make_acl(file, fname) < 0)
  		return NULL;
  #endif
 +#ifdef SUPPORT_XATTRS
-+	if (make_xattr(file, fname) < 0)
++	if (preserve_xattrs && make_xattr(file, fname) < 0)
 +		return NULL;
 +#endif
  
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
-@@ -983,10 +987,18 @@ static struct file_struct *send_file_nam
- 		send_file_entry(file, f);
- #ifdef SUPPORT_ACLS
- 		send_acl(file, f);
-+#endif
-+#ifdef SUPPORT_XATTRS
-+		send_xattr(file, f);
-+#endif
- 	} else {
-+#ifdef SUPPORT_ACLS
- 		/* Cleanup unsent ACL(s). */
- 		send_acl(file, -1);
+@@ -986,12 +991,20 @@ static struct file_struct *send_file_nam
+ 		if (preserve_acls)
+ 			send_acl(file, f);
  #endif
 +#ifdef SUPPORT_XATTRS
-+		send_xattr(file, -1);
++		if (preserve_xattrs)
++			send_xattr(file, f);
++#endif
+ 	} else {
+ #ifdef SUPPORT_ACLS
+ 		/* Cleanup unsent ACL(s). */
+ 		if (preserve_acls)
+ 			send_acl(file, -1);
+ #endif
++#ifdef SUPPORT_XATTRS
++		if (preserve_xattrs)
++			send_xattr(file, -1);
 +#endif
  	}
  	return file;
  }
-@@ -1378,6 +1390,9 @@ struct file_list *recv_file_list(int f)
- #ifdef SUPPORT_ACLS
- 		receive_acl(file, f);
+@@ -1384,6 +1397,10 @@ struct file_list *recv_file_list(int f)
+ 		if (preserve_acls)
+ 			receive_acl(file, f);
  #endif
 +#ifdef SUPPORT_XATTRS
-+		receive_xattr(file, f );
++		if (preserve_xattrs)
++			receive_xattr(file, f );
 +#endif
  
  		if (S_ISREG(file->mode) || S_ISLNK(file->mode))
  			stats.total_size += file->length;
-@@ -1404,6 +1419,9 @@ struct file_list *recv_file_list(int f)
- #ifdef SUPPORT_ACLS
- 	sort_file_acl_index_lists();
+@@ -1411,6 +1428,10 @@ struct file_list *recv_file_list(int f)
+ 	if (preserve_acls)
+ 		sort_file_acl_index_lists();
  #endif
 +#ifdef SUPPORT_XATTRS
-+	sort_file_xattr_index_lists();
++	if (preserve_xattrs)
++		sort_file_xattr_index_lists();
 +#endif
  
  	if (f >= 0) {
@@ -289,17 +312,25 @@ After applying this patch, run these commands for a successful build:
  	if (preserve_gid)
 --- old/rsync.c
 +++ new/rsync.c
-@@ -224,6 +224,10 @@ int set_file_attrs(char *fname, struct f
- 	if (set_acl(fname, file) == 0)
+@@ -34,6 +34,7 @@ extern int verbose;
+ extern int dry_run;
+ extern int daemon_log_format_has_i;
+ extern int preserve_acls;
++extern int preserve_xattrs;
+ extern int preserve_perms;
+ extern int preserve_executability;
+ extern int preserve_times;
+@@ -211,6 +212,10 @@ int set_file_attrs(char *fname, struct f
+ 	if (preserve_acls && set_acl(fname, file) == 0)
  		updated = 1;
  #endif
 +#ifdef SUPPORT_XATTRS
-+	if (set_xattr(fname, file) == 0)
++	if (preserve_xattrs && set_xattr(fname, file) == 0)
 +		updated = 1;
 +#endif
  
- 	if (verbose > 1 && flags & ATTRS_REPORT) {
- 		enum logcode code = daemon_log_format_has_i || dry_run
+ #ifdef HAVE_CHMOD
+ 	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
 --- old/rsync.h
 +++ new/rsync.h
 @@ -672,6 +672,14 @@ struct chmod_mode_struct;
@@ -341,7 +372,7 @@ After applying this patch, run these commands for a successful build:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,540 @@
+@@ -0,0 +1,521 @@
 +/* Extended Attribute support for rsync */
 +/* Copyright (C) 2004 Red Hat, Inc */
 +/* Written by Jay Fenlason, vaguely based on the ACLs patch */
@@ -366,7 +397,6 @@ After applying this patch, run these commands for a successful build:
 +
 +#ifdef SUPPORT_XATTRS
 +
-+extern int preserve_xattrs;
 +extern int dry_run;
 +
 +#define RSYNC_XAL_INITIAL 5
@@ -576,11 +606,8 @@ After applying this patch, run these commands for a successful build:
 +/* generate the xattr(s) for this flist entry;
 + * xattr(s) are either sent or cleaned-up by send_xattr() below */
 +
-+int make_xattr(const struct file_struct *file, const char *fname)
++int make_xattr(UNUSED(const struct file_struct *file), const char *fname)
 +{
-+	if (!preserve_xattrs || !file)
-+		return 1;
-+
 +	rsync_xal_get(fname, &curr_rsync_xal);
 +	return 0; /* TODO:  This needs to return 1 if no xattrs changed! */
 +}
@@ -634,12 +661,9 @@ After applying this patch, run these commands for a successful build:
 +/* send the make_xattr()-generated xattr list for this flist entry,
 + * or clean up after an flist entry that's not being sent (f == -1) */
 +
-+void send_xattr(const struct file_struct *file, int f)
++void send_xattr(UNUSED(const struct file_struct *file), int f)
 +{
 +	ssize_t index;
-+
-+	if (!preserve_xattrs || !file)
-+		return;
 +
 +	if (f == -1) {
 +		rsync_xal_free(&curr_rsync_xal);
@@ -676,8 +700,6 @@ After applying this patch, run these commands for a successful build:
 +	char *fname;
 +	int tag;
 +
-+	if (!preserve_xattrs)
-+		return;
 +	fname = f_name(file, NULL);
 +	tag = read_byte(f);
 +	if (tag != 'X' && tag != 'x') {
@@ -775,22 +797,17 @@ After applying this patch, run these commands for a successful build:
 +{
 +	int ret;
 +
-+	if (!preserve_xattrs)
-+		return 1;
-+
 +	if (rsync_xal_get(orig, &backup_xal) < 0)
 +		ret = rsync_xal_set(bak, &backup_xal);
 +	else
 +		ret = 0;
 +	rsync_xal_free(&backup_xal);
++
 +	return ret;
 +}
 +
 +void push_keep_backup_xattr(const struct file_struct *file, const char *orig, const char *dest)
 +{
-+	if (!preserve_xattrs)
-+		return;
-+
 +	backup_orig_file = file;
 +	backup_orig_fname = orig;
 +	backup_dest_fname = dest;
@@ -799,16 +816,11 @@ After applying this patch, run these commands for a successful build:
 +
 +static int set_keep_backup_xal(void)
 +{
-+	if (!preserve_xattrs)
-+		return 1;
 +	return rsync_xal_set(backup_dest_fname, &backup_xal);
 +}
 +
 +void cleanup_keep_backup_xattr(void)
 +{
-+	if (!preserve_xattrs)
-+		return;
-+
 +	backup_orig_file = NULL;
 +	backup_orig_fname = null_string;
 +	backup_dest_fname = null_string;
@@ -827,8 +839,6 @@ After applying this patch, run these commands for a successful build:
 +
 +void sort_file_xattr_index_lists(void)
 +{
-+	if (!preserve_xattrs)
-+		return;
 +	qsort(fxil.filexalidxs, fxil.count, sizeof (file_xal_index), file_xal_index_compare);
 +}
 +
@@ -870,14 +880,16 @@ After applying this patch, run these commands for a successful build:
 +	int xalidx;
 +	rsync_xal *x;
 +
-+	if (dry_run || !preserve_xattrs)
-+		return 1;
++	if (dry_run)
++		return 1; /* FIXME: --dry-run needs to compute this value */
++
 +	if (file == backup_orig_file) {
 +		if (!strcmp(fname, backup_dest_fname))
 +			return set_keep_backup_xal();
 +	}
 +	xalidx = find_file_xal_index(file);
 +	x = &(rsync_xal_l.rxals[xalidx]);
++
 +	return rsync_xal_set(fname, x);
 +}
 +
