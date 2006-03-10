@@ -27,7 +27,7 @@ After applying this patch, run these commands for a successful build:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1217 @@
+@@ -0,0 +1,1201 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -1113,64 +1113,48 @@ After applying this patch, run these commands for a successful build:
 +/* This returns the next tag_type id from the given acl for the next entry,
 + * or it returns 0 if there are no more tag_type ids in the acl. */
 +
-+static id_t next_ace_id(SMB_ACL_TAG_T tag_type, const rsync_acl *racl)
++static id_t *next_ace_id(SMB_ACL_TAG_T tag_type, const rsync_acl *racl)
 +{
 +	for (; enum_race_index < racl->count; enum_race_index++) {
-+		rsync_ace *race = &racl->races[enum_race_index];
++		rsync_ace *race = &racl->races[enum_race_index++];
 +		if (race->tag_type == tag_type)
-+			return race->id;
++			return &race->id;
 +	}
 +	enum_race_index = 0;
-+	return 0;
++	return NULL;
 +}
 +
-+static id_t next_acl_id(SMB_ACL_TAG_T tag_type, const rsync_acl_list *racl_list)
++static id_t *next_acl_id(SMB_ACL_TAG_T tag_type, const rsync_acl_list *racl_list)
 +{
 +	for (; enum_racl_index < racl_list->count; enum_racl_index++) {
 +		rsync_acl *racl = &racl_list->racls[enum_racl_index];
-+		id_t id = next_ace_id(tag_type, racl);
++		id_t *id = next_ace_id(tag_type, racl);
 +		if (id)
 +			return id;
 +	}
 +	enum_racl_index = 0;
-+	return 0;
++	return NULL;
 +}
 +
-+static id_t next_acl_list_id(SMB_ACL_TAG_T tag_type)
++static id_t *next_acl_list_id(SMB_ACL_TAG_T tag_type)
 +{
 +	for (; *enum_racl_list; enum_racl_list++) {
-+		id_t id = next_acl_id(tag_type, *enum_racl_list);
++		id_t *id = next_acl_id(tag_type, *enum_racl_list);
 +		if (id)
 +			return id;
 +	}
 +	enum_racl_list = &_enum_racl_lists[0];
-+	return 0;
++	return NULL;
 +}
 +
-+id_t next_acl_uid()
++id_t *next_acl_uid()
 +{
 +	return next_acl_list_id(SMB_ACL_USER);
 +}
 +
-+id_t next_acl_gid()
++id_t *next_acl_gid()
 +{
 +	return next_acl_list_id(SMB_ACL_GROUP);
-+}
-+
-+/* referring to the global context enum_entry, sets the entry's id */
-+static void set_acl_id(id_t id)
-+{
-+	(*enum_racl_list)->racls[enum_racl_index].races[enum_race_index++].id = id;
-+}
-+
-+void acl_uid_map(id_t uid)
-+{
-+	set_acl_id(uid);
-+}
-+
-+void acl_gid_map(id_t gid)
-+{
-+	set_acl_id(gid);
 +}
 +
 +#define PERMS_SPLICE(perms,newbits,where) (((perms) & ~(7 << (where))) | ((newbits) << (where)))
@@ -5410,19 +5394,17 @@ After applying this patch, run these commands for a successful build:
  		/* read the gid list */
  		while ((id = read_int(f)) != 0) {
  			int len = read_byte(f);
-@@ -336,6 +337,18 @@ void recv_uid_list(int f, struct file_li
+@@ -336,6 +337,16 @@ void recv_uid_list(int f, struct file_li
  		}
  	}
  
 +#ifdef SUPPORT_ACLS
 +	if (preserve_acls && !numeric_ids) {
-+		id_t id;
-+		/* The enumerations don't return 0 except to flag the last
-+		 * entry, since uidlist doesn't munge 0 anyway. */
-+		while ((id = next_acl_uid(flist)) != 0)
-+			acl_uid_map(match_uid(id));
-+		while ((id = next_acl_gid(flist)) != 0)
-+			acl_gid_map(match_gid(id));
++		id_t *id;
++		while ((id = next_acl_uid(flist)) != NULL)
++			*id = match_uid(*id);
++		while ((id = next_acl_gid(flist)) != NULL)
++			*id = match_gid(*id);
 +	}
 +#endif
 +
