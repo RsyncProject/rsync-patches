@@ -27,7 +27,7 @@ After applying this patch, run these commands for a successful build:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1202 @@
+@@ -0,0 +1,1217 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -578,17 +578,20 @@ After applying this patch, run these commands for a successful build:
 +#endif
 +
 +/* build an SMB_ACL_T corresponding to an rsync_acl */
-+static BOOL pack_smb_acl(SMB_ACL_T *smb_acl, const rsync_acl *racl, int mbits)
++static BOOL pack_smb_acl(SMB_ACL_T *smb_acl, const rsync_acl *racl, int perms)
 +{
 +	size_t count = racl->count;
 +	rsync_ace *race = racl->races;
 +	const char *errfun = NULL;
++	int bits;
++
 +	*smb_acl = sys_acl_init(count);
 +	if (!*smb_acl) {
-+		rprintf(FERROR, "pack_smb_acl: sys_acl_int(): %s\n",
++		rprintf(FERROR, "pack_smb_acl: sys_acl_init(): %s\n",
 +			strerror(errno));
 +		return False;
 +	}
++
 +	for (; count--; race++) {
 +		SMB_ACL_ENTRY_T entry;
 +		SMB_ACL_PERMSET_T permset;
@@ -615,21 +618,33 @@ After applying this patch, run these commands for a successful build:
 +			errfun = "sys_acl_clear_perms";
 +			break;
 +		}
-+		if (race->tag_type == SMB_ACL_MASK && mbits >= 0)
-+			race->access = mbits;
-+		if (race->access & 4) {
++		switch (perms >= 0 ? race->tag_type : SMB_ACL_USER_OBJ) {
++		case SMB_ACL_GROUP_OBJ:
++			bits = racl->count > 3 ? race->access : (perms >> 3) & 7;
++			break;
++		case SMB_ACL_MASK:
++			bits = (perms >> 3) & 7;
++			break;
++		case SMB_ACL_OTHER:
++			bits = perms & 7;
++			break;
++		default:
++			bits = race->access;
++			break;
++		}
++		if (bits & 4) {
 +			if (sys_acl_add_perm(permset, SMB_ACL_READ)) {
 +				errfun = "sys_acl_add_perm";
 +				break;
 +			}
 +		}
-+		if (race->access & 2) {
++		if (bits & 2) {
 +			if (sys_acl_add_perm(permset, SMB_ACL_WRITE)) {
 +				errfun = "sys_acl_add_perm";
 +				break;
 +			}
 +		}
-+		if (race->access & 1) {
++		if (bits & 1) {
 +			if (sys_acl_add_perm(permset, SMB_ACL_EXECUTE)) {
 +				errfun = "sys_acl_add_perm";
 +				break;
@@ -1061,10 +1076,10 @@ After applying this patch, run these commands for a successful build:
 +			 * files (where the current group permissions == 0).
 +			 * If this is not the right value, the upcoming chmod()
 +			 * call will change it. */
-+			int mbits = type == SMB_ACL_TYPE_ACCESS
-+				  ? (int)((old_mode >> 3) & 7) : -1;
++			int perms = type == SMB_ACL_TYPE_ACCESS
++				  ? (int)(old_mode & CHMOD_BITS) : -1;
 +			if (!*sacl_new
-+			 && !pack_smb_acl(sacl_new, racl_new, mbits)) {
++			 && !pack_smb_acl(sacl_new, racl_new, perms)) {
 +				unchanged = -1;
 +				continue;
 +			}
@@ -1467,7 +1482,7 @@ After applying this patch, run these commands for a successful build:
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -1342,6 +1349,8 @@ void generate_files(int f_out, struct fi
+@@ -1343,6 +1350,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
