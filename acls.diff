@@ -4,9 +4,6 @@ After applying this patch, run these commands for a successful build:
     ./configure --enable-acl-support
     make
 
-Caveat: using the --acls (-A) option currently overrides any permission
-changes requested by the --chmod option.
-
 --- old/Makefile.in
 +++ new/Makefile.in
 @@ -25,15 +25,15 @@ VERSION=@VERSION@
@@ -30,7 +27,7 @@ changes requested by the --chmod option.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1218 @@
+@@ -0,0 +1,1202 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -80,8 +77,7 @@ changes requested by the --chmod option.
 +
 +static void expand_rsync_acl(rsync_acl *racl)
 +{
-+	/* First time through, 0 <= 0, so list is expanded.
-+	 * (Diabolical, rsync guys!) */
++	/* First time through, 0 <= 0, so list is expanded. */
 +	if (racl->malloced <= racl->count) {
 +		rsync_ace *new_ptr;
 +		size_t new_size = racl->malloced + 10;
@@ -245,8 +241,7 @@ changes requested by the --chmod option.
 +
 +static void expand_rsync_acl_list(rsync_acl_list *racl_list)
 +{
-+	/* First time through, 0 <= 0, so list is expanded.
-+	 * (Diabolical, rsync guys!) */
++	/* First time through, 0 <= 0, so list is expanded. */
 +	if (racl_list->malloced <= racl_list->count) {
 +		rsync_acl *new_ptr;
 +		size_t new_size;
@@ -321,7 +316,7 @@ changes requested by the --chmod option.
 +	size_t count = racl->count;
 +	write_int(f, count);
 +	for (race = racl->races; count--; race++) {
-+		char ch;
++		int ch;
 +		switch (race->tag_type) {
 +		case SMB_ACL_USER_OBJ:
 +			ch = 'u';
@@ -349,7 +344,7 @@ changes requested by the --chmod option.
 +		}
 +		write_byte(f, ch);
 +		write_byte(f, race->access);
-+		if (isupper((int)ch)) {
++		if (isupper(ch)) {
 +			write_int(f, race->id);
 +			/* FIXME: sorta wasteful: we should maybe buffer as
 +			 * many ids as max(ACL_USER + ACL_GROUP) objects to
@@ -405,7 +400,6 @@ changes requested by the --chmod option.
 +	do {
 +		SMB_ACL_T sacl;
 +		BOOL ok;
-+		*curr_racl = rsync_acl_initializer;
 +		if ((sacl = sys_acl_get_file(fname, type)) != 0) {
 +			ok = unpack_smb_acl(curr_racl, sacl);
 +			sys_acl_free_acl(sacl);
@@ -414,6 +408,7 @@ changes requested by the --chmod option.
 +		} else if (errno == ENOTSUP) {
 +			/* ACLs are not supported.  Invent an access ACL from
 +			 * permissions; let the default ACL default to empty. */
++			*curr_racl = rsync_acl_initializer;
 +			if (type == SMB_ACL_TYPE_ACCESS)
 +				perms_to_acl(file->mode & ACCESSPERMS, curr_racl);
 +		} else {
@@ -491,8 +486,7 @@ changes requested by the --chmod option.
 +
 +static void expand_file_acl_index_list(file_acl_index_list *fileaclidx_list)
 +{
-+	/* First time through, 0 <= 0, so list is expanded.
-+	 * (Diabolical, rsync guys!) */
++	/* First time through, 0 <= 0, so list is expanded. */
 +	if (fileaclidx_list->malloced <= fileaclidx_list->count) {
 +		file_acl_index *new_ptr;
 +		size_t new_size;
@@ -545,8 +539,7 @@ changes requested by the --chmod option.
 +
 +static void expand_smb_acl_list(smb_acl_list *sacl_list)
 +{
-+	/* First time through, 0 <= 0, so list is expanded.
-+	 * (Diabolical, rsync guys!) */
++	/* First time through, 0 <= 0, so list is expanded. */
 +	if (sacl_list->malloced <= sacl_list->count) {
 +		SMB_ACL_T *new_ptr;
 +		size_t new_size;
@@ -585,7 +578,7 @@ changes requested by the --chmod option.
 +#endif
 +
 +/* build an SMB_ACL_T corresponding to an rsync_acl */
-+static BOOL pack_smb_acl(SMB_ACL_T *smb_acl, const rsync_acl *racl)
++static BOOL pack_smb_acl(SMB_ACL_T *smb_acl, const rsync_acl *racl, int mbits)
 +{
 +	size_t count = racl->count;
 +	rsync_ace *race = racl->races;
@@ -608,11 +601,12 @@ changes requested by the --chmod option.
 +			break;
 +		}
 +		if (race->tag_type == SMB_ACL_USER ||
-+		    race->tag_type == SMB_ACL_GROUP)
++		    race->tag_type == SMB_ACL_GROUP) {
 +			if (sys_acl_set_qualifier(entry, (void*)&race->id)) {
 +				errfun = "sys_acl_set_qualfier";
 +				break;
 +			}
++		}
 +		if (sys_acl_get_permset(entry, &permset)) {
 +			errfun = "sys_acl_get_permset";
 +			break;
@@ -621,21 +615,26 @@ changes requested by the --chmod option.
 +			errfun = "sys_acl_clear_perms";
 +			break;
 +		}
-+		if (race->access & 4)
++		if (race->tag_type == SMB_ACL_MASK && mbits >= 0)
++			race->access = mbits;
++		if (race->access & 4) {
 +			if (sys_acl_add_perm(permset, SMB_ACL_READ)) {
 +				errfun = "sys_acl_add_perm";
 +				break;
 +			}
-+		if (race->access & 2)
++		}
++		if (race->access & 2) {
 +			if (sys_acl_add_perm(permset, SMB_ACL_WRITE)) {
 +				errfun = "sys_acl_add_perm";
 +				break;
 +			}
-+		if (race->access & 1)
++		}
++		if (race->access & 1) {
 +			if (sys_acl_add_perm(permset, SMB_ACL_EXECUTE)) {
 +				errfun = "sys_acl_add_perm";
 +				break;
 +			}
++		}
 +		if (sys_acl_set_permset(entry, permset)) {
 +			errfun = "sys_acl_set_permset";
 +			break;
@@ -650,18 +649,16 @@ changes requested by the --chmod option.
 +	return True;
 +}
 +
-+static void receive_rsync_acl(rsync_acl *racl, int f)
++static void receive_rsync_acl(rsync_acl *racl, mode_t mode, int f)
 +{
-+#if ACLS_NEED_MASK
-+	uchar required_mask_perm = 0;
-+#endif
-+	BOOL saw_mask = False;
-+	BOOL saw_user_obj = False, saw_group_obj = False,
-+		saw_other = False;
-+	size_t count = read_int(f);
++	rsync_ace *user = NULL, *group = NULL, *other = NULL, *mask = NULL;
 +	rsync_ace *race;
-+	if (!count)
++	BOOL need_sort = 0;
++	size_t count;
++
++	if (!(count = read_int(f)))
 +		return;
++
 +	while (count--) {
 +		uchar tag = read_byte(f);
 +		expand_rsync_acl(racl);
@@ -669,25 +666,25 @@ changes requested by the --chmod option.
 +		switch (tag) {
 +		case 'u':
 +			race->tag_type = SMB_ACL_USER_OBJ;
-+			saw_user_obj = True;
++			user = race;
 +			break;
 +		case 'U':
 +			race->tag_type = SMB_ACL_USER;
 +			break;
 +		case 'g':
 +			race->tag_type = SMB_ACL_GROUP_OBJ;
-+			saw_group_obj = True;
++			group = race;
 +			break;
 +		case 'G':
 +			race->tag_type = SMB_ACL_GROUP;
 +			break;
 +		case 'o':
 +			race->tag_type = SMB_ACL_OTHER;
-+			saw_other = True;
++			other = race;
 +			break;
 +		case 'm':
 +			race->tag_type = SMB_ACL_MASK;
-+			saw_mask = True;
++			mask = race;
 +			break;
 +		default:
 +			rprintf(FERROR, "receive_rsync_acl: unknown tag %c\n",
@@ -703,76 +700,52 @@ changes requested by the --chmod option.
 +		if (race->tag_type == SMB_ACL_USER ||
 +		    race->tag_type == SMB_ACL_GROUP) {
 +			race->id = read_int(f);
-+#if ACLS_NEED_MASK
-+			required_mask_perm |= race->access;
-+#endif
 +		}
-+#if ACLS_NEED_MASK
-+		else if (race->tag_type == SMB_ACL_GROUP_OBJ)
-+			required_mask_perm |= race->access;
-+#endif
-+
 +	}
-+	if (!saw_user_obj) {
++	if (!user) {
 +		expand_rsync_acl(racl);
-+		race = &racl->races[racl->count++];
-+		race->tag_type = SMB_ACL_USER_OBJ;
-+		race->access = 7;
++		user = &racl->races[racl->count++];
++		user->tag_type = SMB_ACL_USER_OBJ;
++		user->access = (mode >> 6) & 7;
++		need_sort = True;
 +	}
-+	if (!saw_group_obj) {
++	if (!group) {
 +		expand_rsync_acl(racl);
-+		race = &racl->races[racl->count++];
-+		race->tag_type = SMB_ACL_GROUP_OBJ;
-+		race->access = 0;
++		group = &racl->races[racl->count++];
++		group->tag_type = SMB_ACL_GROUP_OBJ;
++		group->access = (mode >> 3) & 7;
++		need_sort = True;
 +	}
-+	if (!saw_other) {
++	if (!other) {
 +		expand_rsync_acl(racl);
-+		race = &racl->races[racl->count++];
-+		race->tag_type = SMB_ACL_OTHER;
-+		race->access = 0;
++		other = &racl->races[racl->count++];
++		other->tag_type = SMB_ACL_OTHER;
++		other->access = mode & 7;
++		need_sort = True;
 +	}
 +#if ACLS_NEED_MASK
-+	if (!saw_mask) {
++	if (!mask) {
 +		expand_rsync_acl(racl);
-+		race = &racl->races[racl->count++];
-+		race->tag_type = SMB_ACL_MASK;
-+		race->access = required_mask_perm;
++		mask = &racl->races[racl->count++];
++		mask->tag_type = SMB_ACL_MASK;
++		mask->access = (mode >> 3) & 7;
++		need_sort = True;
 +	}
 +#else
 +	/* If we, a system without ACLS_NEED_MASK, received data from a
 +	 * system that has masks, throw away the extraneous CLASS_OBJs. */
-+	if (saw_mask && racl->count == 4) {
-+		rsync_ace *group_obj_race = NULL, *mask_race = NULL;
-+		rsync_ace *p;
-+		size_t i;
-+		for (i = 0, p = racl->races; i < racl->count; i++, p++) {
-+			if (p->tag_type == SMB_ACL_MASK)
-+				mask_race = p;
-+			else if (p->tag_type == SMB_ACL_GROUP_OBJ)
-+				group_obj_race = p;
-+		}
-+		if (mask_race == NULL || group_obj_race == NULL) {
-+			rprintf(FERROR, "receive_rsync_acl: have four ACES "
-+					"and one's ACL_MASK but missing "
-+					"either it or ACL_GROUP_OBJ, "
-+					"when pruning ACL\n");
-+		} else {
-+			/* mask off group perms with it first */
-+			group_obj_race->access &= mask_race->access;
-+			/* dump mask_race; re-slot any followers-on */
-+			racl->count--;
-+			if (mask_race != &racl->races[racl->count]) {
-+				*mask_race = racl->races[racl->count];
-+				saw_user_obj = False; /* force re-sort */
-+			}
++	if (mask && racl->count == 4) {
++		/* mask off group perms with it first */
++		group->access &= mask->access;
++		/* dump mask; re-slot any followers-on */
++		racl->count--;
++		if (mask != &racl->races[racl->count]) {
++			*mask = racl->races[racl->count];
++			need_sort = True;
 +		}
 +	}
 +#endif
-+#if ACLS_NEED_MASK
-+	if (!(saw_user_obj && saw_group_obj && saw_other && saw_mask))
-+#else
-+	if (!(saw_user_obj && saw_group_obj && saw_other))
-+#endif
++	if (need_sort)
 +		sort_rsync_acl(racl);
 +}
 +
@@ -820,7 +793,7 @@ changes requested by the --chmod option.
 +				aclidx = racl_list->count;
 +			fileaclidx_list->fileaclidxs[fileaclidx_list->count++].
 +				file = file;
-+			receive_rsync_acl(&racl, f);
++			receive_rsync_acl(&racl, file->mode, f);
 +			expand_rsync_acl_list(racl_list);
 +			racl_list->racls[racl_list->count++] = racl;
 +			expand_smb_acl_list(sacl_list);
@@ -1036,7 +1009,7 @@ changes requested by the --chmod option.
 +
 +/* set ACL on rsync-ed or keep_backup-ed file */
 +
-+int set_acl(const char *fname, const struct file_struct *file)
++int set_acl(const char *fname, const struct file_struct *file, mode_t old_mode)
 +{
 +	int unchanged = 1;
 +	SMB_ACL_TYPE_T type;
@@ -1082,11 +1055,19 @@ changes requested by the --chmod option.
 +				continue;
 +			}
 +		} else {
-+			if (!*sacl_new)
-+				if (!pack_smb_acl(sacl_new, racl_new)) {
-+					unchanged = -1;
-+					continue;
-+				}
++			/* We set the mask (if it exists) to the file's group
++			 * permissions (as they currently exist on the disk).
++			 * This avoids a permission race, particularly for new
++			 * files (where the current group permissions == 0).
++			 * If this is not the right value, the upcoming chmod()
++			 * call will change it. */
++			int mbits = type == SMB_ACL_TYPE_ACCESS
++				  ? (int)((old_mode >> 3) & 7) : -1;
++			if (!*sacl_new
++			 && !pack_smb_acl(sacl_new, racl_new, mbits)) {
++				unchanged = -1;
++				continue;
++			}
 +			if (sys_acl_set_file(fname, type, *sacl_new) < 0) {
 +				rprintf(FERROR, "set_acl: sys_acl_set_file(%s, %s): %s\n",
 +					fname, str_acl_type(type),
@@ -4946,20 +4927,20 @@ changes requested by the --chmod option.
  	if (daemon_chmod_modes && !S_ISLNK(flist_mode))
  		cur_mode = tweak_mode(cur_mode, daemon_chmod_modes);
  	return (flist_mode & ~CHMOD_BITS) | (cur_mode & CHMOD_BITS);
-@@ -217,6 +219,13 @@ int set_file_attrs(char *fname, struct f
+@@ -203,6 +205,13 @@ int set_file_attrs(char *fname, struct f
+ 		updated = 1;
  	}
- #endif
  
 +#ifdef SUPPORT_ACLS
 +	/* It's OK to call set_acl() now, even for a dir, as the generator
 +	 * will enable owner-writability using chmod, if necessary. */
-+	if (preserve_acls && set_acl(fname, file) == 0)
++	if (preserve_acls && set_acl(fname, file, st->st_mode) == 0)
 +		updated = 1;
 +#endif
 +
- 	if (verbose > 1 && flags & ATTRS_REPORT) {
- 		enum logcode code = daemon_log_format_has_i || dry_run
- 				  ? FCLIENT : FINFO;
+ #ifdef HAVE_CHMOD
+ 	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
+ 		int ret = do_chmod(fname, file->mode);
 --- old/rsync.h
 +++ new/rsync.h
 @@ -658,6 +658,20 @@ struct chmod_mode_struct;
