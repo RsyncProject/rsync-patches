@@ -155,19 +155,21 @@ After applying this patch, run these commands for a successful build:
  		if (!(backupptr = get_backup_name(fname))) {
  			close(fd);
  			return;
-@@ -1298,7 +1302,10 @@ void generate_files(int f_out, struct fi
+@@ -1298,9 +1302,12 @@ void generate_files(int f_out, struct fi
  	int save_ignore_existing = ignore_existing;
  	int save_ignore_non_existing = ignore_non_existing;
  	int save_do_progress = do_progress;
 -	int save_make_backups = make_backups;
 +	int save_make_backups = GEN_make_backups = make_backups;
-+
+ 	int dir_tweaking = !(list_only || local_name || dry_run);
+ 
 +	GEN_append_mode = append_mode;
 +	GEN_csum_length = csum_length;
- 
++
  	if (protocol_version >= 29) {
  		itemizing = 1;
-@@ -1327,7 +1334,7 @@ void generate_files(int f_out, struct fi
+ 		maybe_ATTRS_REPORT = log_format_has_i ? 0 : ATTRS_REPORT;
+@@ -1328,7 +1335,7 @@ void generate_files(int f_out, struct fi
  		do_delete_pass(flist);
  	do_progress = 0;
  
@@ -176,7 +178,7 @@ After applying this patch, run these commands for a successful build:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1336,12 +1343,6 @@ void generate_files(int f_out, struct fi
+@@ -1337,12 +1344,6 @@ void generate_files(int f_out, struct fi
  			: "enabled");
  	}
  
@@ -189,7 +191,7 @@ After applying this patch, run these commands for a successful build:
  	for (i = 0; i < flist->count; i++) {
  		struct file_struct *file = flist->files[i];
  
-@@ -1385,23 +1386,34 @@ void generate_files(int f_out, struct fi
+@@ -1386,23 +1387,34 @@ void generate_files(int f_out, struct fi
  		delete_in_dir(NULL, NULL, NULL, NULL);
  
  	phase++;
@@ -230,7 +232,7 @@ After applying this patch, run these commands for a successful build:
  		if (local_name)
  			strlcpy(fbuf, local_name, sizeof fbuf);
  		else
-@@ -1413,27 +1425,43 @@ void generate_files(int f_out, struct fi
+@@ -1414,27 +1426,43 @@ void generate_files(int f_out, struct fi
  	phase++;
  	ignore_non_existing = save_ignore_non_existing;
  	ignore_existing = save_ignore_existing;
@@ -659,7 +661,7 @@ After applying this patch, run these commands for a successful build:
  		if ((size_t)write(batch_fd, buffer, total) != total)
  			exit_cleanup(RERR_FILEIO);
  	}
-@@ -1114,7 +1067,6 @@ static void writefd_unbuffered(int fd,ch
+@@ -1119,7 +1072,6 @@ static void writefd_unbuffered(int fd,ch
  			 * to grab any messages they sent before they died. */
  			while (fd == sock_f_out && io_multiplexing_in) {
  				set_io_timeout(30);
@@ -667,7 +669,7 @@ After applying this patch, run these commands for a successful build:
  				readfd_unbuffered(sock_f_in, io_filesfrom_buf,
  						  sizeof io_filesfrom_buf);
  			}
-@@ -1124,7 +1076,7 @@ static void writefd_unbuffered(int fd,ch
+@@ -1129,7 +1081,7 @@ static void writefd_unbuffered(int fd,ch
  		total += cnt;
  
  		if (fd == sock_f_out) {
@@ -676,7 +678,7 @@ After applying this patch, run these commands for a successful build:
  				last_io_out = time(NULL);
  			sleep_for_bwlimit(cnt);
  		}
-@@ -1148,7 +1100,7 @@ static void mplex_write(enum msgcode cod
+@@ -1153,7 +1105,7 @@ static void mplex_write(enum msgcode cod
  	 * cause output to occur down the socket.  Setting contiguous_write_len
  	 * prevents the reading of msg_fd_in once we actually start to write
  	 * this sequence of data (though we might read it before the start). */
@@ -685,7 +687,7 @@ After applying this patch, run these commands for a successful build:
  		contiguous_write_len = len + 4;
  
  	if (n > sizeof buffer - 4)
-@@ -1164,31 +1116,29 @@ static void mplex_write(enum msgcode cod
+@@ -1169,31 +1121,29 @@ static void mplex_write(enum msgcode cod
  	if (len)
  		writefd_unbuffered(sock_f_out, buf, len);
  
@@ -729,7 +731,7 @@ After applying this patch, run these commands for a successful build:
  	if (fd == sock_f_out)
  		stats.total_written += len;
  
-@@ -1401,9 +1351,3 @@ void start_write_batch(int fd)
+@@ -1406,9 +1356,3 @@ void start_write_batch(int fd)
  	else
  		write_batch_monitor_in = fd;
  }
@@ -808,7 +810,7 @@ After applying this patch, run these commands for a successful build:
  		return;
  
  	if (am_daemon) {
-@@ -617,12 +627,30 @@ static void do_server_sender(int f_in, i
+@@ -628,12 +638,30 @@ static void do_server_sender(int f_in, i
  	exit_cleanup(0);
  }
  
@@ -842,7 +844,7 @@ After applying this patch, run these commands for a successful build:
  
  	/* The receiving side mustn't obey this, or an existing symlink that
  	 * points to an identical file won't be replaced by the referent. */
-@@ -631,70 +659,16 @@ static int do_recv(int f_in,int f_out,st
+@@ -642,70 +670,16 @@ static int do_recv(int f_in,int f_out,st
  	if (preserve_hard_links)
  		init_hard_links();
  
@@ -918,7 +920,7 @@ After applying this patch, run these commands for a successful build:
  	generate_files(f_out, flist, local_name);
  
  	handle_stats(-1);
-@@ -705,10 +679,13 @@ static int do_recv(int f_in,int f_out,st
+@@ -716,10 +690,13 @@ static int do_recv(int f_in,int f_out,st
  	}
  	io_flush(FULL_FLUSH);
  
@@ -936,7 +938,7 @@ After applying this patch, run these commands for a successful build:
  }
  
  
-@@ -1078,22 +1055,6 @@ static int start_client(int argc, char *
+@@ -1089,22 +1066,6 @@ static int start_client(int argc, char *
  	return ret;
  }
  
@@ -959,7 +961,7 @@ After applying this patch, run these commands for a successful build:
  RETSIGTYPE remember_children(UNUSED(int val))
  {
  #ifdef WNOHANG
-@@ -1185,8 +1146,6 @@ int main(int argc,char *argv[])
+@@ -1196,8 +1157,6 @@ int main(int argc,char *argv[])
  # endif
  	sigact.sa_flags = SA_NOCLDSTOP;
  #endif
@@ -979,7 +981,7 @@ After applying this patch, run these commands for a successful build:
  extern int checksum_seed;
  extern int append_mode;
  
-@@ -132,7 +132,7 @@ static void matched(int f, struct sum_st
+@@ -110,7 +110,7 @@ static void matched(int f, struct sum_st
  	else
  		last_match = offset;
  
@@ -988,7 +990,7 @@ After applying this patch, run these commands for a successful build:
  		show_progress(last_match, buf->file_size);
  }
  
-@@ -332,7 +332,7 @@ void match_sums(int f, struct sum_struct
+@@ -314,7 +314,7 @@ void match_sums(int f, struct sum_struct
  	if (append_mode) {
  		OFF_T j = 0;
  		for (j = CHUNK_SIZE; j < s->flength; j += CHUNK_SIZE) {
@@ -997,7 +999,7 @@ After applying this patch, run these commands for a successful build:
  				show_progress(last_match, buf->file_size);
  			sum_update(map_ptr(buf, last_match, CHUNK_SIZE),
  				   CHUNK_SIZE);
-@@ -340,7 +340,7 @@ void match_sums(int f, struct sum_struct
+@@ -322,7 +322,7 @@ void match_sums(int f, struct sum_struct
  		}
  		if (last_match < s->flength) {
  			int32 len = s->flength - last_match;
@@ -1024,7 +1026,7 @@ After applying this patch, run these commands for a successful build:
  int keep_partial = 0;
  int safe_symlinks = 0;
  int copy_unsafe_links = 0;
-@@ -1299,6 +1299,7 @@ int parse_arguments(int *argc, const cha
+@@ -1301,6 +1301,7 @@ int parse_arguments(int *argc, const cha
  
  	if (do_progress && !verbose && !log_before_transfer && !am_server)
  		verbose = 1;
