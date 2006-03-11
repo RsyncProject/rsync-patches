@@ -4,6 +4,11 @@ After applying this patch, run these commands for a successful build:
     ./configure --enable-acl-support
     make
 
+This code does not yet itemize changes in ACL information (see --itemize),
+and it has a bug where some user/group ACL changes might not be propagated
+from the sender to the receiver if the receiver already has a version of
+the file that does not need any other attribute updates.
+
 --- old/Makefile.in
 +++ new/Makefile.in
 @@ -25,15 +25,15 @@ VERSION=@VERSION@
@@ -27,7 +32,7 @@ After applying this patch, run these commands for a successful build:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1201 @@
+@@ -0,0 +1,1196 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -74,6 +79,8 @@ After applying this patch, run these commands for a successful build:
 +
 +#define OTHER_TYPE(t) (SMB_ACL_TYPE_ACCESS+SMB_ACL_TYPE_DEFAULT-(t))
 +#define BUMP_TYPE(t) ((t = OTHER_TYPE(t)) == SMB_ACL_TYPE_DEFAULT)
++
++#define PERMS_SPLICE(perms,newbits,where) (((perms) & ~(7 << (where))) | ((newbits) << (where)))
 +
 +static void expand_rsync_acl(rsync_acl *racl)
 +{
@@ -309,7 +316,6 @@ After applying this patch, run these commands for a successful build:
 + * lowercase in this instance means there's no ACL following, so the
 + * ACL is a repeat, so the receiver should reuse the last of the same
 + * type ACL. */
-+
 +static void send_rsync_acl(int f, const rsync_acl *racl)
 +{
 +	rsync_ace *race;
@@ -359,7 +365,6 @@ After applying this patch, run these commands for a successful build:
 +
 +static rsync_acl _curr_rsync_acls[2];
 +
-+
 +static const char *str_acl_type(SMB_ACL_TYPE_T type)
 +{
 +	return type == SMB_ACL_TYPE_ACCESS ? "SMB_ACL_TYPE_ACCESS" :
@@ -367,26 +372,21 @@ After applying this patch, run these commands for a successful build:
 +		"unknown SMB_ACL_TYPE_T";
 +}
 +
-+/*
-+ * Overwrite racl with a new three-entry ACL from the given permissions.
-+ */
++/* Replace racl with a new three-entry ACL from the given permissions. */
 +static void perms_to_acl(int perms, rsync_acl *racl)
 +{
 +	racl->count = 0;
-+	expand_rsync_acl(racl);
++	expand_rsync_acl(racl); /* ensures at least 10 slots */
 +	racl->races[racl->count].tag_type = SMB_ACL_USER_OBJ;
 +	racl->races[racl->count++].access = (perms >> 6) & 7;
-+	expand_rsync_acl(racl);
 +	racl->races[racl->count].tag_type = SMB_ACL_GROUP_OBJ;
 +	racl->races[racl->count++].access = (perms >> 3) & 7;
-+	expand_rsync_acl(racl);
 +	racl->races[racl->count].tag_type = SMB_ACL_OTHER;
 +	racl->races[racl->count++].access = (perms >> 0) & 7;
 +}
 +
 +/* Generate the ACL(s) for this flist entry;
 + * ACL(s) are either sent or cleaned-up by send_acl() below. */
-+
 +int make_acl(const struct file_struct *file, const char *fname)
 +{
 +	SMB_ACL_TYPE_T type;
@@ -424,7 +424,6 @@ After applying this patch, run these commands for a successful build:
 +
 +/* Send the make_acl()-generated ACLs for this flist entry,
 + * or clean up after an flist entry that's not being sent (f == -1). */
-+
 +void send_acl(const struct file_struct *file, int f)
 +{
 +	SMB_ACL_TYPE_T type;
@@ -664,8 +663,11 @@ After applying this patch, run these commands for a successful build:
 +	return True;
 +}
 +
-+static void receive_rsync_acl(rsync_acl *racl, mode_t mode, int f)
++static void receive_rsync_acl(rsync_acl *racl, int f)
 +{
++#ifdef ACLS_NEED_MASK
++	uchar required_mask_perm = 0;
++#endif
 +	rsync_ace *user = NULL, *group = NULL, *other = NULL, *mask = NULL;
 +	rsync_ace *race;
 +	BOOL need_sort = 0;
@@ -715,27 +717,34 @@ After applying this patch, run these commands for a successful build:
 +		if (race->tag_type == SMB_ACL_USER ||
 +		    race->tag_type == SMB_ACL_GROUP) {
 +			race->id = read_int(f);
++#if ACLS_NEED_MASK
++			required_mask_perm |= race->access;
++#endif
 +		}
++#if ACLS_NEED_MASK
++		else if (race->tag_type == SMB_ACL_GROUP_OBJ)
++			required_mask_perm |= race->access;
++#endif
 +	}
 +	if (!user) {
 +		expand_rsync_acl(racl);
 +		user = &racl->races[racl->count++];
 +		user->tag_type = SMB_ACL_USER_OBJ;
-+		user->access = (mode >> 6) & 7;
++		user->access = 7;
 +		need_sort = True;
 +	}
 +	if (!group) {
 +		expand_rsync_acl(racl);
 +		group = &racl->races[racl->count++];
 +		group->tag_type = SMB_ACL_GROUP_OBJ;
-+		group->access = (mode >> 3) & 7;
++		group->access = 0;
 +		need_sort = True;
 +	}
 +	if (!other) {
 +		expand_rsync_acl(racl);
 +		other = &racl->races[racl->count++];
 +		other->tag_type = SMB_ACL_OTHER;
-+		other->access = mode & 7;
++		other->access = 0;
 +		need_sort = True;
 +	}
 +#if ACLS_NEED_MASK
@@ -743,7 +752,7 @@ After applying this patch, run these commands for a successful build:
 +		expand_rsync_acl(racl);
 +		mask = &racl->races[racl->count++];
 +		mask->tag_type = SMB_ACL_MASK;
-+		mask->access = (mode >> 3) & 7;
++		mask->access = required_mask_perm;
 +		need_sort = True;
 +	}
 +#else
@@ -765,7 +774,6 @@ After applying this patch, run these commands for a successful build:
 +}
 +
 +/* receive and build the rsync_acl_lists */
-+
 +void receive_acl(struct file_struct *file, int f)
 +{
 +	SMB_ACL_TYPE_T type;
@@ -808,7 +816,7 @@ After applying this patch, run these commands for a successful build:
 +				aclidx = racl_list->count;
 +			fileaclidx_list->fileaclidxs[fileaclidx_list->count++].
 +				file = file;
-+			receive_rsync_acl(&racl, file->mode, f);
++			receive_rsync_acl(&racl, f);
 +			expand_rsync_acl_list(racl_list);
 +			racl_list->racls[racl_list->count++] = racl;
 +			expand_smb_acl_list(sacl_list);
@@ -883,7 +891,6 @@ After applying this patch, run these commands for a successful build:
 +}
 +
 +/* for duplicating ACLs on backups when using backup_dir */
-+
 +int dup_acl(const char *orig, const char *bak, mode_t mode)
 +{
 +	SMB_ACL_TYPE_T type;
@@ -1023,8 +1030,7 @@ After applying this patch, run these commands for a successful build:
 +}
 +
 +/* set ACL on rsync-ed or keep_backup-ed file */
-+
-+int set_acl(const char *fname, const struct file_struct *file, mode_t old_mode)
++int set_acl(const char *fname, const struct file_struct *file)
 +{
 +	int unchanged = 1;
 +	SMB_ACL_TYPE_T type;
@@ -1070,14 +1076,11 @@ After applying this patch, run these commands for a successful build:
 +				continue;
 +			}
 +		} else {
-+			/* We set the mask (if it exists) to the file's group
-+			 * permissions (as they currently exist on the disk).
-+			 * This avoids a permission race, particularly for new
-+			 * files (where the current group permissions == 0).
-+			 * If this is not the right value, the upcoming chmod()
-+			 * call will change it. */
++			/* For an access ACL, we substitute the permissions
++			 * from the file-list because --chmod might have
++			 * changed them. */
 +			int perms = type == SMB_ACL_TYPE_ACCESS
-+				  ? (int)(old_mode & CHMOD_BITS) : -1;
++				  ? (int)(file->mode & CHMOD_BITS) : -1;
 +			if (!*sacl_new
 +			 && !pack_smb_acl(sacl_new, racl_new, perms)) {
 +				unchanged = -1;
@@ -1112,7 +1115,6 @@ After applying this patch, run these commands for a successful build:
 +
 +/* This returns the next tag_type id from the given acl for the next entry,
 + * or it returns 0 if there are no more tag_type ids in the acl. */
-+
 +static id_t *next_ace_id(SMB_ACL_TAG_T tag_type, const rsync_acl *racl)
 +{
 +	for (; enum_race_index < racl->count; enum_race_index++) {
@@ -1156,8 +1158,6 @@ After applying this patch, run these commands for a successful build:
 +{
 +	return next_acl_list_id(SMB_ACL_GROUP);
 +}
-+
-+#define PERMS_SPLICE(perms,newbits,where) (((perms) & ~(7 << (where))) | ((newbits) << (where)))
 +
 +int default_perms_for_dir(const char *dir)
 +{
@@ -4927,20 +4927,41 @@ After applying this patch, run these commands for a successful build:
  	if (daemon_chmod_modes && !S_ISLNK(flist_mode))
  		cur_mode = tweak_mode(cur_mode, daemon_chmod_modes);
  	return (flist_mode & ~CHMOD_BITS) | (cur_mode & CHMOD_BITS);
-@@ -203,6 +205,13 @@ int set_file_attrs(char *fname, struct f
- 		updated = 1;
+@@ -205,7 +207,19 @@ int set_file_attrs(char *fname, struct f
+ 
+ #ifdef HAVE_CHMOD
+ 	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
+-		int ret = do_chmod(fname, file->mode);
++		mode_t mode = file->mode;
++		int ret;
++#ifdef SUPPORT_ACLS
++		/* If we're preserving ACLs, we only want to turn off any
++		 * newly-disabled bits here and make sure that the special
++		 * permissions are set correctly.  We'll let set_acl() turn
++		 * on any new access bits as it installs the full ACL. */
++		if (preserve_acls) {
++			mode &= ((S_ISUID | S_ISGID | S_ISVTX)
++			       | (st->st_mode & CHMOD_BITS));
++		}
++#endif
++		ret = do_chmod(fname, mode);
+ 		if (ret < 0) {
+ 			rsyserr(FERROR, errno,
+ 				"failed to set permissions on %s",
+@@ -217,6 +231,13 @@ int set_file_attrs(char *fname, struct f
  	}
+ #endif
  
 +#ifdef SUPPORT_ACLS
 +	/* It's OK to call set_acl() now, even for a dir, as the generator
 +	 * will enable owner-writability using chmod, if necessary. */
-+	if (preserve_acls && set_acl(fname, file, st->st_mode) == 0)
++	if (preserve_acls && set_acl(fname, file) == 0)
 +		updated = 1;
 +#endif
 +
- #ifdef HAVE_CHMOD
- 	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
- 		int ret = do_chmod(fname, file->mode);
+ 	if (verbose > 1 && flags & ATTRS_REPORT) {
+ 		enum logcode code = daemon_log_format_has_i || dry_run
+ 				  ? FCLIENT : FINFO;
 --- old/rsync.h
 +++ new/rsync.h
 @@ -658,6 +658,20 @@ struct chmod_mode_struct;
