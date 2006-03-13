@@ -26,46 +26,108 @@ with literal values were needed.
 
 --- old/acls.c
 +++ new/acls.c
-@@ -146,6 +146,9 @@ static BOOL unpack_smb_acl(rsync_acl *ra
+@@ -30,9 +30,11 @@ extern int am_root;
+ extern int dry_run;
+ extern int orig_umask;
+ 
++typedef unsigned short abits;
++
+ typedef struct {
+ 	id_t id;
+-	uchar access;
++	abits access;
+ } id_access;
+ 
+ typedef struct {
+@@ -41,15 +43,15 @@ typedef struct {
+ 	id_access *idas;
+ } ida_list;
+ 
+-#define NO_ENTRY ((uchar)0x80)
++#define NO_ENTRY ((abits)0x8000)
+ typedef struct {
+ 	ida_list users;
+ 	ida_list groups;
+ 	/* These will be NO_ENTRY if there's no such entry. */
+-	uchar user_obj;
+-	uchar group_obj;
+-	uchar mask;
+-	uchar other;
++	abits user_obj;
++	abits group_obj;
++	abits mask;
++	abits other;
+ } rsync_acl;
+ 
+ static const rsync_acl rsync_acl_initializer =
+@@ -148,7 +150,7 @@ static BOOL unpack_smb_acl(rsync_acl *ra
+ 	     rc = sys_acl_get_entry(sacl, SMB_ACL_NEXT_ENTRY, &entry)) {
+ 		SMB_ACL_TAG_T tag_type;
+ 		SMB_ACL_PERMSET_T permset;
+-		uchar access;
++		abits access;
+ 		void *qualifier;
+ 		id_access *ida;
+ 		ida_list *idal;
+@@ -162,6 +164,9 @@ static BOOL unpack_smb_acl(rsync_acl *ra
  		}
- 		race->access = (sys_acl_get_perm(permset, SMB_ACL_READ) ? 4 : 0)
- 			     | (sys_acl_get_perm(permset, SMB_ACL_WRITE) ? 2 : 0)
-+			     | (sys_acl_get_perm(permset, SMB_ACL_DELETE) ? 8 : 0)
-+			     | (sys_acl_get_perm(permset, SMB_ACL_CHMOD) ? 16 : 0)
-+			     | (sys_acl_get_perm(permset, SMB_ACL_CHOWN) ? 32 : 0)
- 			     | (sys_acl_get_perm(permset, SMB_ACL_EXECUTE) ? 1 : 0);
- 		switch (race->tag_type) {
- 		case SMB_ACL_USER:
-@@ -575,6 +578,21 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
- 				errfun = "sys_acl_add_perm";
- 				break;
- 			}
-+		if (race->access & 8)
-+			if (sys_acl_add_perm(permset, SMB_ACL_DELETE)) {
-+				errfun = "sys_acl_add_perm";
-+				break;
-+			}
-+		if (race->access & 16)
-+			if (sys_acl_add_perm(permset, SMB_ACL_CHMOD)) {
-+				errfun = "sys_acl_add_perm";
-+				break;
-+			}
-+		if (race->access & 32)
-+			if (sys_acl_add_perm(permset, SMB_ACL_CHOWN)) {
-+				errfun = "sys_acl_add_perm";
-+				break;
-+			}
- 		if (sys_acl_set_permset(entry, permset)) {
- 			errfun = "sys_acl_set_permset";
- 			break;
-@@ -634,7 +652,7 @@ static void receive_rsync_acl(rsync_acl 
- 			exit_cleanup(RERR_STREAMIO);
- 		}
- 		race->access = read_byte(f);
--		if (race->access & ~ (4 | 2 | 1)) {
-+		if (race->access & ~(32 | 16 | 8 | 4 | 2 | 1)) {
+ 		access = (sys_acl_get_perm(permset, SMB_ACL_READ) ? 4 : 0)
+ 		       | (sys_acl_get_perm(permset, SMB_ACL_WRITE) ? 2 : 0)
++		       | (sys_acl_get_perm(permset, SMB_ACL_DELETE) ? 8 : 0)
++		       | (sys_acl_get_perm(permset, SMB_ACL_CHMOD) ? 16 : 0)
++		       | (sys_acl_get_perm(permset, SMB_ACL_CHOWN) ? 32 : 0)
+ 		       | (sys_acl_get_perm(permset, SMB_ACL_EXECUTE) ? 1 : 0);
+ 		/* continue == done with entry; break == store in given idal */
+ 		switch (tag_type) {
+@@ -559,13 +564,19 @@ static void expand_smb_acl_list(smb_acl_
+ #define COE(func,args) CALL_OR_ERROR(func,args,#func)
+ #define COE2(func,args) CALL_OR_ERROR(func,args,NULL)
+ 
+-static int store_access_in_entry(uchar access, SMB_ACL_ENTRY_T entry)
++static int store_access_in_entry(abits access, SMB_ACL_ENTRY_T entry)
+ {
+ 	const char *errfun = NULL;
+ 	SMB_ACL_PERMSET_T permset;
+ 
+ 	COE( sys_acl_get_permset,(entry, &permset) );
+ 	COE( sys_acl_clear_perms,(permset) );
++	if (access & 32)
++		COE( sys_acl_add_perm(permset, SMB_ACL_CHOWN) );
++	if (access & 16)
++		COE( sys_acl_add_perm(permset, SMB_ACL_CHMOD) );
++	if (access & 8)
++		COE( sys_acl_add_perm(permset, SMB_ACL_DELETE) );
+ 	if (access & 4)
+ 		COE( sys_acl_add_perm,(permset, SMB_ACL_READ) );
+ 	if (access & 2)
+@@ -645,7 +656,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
+ 	return False;
+ }
+ 
+-static mode_t change_sacl_perms(SMB_ACL_T sacl, uchar mask, mode_t old_mode, mode_t mode)
++static mode_t change_sacl_perms(SMB_ACL_T sacl, abits mask, mode_t old_mode, mode_t mode)
+ {
+ 	SMB_ACL_ENTRY_T entry;
+ 	int group_id = mask != NO_ENTRY ? SMB_ACL_MASK : SMB_ACL_GROUP_OBJ;
+@@ -696,7 +707,7 @@ static mode_t change_sacl_perms(SMB_ACL_
+ 
+ static void receive_rsync_acl(rsync_acl *racl, int f)
+ {
+-	uchar computed_mask_bits = 0;
++	abits computed_mask_bits = 0;
+ 	ida_list *idal = NULL;
+ 	id_access *ida;
+ 	size_t count;
+@@ -708,8 +719,8 @@ static void receive_rsync_acl(rsync_acl 
+ 
+ 	while (count--) {
+ 		char tag = read_byte(f);
+-		uchar access = read_byte(f);
+-		if (access & ~ (4 | 2 | 1)) {
++		abits access = read_byte(f);
++		if (access & ~(32 | 16 | 8 | 4 | 2 | 1)) {
  			rprintf(FERROR, "receive_rsync_acl: bogus permset %o\n",
- 				race->access);
+ 				access);
  			exit_cleanup(RERR_STREAMIO);
 --- old/smb_acls.h
 +++ new/smb_acls.h
