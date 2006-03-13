@@ -32,7 +32,7 @@ the file that does not need any other attribute updates.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1238 @@
+@@ -0,0 +1,1242 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -583,15 +583,18 @@ the file that does not need any other attribute updates.
 +	}
 +}
 +
-+#define COE(func,args) /* call or error */ \
++#define CALL_OR_ERROR(func,args,str) \
 +	do { \
 +		if (func args) { \
-+			errfun = #func; \
++			errfun = str; \
 +			goto error_exit; \
 +		} \
 +	} while (0)
 +
-+static BOOL store_access_in_entry(uchar access, SMB_ACL_ENTRY_T entry)
++#define COE(func,args) CALL_OR_ERROR(func,args,#func)
++#define COE2(func,args) CALL_OR_ERROR(func,args,NULL)
++
++static int store_access_in_entry(uchar access, SMB_ACL_ENTRY_T entry)
 +{
 +	const char *errfun = NULL;
 +	SMB_ACL_PERMSET_T permset;
@@ -606,12 +609,12 @@ the file that does not need any other attribute updates.
 +		COE( sys_acl_add_perm,(permset, SMB_ACL_EXECUTE) );
 +	COE( sys_acl_set_permset,(entry, permset) );
 +
-+	return True;
++	return 0;
 +
-+error_exit:
++  error_exit:
 +	rprintf(FERROR, "store_access_in_entry %s(): %s\n", errfun,
 +		strerror(errno));
-+	return False;
++	return -1;
 +}
 +
 +/* build an SMB_ACL_T corresponding to an rsync_acl */
@@ -630,42 +633,36 @@ the file that does not need any other attribute updates.
 +
 +	COE( sys_acl_create_entry,(smb_acl, &entry) );
 +	COE( sys_acl_set_tag_type,(entry, SMB_ACL_USER_OBJ) );
-+	if (!store_access_in_entry(racl->user_obj, entry))
-+		goto free_exit;
++	COE2( store_access_in_entry,(racl->user_obj, entry) );
 +
 +	for (ida = racl->users.idas, count = racl->users.count;
 +	     count--; ida++) {
 +		COE( sys_acl_create_entry,(smb_acl, &entry) );
 +		COE( sys_acl_set_tag_type,(entry, SMB_ACL_USER) );
 +		COE( sys_acl_set_qualifier,(entry, (void*)&ida->id) );
-+		if (!store_access_in_entry(ida->access, entry))
-+			goto free_exit;
++		COE2( store_access_in_entry,(ida->access, entry) );
 +	}
 +
 +	COE( sys_acl_create_entry,(smb_acl, &entry) );
 +	COE( sys_acl_set_tag_type,(entry, SMB_ACL_GROUP_OBJ) );
-+	if (!store_access_in_entry(racl->group_obj, entry))
-+		goto free_exit;
++	COE2( store_access_in_entry,(racl->group_obj, entry) );
 +
 +	for (ida = racl->groups.idas, count = racl->groups.count;
 +	     count--; ida++) {
 +		COE( sys_acl_create_entry,(smb_acl, &entry) );
 +		COE( sys_acl_set_tag_type,(entry, SMB_ACL_GROUP) );
 +		COE( sys_acl_set_qualifier,(entry, (void*)&ida->id) );
-+		if (!store_access_in_entry(ida->access, entry))
-+			goto free_exit;
++		COE2( store_access_in_entry,(ida->access, entry) );
 +	}
 +	if (racl->mask != NO_ENTRY) {
 +		COE( sys_acl_create_entry,(smb_acl, &entry) );
 +		COE( sys_acl_set_tag_type,(entry, SMB_ACL_MASK) );
-+		if (!store_access_in_entry(racl->mask, entry))
-+			goto free_exit;
++		COE2( store_access_in_entry,(racl->mask, entry) );
 +	}
 +
 +	COE( sys_acl_create_entry,(smb_acl, &entry) );
 +	COE( sys_acl_set_tag_type,(entry, SMB_ACL_OTHER) );
-+	if (!store_access_in_entry(racl->other, entry))
-+		goto free_exit;
++	COE2( store_access_in_entry,(racl->other, entry) );
 +
 +#ifdef DEBUG
 +	if (sys_acl_valid(*smb_acl) < 0)
@@ -674,10 +671,11 @@ the file that does not need any other attribute updates.
 +
 +	return True;
 +
-+error_exit:
-+	rprintf(FERROR, "pack_smb_acl %s(): %s\n", errfun,
-+		strerror(errno));
-+free_exit:
++  error_exit:
++	if (errfun) {
++		rprintf(FERROR, "pack_smb_acl %s(): %s\n", errfun,
++			strerror(errno));
++	}
 +	sys_acl_free_acl(*smb_acl);
 +	return False;
 +}
@@ -692,7 +690,7 @@ the file that does not need any other attribute updates.
 +	if (S_ISDIR(mode)) {
 +		/* If the sticky bit is going on, it's not safe to allow all
 +		 * the new ACLs to go into effect before it gets set. */
-+		if (!(old_mode & S_ISVTX) && mode & S_ISVTX)
++		if (mode & S_ISVTX && !(old_mode & S_ISVTX))
 +			mode &= ~0077;
 +	} else {
 +		/* If setuid or setgid is going off, it's not safe to allow all
@@ -712,18 +710,22 @@ the file that does not need any other attribute updates.
 +			break;
 +		}
 +		if (tag_type == SMB_ACL_USER_OBJ)
-+			store_access_in_entry((mode >> 6) & 7, entry);
++			COE2( store_access_in_entry,((mode >> 6) & 7, entry) );
 +		else if (tag_type == group_id)
-+			store_access_in_entry((mode >> 3) & 7, entry);
++			COE2( store_access_in_entry,((mode >> 3) & 7, entry) );
 +		else if (tag_type == SMB_ACL_OTHER)
-+			store_access_in_entry(mode & 7, entry);
++			COE2( store_access_in_entry,(mode & 7, entry) );
 +	}
 +	if (rc) {
-+		rprintf(FERROR, "change_sacl_perms: %s(): %s\n",
-+			errfun, strerror(errno));
++	  error_exit:
++		if (errfun) {
++			rprintf(FERROR, "change_sacl_perms: %s(): %s\n",
++				errfun, strerror(errno));
++		}
++		return ~0u;
 +	}
 +
-+	/* return the mode of the file on disk, as we set them */
++	/* Return the mode of the file on disk, as we will set them. */
 +	return (old_mode & ~ACCESSPERMS) | (mode & ACCESSPERMS);
 +}
 +
@@ -1141,6 +1143,8 @@ the file that does not need any other attribute updates.
 +				if (type == SMB_ACL_TYPE_ACCESS) {
 +					cur_mode = change_sacl_perms(*sacl_new, racl_new->mask,
 +								     cur_mode, file->mode);
++					if (cur_mode == ~0u)
++						continue;
 +				}
 +				if (sys_acl_set_file(fname, type, *sacl_new) < 0) {
 +					rprintf(FERROR, "set_acl: sys_acl_set_file(%s, %s): %s\n",
