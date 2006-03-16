@@ -32,7 +32,7 @@ the file that does not need any other attribute updates.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1242 @@
+@@ -0,0 +1,1254 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -690,6 +690,10 @@ the file that does not need any other attribute updates.
 +	if (S_ISDIR(mode)) {
 +		/* If the sticky bit is going on, it's not safe to allow all
 +		 * the new ACLs to go into effect before it gets set. */
++#ifdef SMB_ACL_LOSES_SPECIAL_MODE_BITS
++		if (mode & S_ISVTX)
++			mode &= ~0077;
++#else
 +		if (mode & S_ISVTX && !(old_mode & S_ISVTX))
 +			mode &= ~0077;
 +	} else {
@@ -698,6 +702,7 @@ the file that does not need any other attribute updates.
 +		if ((old_mode & S_ISUID && !(mode & S_ISUID))
 +		 || (old_mode & S_ISGID && !(mode & S_ISGID)))
 +			mode &= ~0077;
++#endif
 +	}
 +
 +	errfun = "sys_acl_get_entry";
@@ -724,6 +729,13 @@ the file that does not need any other attribute updates.
 +		}
 +		return ~0u;
 +	}
++
++#ifdef SMB_ACL_LOSES_SPECIAL_MODE_BITS
++	/* Ensure that chmod() will be called to restore any lost setid bits. */
++	if (old_mode & (S_ISUID | S_ISGID | S_ISVTX)
++	 && (old_mode & CHMOD_BITS) == (mode & CHMOD_BITS))
++		old_mode &= ~(S_ISUID | S_ISGID | S_ISVTX);
++#endif
 +
 +	/* Return the mode of the file on disk, as we will set them. */
 +	return (old_mode & ~ACCESSPERMS) | (mode & ACCESSPERMS);
@@ -1079,11 +1091,11 @@ the file that does not need any other attribute updates.
 + *
 + * This sets extended access ACL entries and default ACLs.  If convenient,
 + * it sets permission bits along with the access ACLs and signals having
-+ * done so by modifying p_mode, which should point into the stat buffer.
++ * done so by modifying mode_p, which should point into the stat buffer.
 + *
 + * returns: 1 for unchanged, 0 for changed, -1 for failed
-+ * Pass NULL for p_mode to get the return code without changing anything. */
-+int set_acl(const char *fname, const struct file_struct *file, mode_t *p_mode)
++ * Pass NULL for mode_p to get the return code without changing anything. */
++int set_acl(const char *fname, const struct file_struct *file, mode_t *mode_p)
 +{
 +	int unchanged = 1;
 +	SMB_ACL_TYPE_T type;
@@ -1124,7 +1136,7 @@ the file that does not need any other attribute updates.
 +		rsync_acl_free(&racl_orig);
 +		if (ok)
 +			continue;
-+		if (!dry_run && p_mode) {
++		if (!dry_run && mode_p) {
 +			if (type == SMB_ACL_TYPE_DEFAULT
 +			 && rsync_acl_count_entries(racl_new) == 0) {
 +				if (sys_acl_delete_def_file(fname) < 0) {
@@ -1134,7 +1146,7 @@ the file that does not need any other attribute updates.
 +					continue;
 +				}
 +			} else {
-+				mode_t cur_mode = *p_mode;
++				mode_t cur_mode = *mode_p;
 +				if (!*sacl_new
 +				 && !pack_smb_acl(sacl_new, racl_new)) {
 +					unchanged = -1;
@@ -1154,7 +1166,7 @@ the file that does not need any other attribute updates.
 +					continue;
 +				}
 +				if (type == SMB_ACL_TYPE_ACCESS)
-+					*p_mode = cur_mode;
++					*mode_p = cur_mode;
 +			}
 +		}
 +		if (unchanged == 1)
@@ -1353,7 +1365,7 @@ the file that does not need any other attribute updates.
 +			AC_MSG_RESULT(Using UnixWare ACLs)
 +			AC_DEFINE(HAVE_UNIXWARE_ACLS, 1, [true if you have UnixWare ACLs])
 +			;;
-+		*solaris*)
++		*solaris*|*cygwin*)
 +			AC_MSG_RESULT(Using solaris ACLs)
 +			AC_DEFINE(HAVE_SOLARIS_ACLS, 1, [true if you have solaris ACLs])
 +			;;
@@ -1541,7 +1553,7 @@ the file that does not need any other attribute updates.
  
 --- old/lib/sysacls.c
 +++ new/lib/sysacls.c
-@@ -0,0 +1,3242 @@
+@@ -0,0 +1,3240 @@
 +/* 
 +   Unix SMB/CIFS implementation.
 +   Samba system utilities for ACL support.
@@ -2184,7 +2196,6 @@ the file that does not need any other attribute updates.
 +
 +	for (i = 0; i < acl_d->count; i++) {
 +		struct acl	*ap	= &acl_d->acl[i];
-+		struct passwd	*pw;
 +		struct group	*gr;
 +		char		tagbuf[12];
 +		char		idbuf[12];
@@ -2287,7 +2298,7 @@ the file that does not need any other attribute updates.
 +	 * acl[] array, this actually allocates an ACL with room
 +	 * for (count+1) entries
 +	 */
-+	if ((a = SMB_MALLOC(sizeof(struct SMB_ACL_T) + count * sizeof(struct acl))) == NULL) {
++	if ((a = (SMB_ACL_T)SMB_MALLOC(sizeof(struct SMB_ACL_T) + count * sizeof(struct acl))) == NULL) {
 +		errno = ENOMEM;
 +		return NULL;
 +	}
@@ -2530,7 +2541,7 @@ the file that does not need any other attribute updates.
 +	return 0;
 +}
 +
-+int sys_acl_free_qualifier(void *qual, SMB_ACL_TAG_T tagtype)
++int sys_acl_free_qualifier(UNUSED(void *qual), UNUSED(SMB_ACL_TAG_T tagtype))
 +{
 +	return 0;
 +}
@@ -2815,7 +2826,6 @@ the file that does not need any other attribute updates.
 +
 +	for (i = 0; i < acl_d->count; i++) {
 +		struct acl	*ap	= &acl_d->acl[i];
-+		struct passwd	*pw;
 +		struct group	*gr;
 +		char		tagbuf[12];
 +		char		idbuf[12];
@@ -5085,7 +5095,7 @@ the file that does not need any other attribute updates.
  transfer.  The resulting value is treated as though it was the permissions
 --- old/smb_acls.h
 +++ new/smb_acls.h
-@@ -0,0 +1,277 @@
+@@ -0,0 +1,281 @@
 +/* 
 +   Unix SMB/Netbios implementation.
 +   Version 2.2.x
@@ -5207,6 +5217,10 @@ the file that does not need any other attribute updates.
 +
 +#define SMB_ACL_TYPE_ACCESS	0
 +#define SMB_ACL_TYPE_DEFAULT	1
++
++#ifdef __CYGWIN__
++#define SMB_ACL_LOSES_SPECIAL_MODE_BITS
++#endif
 +
 +#elif defined HAVE_HPUX_ACLS
 +
@@ -5365,7 +5379,7 @@ the file that does not need any other attribute updates.
 +#endif /* _SMB_ACLS_H */
 --- old/testsuite/default-acls.test
 +++ new/testsuite/default-acls.test
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,64 @@
 +#! /bin/sh
 +
 +# This program is distributable under the terms of the GNU GPL see
@@ -5376,15 +5390,24 @@ the file that does not need any other attribute updates.
 +. $srcdir/testsuite/rsync.fns
 +
 +$RSYNC --version | grep ", ACLs" >/dev/null || test_skipped "Rsync is configured without ACL support"
-+setfacl -dm u::rwx,g::---,o::--- "$scratchdir" || test_skipped "Your filesystem has ACLs disabled"
++case "$setfacl_nodef" in
++*-k*) opts='-dm u::7,g::5,o:5' ;;
++*) opts='-m d:u::7,d:g::5,d:o:5' ;;
++esac
++setfacl $opts "$scratchdir" || test_skipped "Your filesystem has ACLs disabled"
 +
 +# Call as: testit <dirname> <default-acl> <file-expected> <program-expected>
 +testit() {
 +    todir="$scratchdir/$1"
 +    mkdir "$todir"
-+    # FIXME This doesn't work on solaris...
-+    setfacl -k "$todir"
-+    [ "$2" ] && setfacl -dm "$2" "$todir"
++    $setfacl_nodef "$todir"
++    if [ "$2" ]; then
++	case "$setfacl_nodef" in
++	*-k*) opts="-dm $2" ;;
++	*) opts="-m `echo $2 | sed 's/\([ugom]:\)/d:\1/g'`"
++	esac
++	setfacl $opts "$todir"
++    fi
 +    # Make sure we obey ACLs when creating a directory to hold multiple transferred files,
 +    # even though the directory itself is outside the transfer
 +    $RSYNC -rvv "$scratchdir/dir" "$scratchdir/file" "$scratchdir/program" "$todir/to/"
@@ -5409,10 +5432,10 @@ the file that does not need any other attribute updates.
 +
 +# Test some target directories
 +umask 0077
-+testit da777 u::rwx,g::rwx,o::rwx rw-rw-rw- rwxrwxrwx
-+testit da775 u::rwx,g::rwx,o::r-x rw-rw-r-- rwxrwxr-x
-+testit da750 u::rwx,g::r-x,o::--- rw-r----- rwxr-x---
-+testit da770mask u::rwx,g::---,m::rwx,o::--- rw-rw---- rwxrwx---
++testit da777 u::7,g::7,o:7 rw-rw-rw- rwxrwxrwx
++testit da775 u::7,g::7,o:5 rw-rw-r-- rwxrwxr-x
++testit da750 u::7,g::5,o:0 rw-r----- rwxr-x---
++testit da770mask u::7,u:0:7,g::0,m:7,o:0 rw-rw---- rwxrwx---
 +testit noda1 '' rw------- rwx------
 +umask 0000
 +testit noda2 '' rw-rw-rw- rwxrwxrwx
