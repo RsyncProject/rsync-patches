@@ -314,15 +314,7 @@ After applying this patch, run these commands for a successful build:
  int sock_f_in = -1;
  int sock_f_out = -1;
  
-@@ -102,7 +98,6 @@ static char io_filesfrom_buf[2048];
- static char *io_filesfrom_bp;
- static char io_filesfrom_lastchar;
- static int io_filesfrom_buflen;
--static int defer_forwarding_messages = 0;
- static int select_timeout = SELECT_TIMEOUT;
- static int active_filecnt = 0;
- static OFF_T active_bytecnt = 0;
-@@ -110,27 +105,31 @@ static OFF_T active_bytecnt = 0;
+@@ -110,27 +106,31 @@ static OFF_T active_bytecnt = 0;
  static void read_loop(int fd, char *buf, size_t len);
  
  struct flist_ndx_item {
@@ -360,7 +352,7 @@ After applying this patch, run these commands for a successful build:
  
  static void flist_ndx_push(struct flist_ndx_list *lp, int ndx)
  {
-@@ -140,27 +139,31 @@ static void flist_ndx_push(struct flist_
+@@ -140,27 +140,31 @@ static void flist_ndx_push(struct flist_
  		out_of_memory("flist_ndx_push");
  	item->next = NULL;
  	item->ndx = ndx;
@@ -398,7 +390,7 @@ After applying this patch, run these commands for a successful build:
  
  	return ndx;
  }
-@@ -169,7 +172,7 @@ static void check_timeout(void)
+@@ -169,7 +173,7 @@ static void check_timeout(void)
  {
  	time_t t;
  
@@ -407,7 +399,7 @@ After applying this patch, run these commands for a successful build:
  		return;
  
  	if (!last_io_in) {
-@@ -210,44 +213,38 @@ void set_io_timeout(int secs)
+@@ -210,44 +214,38 @@ void set_io_timeout(int secs)
  
  /* Setup the fd used to receive MSG_* messages.  Only needed during the
   * early stages of being a local sender (up through the sending of the
@@ -468,7 +460,7 @@ After applying this patch, run these commands for a successful build:
  static void read_msg_fd(void)
  {
  	char buf[2048];
-@@ -266,57 +263,6 @@ static void read_msg_fd(void)
+@@ -266,57 +264,6 @@ static void read_msg_fd(void)
  	tag = (tag >> 24) - MPLEX_BASE;
  
  	switch (tag) {
@@ -526,7 +518,7 @@ After applying this patch, run these commands for a successful build:
  	case MSG_INFO:
  	case MSG_ERROR:
  	case MSG_LOG:
-@@ -325,10 +271,7 @@ static void read_msg_fd(void)
+@@ -325,10 +272,7 @@ static void read_msg_fd(void)
  			if (n >= sizeof buf)
  				n = sizeof buf - 1;
  			read_loop(fd, buf, n);
@@ -538,7 +530,7 @@ After applying this patch, run these commands for a successful build:
  			len -= n;
  		}
  		break;
-@@ -362,70 +305,74 @@ void decrement_active_files(int ndx)
+@@ -362,70 +306,76 @@ void decrement_active_files(int ndx)
  	active_bytecnt -= the_file_list->files[ndx]->length;
  }
  
@@ -548,15 +540,18 @@ After applying this patch, run these commands for a successful build:
 - * This is only active in the receiver. */
 -static int msg2genr_flush(int flush_it_all)
 + * This is only called by the generator. */
-+static int msg_list_flush(int flush_it_all)
++static void msg_list_flush(void)
  {
 -	static int written = 0;
 -	struct timeval tv;
 -	fd_set fds;
--
++	assert(am_generator());
+ 
 -	if (msg_fd_out < 0)
 -		return -1;
--
++	if (defer_forwarding_messages)
++		return;
+ 
 -	while (msg2genr.head) {
 -		struct msg_list_item *m = msg2genr.head;
 -		int n = write(msg_fd_out, m->buf + written, m->len - written);
@@ -579,10 +574,14 @@ After applying this patch, run these commands for a successful build:
 -				msg2genr.tail = NULL;
 -			free(m);
 -			written = 0;
-+	assert(am_generator());
 +	no_flush++;
++	defer_forwarding_messages = 1;
 +	while (msg_list.head) {
 +		struct msg_list_item *m = (struct msg_list_item *)msg_list.head;
++		pthread_mutex_lock(&msg_list.mutex);
++		if (!(msg_list.head = m->next))
++			msg_list.tail = NULL;
++		pthread_mutex_unlock(&msg_list.mutex);
 +		switch (m->code) {
 +		case MSG_SOCKERR:
 +			close_multiplexing_out();
@@ -596,17 +595,11 @@ After applying this patch, run these commands for a successful build:
 +			io_multiplex_write(m->code, m->buf, m->len);
 +			break;
  		}
-+		pthread_mutex_lock(&msg_list.mutex);
-+		if (!(msg_list.head = m->next))
-+			msg_list.tail = NULL;
-+		pthread_mutex_unlock(&msg_list.mutex);
 +		free(m);
-+		if (!flush_it_all)
-+			break;
  	}
+-	return 1;
++	defer_forwarding_messages = 0;
 +	no_flush--;
-+
- 	return 1;
  }
  
  void send_msg(enum msgcode code, char *buf, int len)
@@ -658,7 +651,7 @@ After applying this patch, run these commands for a successful build:
  	return flist_ndx_pop(&hlink_list);
  }
  
-@@ -505,11 +452,6 @@ static int read_timeout(int fd, char *bu
+@@ -505,11 +455,6 @@ static int read_timeout(int fd, char *bu
  		FD_ZERO(&r_fds);
  		FD_ZERO(&w_fds);
  		FD_SET(fd, &r_fds);
@@ -670,7 +663,7 @@ After applying this patch, run these commands for a successful build:
  		if (io_filesfrom_f_out >= 0) {
  			int new_fd;
  			if (io_filesfrom_buflen == 0) {
-@@ -542,9 +484,6 @@ static int read_timeout(int fd, char *bu
+@@ -542,9 +487,6 @@ static int read_timeout(int fd, char *bu
  			continue;
  		}
  
@@ -680,7 +673,7 @@ After applying this patch, run these commands for a successful build:
  		if (io_filesfrom_f_out >= 0) {
  			if (io_filesfrom_buflen) {
  				if (FD_ISSET(io_filesfrom_f_out, &w_fds)) {
-@@ -866,6 +805,8 @@ static void readfd(int fd, char *buffer,
+@@ -866,6 +808,8 @@ static void readfd(int fd, char *buffer,
  	}
  
  	if (fd == write_batch_monitor_in) {
@@ -689,26 +682,7 @@ After applying this patch, run these commands for a successful build:
  		if ((size_t)write(batch_fd, buffer, total) != total)
  			exit_cleanup(RERR_FILEIO);
  	}
-@@ -1101,18 +1042,6 @@ static void writefd_unbuffered(int fd,ch
- 		if (!FD_ISSET(fd, &w_fds))
- 			continue;
- 
--		if (msg2sndr.head && !defer_forwarding_messages) {
--			struct msg_list_item *m = msg2sndr.head;
--			int code = *((uchar*)m->buf+3) - MPLEX_BASE;
--			if (!(msg2sndr.head = m->next))
--				msg2sndr.tail = NULL;
--			defer_forwarding_messages = 1;
--			io_multiplex_write(code, m->buf+4, m->len-4);
--			defer_forwarding_messages = 0;
--			free(m);
--			continue;
--		}
--
- 		n = len - total;
- 		if (bwlimit_writemax && n > bwlimit_writemax)
- 			n = bwlimit_writemax;
-@@ -1138,7 +1067,6 @@ static void writefd_unbuffered(int fd,ch
+@@ -1127,7 +1071,6 @@ static void writefd_unbuffered(int fd,ch
  			 * to grab any messages they sent before they died. */
  			while (fd == sock_f_out && io_multiplexing_in) {
  				set_io_timeout(30);
@@ -716,11 +690,8 @@ After applying this patch, run these commands for a successful build:
  				readfd_unbuffered(sock_f_in, io_filesfrom_buf,
  						  sizeof io_filesfrom_buf);
  			}
-@@ -1146,15 +1074,13 @@ static void writefd_unbuffered(int fd,ch
- 		}
- 
- 		total += cnt;
--		defer_forwarding_messages = 1;
+@@ -1138,7 +1081,7 @@ static void writefd_unbuffered(int fd,ch
+ 		defer_forwarding_messages = 1;
  
  		if (fd == sock_f_out) {
 -			if (io_timeout || am_generator)
@@ -728,37 +699,50 @@ After applying this patch, run these commands for a successful build:
  				last_io_out = time(NULL);
  			sleep_for_bwlimit(cnt);
  		}
- 	}
--	defer_forwarding_messages = 0;
- 
+@@ -1148,23 +1091,6 @@ static void writefd_unbuffered(int fd,ch
  	no_flush--;
  }
-@@ -1186,25 +1112,23 @@ static void mplex_write(enum msgcode cod
+ 
+-static void msg2sndr_flush(void)
+-{
+-	if (defer_forwarding_messages)
+-		return;
+-
+-	while (msg2sndr.head && io_multiplexing_out) {
+-		struct msg_list_item *m = msg2sndr.head;
+-		if (!(msg2sndr.head = m->next))
+-			msg2sndr.tail = NULL;
+-		stats.total_written += m->len;
+-		defer_forwarding_messages = 1;
+-		writefd_unbuffered(sock_f_out, m->buf, m->len);
+-		defer_forwarding_messages = 0;
+-		free(m);
+-	}
+-}
+-
+ /**
+  * Write an message to a multiplexed stream. If this fails then rsync
+  * exits.
+@@ -1190,14 +1116,15 @@ static void mplex_write(enum msgcode cod
+ 		defer_forwarding_messages = 1;
+ 		writefd_unbuffered(sock_f_out, buf, len);
+ 		defer_forwarding_messages = 0;
+-		msg2sndr_flush();
++		if (am_generator())
++			msg_list_flush();
+ 	}
+ }
  
  void io_flush(int flush_it_all)
  {
 -	msg2genr_flush(flush_it_all);
--
--	if (!iobuf_out_cnt || no_flush)
-+	if (no_flush)
- 		return;
- 
--	if (io_multiplexing_out)
--		mplex_write(MSG_DATA, iobuf_out, iobuf_out_cnt);
--	else
--		writefd_unbuffered(sock_f_out, iobuf_out, iobuf_out_cnt);
--	iobuf_out_cnt = 0;
-+	if (iobuf_out_cnt) {
-+		if (io_multiplexing_out)
-+			mplex_write(MSG_DATA, iobuf_out, iobuf_out_cnt);
-+		else
-+			writefd_unbuffered(sock_f_out, iobuf_out, iobuf_out_cnt);
-+		iobuf_out_cnt = 0;
-+	}
-+
+-	msg2sndr_flush();
 +	if (am_generator())
-+		msg_list_flush(flush_it_all);
- }
++		msg_list_flush();
+ 
+ 	if (!iobuf_out_cnt || no_flush)
+ 		return;
+@@ -1211,11 +1138,6 @@ void io_flush(int flush_it_all)
  
  static void writefd(int fd,char *buf,size_t len)
  {
@@ -770,7 +754,7 @@ After applying this patch, run these commands for a successful build:
  	if (fd == sock_f_out)
  		stats.total_written += len;
  
-@@ -1417,9 +1341,3 @@ void start_write_batch(int fd)
+@@ -1428,9 +1350,3 @@ void start_write_batch(int fd)
  	else
  		write_batch_monitor_in = fd;
  }
