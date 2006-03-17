@@ -4,10 +4,10 @@ After applying this patch, run these commands for a successful build:
     ./configure --enable-acl-support
     make
 
-This code does not yet itemize changes in ACL information (see --itemize),
-and it has a bug where some user/group ACL changes might not be propagated
-from the sender to the receiver if the receiver already has a version of
-the file that does not need any other attribute updates.
+See the --acls (-A) option in the revised man page for a note on using this
+latest ACL-enabling patch to send files to an older ACL-enabled rsync.
+
+This code does not yet itemize changes in ACL information (see --itemize).
 
 --- old/Makefile.in
 +++ new/Makefile.in
@@ -32,7 +32,7 @@ the file that does not need any other attribute updates.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1254 @@
+@@ -0,0 +1,1255 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -64,6 +64,7 @@ the file that does not need any other attribute updates.
 +extern int am_root;
 +extern int dry_run;
 +extern int orig_umask;
++extern int preserve_acls;
 +
 +typedef struct {
 +	id_t id;
@@ -437,7 +438,7 @@ the file that does not need any other attribute updates.
 +			if (!ok)
 +				return -1;
 +			/* Strip access ACLs of permission-bit entries. */
-+			if (type == SMB_ACL_TYPE_ACCESS)
++			if (type == SMB_ACL_TYPE_ACCESS && preserve_acls == 1)
 +				rsync_acl_strip_perms(curr_racl);
 +		} else if (errno == ENOTSUP) {
 +			/* ACLs are not supported. Leave list empty. */
@@ -4897,13 +4898,14 @@ the file that does not need any other attribute updates.
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1068,6 +1080,23 @@ int parse_arguments(int *argc, const cha
+@@ -1068,6 +1080,24 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
 +		case 'A':
 +#ifdef SUPPORT_ACLS
-+			preserve_acls = preserve_perms = 1;
++			preserve_acls++;
++			preserve_perms = 1;
 +			break;
 +#else
 +			/* FIXME: this should probably be ignored with a
@@ -4921,7 +4923,7 @@ the file that does not need any other attribute updates.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1511,6 +1540,10 @@ void server_options(char **args,int *arg
+@@ -1511,6 +1541,10 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
