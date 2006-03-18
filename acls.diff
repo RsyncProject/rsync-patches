@@ -32,7 +32,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1255 @@
+@@ -0,0 +1,1264 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -96,7 +96,8 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +
 +/* a few useful calculations */
 +
-+static int rsync_acl_count_entries(const rsync_acl *racl) {
++static int rsync_acl_count_entries(const rsync_acl *racl)
++{
 +	return racl->users.count + racl->groups.count
 +	     + (racl->user_obj != NO_ENTRY)
 +	     + (racl->group_obj != NO_ENTRY)
@@ -104,14 +105,16 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +	     + (racl->other != NO_ENTRY);
 +}
 +
-+static int rsync_acl_get_perms(const rsync_acl *racl) {
++static int rsync_acl_get_perms(const rsync_acl *racl)
++{
 +	/* Note that (NO_ENTRY & 7) is 0. */
 +	return ((racl->user_obj & 7) << 6)
 +	     + (((racl->mask != NO_ENTRY ? racl->mask : racl->group_obj) & 7) << 3)
 +	     + (racl->other & 7);
 +}
 +
-+static void rsync_acl_strip_perms(rsync_acl *racl) {
++static void rsync_acl_strip_perms(rsync_acl *racl)
++{
 +	racl->user_obj = NO_ENTRY;
 +	if (racl->mask == NO_ENTRY)
 +		racl->group_obj = NO_ENTRY;
@@ -437,6 +440,12 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +			sys_acl_free_acl(sacl);
 +			if (!ok)
 +				return -1;
++#ifdef ACLS_NEED_MASK
++			/* Don't ever send a redundant mask value. */
++			if (!racl->users.count && !racl->groups.count
++			 && racl->group == racl->mask)
++				racl->mask = NO_ENTRY;
++#endif
 +			/* Strip access ACLs of permission-bit entries. */
 +			if (type == SMB_ACL_TYPE_ACCESS && preserve_acls == 1)
 +				rsync_acl_strip_perms(curr_racl);
@@ -5027,7 +5036,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
  				"failed to set permissions on %s",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -658,6 +658,20 @@ struct chmod_mode_struct;
+@@ -660,6 +660,20 @@ struct chmod_mode_struct;
  
  #define UNUSED(x) x __attribute__((__unused__))
  
