@@ -32,7 +32,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1297 @@
+@@ -0,0 +1,1293 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -323,8 +323,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +
 +static inline rsync_acl_list *rsync_acl_lists(SMB_ACL_TYPE_T type)
 +{
-+	return type == SMB_ACL_TYPE_ACCESS ? &_rsync_acl_lists[0]
-+	    : &_rsync_acl_lists[1];
++	return &_rsync_acl_lists[type != SMB_ACL_TYPE_ACCESS];
 +}
 +
 +static void expand_rsync_acl_list(rsync_acl_list *racl_list)
@@ -357,9 +356,9 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +				   const rsync_acl *racl)
 +{
 +	static int access_match = -1, default_match = -1;
-+	int *match = (type == SMB_ACL_TYPE_ACCESS) ?
-+			&access_match : &default_match;
++	int *match = type == SMB_ACL_TYPE_ACCESS ? &access_match : &default_match;
 +	size_t count = racl_list->count;
++
 +	/* If this is the first time through or we didn't match the last
 +	 * time, then start at the end of the list, which should be the
 +	 * best place to start hunting. */
@@ -371,6 +370,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +		if (!(*match)--)
 +			*match = racl_list->count - 1;
 +	}
++
 +	*match = -1;
 +	return *match;
 +}
@@ -427,9 +427,9 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +
 +static const char *str_acl_type(SMB_ACL_TYPE_T type)
 +{
-+	return type == SMB_ACL_TYPE_ACCESS ? "SMB_ACL_TYPE_ACCESS" :
-+		type == SMB_ACL_TYPE_DEFAULT ? "SMB_ACL_TYPE_DEFAULT" :
-+		"unknown SMB_ACL_TYPE_T";
++	return type == SMB_ACL_TYPE_ACCESS ? "SMB_ACL_TYPE_ACCESS"
++	     : type == SMB_ACL_TYPE_DEFAULT ? "SMB_ACL_TYPE_DEFAULT"
++	     : "unknown SMB_ACL_TYPE_T";
 +}
 +
 +/* Generate the ACL(s) for this flist entry;
@@ -522,41 +522,41 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +typedef struct {
 +	size_t count;
 +	size_t malloced;
-+	file_acl_index *fileaclidxs;
++	file_acl_index *fais;
 +} file_acl_index_list;
 +
 +static file_acl_index_list _file_acl_index_lists[] = {
-+	{0, 0, NULL },/* SMB_ACL_TYPE_ACCESS */
-+	{0, 0, NULL } /* SMB_ACL_TYPE_DEFAULT */
++	{0, 0, NULL }, /* SMB_ACL_TYPE_ACCESS */
++	{0, 0, NULL }  /* SMB_ACL_TYPE_DEFAULT */
 +};
 +
 +static inline file_acl_index_list *file_acl_index_lists(SMB_ACL_TYPE_T type)
 +{
-+	return type == SMB_ACL_TYPE_ACCESS ?
-+		&_file_acl_index_lists[0] : &_file_acl_index_lists[1];
++	return &_file_acl_index_lists[type != SMB_ACL_TYPE_ACCESS];
 +}
 +
-+static void expand_file_acl_index_list(file_acl_index_list *fileaclidx_list)
++static void expand_file_acl_index_list(file_acl_index_list *flst)
 +{
 +	/* First time through, 0 <= 0, so list is expanded. */
-+	if (fileaclidx_list->malloced <= fileaclidx_list->count) {
++	if (flst->malloced <= flst->count) {
 +		file_acl_index *new_ptr;
 +		size_t new_size;
-+		if (fileaclidx_list->malloced < 1000)
-+			new_size = fileaclidx_list->malloced + 1000;
++
++		if (flst->malloced < 1000)
++			new_size = flst->malloced + 1000;
 +		else
-+			new_size = fileaclidx_list->malloced * 2;
-+		new_ptr = realloc_array(fileaclidx_list->fileaclidxs, file_acl_index, new_size);
++			new_size = flst->malloced * 2;
++		new_ptr = realloc_array(flst->fais, file_acl_index, new_size);
 +		if (verbose >= 3) {
 +			rprintf(FINFO, "expand_file_acl_index_list to %.0f bytes, did%s move\n",
-+				(double) new_size * sizeof fileaclidx_list->fileaclidxs[0],
-+				fileaclidx_list->fileaclidxs ? "" : " not");
++				(double) new_size * sizeof flst->fais[0],
++				flst->fais ? "" : " not");
 +		}
 +
-+		fileaclidx_list->fileaclidxs = new_ptr;
-+		fileaclidx_list->malloced = new_size;
++		flst->fais = new_ptr;
++		flst->malloced = new_size;
 +
-+		if (!fileaclidx_list->fileaclidxs)
++		if (!flst->fais)
 +			out_of_memory("expand_file_acl_index_list");
 +	}
 +}
@@ -576,8 +576,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +
 +static inline smb_acl_list *smb_acl_lists(SMB_ACL_TYPE_T type)
 +{
-+	return type == SMB_ACL_TYPE_ACCESS ? &_smb_acl_lists[0] :
-+		&_smb_acl_lists[1];
++	return &_smb_acl_lists[type != SMB_ACL_TYPE_ACCESS];
 +}
 +
 +static void expand_smb_acl_list(smb_acl_list *sacl_list)
@@ -869,7 +868,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +		}
 +	} else
 +#endif
-+	if (racl->mask == ACL_NO_ENTRY) /* always made non-empty when needed */
++	if (racl->mask == ACL_NO_ENTRY) /* Always non-empty when needed. */
 +		racl->mask = computed_mask_bits | (racl->group_obj & 7);
 +}
 +
@@ -885,10 +884,10 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +	fname = f_name(file, NULL);
 +	type = SMB_ACL_TYPE_ACCESS;
 +	do {
-+		file_acl_index_list *fileaclidx_list =
-+			file_acl_index_lists(type);
 +		char tag;
-+		expand_file_acl_index_list(fileaclidx_list);
++		file_acl_index_list *flst = file_acl_index_lists(type);
++
++		expand_file_acl_index_list(flst);
 +
 +		tag = read_byte(f);
 +		if (tag == 'A' || tag == 'a') {
@@ -912,10 +911,8 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +			rsync_acl racl;
 +			rsync_acl_list *racl_list = rsync_acl_lists(type);
 +			smb_acl_list *sacl_list = smb_acl_lists(type);
-+			fileaclidx_list->fileaclidxs[fileaclidx_list->count].
-+				aclidx = racl_list->count;
-+			fileaclidx_list->fileaclidxs[fileaclidx_list->count++].
-+				file = file;
++			flst->fais[flst->count].aclidx = racl_list->count;
++			flst->fais[flst->count++].file = file;
 +			receive_rsync_acl(&racl, f, type);
 +			expand_rsync_acl_list(racl_list);
 +			racl_list->racls[racl_list->count++] = racl;
@@ -931,10 +928,8 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +					index);
 +				exit_cleanup(RERR_STREAMIO);
 +			}
-+			fileaclidx_list->fileaclidxs[fileaclidx_list->count].
-+				aclidx = index;
-+			fileaclidx_list->fileaclidxs[fileaclidx_list->count++].
-+				file = file;
++			flst->fais[flst->count].aclidx = index;
++			flst->fais[flst->count++].file = file;
 +		}
 +	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
 +}
@@ -943,8 +938,8 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +{
 +	const file_acl_index *fileaclidx1 = (const file_acl_index *)f1;
 +	const file_acl_index *fileaclidx2 = (const file_acl_index *)f2;
-+	return fileaclidx1->file == fileaclidx2->file ? 0 :
-+		fileaclidx1->file < fileaclidx2->file ? -1 : 1;
++	return fileaclidx1->file == fileaclidx2->file ? 0
++	     : fileaclidx1->file < fileaclidx2->file ? -1 : 1;
 +}
 +
 +void sort_file_acl_index_lists()
@@ -953,36 +948,38 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +
 +	type = SMB_ACL_TYPE_ACCESS;
 +	do {
-+		file_acl_index_list *fileaclidx_list =
-+			file_acl_index_lists(type);
-+		if (!fileaclidx_list->count)
++		file_acl_index_list *flst = file_acl_index_lists(type);
++
++		if (!flst->count)
 +			continue;
-+		qsort(fileaclidx_list->fileaclidxs, fileaclidx_list->count,
-+		      sizeof fileaclidx_list->fileaclidxs[0],
++
++		qsort(flst->fais, flst->count, sizeof flst->fais[0],
 +		      &file_acl_index_list_sorter);
 +	} while (BUMP_TYPE(type));
 +}
 +
-+static int find_file_acl_index(const file_acl_index_list *fileaclidx_list,
-+			       const struct file_struct *file) {
-+	int low = 0, high = fileaclidx_list->count;
++static int find_file_acl_index(const file_acl_index_list *flst,
++			       const struct file_struct *file)
++{
++	int low = 0, high = flst->count;
 +	const struct file_struct *file_mid;
++
 +	if (!high--)
 +		return -1;
 +	do {
 +		int mid = (high + low) / 2;
-+		file_mid = fileaclidx_list->fileaclidxs[mid].file;
++		file_mid = flst->fais[mid].file;
 +		if (file_mid == file)
-+			return fileaclidx_list->fileaclidxs[mid].aclidx;
++			return flst->fais[mid].aclidx;
 +		if (file_mid > file)
 +			high = mid - 1;
 +		else
 +			low = mid + 1;
 +	} while (low < high);
 +	if (low == high) {
-+		file_mid = fileaclidx_list->fileaclidxs[low].file;
++		file_mid = flst->fais[low].file;
 +		if (file_mid == file)
-+			return fileaclidx_list->fileaclidxs[low].aclidx;
++			return flst->fais[low].aclidx;
 +	}
 +	rprintf(FERROR,
 +		"find_file_acl_index: can't find entry for file in list\n");
@@ -1235,8 +1232,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
 + * or it returns 0 if there are no more tag_type ids in the acl. */
 +static id_t *next_ace_id(SMB_ACL_TAG_T tag_type, const rsync_acl *racl)
 +{
-+	const ida_list *idal = (tag_type == SMB_ACL_USER ?
-+		&racl->users : &racl->groups);
++	const ida_list *idal = tag_type == SMB_ACL_USER ? &racl->users : &racl->groups;
 +	if (enum_ida_index < idal->count) {
 +		id_access *ida = &idal->idas[enum_ida_index++];
 +		return &ida->id;
@@ -5044,7 +5040,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
  	if (daemon_chmod_modes && !S_ISLNK(flist_mode))
  		cur_mode = tweak_mode(cur_mode, daemon_chmod_modes);
  	return (flist_mode & ~CHMOD_BITS) | (cur_mode & CHMOD_BITS);
-@@ -203,9 +205,21 @@ int set_file_attrs(char *fname, struct f
+@@ -203,6 +205,17 @@ int set_file_attrs(char *fname, struct f
  		updated = 1;
  	}
  
@@ -5061,12 +5057,7 @@ This code does not yet itemize changes in ACL information (see --itemize).
 +
  #ifdef HAVE_CHMOD
  	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
--		int ret = do_chmod(fname, file->mode);
-+		mode_t mode = file->mode;
-+		int ret = do_chmod(fname, mode);
- 		if (ret < 0) {
- 			rsyserr(FERROR, errno,
- 				"failed to set permissions on %s",
+ 		int ret = do_chmod(fname, file->mode);
 --- old/rsync.h
 +++ new/rsync.h
 @@ -660,6 +660,20 @@ struct chmod_mode_struct;
