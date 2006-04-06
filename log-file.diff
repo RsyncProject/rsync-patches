@@ -22,12 +22,13 @@ are doing, similar to how a daemon logs its actions.
  	if (verbose > 2) {
 --- old/clientserver.c
 +++ new/clientserver.c
-@@ -44,10 +44,14 @@ extern int protocol_version;
+@@ -44,11 +44,15 @@ extern int protocol_version;
  extern int io_timeout;
  extern int no_detach;
  extern int default_af_hint;
 +extern int logfile_format_has_i;
 +extern int logfile_format_has_o_or_i;
+ extern int log_initialised;
  extern mode_t orig_umask;
  extern char *bind_address;
  extern char *sockopts;
@@ -37,7 +38,7 @@ are doing, similar to how a daemon logs its actions.
  extern char *files_from;
  extern char *tmpdir;
  extern struct chmod_mode_struct *chmod_modes;
-@@ -55,8 +59,6 @@ extern struct filter_list_struct server_
+@@ -56,8 +60,6 @@ extern struct filter_list_struct server_
  
  char *auth_user;
  int read_only = 0;
@@ -46,13 +47,9 @@ are doing, similar to how a daemon logs its actions.
  int module_id = -1;
  struct chmod_mode_struct *daemon_chmod_modes;
  
-@@ -328,12 +330,16 @@ static int rsync_module(int f_in, int f_
- 	if (lp_read_only(i))
+@@ -330,11 +332,12 @@ static int rsync_module(int f_in, int f_
  		read_only = 1;
  
-+	/* optionally use a log file instead of syslog */
-+	logfile_name = lp_log_file();
-+
  	if (lp_transfer_logging(i)) {
 -		if (log_format_has(lp_log_format(i), 'i'))
 -			daemon_log_format_has_i = 1;
@@ -68,6 +65,34 @@ are doing, similar to how a daemon logs its actions.
  	}
  
  	am_root = (MY_UID() == 0);
+@@ -395,6 +398,7 @@ static int rsync_module(int f_in, int f_
+ 	parse_rule(&server_filter_list, p, MATCHFLG_WORD_SPLIT,
+ 		   XFLG_ABS_IF_SLASH | XFLG_OLD_PREFIXES);
+ 
++	logfile_name = lp_log_file();
+ 	log_init();
+ 
+ #ifdef HAVE_PUTENV
+@@ -742,8 +746,10 @@ int start_daemon(int f_in, int f_out)
+ 	if (!lp_load(config_file, 0))
+ 		exit_cleanup(RERR_SYNTAX);
+ 
+-	if (!log_initialised)
++	if (!log_initialised) {
++		logfile_name = lp_log_file();
+ 		log_init();
++	}
+ 
+ 	if (!am_server) {
+ 		set_socket_options(f_in, "SO_KEEPALIVE");
+@@ -842,6 +848,7 @@ int daemon_main(void)
+ 	if (bind_address == NULL && *lp_bind_address())
+ 		bind_address = lp_bind_address();
+ 
++	logfile_name = lp_log_file();
+ 	log_init();
+ 
+ 	rprintf(FLOG, "rsyncd version %s starting, listening on port %d\n",
 --- old/flist.c
 +++ new/flist.c
 @@ -95,15 +95,15 @@ static int show_filelist_p(void)
@@ -166,7 +191,7 @@ are doing, similar to how a daemon logs its actions.
  	} else if (!am_server) {
 --- old/log.c
 +++ new/log.c
-@@ -44,17 +44,18 @@ extern int protocol_version;
+@@ -44,16 +44,17 @@ extern int protocol_version;
  extern int preserve_times;
  extern int log_format_has_i;
  extern int log_format_has_o_or_i;
@@ -181,7 +206,6 @@ are doing, similar to how a daemon logs its actions.
  extern iconv_t ic_chck;
  #endif
  
- static int log_initialised;
  static int logfile_was_closed;
 -static char *logfname;
  static FILE *logfile;
@@ -323,7 +347,7 @@ are doing, similar to how a daemon logs its actions.
  	}
 --- old/options.c
 +++ new/options.c
-@@ -148,6 +148,8 @@ char *basis_dir[MAX_BASIS_DIRS+1];
+@@ -146,6 +146,8 @@ char *basis_dir[MAX_BASIS_DIRS+1];
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *log_format = NULL;
@@ -332,7 +356,7 @@ are doing, similar to how a daemon logs its actions.
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
-@@ -164,7 +166,9 @@ int verbose = 0;
+@@ -162,7 +164,9 @@ int verbose = 0;
  int quiet = 0;
  int log_before_transfer = 0;
  int log_format_has_i = 0;
@@ -342,7 +366,7 @@ are doing, similar to how a daemon logs its actions.
  int always_checksum = 0;
  int list_only = 0;
  
-@@ -361,6 +365,7 @@ void usage(enum logcode F)
+@@ -359,6 +363,7 @@ void usage(enum logcode F)
    rprintf(F,"     --progress              show progress during transfer\n");
    rprintf(F," -P                          same as --partial --progress\n");
    rprintf(F," -i, --itemize-changes       output a change-summary for all updates\n");
@@ -350,7 +374,7 @@ are doing, similar to how a daemon logs its actions.
    rprintf(F,"     --log-format=FORMAT     output filenames using the specified format\n");
    rprintf(F,"     --password-file=FILE    read password from FILE\n");
    rprintf(F,"     --list-only             list the files instead of copying them\n");
-@@ -494,6 +499,7 @@ static struct poptOption long_options[] 
+@@ -492,6 +497,7 @@ static struct poptOption long_options[] 
    {"partial-dir",      0,  POPT_ARG_STRING, &partial_dir, 0, 0, 0 },
    {"delay-updates",    0,  POPT_ARG_NONE,   &delay_updates, 0, 0, 0 },
    {"prune-empty-dirs",'m', POPT_ARG_NONE,   &prune_empty_dirs, 0, 0, 0 },
@@ -358,7 +382,7 @@ are doing, similar to how a daemon logs its actions.
    {"log-format",       0,  POPT_ARG_STRING, &log_format, 0, 0, 0 },
    {"itemize-changes", 'i', POPT_ARG_NONE,   0, 'i', 0, 0 },
    {"bwlimit",          0,  POPT_ARG_INT,    &bwlimit, 0, 0, 0 },
-@@ -1314,6 +1320,21 @@ int parse_arguments(int *argc, const cha
+@@ -1311,6 +1317,21 @@ int parse_arguments(int *argc, const cha
  	if (log_format_has_i || log_format_has(log_format, 'o'))
  		log_format_has_o_or_i = 1;
  
@@ -434,7 +458,7 @@ are doing, similar to how a daemon logs its actions.
  			rprintf(code, "%s\n", fname);
 --- old/rsync.h
 +++ new/rsync.h
-@@ -156,8 +156,8 @@
+@@ -158,8 +158,8 @@
  
  
  /* Log-message categories.  Only FERROR and FINFO get sent over the socket.
