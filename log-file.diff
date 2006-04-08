@@ -22,13 +22,12 @@ are doing, similar to how a daemon logs its actions.
  	if (verbose > 2) {
 --- old/clientserver.c
 +++ new/clientserver.c
-@@ -44,11 +44,15 @@ extern int protocol_version;
+@@ -44,10 +44,14 @@ extern int protocol_version;
  extern int io_timeout;
  extern int no_detach;
  extern int default_af_hint;
 +extern int logfile_format_has_i;
 +extern int logfile_format_has_o_or_i;
- extern int log_initialised;
  extern mode_t orig_umask;
  extern char *bind_address;
  extern char *sockopts;
@@ -38,7 +37,7 @@ are doing, similar to how a daemon logs its actions.
  extern char *files_from;
  extern char *tmpdir;
  extern struct chmod_mode_struct *chmod_modes;
-@@ -56,8 +60,6 @@ extern struct filter_list_struct server_
+@@ -55,8 +59,6 @@ extern struct filter_list_struct server_
  
  char *auth_user;
  int read_only = 0;
@@ -47,7 +46,7 @@ are doing, similar to how a daemon logs its actions.
  int module_id = -1;
  struct chmod_mode_struct *daemon_chmod_modes;
  
-@@ -330,11 +332,12 @@ static int rsync_module(int f_in, int f_
+@@ -329,11 +331,12 @@ static int rsync_module(int f_in, int f_
  		read_only = 1;
  
  	if (lp_transfer_logging(i)) {
@@ -65,34 +64,6 @@ are doing, similar to how a daemon logs its actions.
  	}
  
  	am_root = (MY_UID() == 0);
-@@ -395,6 +398,7 @@ static int rsync_module(int f_in, int f_
- 	parse_rule(&server_filter_list, p, MATCHFLG_WORD_SPLIT,
- 		   XFLG_ABS_IF_SLASH | XFLG_OLD_PREFIXES);
- 
-+	logfile_name = lp_log_file();
- 	log_init();
- 
- #ifdef HAVE_PUTENV
-@@ -742,8 +746,10 @@ int start_daemon(int f_in, int f_out)
- 	if (!lp_load(config_file, 0))
- 		exit_cleanup(RERR_SYNTAX);
- 
--	if (!log_initialised)
-+	if (!log_initialised) {
-+		logfile_name = lp_log_file();
- 		log_init();
-+	}
- 
- 	if (!am_server) {
- 		set_socket_options(f_in, "SO_KEEPALIVE");
-@@ -842,6 +848,7 @@ int daemon_main(void)
- 	if (bind_address == NULL && *lp_bind_address())
- 		bind_address = lp_bind_address();
- 
-+	logfile_name = lp_log_file();
- 	log_init();
- 
- 	rprintf(FLOG, "rsyncd version %s starting, listening on port %d\n",
 --- old/flist.c
 +++ new/flist.c
 @@ -95,15 +95,15 @@ static int show_filelist_p(void)
@@ -191,7 +162,7 @@ are doing, similar to how a daemon logs its actions.
  	} else if (!am_server) {
 --- old/log.c
 +++ new/log.c
-@@ -44,17 +44,18 @@ extern int protocol_version;
+@@ -44,18 +44,19 @@ extern int protocol_version;
  extern int preserve_times;
  extern int log_format_has_i;
  extern int log_format_has_o_or_i;
@@ -206,6 +177,7 @@ are doing, similar to how a daemon logs its actions.
  extern iconv_t ic_chck;
  #endif
  
+ static int log_initialised;
  static int logfile_was_closed;
 -static char *logfname;
 -static FILE *logfile;
@@ -245,17 +217,22 @@ are doing, similar to how a daemon logs its actions.
  		rprintf(FINFO, "Ignoring \"log file\" setting.\n");
  	}
  }
-@@ -172,8 +173,7 @@ void log_init(void)
+@@ -171,9 +172,11 @@ void log_init(void)
+ 	t = time(NULL);
  	localtime(&t);
  
- 	/* optionally use a log file instead of syslog */
+-	/* optionally use a log file instead of syslog */
 -	logfname = lp_log_file();
 -	if (logfname && *logfname)
++	/* Optionally use a log file instead of syslog.  (Non-daemon
++	 * rsyncs will have already set logfile_name, as needed.) */
++	if (am_daemon)
++		logfile_name = lp_log_file();
 +	if (logfile_name && *logfile_name)
  		logfile_open();
  	else
  		syslog_init();
-@@ -181,10 +181,10 @@ void log_init(void)
+@@ -181,10 +184,10 @@ void log_init(void)
  
  void logfile_close(void)
  {
@@ -269,19 +246,19 @@ are doing, similar to how a daemon logs its actions.
  	}
  }
  
-@@ -243,9 +243,9 @@ void rwrite(enum logcode code, char *buf
+@@ -243,9 +246,9 @@ void rwrite(enum logcode code, char *buf
  
  	if (code == FCLIENT)
  		code = FINFO;
 -	else if (am_daemon) {
-+	else if (logfile_name) { /* always non-NULL in the daemon */
++	else if (am_daemon || logfile_name) {
  		static int in_block;
 -		char msg[2048];
 +		char msg[2048], *s;
  		int priority = code == FERROR ? LOG_WARNING : LOG_INFO;
  
  		if (in_block)
-@@ -254,10 +254,11 @@ void rwrite(enum logcode code, char *buf
+@@ -254,10 +257,11 @@ void rwrite(enum logcode code, char *buf
  		if (!log_initialised)
  			log_init();
  		strlcpy(msg, buf, MIN((int)sizeof msg, len + 1));
@@ -295,7 +272,7 @@ are doing, similar to how a daemon logs its actions.
  			return;
  	} else if (code == FLOG)
  		return;
-@@ -403,26 +404,14 @@ void rflush(enum logcode code)
+@@ -403,26 +407,14 @@ void rflush(enum logcode code)
  {
  	FILE *f = NULL;
  
@@ -326,7 +303,7 @@ are doing, similar to how a daemon logs its actions.
  	fflush(f);
  }
  
-@@ -695,12 +684,12 @@ void log_item(struct file_struct *file, 
+@@ -695,12 +687,12 @@ void log_item(struct file_struct *file, 
  {
  	char *s_or_r = am_sender ? "send" : "recv";
  
@@ -343,7 +320,7 @@ are doing, similar to how a daemon logs its actions.
  	}
  }
  
-@@ -712,7 +701,7 @@ void maybe_log_item(struct file_struct *
+@@ -712,7 +704,7 @@ void maybe_log_item(struct file_struct *
  		|| log_format_has_i > 1 || (verbose > 1 && log_format_has_i));
  	int local_change = iflags & ITEM_LOCAL_CHANGE && significant_flags;
  	if (am_server) {
@@ -352,7 +329,7 @@ are doing, similar to how a daemon logs its actions.
  			log_item(file, &stats, iflags, buf);
  	} else if (see_item || local_change || *buf
  	    || (S_ISDIR(file->mode) && significant_flags))
-@@ -740,10 +729,10 @@ void log_delete(char *fname, int mode)
+@@ -740,10 +732,10 @@ void log_delete(char *fname, int mode)
  			      ITEM_DELETED, NULL);
  	}
  
