@@ -5067,7 +5067,7 @@ TODO items:
  		int ret = do_chmod(fname, file->mode);
 --- old/rsync.h
 +++ new/rsync.h
-@@ -660,6 +660,20 @@ struct chmod_mode_struct;
+@@ -661,6 +661,20 @@ struct chmod_mode_struct;
  
  #define UNUSED(x) x __attribute__((__unused__))
  
@@ -5424,12 +5424,49 @@ TODO items:
 +
 +#endif /* No ACLs. */
 +#endif /* _SMB_ACLS_H */
---- old/testsuite/default-acls.test
-+++ new/testsuite/default-acls.test
-@@ -0,0 +1,64 @@
+--- old/testsuite/acls.test
++++ new/testsuite/acls.test
+@@ -0,0 +1,34 @@
 +#! /bin/sh
 +
-+# This program is distributable under the terms of the GNU GPL see
++# This program is distributable under the terms of the GNU GPL (see
++# COPYING).
++
++# Test that rsync handles basic ACL preservation.
++
++. $srcdir/testsuite/rsync.fns
++
++$RSYNC --version | grep ", ACLs" >/dev/null || test_skipped "Rsync is configured without ACL support"
++case "$setfacl_nodef" in
++true) test_skipped "I don't know how to use your setfacl command" ;;
++esac
++
++makepath "$fromdir/foo"
++echo something >"$fromdir/file1"
++echo else >"$fromdir/file2"
++
++files='foo file1 file2'
++
++setfacl -m u:0:7 "$fromdir/foo" || test_skipped "Your filesystem has ACLs disabled"
++setfacl -m u:0:5 "$fromdir/file1"
++setfacl -m u:0:5 "$fromdir/file2"
++
++$RSYNC -avvA "$fromdir/" "$todir/"
++
++cd "$fromdir"
++getfacl $files >"$scratchdir/acls.txt"
++
++cd "$todir"
++getfacl $files | diff $diffopt "$scratchdir/acls.txt" -
++
++# The script would have aborted on error, so getting here means we've won.
++exit 0
+--- old/testsuite/default-acls.test
++++ new/testsuite/default-acls.test
+@@ -0,0 +1,65 @@
++#! /bin/sh
++
++# This program is distributable under the terms of the GNU GPL (see
 +# COPYING).
 +
 +# Test that rsync obeys default ACLs. -- Matt McCutchen
@@ -5438,6 +5475,7 @@ TODO items:
 +
 +$RSYNC --version | grep ", ACLs" >/dev/null || test_skipped "Rsync is configured without ACL support"
 +case "$setfacl_nodef" in
++true) test_skipped "I don't know how to use your setfacl command" ;;
 +*-k*) opts='-dm u::7,g::5,o:5' ;;
 +*) opts='-m d:u::7,d:g::5,d:o:5' ;;
 +esac
