@@ -1,9 +1,9 @@
-This patch allows a non-daemon server and a client rsync to log what they
+This patch allows a non-daemon server and/or a client rsync to log what they
 are doing, similar to how a daemon logs its actions.
 
 --- old/cleanup.c
 +++ new/cleanup.c
-@@ -21,6 +21,7 @@
+@@ -21,10 +21,12 @@
  
  #include "rsync.h"
  
@@ -11,12 +11,17 @@ are doing, similar to how a daemon logs its actions.
  extern int io_error;
  extern int keep_partial;
  extern int log_got_error;
-@@ -149,7 +150,7 @@ void _exit_cleanup(int code, const char 
+ extern char *partial_dir;
++extern char *logfile_name;
+ 
+ #ifdef HAVE_SIGACTION
+ static struct sigaction sigact;
+@@ -149,7 +151,7 @@ void _exit_cleanup(int code, const char 
  			code = RERR_PARTIAL;
  	}
  
 -	if (code)
-+	if (code || am_server)
++	if (code || am_daemon || (am_server && logfile_name))
  		log_exit(code, file, line);
  
  	if (verbose > 2) {
@@ -121,7 +126,7 @@ are doing, similar to how a daemon logs its actions.
  extern int am_root;
  extern int am_server;
  extern int am_daemon;
-@@ -663,7 +663,7 @@ static int try_dests_reg(struct file_str
+@@ -661,7 +661,7 @@ static int try_dests_reg(struct file_str
  		} else if (itemizing)
  			itemize(file, ndx, 0, stp, 0, 0, NULL);
  		if (verbose > 1 && maybe_ATTRS_REPORT) {
@@ -130,7 +135,7 @@ are doing, similar to how a daemon logs its actions.
  			     ? FCLIENT : FINFO;
  			rprintf(code, "%s is uptodate\n", fname);
  		}
-@@ -686,7 +686,7 @@ static int try_dests_reg(struct file_str
+@@ -684,7 +684,7 @@ static int try_dests_reg(struct file_str
  		if (maybe_ATTRS_REPORT
  		 && ((!itemizing && verbose && match_level == 2)
  		  || (verbose > 1 && match_level == 3))) {
@@ -139,7 +144,7 @@ are doing, similar to how a daemon logs its actions.
  			     ? FCLIENT : FINFO;
  			rprintf(code, "%s%s\n", fname,
  				match_level == 3 ? " is uptodate" : "");
-@@ -742,7 +742,7 @@ static int try_dests_non(struct file_str
+@@ -746,7 +746,7 @@ static int try_dests_non(struct file_str
  			itemize(file, ndx, 0, &st, changes, 0, lp);
  		}
  		if (verbose > 1 && maybe_ATTRS_REPORT) {
@@ -148,7 +153,7 @@ are doing, similar to how a daemon logs its actions.
  			     ? FCLIENT : FINFO;
  			rprintf(code, "%s is uptodate\n", fname);
  		}
-@@ -1304,9 +1304,9 @@ void generate_files(int f_out, struct fi
+@@ -1309,9 +1309,9 @@ void generate_files(int f_out, struct fi
  	if (protocol_version >= 29) {
  		itemizing = 1;
  		maybe_ATTRS_REPORT = log_format_has_i ? 0 : ATTRS_REPORT;
