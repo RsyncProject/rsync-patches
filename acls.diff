@@ -38,7 +38,7 @@ TODO items:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1293 @@
+@@ -0,0 +1,1305 @@
 +/* -*- c-file-style: "linux" -*-
 +   Copyright (C) Andrew Tridgell 1996
 +   Copyright (C) Paul Mackerras 1996
@@ -305,13 +305,26 @@ TODO items:
 +	     && ida_lists_equal(&racl1->groups, &racl2->groups));
 +}
 +
-+static BOOL rsync_acl_extended_parts_equal(const rsync_acl *racl1, const rsync_acl *racl2)
++/* The first parameter will always be a fully-populated rsync_acl.
++ * The second parameter will usually be a condensed rsync_acl, which means
++ * that it might have several of its access objects set to ACL_NO_ENTRY. */
++static BOOL rsync_acl_extended_parts_equal(const rsync_acl *racl1,
++					   const rsync_acl *racl2, mode_t m)
 +{
 +	/* We ignore any differences that chmod() can take care of. */
 +	if ((racl1->mask ^ racl2->mask) & ACL_NO_ENTRY)
 +		return False;
-+	if (racl1->mask != ACL_NO_ENTRY && racl1->group_obj != racl2->group_obj)
-+		return False;
++	if (racl1->mask != ACL_NO_ENTRY) {
++		/* A condensed rsync_acl with a mask can only have no
++		 * group_obj when it was identical to the mask.  This
++		 * means that it was also identical to the group attrs
++		 * from the mode. */
++		if (racl2->group_obj == ACL_NO_ENTRY) {
++			if (racl1->group_obj != ((m >> 3) & 7))
++				return False;
++		} else if (racl1->group_obj != racl2->group_obj)
++			return False;
++	}
 +	return ida_lists_equal(&racl1->users, &racl2->users)
 +	    && ida_lists_equal(&racl1->groups, &racl2->groups);
 +}
@@ -1041,17 +1054,16 @@ TODO items:
 +				bak, str_acl_type(type), strerror(errno));
 +			ret = -1;
 +		}
-+		out_with_all:
-+			if (sacl_bak)
-+				rsync_acl_free(&racl_bak);
-+		out_with_one_racl:
-+			rsync_acl_free(&racl_orig);
-+		out_with_sacls:
-+			if (sacl_bak)
-+				sys_acl_free_acl(sacl_bak);
-+		/* out_with_one_sacl: */
-+			if (sacl_orig)
-+				sys_acl_free_acl(sacl_orig);
++	  out_with_all:
++		if (sacl_bak)
++			rsync_acl_free(&racl_bak);
++	  out_with_one_racl:
++		rsync_acl_free(&racl_orig);
++	  out_with_sacls:
++		if (sacl_bak)
++			sys_acl_free_acl(sacl_bak);
++		if (sacl_orig)
++			sys_acl_free_acl(sacl_orig);
 +	} while (BUMP_TYPE(type) && S_ISDIR(mode));
 +
 +	return ret;
@@ -1176,7 +1188,7 @@ TODO items:
 +			continue;
 +		}
 +		if (type == SMB_ACL_TYPE_ACCESS)
-+			ok = rsync_acl_extended_parts_equal(&racl_orig, racl_new);
++			ok = rsync_acl_extended_parts_equal(&racl_orig, racl_new, file->mode);
 +		else
 +			ok = rsync_acls_equal(&racl_orig, racl_new);
 +		rsync_acl_free(&racl_orig);
@@ -1390,7 +1402,7 @@ TODO items:
  dnl At the moment we don't test for a broken memcmp(), because all we
  dnl need to do is test for equality, not comparison, and it seems that
  dnl every platform has a memcmp that can do at least that.
-@@ -738,6 +743,78 @@ AC_SUBST(OBJ_RESTORE)
+@@ -746,6 +751,78 @@ AC_SUBST(OBJ_RESTORE)
  AC_SUBST(CC_SHOBJ_FLAG)
  AC_SUBST(BUILD_POPT)
  
@@ -1479,7 +1491,7 @@ TODO items:
  extern int preserve_links;
  extern int preserve_hard_links;
  extern int preserve_devices;
-@@ -970,6 +971,11 @@ static struct file_struct *send_file_nam
+@@ -965,6 +966,11 @@ static struct file_struct *send_file_nam
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
  
@@ -1491,7 +1503,7 @@ TODO items:
  	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
  	flist_expand(flist);
-@@ -977,6 +983,16 @@ static struct file_struct *send_file_nam
+@@ -972,6 +978,16 @@ static struct file_struct *send_file_nam
  	if (file->basename[0]) {
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f);
@@ -1508,7 +1520,7 @@ TODO items:
  	}
  	return file;
  }
-@@ -1365,6 +1381,11 @@ struct file_list *recv_file_list(int f)
+@@ -1360,6 +1376,11 @@ struct file_list *recv_file_list(int f)
  			flags |= read_byte(f) << 8;
  		file = receive_file_entry(flist, flags, f);
  
@@ -1520,7 +1532,7 @@ TODO items:
  		if (S_ISREG(file->mode) || S_ISLNK(file->mode))
  			stats.total_size += file->length;
  
-@@ -1387,6 +1408,11 @@ struct file_list *recv_file_list(int f)
+@@ -1382,6 +1403,11 @@ struct file_list *recv_file_list(int f)
  
  	clean_flist(flist, relative_paths, 1);
  
@@ -1542,7 +1554,7 @@ TODO items:
  extern struct stats stats;
  extern dev_t filesystem_dev;
  extern char *backup_dir;
-@@ -321,6 +322,8 @@ static void do_delete_pass(struct file_l
+@@ -319,6 +320,8 @@ static void do_delete_pass(struct file_l
  
  int unchanged_attrs(struct file_struct *file, STRUCT_STAT *st)
  {
@@ -1551,7 +1563,7 @@ TODO items:
  	if (preserve_perms
  	 && (st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS))
  		return 0;
-@@ -355,6 +358,7 @@ void itemize(struct file_struct *file, i
+@@ -353,6 +356,7 @@ void itemize(struct file_struct *file, i
  		if (preserve_gid && file->gid != GID_NONE
  		    && st->st_gid != file->gid)
  			iflags |= ITEM_REPORT_GROUP;
@@ -1559,7 +1571,7 @@ TODO items:
  	} else
  		iflags |= ITEM_IS_NEW;
  
-@@ -753,6 +757,7 @@ static int try_dests_non(struct file_str
+@@ -769,6 +773,7 @@ static int try_dests_non(struct file_str
  }
  
  static int phase = 0;
@@ -1567,7 +1579,7 @@ TODO items:
  
  /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
   * make sure it exists, and has the right permissions/timestamp info.  For
-@@ -844,6 +849,10 @@ static void recv_generator(char *fname, 
+@@ -860,6 +865,10 @@ static void recv_generator(char *fname, 
  			}
  			if (fuzzy_basis)
  				need_fuzzy_dirlist = 1;
@@ -1578,7 +1590,7 @@ TODO items:
  		}
  		parent_dirname = dn;
  
-@@ -871,7 +880,8 @@ static void recv_generator(char *fname, 
+@@ -887,7 +896,8 @@ static void recv_generator(char *fname, 
  	if (!preserve_perms) {
  		int exists = statret == 0
  			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
@@ -1588,7 +1600,7 @@ TODO items:
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -1343,6 +1353,8 @@ void generate_files(int f_out, struct fi
+@@ -1366,6 +1376,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
@@ -5067,7 +5079,7 @@ TODO items:
  		int ret = do_chmod(fname, file->mode);
 --- old/rsync.h
 +++ new/rsync.h
-@@ -661,6 +661,20 @@ struct chmod_mode_struct;
+@@ -660,6 +660,20 @@ struct chmod_mode_struct;
  
  #define UNUSED(x) x __attribute__((__unused__))
  
