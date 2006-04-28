@@ -38,7 +38,7 @@ TODO items:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1306 @@
+@@ -0,0 +1,1310 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -122,12 +122,13 @@ TODO items:
 +#endif
 +}
 +
++/* This cannot be called on an rsync_acl that has ACL_NO_ENTRY in any
++ * spot but the mask. */
 +static int rsync_acl_get_perms(const rsync_acl *racl)
 +{
-+	/* Note that (ACL_NO_ENTRY & 7) is 0. */
-+	return ((racl->user_obj & 7) << 6)
-+	     + (((racl->mask != ACL_NO_ENTRY ? racl->mask : racl->group_obj) & 7) << 3)
-+	     + (racl->other & 7);
++	return (racl->user_obj << 6)
++	     + ((racl->mask != ACL_NO_ENTRY ? racl->mask : racl->group_obj) << 3)
++	     + racl->other;
 +}
 +
 +static void rsync_acl_strip_perms(rsync_acl *racl)
@@ -161,20 +162,13 @@ TODO items:
 +	}
 +}
 +
-+static void ida_list_free(ida_list *idal)
-+{
-+	if (idal->idas) {
-+		free(idal->idas);
-+		idal->idas = NULL;
-+		idal->count = 0;
-+		idal->malloced = 0;
-+	}
-+}
-+
 +static void rsync_acl_free(rsync_acl *racl)
 +{
-+	ida_list_free(&racl->users);
-+	ida_list_free(&racl->groups);
++	if (racl->users.idas)
++		free(racl->users.idas);
++	if (racl->groups.idas)
++		free(racl->groups.idas);
++	*racl = empty_rsync_acl;
 +}
 +
 +static int id_access_sorter(const void *r1, const void *r2)
@@ -277,6 +271,15 @@ TODO items:
 +
 +	sort_ida_list(&racl->users);
 +	sort_ida_list(&racl->groups);
++
++#ifdef ACLS_NEED_MASK
++	if (!racl->users.count && !racl->groups.count) {
++		/* Throw away a superfluous mask, but mask off the
++		 * group perms with it first. */
++		racl->group_obj &= racl->mask;
++		racl->mask = ACL_NO_ENTRY;
++	}
++#endif
 +
 +	return True;
 +}
@@ -661,6 +664,9 @@ TODO items:
 +/* build an SMB_ACL_T corresponding to an rsync_acl */
 +static BOOL pack_smb_acl(SMB_ACL_T *smb_acl, const rsync_acl *racl)
 +{
++#ifdef ACLS_NEED_MASK
++	uchar mask_bits;
++#endif
 +	size_t count;
 +	id_access *ida;
 +	const char *errfun = NULL;
@@ -676,8 +682,7 @@ TODO items:
 +	COE( sys_acl_set_tag_type,(entry, SMB_ACL_USER_OBJ) );
 +	COE2( store_access_in_entry,(racl->user_obj & 7, entry) );
 +
-+	for (ida = racl->users.idas, count = racl->users.count;
-+	     count--; ida++) {
++	for (ida = racl->users.idas, count = racl->users.count; count--; ida++) {
 +		COE( sys_acl_create_entry,(smb_acl, &entry) );
 +		COE( sys_acl_set_tag_type,(entry, SMB_ACL_USER) );
 +		COE( sys_acl_set_qualifier,(entry, (void*)&ida->id) );
@@ -688,20 +693,23 @@ TODO items:
 +	COE( sys_acl_set_tag_type,(entry, SMB_ACL_GROUP_OBJ) );
 +	COE2( store_access_in_entry,(racl->group_obj & 7, entry) );
 +
-+	for (ida = racl->groups.idas, count = racl->groups.count;
-+	     count--; ida++) {
++	for (ida = racl->groups.idas, count = racl->groups.count; count--; ida++) {
 +		COE( sys_acl_create_entry,(smb_acl, &entry) );
 +		COE( sys_acl_set_tag_type,(entry, SMB_ACL_GROUP) );
 +		COE( sys_acl_set_qualifier,(entry, (void*)&ida->id) );
 +		COE2( store_access_in_entry,(ida->access, entry) );
 +	}
-+#ifndef ACLS_NEED_MASK
++
++#ifdef ACLS_NEED_MASK
++	mask_bits = racl->mask == ACL_NO_ENTRY ? racl->group_obj & 7 : racl->mask;
++	COE( sys_acl_create_entry,(smb_acl, &entry) );
++	COE( sys_acl_set_tag_type,(entry, SMB_ACL_MASK) );
++	COE2( store_access_in_entry,(mask_bits, entry) );
++#else
 +	if (racl->mask != ACL_NO_ENTRY) {
-+#endif
 +		COE( sys_acl_create_entry,(smb_acl, &entry) );
 +		COE( sys_acl_set_tag_type,(entry, SMB_ACL_MASK) );
 +		COE2( store_access_in_entry,(racl->mask, entry) );
-+#ifndef ACLS_NEED_MASK
 +	}
 +#endif
 +
@@ -877,22 +885,19 @@ TODO items:
 +		if (racl->other == ACL_NO_ENTRY)
 +			racl->other = 0;
 +	}
-+#ifndef ACLS_NEED_MASK
++
 +	if (!racl->users.count && !racl->groups.count) {
-+		/* If we, a system without ACLS_NEED_MASK, received a
-+		 * superfluous mask, throw it away. */
++		/* If we received a superfluous mask, throw it away. */
 +		if (racl->mask != ACL_NO_ENTRY) {
-+			/* mask off group perms with it first */
++			/* Mask off the group perms with it first. */
 +			racl->group_obj &= racl->mask | ACL_NO_ENTRY;
 +			racl->mask = ACL_NO_ENTRY;
 +		}
-+	} else
-+#endif
-+	if (racl->mask == ACL_NO_ENTRY) /* Always non-empty when needed. */
++	} else if (racl->mask == ACL_NO_ENTRY) /* Must be non-empty with lists. */
 +		racl->mask = computed_mask_bits | (racl->group_obj & 7);
 +}
 +
-+/* receive and build the rsync_acl_lists */
++/* Receive and build the rsync_acl_lists. */
 +void receive_acl(struct file_struct *file, int f)
 +{
 +	SMB_ACL_TYPE_T type;
@@ -956,10 +961,9 @@ TODO items:
 +
 +static int file_acl_index_list_sorter(const void *f1, const void *f2)
 +{
-+	const file_acl_index *fileaclidx1 = (const file_acl_index *)f1;
-+	const file_acl_index *fileaclidx2 = (const file_acl_index *)f2;
-+	return fileaclidx1->file == fileaclidx2->file ? 0
-+	     : fileaclidx1->file < fileaclidx2->file ? -1 : 1;
++	const file_acl_index *fx1 = (const file_acl_index *)f1;
++	const file_acl_index *fx2 = (const file_acl_index *)f2;
++	return fx1->file == fx2->file ? 0 : fx1->file < fx2->file ? -1 : 1;
 +}
 +
 +void sort_file_acl_index_lists()
