@@ -31,22 +31,7 @@ entry.
 
 --- old/acls.c
 +++ new/acls.c
-@@ -84,10 +84,10 @@ static int calc_sacl_entries(const rsync
- 
- static int rsync_acl_get_perms(const rsync_acl *racl)
- {
--	/* Note that (ACL_NO_ENTRY & 7) is 0. */
--	return ((racl->user_obj & 7) << 6)
--	     + (((racl->mask != ACL_NO_ENTRY ? racl->mask : racl->group_obj) & 7) << 3)
--	     + (racl->other & 7);
-+	/* Note that (ACL_NO_ENTRY & 077) is 0. */
-+	return ((racl->user_obj & 077) << 6)
-+	     + (((racl->mask != ACL_NO_ENTRY ? racl->mask : racl->group_obj) & 077) << 3)
-+	     + (racl->other & 077);
- }
- 
- static void rsync_acl_strip_perms(rsync_acl *racl)
-@@ -178,6 +178,9 @@ static BOOL unpack_smb_acl(rsync_acl *ra
+@@ -325,6 +325,9 @@ static BOOL unpack_smb_acl(rsync_acl *ra
  		}
  		access = (sys_acl_get_perm(permset, SMB_ACL_READ) ? 4 : 0)
  		       | (sys_acl_get_perm(permset, SMB_ACL_WRITE) ? 2 : 0)
@@ -54,9 +39,9 @@ entry.
 +		       | (sys_acl_get_perm(permset, SMB_ACL_CHMOD) ? 16 : 0)
 +		       | (sys_acl_get_perm(permset, SMB_ACL_CHOWN) ? 32 : 0)
  		       | (sys_acl_get_perm(permset, SMB_ACL_EXECUTE) ? 1 : 0);
- 		/* continue == done with entry; break == store in given idal */
+ 		/* continue == done with entry; break == store in temporary ida list */
  		switch (tag_type) {
-@@ -587,6 +590,12 @@ static int store_access_in_entry(uchar a
+@@ -419,6 +422,12 @@ static int store_access_in_entry(uchar a
  
  	COE( sys_acl_get_permset,(entry, &permset) );
  	COE( sys_acl_clear_perms,(permset) );
@@ -69,25 +54,34 @@ entry.
  	if (access & 4)
  		COE( sys_acl_add_perm,(permset, SMB_ACL_READ) );
  	if (access & 2)
-@@ -619,7 +628,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
+@@ -452,7 +461,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
  
  	COE( sys_acl_create_entry,(smb_acl, &entry) );
  	COE( sys_acl_set_tag_type,(entry, SMB_ACL_USER_OBJ) );
 -	COE2( store_access_in_entry,(racl->user_obj & 7, entry) );
 +	COE2( store_access_in_entry,(racl->user_obj & 077, entry) );
  
- 	for (ida = racl->users.idas, count = racl->users.count;
- 	     count--; ida++) {
-@@ -631,7 +640,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
+ 	for (ida = racl->users.idas, count = racl->users.count; count--; ida++) {
+ 		COE( sys_acl_create_entry,(smb_acl, &entry) );
+@@ -463,7 +472,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
  
  	COE( sys_acl_create_entry,(smb_acl, &entry) );
  	COE( sys_acl_set_tag_type,(entry, SMB_ACL_GROUP_OBJ) );
 -	COE2( store_access_in_entry,(racl->group_obj & 7, entry) );
 +	COE2( store_access_in_entry,(racl->group_obj & 077, entry) );
  
- 	for (ida = racl->groups.idas, count = racl->groups.count;
- 	     count--; ida++) {
-@@ -652,7 +661,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
+ 	for (ida = racl->groups.idas, count = racl->groups.count; count--; ida++) {
+ 		COE( sys_acl_create_entry,(smb_acl, &entry) );
+@@ -473,7 +482,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
+ 	}
+ 
+ #ifdef ACLS_NEED_MASK
+-	mask_bits = racl->mask == NO_ENTRY ? racl->group_obj & 7 : racl->mask;
++	mask_bits = racl->mask == NO_ENTRY ? racl->group_obj & 077 : racl->mask;
+ 	COE( sys_acl_create_entry,(smb_acl, &entry) );
+ 	COE( sys_acl_set_tag_type,(entry, SMB_ACL_MASK) );
+ 	COE2( store_access_in_entry,(mask_bits, entry) );
+@@ -487,7 +496,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
  
  	COE( sys_acl_create_entry,(smb_acl, &entry) );
  	COE( sys_acl_set_tag_type,(entry, SMB_ACL_OTHER) );
@@ -96,7 +90,7 @@ entry.
  
  #ifdef DEBUG
  	if (sys_acl_valid(*smb_acl) < 0)
-@@ -761,7 +770,7 @@ static void receive_rsync_acl(rsync_acl 
+@@ -721,7 +730,7 @@ static void receive_rsync_acl(rsync_acl 
  	while (count--) {
  		char tag = read_byte(f);
  		uchar access = read_byte(f);
@@ -105,15 +99,15 @@ entry.
  			rprintf(FERROR, "receive_rsync_acl: bogus permset %o\n",
  				access);
  			exit_cleanup(RERR_STREAMIO);
-@@ -834,7 +843,7 @@ static void receive_rsync_acl(rsync_acl 
- 	} else
- #endif
- 	if (racl->mask == ACL_NO_ENTRY) /* Always non-empty when needed. */
+@@ -797,7 +806,7 @@ static void receive_rsync_acl(rsync_acl 
+ 			racl->mask = NO_ENTRY;
+ 		}
+ 	} else if (racl->mask == NO_ENTRY) /* Must be non-empty with lists. */
 -		racl->mask = computed_mask_bits | (racl->group_obj & 7);
 +		racl->mask = computed_mask_bits | (racl->group_obj & 077);
  }
  
- /* receive and build the rsync_acl_lists */
+ /* Receive the ACL info the sender has included for this file-list entry. */
 --- old/smb_acls.h
 +++ new/smb_acls.h
 @@ -33,6 +33,11 @@
