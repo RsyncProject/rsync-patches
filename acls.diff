@@ -30,7 +30,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1120 @@
+@@ -0,0 +1,1080 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -96,48 +96,8 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	{NULL, 0}, {NULL, 0}, NO_ENTRY, NO_ENTRY, NO_ENTRY, NO_ENTRY
 +};
 +
-+/* === List functions === */
-+
-+#define EMPTY_LIST {NULL, 0, 0}
-+
-+typedef struct {
-+	void *items;
-+	size_t count;
-+	size_t malloced;
-+} item_list;
-+
-+static item_list access_acl_list = EMPTY_LIST;
-+static item_list default_acl_list = EMPTY_LIST;
-+
-+#define EXPAND_ITEM_LIST(lp, type, fast) (type*)expand_item_list(lp, sizeof (type), #type, fast)
-+
-+static void *expand_item_list(item_list *lp, size_t item_size, const char *desc, int fast)
-+{
-+	/* First time through, 0 <= 0, so list is expanded. */
-+	if (lp->malloced <= lp->count) {
-+		void *new_ptr;
-+		size_t new_size = lp->malloced;
-+		if (fast) {
-+			if (new_size < 1000)
-+				new_size += 1000;
-+			else
-+				new_size *= 2;
-+		} else
-+			new_size += 10;
-+		new_ptr = realloc_array(lp->items, char, new_size * item_size);
-+		if (verbose >= 4) {
-+			rprintf(FINFO, "[%s] expand %s to %.0f bytes, did%s move\n",
-+				who_am_i(), desc, (double)new_size * item_size,
-+				new_ptr == lp->items ? " not" : "");
-+		}
-+		if (!new_ptr)
-+			out_of_memory("expand_item_list");
-+
-+		lp->items = new_ptr;
-+		lp->malloced = new_size;
-+	}
-+	return (char*)lp->items + (lp->count++ * item_size);
-+}
++static item_list access_acl_list = EMPTY_ITEM_LIST;
++static item_list default_acl_list = EMPTY_ITEM_LIST;
 +
 +/* === Calculations on ACL types === */
 +
@@ -332,7 +292,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +/* Unpack system acl -> rsync acl verbatim.  Return whether we succeeded. */
 +static BOOL unpack_smb_acl(rsync_acl *racl, SMB_ACL_T sacl)
 +{
-+	static item_list temp_ida_list = EMPTY_LIST;
++	static item_list temp_ida_list = EMPTY_ITEM_LIST;
 +	SMB_ACL_TAG_T prior_list_type = 0;
 +	SMB_ACL_ENTRY_T entry;
 +	const char *errfun;
@@ -740,7 +700,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +static void receive_rsync_acl(rsync_acl *racl, int f, SMB_ACL_TYPE_T type)
 +{
-+	static item_list temp_ida_list = EMPTY_LIST;
++	static item_list temp_ida_list = EMPTY_ITEM_LIST;
 +	SMB_ACL_TAG_T tag_type = 0, prior_list_type = 0;
 +	uchar computed_mask_bits = 0;
 +	id_access *ida;
@@ -5922,7 +5882,25 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #define GID_NONE ((gid_t)-1)
  
  #define HL_CHECK_MASTER	0
-@@ -660,6 +669,21 @@ struct chmod_mode_struct;
+@@ -645,6 +654,17 @@ struct stats {
+ 
+ struct chmod_mode_struct;
+ 
++#define EMPTY_ITEM_LIST {NULL, 0, 0}
++
++typedef struct {
++	void *items;
++	size_t count;
++	size_t malloced;
++} item_list;
++
++#define EXPAND_ITEM_LIST(lp, type, fast) \
++	(type*)expand_item_list(lp, sizeof (type), #type, fast)
++
+ #include "byteorder.h"
+ #include "lib/mdfour.h"
+ #include "lib/wildmatch.h"
+@@ -660,6 +680,21 @@ struct chmod_mode_struct;
  
  #define UNUSED(x) x __attribute__((__unused__))
  
@@ -6304,6 +6282,16 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +#endif /* No ACLs. */
 +#endif /* _SMB_ACLS_H */
+--- old/t_stub.c
++++ new/t_stub.c
+@@ -78,3 +78,7 @@ struct filter_list_struct server_filter_
+     return NULL;
+ }
+ 
++ const char *who_am_i(void)
++{
++    return "test";
++}
 --- old/testsuite/acls.test
 +++ new/testsuite/acls.test
 @@ -0,0 +1,34 @@
@@ -6738,3 +6726,38 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	/* Now convert all the uids/gids from sender values to our values. */
  	if (am_root && preserve_uid && !numeric_ids) {
  		for (i = 0; i < flist->count; i++)
+--- old/util.c
++++ new/util.c
+@@ -1446,3 +1446,32 @@ int bitbag_next_bit(struct bitbag *bb, i
+ 
+ 	return -1;
+ }
++
++void *expand_item_list(item_list *lp, size_t item_size,
++		       const char *desc, int fast)
++{
++	/* First time through, 0 <= 0, so list is expanded. */
++	if (lp->malloced <= lp->count) {
++		void *new_ptr;
++		size_t new_size = lp->malloced;
++		if (fast) {
++			if (new_size < 1000)
++				new_size += 1000;
++			else
++				new_size *= 2;
++		} else
++			new_size += 10;
++		new_ptr = realloc_array(lp->items, char, new_size * item_size);
++		if (verbose >= 4) {
++			rprintf(FINFO, "[%s] expand %s to %.0f bytes, did%s move\n",
++				who_am_i(), desc, (double)new_size * item_size,
++				new_ptr == lp->items ? " not" : "");
++		}
++		if (!new_ptr)
++			out_of_memory("expand_item_list");
++
++		lp->items = new_ptr;
++		lp->malloced = new_size;
++	}
++	return (char*)lp->items + (lp->count++ * item_size);
++}
