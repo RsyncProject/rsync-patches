@@ -7,14 +7,6 @@ After applying this patch, run these commands for a successful build:
 See the --acls (-A) option in the revised man page for a note on using this
 latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 
-TODO items:
-
-- The -i option does not yet itemize changes in ACL information.
-
-- The --link-dest option might link together two files that differ just
-  in their ACL info, and if that happens the file in the --link-dest dir
-  would get its ACLs updated.
-
 --- old/Makefile.in
 +++ new/Makefile.in
 @@ -25,15 +25,15 @@ VERSION=@VERSION@
@@ -38,7 +30,7 @@ TODO items:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1308 @@
+@@ -0,0 +1,1120 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -70,6 +62,9 @@ TODO items:
 +extern int dry_run;
 +extern int orig_umask;
 +extern int preserve_acls;
++extern unsigned int file_struct_len;
++
++/* === ACL structures === */
 +
 +typedef struct {
 +	id_t id;
@@ -77,217 +72,146 @@ TODO items:
 +} id_access;
 +
 +typedef struct {
-+	size_t count;
-+	size_t malloced;
 +	id_access *idas;
-+} ida_list;
++	int count;
++} ida_entries;
 +
-+#define ACL_NO_ENTRY ((uchar)0x80)
-+typedef struct {
-+	ida_list users;
-+	ida_list groups;
-+	/* These will be ACL_NO_ENTRY if there's no such entry. */
++#define NO_ENTRY ((uchar)0x80)
++typedef struct rsync_acl {
++	ida_entries users;
++	ida_entries groups;
++	/* These will be NO_ENTRY if there's no such entry. */
 +	uchar user_obj;
 +	uchar group_obj;
 +	uchar mask;
 +	uchar other;
 +} rsync_acl;
 +
++typedef struct {
++	rsync_acl racl;
++	SMB_ACL_T sacl;
++} acl_duo;
++
 +static const rsync_acl empty_rsync_acl = {
-+	{0, 0, NULL}, {0, 0, NULL},
-+	ACL_NO_ENTRY, ACL_NO_ENTRY, ACL_NO_ENTRY, ACL_NO_ENTRY
++	{NULL, 0}, {NULL, 0}, NO_ENTRY, NO_ENTRY, NO_ENTRY, NO_ENTRY
 +};
++
++/* === List functions === */
++
++#define EMPTY_LIST {NULL, 0, 0}
++
++typedef struct {
++	void *items;
++	size_t count;
++	size_t malloced;
++} item_list;
++
++static item_list access_acl_list = EMPTY_LIST;
++static item_list default_acl_list = EMPTY_LIST;
++
++#define EXPAND_ITEM_LIST(lp, type, fast) (type*)expand_item_list(lp, sizeof (type), #type, fast)
++
++static void *expand_item_list(item_list *lp, size_t item_size, const char *desc, int fast)
++{
++	/* First time through, 0 <= 0, so list is expanded. */
++	if (lp->malloced <= lp->count) {
++		void *new_ptr;
++		size_t new_size = lp->malloced;
++		if (fast) {
++			if (new_size < 1000)
++				new_size += 1000;
++			else
++				new_size *= 2;
++		} else
++			new_size += 10;
++		new_ptr = realloc_array(lp->items, char, new_size * item_size);
++		if (verbose >= 4) {
++			rprintf(FINFO, "[%s] expand %s to %.0f bytes, did%s move\n",
++				who_am_i(), desc, (double)new_size * item_size,
++				new_ptr == lp->items ? " not" : "");
++		}
++		if (!new_ptr)
++			out_of_memory("expand_item_list");
++
++		lp->items = new_ptr;
++		lp->malloced = new_size;
++	}
++	return (char*)lp->items + (lp->count++ * item_size);
++}
++
++/* === Calculations on ACL types === */
++
++static const char *str_acl_type(SMB_ACL_TYPE_T type)
++{
++	return type == SMB_ACL_TYPE_ACCESS ? "SMB_ACL_TYPE_ACCESS"
++	     : type == SMB_ACL_TYPE_DEFAULT ? "SMB_ACL_TYPE_DEFAULT"
++	     : "unknown SMB_ACL_TYPE_T";
++}
 +
 +#define OTHER_TYPE(t) (SMB_ACL_TYPE_ACCESS+SMB_ACL_TYPE_DEFAULT-(t))
 +#define BUMP_TYPE(t) ((t = OTHER_TYPE(t)) == SMB_ACL_TYPE_DEFAULT)
 +
-+/* a few useful calculations */
-+
 +static int count_racl_entries(const rsync_acl *racl)
 +{
 +	return racl->users.count + racl->groups.count
-+	     + (racl->user_obj != ACL_NO_ENTRY)
-+	     + (racl->group_obj != ACL_NO_ENTRY)
-+	     + (racl->mask != ACL_NO_ENTRY)
-+	     + (racl->other != ACL_NO_ENTRY);
++	     + (racl->user_obj != NO_ENTRY)
++	     + (racl->group_obj != NO_ENTRY)
++	     + (racl->mask != NO_ENTRY)
++	     + (racl->other != NO_ENTRY);
 +}
 +
 +static int calc_sacl_entries(const rsync_acl *racl)
 +{
++	/* A System ACL always gets user/group/other permission entries. */
 +	return racl->users.count + racl->groups.count
 +#ifdef ACLS_NEED_MASK
 +	     + 4;
 +#else
-+	     + (racl->mask != ACL_NO_ENTRY) + 3;
++	     + (racl->mask != NO_ENTRY) + 3;
 +#endif
 +}
 +
-+/* This cannot be called on an rsync_acl that has ACL_NO_ENTRY in any
-+ * spot but the mask. */
++/* Extracts and returns the permission bits from the ACL.  This cannot be
++ * called on an rsync_acl that has NO_ENTRY in any spot but the mask. */
 +static int rsync_acl_get_perms(const rsync_acl *racl)
 +{
 +	return (racl->user_obj << 6)
-+	     + ((racl->mask != ACL_NO_ENTRY ? racl->mask : racl->group_obj) << 3)
++	     + ((racl->mask != NO_ENTRY ? racl->mask : racl->group_obj) << 3)
 +	     + racl->other;
 +}
 +
++/* Removes the permission-bit entries from the ACL because these
++ * can be reconstructed from the file's mode. */
 +static void rsync_acl_strip_perms(rsync_acl *racl)
 +{
-+	racl->user_obj = ACL_NO_ENTRY;
-+	if (racl->mask == ACL_NO_ENTRY)
-+		racl->group_obj = ACL_NO_ENTRY;
-+	else
-+		racl->mask = ACL_NO_ENTRY;
-+	racl->other = ACL_NO_ENTRY;
-+}
-+
-+static void expand_ida_list(ida_list *idal)
-+{
-+	/* First time through, 0 <= 0, so list is expanded. */
-+	if (idal->malloced <= idal->count) {
-+		id_access *new_ptr;
-+		size_t new_size = idal->malloced + 10;
-+		new_ptr = realloc_array(idal->idas, id_access, new_size);
-+		if (verbose >= 4) {
-+			rprintf(FINFO, "expand rsync_acl to %.0f bytes, did%s move\n",
-+				(double) new_size * sizeof idal->idas[0],
-+				idal->idas ? "" : " not");
-+		}
-+
-+		idal->idas = new_ptr;
-+		idal->malloced = new_size;
-+
-+		if (!idal->idas)
-+			out_of_memory("expand_ida_list");
++	racl->user_obj = NO_ENTRY;
++	if (racl->mask == NO_ENTRY)
++		racl->group_obj = NO_ENTRY;
++	else {
++		if (racl->group_obj == racl->mask)
++			racl->group_obj = NO_ENTRY;
++		racl->mask = NO_ENTRY;
 +	}
++	racl->other = NO_ENTRY;
 +}
 +
-+static void rsync_acl_free(rsync_acl *racl)
++/* Given an empty rsync_acl, fake up the permission bits. */
++static void rsync_acl_fake_perms(rsync_acl *racl, mode_t mode)
 +{
-+	if (racl->users.idas)
-+		free(racl->users.idas);
-+	if (racl->groups.idas)
-+		free(racl->groups.idas);
-+	*racl = empty_rsync_acl;
-+}
-+
-+static int id_access_sorter(const void *r1, const void *r2)
-+{
-+	id_access *ida1 = (id_access *)r1;
-+	id_access *ida2 = (id_access *)r2;
-+	id_t rid1 = ida1->id, rid2 = ida2->id;
-+	return rid1 == rid2 ? 0 : rid1 < rid2 ? -1 : 1;
-+}
-+
-+static void sort_ida_list(ida_list *idal)
-+{
-+	if (!idal->count)
-+		return;
-+	qsort((void **)idal->idas, idal->count, sizeof idal->idas[0],
-+	      &id_access_sorter);
-+}
-+
-+static BOOL unpack_smb_acl(rsync_acl *racl, SMB_ACL_T sacl)
-+{
-+	SMB_ACL_ENTRY_T entry;
-+	const char *errfun;
-+	int rc;
-+
-+	*racl = empty_rsync_acl;
-+	errfun = "sys_acl_get_entry";
-+	for (rc = sys_acl_get_entry(sacl, SMB_ACL_FIRST_ENTRY, &entry);
-+	     rc == 1;
-+	     rc = sys_acl_get_entry(sacl, SMB_ACL_NEXT_ENTRY, &entry)) {
-+		SMB_ACL_TAG_T tag_type;
-+		SMB_ACL_PERMSET_T permset;
-+		uchar access;
-+		void *qualifier;
-+		id_access *ida;
-+		ida_list *idal;
-+		if ((rc = sys_acl_get_tag_type(entry, &tag_type))) {
-+			errfun = "sys_acl_get_tag_type";
-+			break;
-+		}
-+		if ((rc = sys_acl_get_permset(entry, &permset))) {
-+			errfun = "sys_acl_get_tag_type";
-+			break;
-+		}
-+		access = (sys_acl_get_perm(permset, SMB_ACL_READ) ? 4 : 0)
-+		       | (sys_acl_get_perm(permset, SMB_ACL_WRITE) ? 2 : 0)
-+		       | (sys_acl_get_perm(permset, SMB_ACL_EXECUTE) ? 1 : 0);
-+		/* continue == done with entry; break == store in given idal */
-+		switch (tag_type) {
-+		case SMB_ACL_USER_OBJ:
-+			if (racl->user_obj == ACL_NO_ENTRY)
-+				racl->user_obj = access;
-+			else
-+				rprintf(FINFO, "unpack_smb_acl: warning: duplicate USER_OBJ entry ignored\n");
-+			continue;
-+		case SMB_ACL_USER:
-+			idal = &racl->users;
-+			break;
-+		case SMB_ACL_GROUP_OBJ:
-+			if (racl->group_obj == ACL_NO_ENTRY)
-+				racl->group_obj = access;
-+			else
-+				rprintf(FINFO, "unpack_smb_acl: warning: duplicate GROUP_OBJ entry ignored\n");
-+			continue;
-+		case SMB_ACL_GROUP:
-+			idal = &racl->groups;
-+			break;
-+		case SMB_ACL_MASK:
-+			if (racl->mask == ACL_NO_ENTRY)
-+				racl->mask = access;
-+			else
-+				rprintf(FINFO, "unpack_smb_acl: warning: duplicate MASK entry ignored\n");
-+			continue;
-+		case SMB_ACL_OTHER:
-+			if (racl->other == ACL_NO_ENTRY)
-+				racl->other = access;
-+			else
-+				rprintf(FINFO, "unpack_smb_acl: warning: duplicate OTHER entry ignored\n");
-+			continue;
-+		default:
-+			rprintf(FINFO, "unpack_smb_acl: warning: entry with unrecognized tag type ignored\n");
-+			continue;
-+		}
-+		if (!(qualifier = sys_acl_get_qualifier(entry))) {
-+			errfun = "sys_acl_get_tag_type";
-+			rc = EINVAL;
-+			break;
-+		}
-+		expand_ida_list(idal);
-+		ida = &idal->idas[idal->count++];
-+		ida->id = *((id_t *)qualifier);
-+		ida->access = access;
-+		sys_acl_free_qualifier(qualifier, tag_type);
-+	}
-+	if (rc) {
-+		rprintf(FERROR, "unpack_smb_acl: %s(): %s\n",
-+			errfun, strerror(errno));
-+		rsync_acl_free(racl);
-+		return False;
-+	}
-+
-+	sort_ida_list(&racl->users);
-+	sort_ida_list(&racl->groups);
-+
++	racl->user_obj = (mode >> 6) & 7;
++	racl->group_obj = (mode >> 3) & 7;
 +#ifdef ACLS_NEED_MASK
-+	if (!racl->users.count && !racl->groups.count) {
-+		/* Throw away a superfluous mask, but mask off the
-+		 * group perms with it first. */
-+		racl->group_obj &= racl->mask;
-+		racl->mask = ACL_NO_ENTRY;
-+	}
++	racl->mask = (mode >> 3) & 7;
 +#endif
-+
-+	return True;
++	racl->other = mode & 7;
 +}
 +
-+static BOOL ida_lists_equal(const ida_list *ial1, const ida_list *ial2)
++/* === Rsync ACL functions === */
++
++static BOOL ida_entries_equal(const ida_entries *ial1, const ida_entries *ial2)
 +{
 +	id_access *ida1, *ida2;
-+	size_t count = ial1->count;
++	int count = ial1->count;
 +	if (count != ial2->count)
 +		return False;
 +	ida1 = ial1->idas;
@@ -305,327 +229,209 @@ TODO items:
 +	     && racl1->group_obj == racl2->group_obj
 +	     && racl1->mask == racl2->mask
 +	     && racl1->other == racl2->other
-+	     && ida_lists_equal(&racl1->users, &racl2->users)
-+	     && ida_lists_equal(&racl1->groups, &racl2->groups));
++	     && ida_entries_equal(&racl1->users, &racl2->users)
++	     && ida_entries_equal(&racl1->groups, &racl2->groups));
 +}
 +
-+/* The first parameter will always be a fully-populated rsync_acl.
-+ * The second parameter will usually be a condensed rsync_acl, which means
-+ * that it might have several of its access objects set to ACL_NO_ENTRY. */
-+static BOOL rsync_acl_extended_parts_equal(const rsync_acl *racl1,
-+					   const rsync_acl *racl2, mode_t m)
++/* Are the extended (non-permission-bit) entries equal?  If so, the rest of
++ * the ACL will be handled by the normal mode-preservation code.  This is
++ * only meaningful for access ACLs!  Note: the 1st arg is a fully-populated
++ * rsync_acl, but the 2nd parameter can be a condensed rsync_acl, which means
++ * that it might have several of its perm objects set to NO_ENTRY. */
++static BOOL rsync_acls_equal_enough(const rsync_acl *racl1,
++				    const rsync_acl *racl2, mode_t m)
 +{
-+	/* We ignore any differences that chmod() can take care of. */
-+	if ((racl1->mask ^ racl2->mask) & ACL_NO_ENTRY)
-+		return False;
-+	if (racl1->mask != ACL_NO_ENTRY) {
++	if ((racl1->mask ^ racl2->mask) & NO_ENTRY)
++		return False; /* One has a mask and the other doesn't */
++
++	/* When there's a mask, the group_obj becomes an extended entry. */
++	if (racl1->mask != NO_ENTRY) {
 +		/* A condensed rsync_acl with a mask can only have no
 +		 * group_obj when it was identical to the mask.  This
 +		 * means that it was also identical to the group attrs
 +		 * from the mode. */
-+		if (racl2->group_obj == ACL_NO_ENTRY) {
++		if (racl2->group_obj == NO_ENTRY) {
 +			if (racl1->group_obj != ((m >> 3) & 7))
 +				return False;
 +		} else if (racl1->group_obj != racl2->group_obj)
 +			return False;
 +	}
-+	return ida_lists_equal(&racl1->users, &racl2->users)
-+	    && ida_lists_equal(&racl1->groups, &racl2->groups);
++	return ida_entries_equal(&racl1->users, &racl2->users)
++	    && ida_entries_equal(&racl1->groups, &racl2->groups);
 +}
 +
-+typedef struct {
-+	size_t count;
-+	size_t malloced;
-+	rsync_acl *racls;
-+} rsync_acl_list;
-+
-+static rsync_acl_list _rsync_acl_lists[] = {
-+	{ 0, 0, NULL }, /* SMB_ACL_TYPE_ACCESS */
-+	{ 0, 0, NULL }  /* SMB_ACL_TYPE_DEFAULT */
-+};
-+
-+static inline rsync_acl_list *rsync_acl_lists(SMB_ACL_TYPE_T type)
++static void rsync_acl_free(rsync_acl *racl)
 +{
-+	return &_rsync_acl_lists[type != SMB_ACL_TYPE_ACCESS];
++	if (racl->users.idas)
++		free(racl->users.idas);
++	if (racl->groups.idas)
++		free(racl->groups.idas);
++	*racl = empty_rsync_acl;
 +}
 +
-+static void expand_rsync_acl_list(rsync_acl_list *racl_list)
++void free_acls(statx *sxp)
 +{
-+	/* First time through, 0 <= 0, so list is expanded. */
-+	if (racl_list->malloced <= racl_list->count) {
-+		rsync_acl *new_ptr;
-+		size_t new_size;
-+		if (racl_list->malloced < 1000)
-+			new_size = racl_list->malloced + 1000;
-+		else
-+			new_size = racl_list->malloced * 2;
-+		new_ptr = realloc_array(racl_list->racls, rsync_acl, new_size);
-+		if (verbose >= 3) {
-+			rprintf(FINFO, "expand_rsync_acl_list to %.0f bytes, did%s move\n",
-+				(double) new_size * sizeof racl_list->racls[0],
-+				racl_list->racls ? "" : " not");
-+		}
-+
-+		racl_list->racls = new_ptr;
-+		racl_list->malloced = new_size;
-+
-+		if (!racl_list->racls)
-+			out_of_memory("expand_rsync_acl_list");
++	if (sxp->acc_acl) {
++		rsync_acl_free(sxp->acc_acl);
++		free(sxp->acc_acl);
++		sxp->acc_acl = NULL;
++	}
++	if (sxp->def_acl) {
++		rsync_acl_free(sxp->def_acl);
++		free(sxp->def_acl);
++		sxp->def_acl = NULL;
 +	}
 +}
 +
-+static int find_matching_rsync_acl(SMB_ACL_TYPE_T type,
-+				   const rsync_acl_list *racl_list,
-+				   const rsync_acl *racl)
++static int id_access_sorter(const void *r1, const void *r2)
 +{
-+	static int access_match = -1, default_match = -1;
-+	int *match = type == SMB_ACL_TYPE_ACCESS ? &access_match : &default_match;
-+	size_t count = racl_list->count;
-+
-+	/* If this is the first time through or we didn't match the last
-+	 * time, then start at the end of the list, which should be the
-+	 * best place to start hunting. */
-+	if (*match == -1)
-+		*match = racl_list->count - 1;
-+	while (count--) {
-+		if (rsync_acls_equal(&racl_list->racls[*match], racl))
-+			return *match;
-+		if (!(*match)--)
-+			*match = racl_list->count - 1;
-+	}
-+
-+	*match = -1;
-+	return *match;
++	id_access *ida1 = (id_access *)r1;
++	id_access *ida2 = (id_access *)r2;
++	id_t rid1 = ida1->id, rid2 = ida2->id;
++	return rid1 == rid2 ? 0 : rid1 < rid2 ? -1 : 1;
 +}
 +
-+/* The general strategy with the tag_type <-> character mapping is that
-+ * lowercase implies that no qualifier follows, where uppercase does.
-+ * A similar idiom for the acl type (access or default) itself, but
-+ * lowercase in this instance means there's no ACL following, so the
-+ * ACL is a repeat, so the receiver should reuse the last of the same
-+ * type ACL. */
-+static void send_ida_list(int f, const ida_list *idal, char tag_char)
++static void sort_ida_entries(ida_entries *idal)
 +{
-+	id_access *ida;
-+	size_t count = idal->count;
-+	for (ida = idal->idas; count--; ida++) {
-+		write_byte(f, tag_char);
-+		write_byte(f, ida->access);
-+		write_int(f, ida->id);
-+		/* FIXME: sorta wasteful: we should maybe buffer as
-+		 * many ids as max(ACL_USER + ACL_GROUP) objects to
-+		 * keep from making so many calls. */
-+		if (tag_char == 'U')
-+			add_uid(ida->id);
-+		else
-+			add_gid(ida->id);
-+	}
-+}
-+
-+static void send_rsync_acl(int f, const rsync_acl *racl)
-+{
-+	size_t count = count_racl_entries(racl);
-+	write_int(f, count);
-+	if (racl->user_obj != ACL_NO_ENTRY) {
-+		write_byte(f, 'u');
-+		write_byte(f, racl->user_obj);
-+	}
-+	send_ida_list(f, &racl->users, 'U');
-+	if (racl->group_obj != ACL_NO_ENTRY) {
-+		write_byte(f, 'g');
-+		write_byte(f, racl->group_obj);
-+	}
-+	send_ida_list(f, &racl->groups, 'G');
-+	if (racl->mask != ACL_NO_ENTRY) {
-+		write_byte(f, 'm');
-+		write_byte(f, racl->mask);
-+	}
-+	if (racl->other != ACL_NO_ENTRY) {
-+		write_byte(f, 'o');
-+		write_byte(f, racl->other);
-+	}
-+}
-+
-+static rsync_acl _curr_rsync_acls[2];
-+
-+static const char *str_acl_type(SMB_ACL_TYPE_T type)
-+{
-+	return type == SMB_ACL_TYPE_ACCESS ? "SMB_ACL_TYPE_ACCESS"
-+	     : type == SMB_ACL_TYPE_DEFAULT ? "SMB_ACL_TYPE_DEFAULT"
-+	     : "unknown SMB_ACL_TYPE_T";
-+}
-+
-+/* Generate the ACL(s) for this flist entry;
-+ * ACL(s) are either sent or cleaned-up by send_acl() below. */
-+int make_acl(const struct file_struct *file, const char *fname)
-+{
-+	SMB_ACL_TYPE_T type;
-+	rsync_acl *curr_racl;
-+
-+	if (S_ISLNK(file->mode))
-+		return 1;
-+
-+	curr_racl = &_curr_rsync_acls[0];
-+	type = SMB_ACL_TYPE_ACCESS;
-+	do {
-+		SMB_ACL_T sacl;
-+		BOOL ok;
-+		if ((sacl = sys_acl_get_file(fname, type)) != 0) {
-+			ok = unpack_smb_acl(curr_racl, sacl);
-+			sys_acl_free_acl(sacl);
-+			if (!ok)
-+				return -1;
-+			/* Avoid sending a redundant group/mask value. */
-+			if (curr_racl->group_obj == curr_racl->mask
-+			 && (preserve_acls == 1
-+			  || (!curr_racl->users.count
-+			   && !curr_racl->groups.count)))
-+				curr_racl->mask = ACL_NO_ENTRY;
-+			/* Strip access ACLs of permission-bit entries. */
-+			if (type == SMB_ACL_TYPE_ACCESS && preserve_acls == 1)
-+				rsync_acl_strip_perms(curr_racl);
-+		} else if (errno == ENOTSUP) {
-+			/* ACLs are not supported. Leave list empty. */
-+			*curr_racl = empty_rsync_acl;
-+		} else {
-+			rprintf(FERROR, "send_acl: sys_acl_get_file(%s, %s): %s\n",
-+				fname, str_acl_type(type), strerror(errno));
-+			return -1;
-+		}
-+		curr_racl++;
-+	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
-+
-+	return 0;
-+}
-+
-+/* Send the make_acl()-generated ACLs for this flist entry,
-+ * or clean up after an flist entry that's not being sent (f == -1). */
-+void send_acl(const struct file_struct *file, int f)
-+{
-+	SMB_ACL_TYPE_T type;
-+	rsync_acl *curr_racl;
-+
-+	if (S_ISLNK(file->mode))
++	if (!idal->count)
 +		return;
++	qsort(idal->idas, idal->count, sizeof idal->idas[0], id_access_sorter);
++}
 +
-+	curr_racl = &_curr_rsync_acls[0];
-+	type = SMB_ACL_TYPE_ACCESS;
-+	do {
-+		int index;
-+		rsync_acl_list *racl_list = rsync_acl_lists(type);
-+		if (f == -1) {
-+			rsync_acl_free(curr_racl++);
++/* Transfer the count id_access items out of the temp_ida_list into either
++ * the users or groups ida_entries list in racl. */
++static void save_idas(item_list *temp_ida_list, rsync_acl *racl, SMB_ACL_TAG_T type)
++{
++	id_access *idas;
++	ida_entries *ent;
++
++	if (temp_ida_list->count) {
++		int cnt = temp_ida_list->count;
++		id_access *temp_idas = temp_ida_list->items;
++		if (!(idas = new_array(id_access, cnt)))
++			out_of_memory("save_idas");
++		memcpy(idas, temp_idas, cnt * sizeof *temp_idas);
++	} else
++		idas = NULL;
++
++	ent = type == SMB_ACL_USER ? &racl->users : &racl->groups;
++
++	if (ent->count) {
++		rprintf(FERROR, "save_idas: disjoint list found for type %d\n", type);
++		exit_cleanup(RERR_UNSUPPORTED);
++	}
++	ent->count = temp_ida_list->count;
++	ent->idas = idas;
++
++	/* Truncate the temporary list now that its idas have been saved. */
++	temp_ida_list->count = 0;
++}
++
++/* === System ACLs === */
++
++/* Unpack system acl -> rsync acl verbatim.  Return whether we succeeded. */
++static BOOL unpack_smb_acl(rsync_acl *racl, SMB_ACL_T sacl)
++{
++	static item_list temp_ida_list = EMPTY_LIST;
++	SMB_ACL_TAG_T prior_list_type = 0;
++	SMB_ACL_ENTRY_T entry;
++	const char *errfun;
++	int rc;
++
++	*racl = empty_rsync_acl;
++	errfun = "sys_acl_get_entry";
++	for (rc = sys_acl_get_entry(sacl, SMB_ACL_FIRST_ENTRY, &entry);
++	     rc == 1;
++	     rc = sys_acl_get_entry(sacl, SMB_ACL_NEXT_ENTRY, &entry)) {
++		SMB_ACL_TAG_T tag_type;
++		SMB_ACL_PERMSET_T permset;
++		uchar access;
++		void *qualifier;
++		id_access *ida;
++		if ((rc = sys_acl_get_tag_type(entry, &tag_type))) {
++			errfun = "sys_acl_get_tag_type";
++			break;
++		}
++		if ((rc = sys_acl_get_permset(entry, &permset))) {
++			errfun = "sys_acl_get_tag_type";
++			break;
++		}
++		access = (sys_acl_get_perm(permset, SMB_ACL_READ) ? 4 : 0)
++		       | (sys_acl_get_perm(permset, SMB_ACL_WRITE) ? 2 : 0)
++		       | (sys_acl_get_perm(permset, SMB_ACL_EXECUTE) ? 1 : 0);
++		/* continue == done with entry; break == store in temporary ida list */
++		switch (tag_type) {
++		case SMB_ACL_USER_OBJ:
++			if (racl->user_obj == NO_ENTRY)
++				racl->user_obj = access;
++			else
++				rprintf(FINFO, "unpack_smb_acl: warning: duplicate USER_OBJ entry ignored\n");
++			continue;
++		case SMB_ACL_USER:
++			break;
++		case SMB_ACL_GROUP_OBJ:
++			if (racl->group_obj == NO_ENTRY)
++				racl->group_obj = access;
++			else
++				rprintf(FINFO, "unpack_smb_acl: warning: duplicate GROUP_OBJ entry ignored\n");
++			continue;
++		case SMB_ACL_GROUP:
++			break;
++		case SMB_ACL_MASK:
++			if (racl->mask == NO_ENTRY)
++				racl->mask = access;
++			else
++				rprintf(FINFO, "unpack_smb_acl: warning: duplicate MASK entry ignored\n");
++			continue;
++		case SMB_ACL_OTHER:
++			if (racl->other == NO_ENTRY)
++				racl->other = access;
++			else
++				rprintf(FINFO, "unpack_smb_acl: warning: duplicate OTHER entry ignored\n");
++			continue;
++		default:
++			rprintf(FINFO, "unpack_smb_acl: warning: entry with unrecognized tag type ignored\n");
 +			continue;
 +		}
-+		if ((index = find_matching_rsync_acl(type, racl_list, curr_racl))
-+		    != -1) {
-+			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'a' : 'd');
-+			write_int(f, index);
-+			rsync_acl_free(curr_racl);
-+		} else {
-+			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'A' : 'D');
-+			send_rsync_acl(f, curr_racl);
-+			expand_rsync_acl_list(racl_list);
-+			racl_list->racls[racl_list->count++] = *curr_racl;
++		if (!(qualifier = sys_acl_get_qualifier(entry))) {
++			errfun = "sys_acl_get_tag_type";
++			rc = EINVAL;
++			break;
 +		}
-+		curr_racl++;
-+	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
-+}
-+
-+/* The below stuff is only used by the receiver: */
-+
-+/* structure to hold index to rsync_acl_list member corresponding to
-+ * flist->files[i] */
-+
-+typedef struct {
-+	const struct file_struct *file;
-+	int aclidx;
-+} file_acl_index;
-+
-+typedef struct {
-+	size_t count;
-+	size_t malloced;
-+	file_acl_index *fais;
-+} file_acl_index_list;
-+
-+static file_acl_index_list _file_acl_index_lists[] = {
-+	{0, 0, NULL }, /* SMB_ACL_TYPE_ACCESS */
-+	{0, 0, NULL }  /* SMB_ACL_TYPE_DEFAULT */
-+};
-+
-+static inline file_acl_index_list *file_acl_index_lists(SMB_ACL_TYPE_T type)
-+{
-+	return &_file_acl_index_lists[type != SMB_ACL_TYPE_ACCESS];
-+}
-+
-+static void expand_file_acl_index_list(file_acl_index_list *flst)
-+{
-+	/* First time through, 0 <= 0, so list is expanded. */
-+	if (flst->malloced <= flst->count) {
-+		file_acl_index *new_ptr;
-+		size_t new_size;
-+
-+		if (flst->malloced < 1000)
-+			new_size = flst->malloced + 1000;
-+		else
-+			new_size = flst->malloced * 2;
-+		new_ptr = realloc_array(flst->fais, file_acl_index, new_size);
-+		if (verbose >= 3) {
-+			rprintf(FINFO, "expand_file_acl_index_list to %.0f bytes, did%s move\n",
-+				(double) new_size * sizeof flst->fais[0],
-+				flst->fais ? "" : " not");
++		if (tag_type != prior_list_type) {
++			if (prior_list_type)
++				save_idas(&temp_ida_list, racl, prior_list_type);
++			prior_list_type = tag_type;
 +		}
-+
-+		flst->fais = new_ptr;
-+		flst->malloced = new_size;
-+
-+		if (!flst->fais)
-+			out_of_memory("expand_file_acl_index_list");
++		ida = EXPAND_ITEM_LIST(&temp_ida_list, id_access, 0);
++		ida->id = *((id_t *)qualifier);
++		ida->access = access;
++		sys_acl_free_qualifier(qualifier, tag_type);
 +	}
-+}
-+
-+/* lists to hold the SMB_ACL_Ts corresponding to the rsync_acl_list entries */
-+
-+typedef struct {
-+	size_t count;
-+	size_t malloced;
-+	SMB_ACL_T *sacls;
-+} smb_acl_list;
-+
-+static smb_acl_list _smb_acl_lists[] = {
-+	{ 0, 0, NULL }, /* SMB_ACL_TYPE_ACCESS */
-+	{ 0, 0, NULL }  /* SMB_ACL_TYPE_DEFAULT */
-+};
-+
-+static inline smb_acl_list *smb_acl_lists(SMB_ACL_TYPE_T type)
-+{
-+	return &_smb_acl_lists[type != SMB_ACL_TYPE_ACCESS];
-+}
-+
-+static void expand_smb_acl_list(smb_acl_list *sacl_list)
-+{
-+	/* First time through, 0 <= 0, so list is expanded. */
-+	if (sacl_list->malloced <= sacl_list->count) {
-+		SMB_ACL_T *new_ptr;
-+		size_t new_size;
-+		if (sacl_list->malloced < 1000)
-+			new_size = sacl_list->malloced + 1000;
-+		else
-+			new_size = sacl_list->malloced * 2;
-+		new_ptr = realloc_array(sacl_list->sacls, SMB_ACL_T, new_size);
-+		if (verbose >= 3) {
-+			rprintf(FINFO, "expand_smb_acl_list to %.0f bytes, did%s move\n",
-+				(double) new_size * sizeof sacl_list->sacls[0],
-+				sacl_list->sacls ? "" : " not");
-+		}
-+
-+		sacl_list->sacls = new_ptr;
-+		sacl_list->malloced = new_size;
-+
-+		if (!sacl_list->sacls)
-+			out_of_memory("expand_smb_acl_list");
++	if (rc) {
++		rsyserr(FERROR, errno, "unpack_smb_acl: %s()", errfun);
++		rsync_acl_free(racl);
++		return False;
 +	}
++	if (prior_list_type)
++		save_idas(&temp_ida_list, racl, prior_list_type);
++
++	sort_ida_entries(&racl->users);
++	sort_ida_entries(&racl->groups);
++
++#ifdef ACLS_NEED_MASK
++	if (!racl->users.count && !racl->groups.count) {
++		/* Throw away a superfluous mask, but mask off the
++		 * group perms with it first. */
++		racl->group_obj &= racl->mask;
++		racl->mask = NO_ENTRY;
++	}
++#endif
++
++	return True;
 +}
++
++/* Synactic sugar for system calls */
 +
 +#define CALL_OR_ERROR(func,args,str) \
 +	do { \
@@ -638,6 +444,7 @@ TODO items:
 +#define COE(func,args) CALL_OR_ERROR(func,args,#func)
 +#define COE2(func,args) CALL_OR_ERROR(func,args,NULL)
 +
++/* Store the permissions in the system ACL entry. */
 +static int store_access_in_entry(uchar access, SMB_ACL_ENTRY_T entry)
 +{
 +	const char *errfun = NULL;
@@ -656,12 +463,11 @@ TODO items:
 +	return 0;
 +
 +  error_exit:
-+	rprintf(FERROR, "store_access_in_entry %s(): %s\n", errfun,
-+		strerror(errno));
++	rsyserr(FERROR, errno, "store_access_in_entry %s()", errfun);
 +	return -1;
 +}
 +
-+/* build an SMB_ACL_T corresponding to an rsync_acl */
++/* Pack rsync acl -> system acl verbatim.  Return whether we succeeded. */
 +static BOOL pack_smb_acl(SMB_ACL_T *smb_acl, const rsync_acl *racl)
 +{
 +#ifdef ACLS_NEED_MASK
@@ -673,8 +479,7 @@ TODO items:
 +	SMB_ACL_ENTRY_T entry;
 +
 +	if (!(*smb_acl = sys_acl_init(calc_sacl_entries(racl)))) {
-+		rprintf(FERROR, "pack_smb_acl: sys_acl_init(): %s\n",
-+			strerror(errno));
++		rsyserr(FERROR, errno, "pack_smb_acl: sys_acl_init()");
 +		return False;
 +	}
 +
@@ -701,12 +506,12 @@ TODO items:
 +	}
 +
 +#ifdef ACLS_NEED_MASK
-+	mask_bits = racl->mask == ACL_NO_ENTRY ? racl->group_obj & 7 : racl->mask;
++	mask_bits = racl->mask == NO_ENTRY ? racl->group_obj & 7 : racl->mask;
 +	COE( sys_acl_create_entry,(smb_acl, &entry) );
 +	COE( sys_acl_set_tag_type,(entry, SMB_ACL_MASK) );
 +	COE2( store_access_in_entry,(mask_bits, entry) );
 +#else
-+	if (racl->mask != ACL_NO_ENTRY) {
++	if (racl->mask != NO_ENTRY) {
 +		COE( sys_acl_create_entry,(smb_acl, &entry) );
 +		COE( sys_acl_set_tag_type,(entry, SMB_ACL_MASK) );
 +		COE2( store_access_in_entry,(racl->mask, entry) );
@@ -719,18 +524,367 @@ TODO items:
 +
 +#ifdef DEBUG
 +	if (sys_acl_valid(*smb_acl) < 0)
-+		rprintf(FINFO, "pack_smb_acl: warning: system says the ACL I packed is invalid\n");
++		rprintf(FERROR, "pack_smb_acl: warning: system says the ACL I packed is invalid\n");
 +#endif
 +
 +	return True;
 +
 +  error_exit:
 +	if (errfun) {
-+		rprintf(FERROR, "pack_smb_acl %s(): %s\n", errfun,
-+			strerror(errno));
++		rsyserr(FERROR, errno, "pack_smb_acl %s()", errfun);
 +	}
 +	sys_acl_free_acl(*smb_acl);
 +	return False;
++}
++
++static int find_matching_rsync_acl(SMB_ACL_TYPE_T type,
++				   const item_list *racl_list,
++				   const rsync_acl *racl)
++{
++	static int access_match = -1, default_match = -1;
++	int *match = type == SMB_ACL_TYPE_ACCESS ? &access_match : &default_match;
++	size_t count = racl_list->count;
++
++	/* If this is the first time through or we didn't match the last
++	 * time, then start at the end of the list, which should be the
++	 * best place to start hunting. */
++	if (*match == -1)
++		*match = racl_list->count - 1;
++	while (count--) {
++		rsync_acl *base = racl_list->items;
++		if (rsync_acls_equal(base + *match, racl))
++			return *match;
++		if (!(*match)--)
++			*match = racl_list->count - 1;
++	}
++
++	*match = -1;
++	return *match;
++}
++
++/* Turn the ACL data in statx into cached ACL data, setting the index
++ * values in the file struct. */
++void cache_acls(struct file_struct *file, statx *sxp)
++{
++	SMB_ACL_TYPE_T type;
++	rsync_acl *racl;
++	item_list *racl_list;
++	char *ndx_ptr;
++
++	if (!sxp->acc_acl)
++		return;
++
++	type = SMB_ACL_TYPE_ACCESS;
++	racl = sxp->acc_acl;
++	racl_list = &access_acl_list;
++	ndx_ptr = (char*)file + file_struct_len;
++	do {
++		int ndx = find_matching_rsync_acl(type, racl_list, racl);
++		if (ndx == -1) {
++			acl_duo *new_duo;
++			ndx = racl_list->count;
++			new_duo = EXPAND_ITEM_LIST(racl_list, acl_duo, 1);
++			new_duo->racl = *racl;
++			new_duo->sacl = NULL;
++			*racl = empty_rsync_acl;
++		} else
++			rsync_acl_free(racl);
++		SIVAL(ndx_ptr, 0, ndx);
++		racl = sxp->def_acl;
++		racl_list = &default_acl_list;
++		ndx_ptr += 4;
++	} while (BUMP_TYPE(type) && S_ISDIR(sxp->st.st_mode));
++}
++
++/* Return the ACL(s) for the given filename. */
++int get_acls(const char *fname, statx *sxp)
++{
++	SMB_ACL_TYPE_T type;
++
++	if (S_ISLNK(sxp->st.st_mode))
++		return 0;
++
++	type = SMB_ACL_TYPE_ACCESS;
++	do {
++		SMB_ACL_T sacl = sys_acl_get_file(fname, type);
++		rsync_acl *racl = new(rsync_acl);
++
++		if (!racl)
++			out_of_memory("get_acls");
++		if (type == SMB_ACL_TYPE_ACCESS)
++			sxp->acc_acl = racl;
++		else
++			sxp->def_acl = racl;
++
++		if (sacl) {
++			BOOL ok = unpack_smb_acl(racl, sacl);
++
++			sys_acl_free_acl(sacl);
++			if (!ok) {
++				free_acls(sxp);
++				return -1;
++			}
++		} else if (errno == ENOTSUP) {
++			/* ACLs are not supported, so pretend we have a basic ACL. */
++			*racl = empty_rsync_acl;
++			if (type == SMB_ACL_TYPE_ACCESS)
++				rsync_acl_fake_perms(racl, sxp->st.st_mode);
++		} else {
++			rsyserr(FERROR, errno, "get_acls: sys_acl_get_file(%s, %s)",
++				fname, str_acl_type(type));
++			free_acls(sxp);
++			return -1;
++		}
++	} while (BUMP_TYPE(type) && S_ISDIR(sxp->st.st_mode));
++
++	return 0;
++}
++
++/* === Send functions === */
++
++/* The general strategy with the tag_type <-> character mapping is that
++ * lowercase implies that no qualifier follows, where uppercase does.
++ * A similar idiom for the acl type (access or default) itself, but
++ * lowercase in this instance means there's no ACL following, so the
++ * ACL is a repeat, so the receiver should reuse the last of the same
++ * type ACL. */
++
++/* Send the ida list over the file descriptor. */
++static void send_ida_entries(int f, const ida_entries *idal, char tag_char)
++{
++	id_access *ida;
++	size_t count = idal->count;
++	for (ida = idal->idas; count--; ida++) {
++		write_byte(f, tag_char);
++		write_byte(f, ida->access);
++		write_int(f, ida->id);
++		/* FIXME: sorta wasteful: we should maybe buffer as
++		 * many ids as max(ACL_USER + ACL_GROUP) objects to
++		 * keep from making so many calls. */
++		if (tag_char == 'U')
++			add_uid(ida->id);
++		else
++			add_gid(ida->id);
++	}
++}
++
++/* Send an rsync acl over the file descriptor. */
++static void send_rsync_acl(int f, const rsync_acl *racl)
++{
++	size_t count = count_racl_entries(racl);
++	write_int(f, count);
++	if (racl->user_obj != NO_ENTRY) {
++		write_byte(f, 'u');
++		write_byte(f, racl->user_obj);
++	}
++	send_ida_entries(f, &racl->users, 'U');
++	if (racl->group_obj != NO_ENTRY) {
++		write_byte(f, 'g');
++		write_byte(f, racl->group_obj);
++	}
++	send_ida_entries(f, &racl->groups, 'G');
++	if (racl->mask != NO_ENTRY) {
++		write_byte(f, 'm');
++		write_byte(f, racl->mask);
++	}
++	if (racl->other != NO_ENTRY) {
++		write_byte(f, 'o');
++		write_byte(f, racl->other);
++	}
++}
++
++/* Send the ACLs from the statx structure down the indicated file descriptor.
++ * This also frees the ACL data. */
++void send_acls(statx *sxp, int f)
++{
++	SMB_ACL_TYPE_T type;
++	rsync_acl *racl, *new_racl;
++	item_list *racl_list;
++
++	if (S_ISLNK(sxp->st.st_mode))
++		return;
++
++	type = SMB_ACL_TYPE_ACCESS;
++	racl = sxp->acc_acl;
++	racl_list = &access_acl_list;
++	do {
++		int ndx;
++
++		/* Discard a superfluous mask. */
++		if (racl->mask != NO_ENTRY && !racl->users.count && !racl->groups.count)
++			racl->mask = NO_ENTRY;
++		/* Avoid sending values that can be inferred from other data,
++		 * but only when preserve_acls == 1 (it is 2 when we must be
++		 * backward compatible with older acls.diff versions). */
++		if (type == SMB_ACL_TYPE_ACCESS && preserve_acls == 1)
++			rsync_acl_strip_perms(racl);
++		if ((ndx = find_matching_rsync_acl(type, racl_list, racl)) != -1) {
++			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'a' : 'd');
++			write_int(f, ndx);
++			rsync_acl_free(racl);
++		} else {
++			new_racl = EXPAND_ITEM_LIST(racl_list, rsync_acl, 1);
++			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'A' : 'D');
++			send_rsync_acl(f, racl);
++			*new_racl = *racl;
++			*racl = empty_rsync_acl;
++		}
++		racl = sxp->def_acl;
++		racl_list = &default_acl_list;
++	} while (BUMP_TYPE(type) && S_ISDIR(sxp->st.st_mode));
++
++	free_acls(sxp);
++}
++
++/* === Receive functions === */
++
++static void receive_rsync_acl(rsync_acl *racl, int f, SMB_ACL_TYPE_T type)
++{
++	static item_list temp_ida_list = EMPTY_LIST;
++	SMB_ACL_TAG_T tag_type = 0, prior_list_type = 0;
++	uchar computed_mask_bits = 0;
++	id_access *ida;
++	size_t count;
++
++	*racl = empty_rsync_acl;
++
++	if (!(count = read_int(f)))
++		return;
++
++	while (count--) {
++		char tag = read_byte(f);
++		uchar access = read_byte(f);
++		if (access & ~ (4 | 2 | 1)) {
++			rprintf(FERROR, "receive_rsync_acl: bogus permset %o\n",
++				access);
++			exit_cleanup(RERR_STREAMIO);
++		}
++		switch (tag) {
++		case 'u':
++			if (racl->user_obj != NO_ENTRY) {
++				rprintf(FERROR, "receive_rsync_acl: error: duplicate USER_OBJ entry\n");
++				exit_cleanup(RERR_STREAMIO);
++			}
++			racl->user_obj = access;
++			continue;
++		case 'U':
++			tag_type = SMB_ACL_USER;
++			break;
++		case 'g':
++			if (racl->group_obj != NO_ENTRY) {
++				rprintf(FERROR, "receive_rsync_acl: error: duplicate GROUP_OBJ entry\n");
++				exit_cleanup(RERR_STREAMIO);
++			}
++			racl->group_obj = access;
++			continue;
++		case 'G':
++			tag_type = SMB_ACL_GROUP;
++			break;
++		case 'm':
++			if (racl->mask != NO_ENTRY) {
++				rprintf(FERROR, "receive_rsync_acl: error: duplicate MASK entry\n");
++				exit_cleanup(RERR_STREAMIO);
++			}
++			racl->mask = access;
++			continue;
++		case 'o':
++			if (racl->other != NO_ENTRY) {
++				rprintf(FERROR, "receive_rsync_acl: error: duplicate OTHER entry\n");
++				exit_cleanup(RERR_STREAMIO);
++			}
++			racl->other = access;
++			continue;
++		default:
++			rprintf(FERROR, "receive_rsync_acl: unknown tag %c\n",
++				tag);
++			exit_cleanup(RERR_STREAMIO);
++		}
++		if (tag_type != prior_list_type) {
++			if (prior_list_type)
++				save_idas(&temp_ida_list, racl, prior_list_type);
++			prior_list_type = tag_type;
++		}
++		ida = EXPAND_ITEM_LIST(&temp_ida_list, id_access, 0);
++		ida->access = access;
++		ida->id = read_int(f);
++		computed_mask_bits |= access;
++	}
++	if (prior_list_type)
++		save_idas(&temp_ida_list, racl, prior_list_type);
++
++	if (type == SMB_ACL_TYPE_DEFAULT) {
++		/* Ensure that these are never unset. */
++		if (racl->user_obj == NO_ENTRY)
++			racl->user_obj = 7;
++		if (racl->group_obj == NO_ENTRY)
++			racl->group_obj = 0;
++		if (racl->other == NO_ENTRY)
++			racl->other = 0;
++	}
++
++	if (!racl->users.count && !racl->groups.count) {
++		/* If we received a superfluous mask, throw it away. */
++		if (racl->mask != NO_ENTRY) {
++			/* Mask off the group perms with it first. */
++			racl->group_obj &= racl->mask | NO_ENTRY;
++			racl->mask = NO_ENTRY;
++		}
++	} else if (racl->mask == NO_ENTRY) /* Must be non-empty with lists. */
++		racl->mask = computed_mask_bits | (racl->group_obj & 7);
++}
++
++/* Receive the ACL info the sender has included for this file-list entry. */
++void receive_acl(struct file_struct *file, int f)
++{
++	SMB_ACL_TYPE_T type;
++	item_list *racl_list;
++	char *ndx_ptr;
++
++	if (S_ISLNK(file->mode))
++		return;
++
++	type = SMB_ACL_TYPE_ACCESS;
++	racl_list = &access_acl_list;
++	ndx_ptr = (char*)file + file_struct_len;
++	do {
++		char tag = read_byte(f);
++		int ndx;
++
++		if (tag == 'A' || tag == 'a') {
++			if (type != SMB_ACL_TYPE_ACCESS) {
++				rprintf(FERROR, "receive_acl %s: duplicate access ACL\n",
++					f_name(file, NULL));
++				exit_cleanup(RERR_STREAMIO);
++			}
++		} else if (tag == 'D' || tag == 'd') {
++			if (type == SMB_ACL_TYPE_ACCESS) {
++				rprintf(FERROR, "receive_acl %s: expecting access ACL; got default\n",
++					f_name(file, NULL));
++				exit_cleanup(RERR_STREAMIO);
++			}
++		} else {
++			rprintf(FERROR, "receive_acl %s: unknown ACL type tag: %c\n",
++				f_name(file, NULL), tag);
++			exit_cleanup(RERR_STREAMIO);
++		}
++		if (tag == 'A' || tag == 'D') {
++			acl_duo *duo_item;
++			ndx = racl_list->count;
++			duo_item = EXPAND_ITEM_LIST(racl_list, acl_duo, 1);
++			receive_rsync_acl(&duo_item->racl, f, type);
++			duo_item->sacl = NULL;
++		} else {
++			ndx = read_int(f);
++			if ((size_t)ndx >= racl_list->count) {
++				rprintf(FERROR, "receive_acl %s: %s ACL index %d out of range\n",
++					f_name(file, NULL), str_acl_type(type), ndx);
++				exit_cleanup(RERR_STREAMIO);
++			}
++		}
++		SIVAL(ndx_ptr, 0, ndx);
++		racl_list = &default_acl_list;
++		ndx_ptr += 4;
++	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
 +}
 +
 +static mode_t change_sacl_perms(SMB_ACL_T sacl, rsync_acl *racl, mode_t old_mode, mode_t mode)
@@ -772,14 +926,14 @@ TODO items:
 +			break;
 +		case SMB_ACL_GROUP_OBJ:
 +			/* group is only empty when identical to group perms. */
-+			if (racl->group_obj != ACL_NO_ENTRY)
++			if (racl->group_obj != NO_ENTRY)
 +				break;
 +			COE2( store_access_in_entry,((mode >> 3) & 7, entry) );
 +			break;
 +		case SMB_ACL_MASK:
 +#ifndef ACLS_NEED_MASK
 +			/* mask is only empty when we don't need it. */
-+			if (racl->mask == ACL_NO_ENTRY)
++			if (racl->mask == NO_ENTRY)
 +				break;
 +#endif
 +			COE2( store_access_in_entry,((mode >> 3) & 7, entry) );
@@ -792,8 +946,8 @@ TODO items:
 +	if (rc) {
 +	  error_exit:
 +		if (errfun) {
-+			rprintf(FERROR, "change_sacl_perms: %s(): %s\n",
-+				errfun, strerror(errno));
++			rsyserr(FERROR, errno, "change_sacl_perms: %s()",
++				errfun);
 +		}
 +		return ~0u;
 +	}
@@ -809,425 +963,73 @@ TODO items:
 +	return (old_mode & ~ACCESSPERMS) | (mode & ACCESSPERMS);
 +}
 +
-+static void receive_rsync_acl(rsync_acl *racl, int f, SMB_ACL_TYPE_T type)
-+{
-+	uchar computed_mask_bits = 0;
-+	ida_list *idal = NULL;
-+	id_access *ida;
-+	size_t count;
-+
-+	*racl = empty_rsync_acl;
-+
-+	if (!(count = read_int(f)))
-+		return;
-+
-+	while (count--) {
-+		char tag = read_byte(f);
-+		uchar access = read_byte(f);
-+		if (access & ~ (4 | 2 | 1)) {
-+			rprintf(FERROR, "receive_rsync_acl: bogus permset %o\n",
-+				access);
-+			exit_cleanup(RERR_STREAMIO);
-+		}
-+		switch (tag) {
-+		case 'u':
-+			if (racl->user_obj != ACL_NO_ENTRY) {
-+				rprintf(FERROR, "receive_rsync_acl: error: duplicate USER_OBJ entry\n");
-+				exit_cleanup(RERR_STREAMIO);
-+			}
-+			racl->user_obj = access;
-+			continue;
-+		case 'U':
-+			idal = &racl->users;
-+			break;
-+		case 'g':
-+			if (racl->group_obj != ACL_NO_ENTRY) {
-+				rprintf(FERROR, "receive_rsync_acl: error: duplicate GROUP_OBJ entry\n");
-+				exit_cleanup(RERR_STREAMIO);
-+			}
-+			racl->group_obj = access;
-+			continue;
-+		case 'G':
-+			idal = &racl->groups;
-+			break;
-+		case 'm':
-+			if (racl->mask != ACL_NO_ENTRY) {
-+				rprintf(FERROR, "receive_rsync_acl: error: duplicate MASK entry\n");
-+				exit_cleanup(RERR_STREAMIO);
-+			}
-+			racl->mask = access;
-+			continue;
-+		case 'o':
-+			if (racl->other != ACL_NO_ENTRY) {
-+				rprintf(FERROR, "receive_rsync_acl: error: duplicate OTHER entry\n");
-+				exit_cleanup(RERR_STREAMIO);
-+			}
-+			racl->other = access;
-+			continue;
-+		default:
-+			rprintf(FERROR, "receive_rsync_acl: unknown tag %c\n",
-+				tag);
-+			exit_cleanup(RERR_STREAMIO);
-+		}
-+		expand_ida_list(idal);
-+		ida = &idal->idas[idal->count++];
-+		ida->access = access;
-+		ida->id = read_int(f);
-+		computed_mask_bits |= access;
-+	}
-+
-+	if (type == SMB_ACL_TYPE_DEFAULT) {
-+		/* Ensure that these are never unset. */
-+		if (racl->user_obj == ACL_NO_ENTRY)
-+			racl->user_obj = 7;
-+		if (racl->group_obj == ACL_NO_ENTRY)
-+			racl->group_obj = 0;
-+		if (racl->other == ACL_NO_ENTRY)
-+			racl->other = 0;
-+	}
-+
-+	if (!racl->users.count && !racl->groups.count) {
-+		/* If we received a superfluous mask, throw it away. */
-+		if (racl->mask != ACL_NO_ENTRY) {
-+			/* Mask off the group perms with it first. */
-+			racl->group_obj &= racl->mask | ACL_NO_ENTRY;
-+			racl->mask = ACL_NO_ENTRY;
-+		}
-+	} else if (racl->mask == ACL_NO_ENTRY) /* Must be non-empty with lists. */
-+		racl->mask = computed_mask_bits | (racl->group_obj & 7);
-+}
-+
-+/* Receive and build the rsync_acl_lists. */
-+void receive_acl(struct file_struct *file, int f)
-+{
-+	SMB_ACL_TYPE_T type;
-+
-+	if (S_ISLNK(file->mode))
-+		return;
-+
-+	type = SMB_ACL_TYPE_ACCESS;
-+	do {
-+		char tag;
-+		file_acl_index_list *flst = file_acl_index_lists(type);
-+
-+		expand_file_acl_index_list(flst);
-+
-+		tag = read_byte(f);
-+		if (tag == 'A' || tag == 'a') {
-+			if (type != SMB_ACL_TYPE_ACCESS) {
-+				rprintf(FERROR, "receive_acl %s: duplicate access ACL\n",
-+					f_name(file, NULL));
-+				exit_cleanup(RERR_STREAMIO);
-+			}
-+		} else if (tag == 'D' || tag == 'd') {
-+			if (type == SMB_ACL_TYPE_ACCESS) {
-+				rprintf(FERROR, "receive_acl %s: expecting access ACL; got default\n",
-+					f_name(file, NULL));
-+				exit_cleanup(RERR_STREAMIO);
-+			}
-+		} else {
-+			rprintf(FERROR, "receive_acl %s: unknown ACL type tag: %c\n",
-+				f_name(file, NULL), tag);
-+			exit_cleanup(RERR_STREAMIO);
-+		}
-+		if (tag == 'A' || tag == 'D') {
-+			rsync_acl racl;
-+			rsync_acl_list *racl_list = rsync_acl_lists(type);
-+			smb_acl_list *sacl_list = smb_acl_lists(type);
-+			flst->fais[flst->count].aclidx = racl_list->count;
-+			flst->fais[flst->count++].file = file;
-+			receive_rsync_acl(&racl, f, type);
-+			expand_rsync_acl_list(racl_list);
-+			racl_list->racls[racl_list->count++] = racl;
-+			expand_smb_acl_list(sacl_list);
-+			sacl_list->sacls[sacl_list->count++] = NULL;
-+		} else {
-+			int index = read_int(f);
-+			rsync_acl_list *racl_list = rsync_acl_lists(type);
-+			if ((size_t) index >= racl_list->count) {
-+				rprintf(FERROR, "receive_acl %s: %s ACL index %d out of range\n",
-+					f_name(file, NULL),
-+					str_acl_type(type),
-+					index);
-+				exit_cleanup(RERR_STREAMIO);
-+			}
-+			flst->fais[flst->count].aclidx = index;
-+			flst->fais[flst->count++].file = file;
-+		}
-+	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
-+}
-+
-+static int file_acl_index_list_sorter(const void *f1, const void *f2)
-+{
-+	const file_acl_index *fx1 = (const file_acl_index *)f1;
-+	const file_acl_index *fx2 = (const file_acl_index *)f2;
-+	return fx1->file == fx2->file ? 0 : fx1->file < fx2->file ? -1 : 1;
-+}
-+
-+void sort_file_acl_index_lists()
-+{
-+	SMB_ACL_TYPE_T type;
-+
-+	type = SMB_ACL_TYPE_ACCESS;
-+	do {
-+		file_acl_index_list *flst = file_acl_index_lists(type);
-+
-+		if (!flst->count)
-+			continue;
-+
-+		qsort(flst->fais, flst->count, sizeof flst->fais[0],
-+		      &file_acl_index_list_sorter);
-+	} while (BUMP_TYPE(type));
-+}
-+
-+static int find_file_acl_index(const file_acl_index_list *flst,
-+			       const struct file_struct *file)
-+{
-+	int low = 0, high = flst->count;
-+	const struct file_struct *file_mid;
-+
-+	if (!high--)
-+		return -1;
-+	do {
-+		int mid = (high + low) / 2;
-+		file_mid = flst->fais[mid].file;
-+		if (file_mid == file)
-+			return flst->fais[mid].aclidx;
-+		if (file_mid > file)
-+			high = mid - 1;
-+		else
-+			low = mid + 1;
-+	} while (low < high);
-+	if (low == high) {
-+		file_mid = flst->fais[low].file;
-+		if (file_mid == file)
-+			return flst->fais[low].aclidx;
-+	}
-+	rprintf(FERROR,
-+		"find_file_acl_index: can't find entry for file in list\n");
-+	exit_cleanup(RERR_STREAMIO);
-+	return -1;
-+}
-+
-+/* for duplicating ACLs on backups when using backup_dir */
-+int dup_acl(const char *orig, const char *bak, mode_t mode)
-+{
-+	SMB_ACL_TYPE_T type;
-+	int ret = 0;
-+
-+	type = SMB_ACL_TYPE_ACCESS;
-+	do {
-+		SMB_ACL_T sacl_orig, sacl_bak;
-+		rsync_acl racl_orig, racl_bak;
-+		if (!(sacl_orig = sys_acl_get_file(orig, type))) {
-+			rprintf(FERROR, "dup_acl: sys_acl_get_file(%s, %s): %s\n",
-+				orig, str_acl_type(type), strerror(errno));
-+			ret = -1;
-+			continue;
-+		}
-+		if (!(sacl_bak = sys_acl_get_file(orig, type))) {
-+			rprintf(FERROR, "dup_acl: sys_acl_get_file(%s, %s): %s. ignoring\n",
-+				bak, str_acl_type(type), strerror(errno));
-+			ret = -1;
-+			/* try to forge on through */
-+		}
-+		if (!unpack_smb_acl(&racl_orig, sacl_orig)) {
-+			ret = -1;
-+			goto out_with_sacls;
-+		}
-+		if (sacl_bak) {
-+			if (!unpack_smb_acl(&racl_bak, sacl_bak)) {
-+				ret = -1;
-+				goto out_with_one_racl;
-+			}
-+			if (rsync_acls_equal(&racl_orig, &racl_bak))
-+				goto out_with_all;
-+		} else {
-+			; /* presume they're unequal */
-+		}
-+		if (type == SMB_ACL_TYPE_DEFAULT
-+		 && racl_orig.user_obj == ACL_NO_ENTRY) {
-+			if (sys_acl_delete_def_file(bak) < 0) {
-+				rprintf(FERROR, "dup_acl: sys_acl_delete_def_file(%s): %s\n",
-+					bak, strerror(errno));
-+				ret = -1;
-+			}
-+		} else if (sys_acl_set_file(bak, type, sacl_bak) < 0) {
-+			rprintf(FERROR, "dup_acl: sys_acl_set_file(%s, %s): %s\n",
-+				bak, str_acl_type(type), strerror(errno));
-+			ret = -1;
-+		}
-+	  out_with_all:
-+		if (sacl_bak)
-+			rsync_acl_free(&racl_bak);
-+	  out_with_one_racl:
-+		rsync_acl_free(&racl_orig);
-+	  out_with_sacls:
-+		if (sacl_bak)
-+			sys_acl_free_acl(sacl_bak);
-+		if (sacl_orig)
-+			sys_acl_free_acl(sacl_orig);
-+	} while (BUMP_TYPE(type) && S_ISDIR(mode));
-+
-+	return ret;
-+}
-+
-+/* Stuff for redirecting calls to set_acl() from set_file_attrs()
-+ * for keep_backup(). */
-+static const struct file_struct *backup_orig_file = NULL;
-+static const char null_string[] = "";
-+static const char *backup_orig_fname = null_string;
-+static const char *backup_dest_fname = null_string;
-+static SMB_ACL_T _backup_sacl[] = { NULL, NULL };
-+
-+void push_keep_backup_acl(const struct file_struct *file,
-+			  const char *orig, const char *dest)
-+{
-+	SMB_ACL_TYPE_T type;
-+	SMB_ACL_T *sacl;
-+
-+	backup_orig_file = file;
-+	backup_orig_fname = orig;
-+	backup_dest_fname = dest;
-+
-+	sacl = &_backup_sacl[0];
-+	type = SMB_ACL_TYPE_ACCESS;
-+	do {
-+		if (type == SMB_ACL_TYPE_DEFAULT && !S_ISDIR(file->mode)) {
-+			*sacl = NULL;
-+			break;
-+		}
-+		if (!(*sacl = sys_acl_get_file(orig, type))) {
-+			rprintf(FERROR,
-+				"push_keep_backup_acl: sys_acl_get_file(%s, %s): %s\n",
-+				orig, str_acl_type(type),
-+				strerror(errno));
-+		}
-+	} while (BUMP_TYPE(type));
-+}
-+
-+static int set_keep_backup_acl()
-+{
-+	SMB_ACL_TYPE_T type;
-+	SMB_ACL_T *sacl;
-+	int ret = 0;
-+
-+	sacl = &_backup_sacl[0];
-+	type = SMB_ACL_TYPE_ACCESS;
-+	do {
-+		if (*sacl
-+		 && sys_acl_set_file(backup_dest_fname, type, *sacl) < 0) {
-+			rprintf(FERROR,
-+				"push_keep_backup_acl: sys_acl_get_file(%s, %s): %s\n",
-+				backup_dest_fname,
-+				str_acl_type(type),
-+				strerror(errno));
-+			ret = -1;
-+		}
-+	} while (BUMP_TYPE(type));
-+
-+	return ret;
-+}
-+
-+void cleanup_keep_backup_acl()
-+{
-+	SMB_ACL_TYPE_T type;
-+	SMB_ACL_T *sacl;
-+
-+	backup_orig_file = NULL;
-+	backup_orig_fname = null_string;
-+	backup_dest_fname = null_string;
-+
-+	sacl = &_backup_sacl[0];
-+	type = SMB_ACL_TYPE_ACCESS;
-+	do {
-+		if (*sacl) {
-+			sys_acl_free_acl(*sacl);
-+			*sacl = NULL;
-+		}
-+	} while (BUMP_TYPE(type));
-+}
-+
-+/* set ACL on rsync-ed or keep_backup-ed file
++/* Set ACL on indicated filename.
 + *
 + * This sets extended access ACL entries and default ACLs.  If convenient,
 + * it sets permission bits along with the access ACLs and signals having
-+ * done so by modifying mode_p, which should point into the stat buffer.
++ * done so by modifying sxp->st.st_mode.
 + *
-+ * returns: 1 for unchanged, 0 for changed, -1 for failed
-+ * Pass NULL for mode_p to get the return code without changing anything. */
-+int set_acl(const char *fname, const struct file_struct *file, mode_t *mode_p)
++ * Returns 1 for unchanged, 0 for changed, -1 for failed.  Call this
++ * with fname set to NULL to just check if the ACLs are unchanged. */
++int set_acls(const char *fname, const struct file_struct *file, statx *sxp)
 +{
 +	int unchanged = 1;
 +	SMB_ACL_TYPE_T type;
++	char *ndx_ptr;
 +
 +	if (S_ISLNK(file->mode))
 +		return 1;
 +
-+	if (file == backup_orig_file) {
-+		if (!strcmp(fname, backup_dest_fname))
-+			return set_keep_backup_acl();
-+	}
 +	type = SMB_ACL_TYPE_ACCESS;
++	ndx_ptr = (char*)file + file_struct_len;
 +	do {
-+		BOOL ok;
-+		SMB_ACL_T sacl_orig, *sacl_new;
-+		rsync_acl racl_orig, *racl_new;
-+		int aclidx = find_file_acl_index(file_acl_index_lists(type), file);
++		acl_duo *duo_item;
++		BOOL eq;
++		int ndx = IVAL(ndx_ptr, 0);
 +
-+		racl_new = &(rsync_acl_lists(type)->racls[aclidx]);
-+		sacl_new = &(smb_acl_lists(type)->sacls[aclidx]);
-+		sacl_orig = sys_acl_get_file(fname, type);
-+		if (!sacl_orig) {
-+			rprintf(FERROR, "set_acl: sys_acl_get_file(%s, %s): %s\n",
-+				fname, str_acl_type(type), strerror(errno));
-+			unchanged = -1;
-+			continue;
++		ndx_ptr += 4;
++
++		if (type == SMB_ACL_TYPE_ACCESS) {
++			duo_item = access_acl_list.items;
++			duo_item += ndx;
++			eq = rsync_acls_equal_enough(sxp->acc_acl, &duo_item->racl, file->mode);
++		} else {
++			duo_item = default_acl_list.items;
++			duo_item += ndx;
++			eq = rsync_acls_equal(sxp->def_acl, &duo_item->racl);
 +		}
-+		ok = unpack_smb_acl(&racl_orig, sacl_orig);
-+		sys_acl_free_acl(sacl_orig);
-+		if (!ok) {
-+			unchanged = -1;
++		if (eq)
 +			continue;
-+		}
-+		if (type == SMB_ACL_TYPE_ACCESS)
-+			ok = rsync_acl_extended_parts_equal(&racl_orig, racl_new, file->mode);
-+		else
-+			ok = rsync_acls_equal(&racl_orig, racl_new);
-+		rsync_acl_free(&racl_orig);
-+		if (ok)
-+			continue;
-+		if (!dry_run && mode_p) {
++		if (!dry_run && fname) {
 +			if (type == SMB_ACL_TYPE_DEFAULT
-+			 && racl_new->user_obj == ACL_NO_ENTRY) {
++			 && duo_item->racl.user_obj == NO_ENTRY) {
 +				if (sys_acl_delete_def_file(fname) < 0) {
-+					rprintf(FERROR, "set_acl: sys_acl_delete_def_file(%s): %s\n",
-+						fname, strerror(errno));
++					rsyserr(FERROR, errno, "set_acl: sys_acl_delete_def_file(%s)",
++						fname);
 +					unchanged = -1;
 +					continue;
 +				}
 +			} else {
-+				mode_t cur_mode = *mode_p;
-+				if (!*sacl_new
-+				 && !pack_smb_acl(sacl_new, racl_new)) {
++				mode_t cur_mode = sxp->st.st_mode;
++				if (!duo_item->sacl
++				 && !pack_smb_acl(&duo_item->sacl, &duo_item->racl)) {
 +					unchanged = -1;
 +					continue;
 +				}
 +				if (type == SMB_ACL_TYPE_ACCESS) {
-+					cur_mode = change_sacl_perms(*sacl_new, racl_new,
++					cur_mode = change_sacl_perms(duo_item->sacl, &duo_item->racl,
 +								     cur_mode, file->mode);
 +					if (cur_mode == ~0u)
 +						continue;
 +				}
-+				if (sys_acl_set_file(fname, type, *sacl_new) < 0) {
-+					rprintf(FERROR, "set_acl: sys_acl_set_file(%s, %s): %s\n",
-+						fname, str_acl_type(type),
-+						strerror(errno));
++				if (sys_acl_set_file(fname, type, duo_item->sacl) < 0) {
++					rsyserr(FERROR, errno, "set_acl: sys_acl_set_file(%s, %s)",
++						fname, str_acl_type(type));
 +					unchanged = -1;
 +					continue;
 +				}
 +				if (type == SMB_ACL_TYPE_ACCESS)
-+					*mode_p = cur_mode;
++					sxp->st.st_mode = cur_mode;
 +			}
 +		}
 +		if (unchanged == 1)
@@ -1237,23 +1039,23 @@ TODO items:
 +	return unchanged;
 +}
 +
-+/* Enumeration functions for uid mapping: */
++/* === Enumeration functions for uid mapping === */
 +
 +/* Context -- one and only one.  Should be cycled through once on uid
 + * mapping and once on gid mapping. */
-+static rsync_acl_list *_enum_racl_lists[] = {
-+	&_rsync_acl_lists[0], &_rsync_acl_lists[1], NULL
++static item_list *_enum_racl_lists[] = {
++	&access_acl_list, &default_acl_list, NULL
 +};
 +
-+static rsync_acl_list **enum_racl_list = &_enum_racl_lists[0];
++static item_list **enum_racl_list = &_enum_racl_lists[0];
++static int enum_ida_index = 0;
 +static size_t enum_racl_index = 0;
-+static size_t enum_ida_index = 0;
 +
 +/* This returns the next tag_type id from the given acl for the next entry,
 + * or it returns 0 if there are no more tag_type ids in the acl. */
 +static id_t *next_ace_id(SMB_ACL_TAG_T tag_type, const rsync_acl *racl)
 +{
-+	const ida_list *idal = tag_type == SMB_ACL_USER ? &racl->users : &racl->groups;
++	const ida_entries *idal = tag_type == SMB_ACL_USER ? &racl->users : &racl->groups;
 +	if (enum_ida_index < idal->count) {
 +		id_access *ida = &idal->idas[enum_ida_index++];
 +		return &ida->id;
@@ -1262,12 +1064,13 @@ TODO items:
 +	return NULL;
 +}
 +
-+static id_t *next_acl_id(SMB_ACL_TAG_T tag_type, const rsync_acl_list *racl_list)
++static id_t *next_acl_id(SMB_ACL_TAG_T tag_type, const item_list *racl_list)
 +{
 +	for (; enum_racl_index < racl_list->count; enum_racl_index++) {
-+		rsync_acl *racl = &racl_list->racls[enum_racl_index];
-+		id_t *id = next_ace_id(tag_type, racl);
-+		if (id)
++		id_t *id;
++		acl_duo *duo_item = racl_list->items;
++		duo_item += enum_racl_index;
++		if ((id = next_ace_id(tag_type, &duo_item->racl)) != NULL)
 +			return id;
 +	}
 +	enum_racl_index = 0;
@@ -1295,6 +1098,7 @@ TODO items:
 +	return next_acl_list_id(SMB_ACL_GROUP);
 +}
 +
++/* This is used by dest_mode(). */
 +int default_perms_for_dir(const char *dir)
 +{
 +	rsync_acl racl;
@@ -1336,7 +1140,7 @@ TODO items:
 +	}
 +
 +	/* Apply the permission-bit entries of the default ACL, if any. */
-+	if (racl.user_obj != ACL_NO_ENTRY) {
++	if (racl.user_obj != NO_ENTRY) {
 +		perms = rsync_acl_get_perms(&racl);
 +		if (verbose > 2)
 +			rprintf(FINFO, "got ACL-based default perms %o for directory %s\n", perms, dir);
@@ -1357,40 +1161,88 @@ TODO items:
  extern int preserve_devices;
  extern int preserve_specials;
  extern int preserve_links;
-@@ -133,6 +134,10 @@ static int make_bak_dir(char *fullpath)
+@@ -94,7 +95,8 @@ path
+ ****************************************************************************/
+ static int make_bak_dir(char *fullpath)
+ {
+-	STRUCT_STAT st;
++	statx sx;
++	struct file_struct *file;
+ 	char *rel = fullpath + backup_dir_len;
+ 	char *end = rel + strlen(rel);
+ 	char *p = end;
+@@ -126,13 +128,24 @@ static int make_bak_dir(char *fullpath)
+ 		if (p >= rel) {
+ 			/* Try to transfer the directory settings of the
+ 			 * actual dir that the files are coming from. */
+-			if (do_stat(rel, &st) < 0) {
++			if (do_stat(rel, &sx.st) < 0) {
+ 				rsyserr(FERROR, errno,
+ 					"make_bak_dir stat %s failed",
+ 					full_fname(rel));
  			} else {
- 				do_lchown(fullpath, st.st_uid, st.st_gid);
- 				do_chmod(fullpath, st.st_mode);
+-				do_lchown(fullpath, st.st_uid, st.st_gid);
+-				do_chmod(fullpath, st.st_mode);
 +#ifdef SUPPORT_ACLS
-+				if (preserve_acls)
-+					dup_acl(end, fullpath, st.st_mode);
++				sx.acc_acl = sx.def_acl = NULL;
 +#endif
++				if (!(file = make_file(rel, NULL, NULL, 0, NO_FILTERS)))
++					continue;
++#ifdef SUPPORT_ACLS
++				if (preserve_acls) {
++					get_acls(rel, &sx);
++					cache_acls(file, &sx);
++				}
++#endif
++				set_file_attrs(fullpath, file, NULL, 0);
++				free(file);
  			}
  		}
  		*p = '/';
-@@ -186,6 +191,11 @@ static int keep_backup(char *fname)
+@@ -170,15 +183,18 @@ static int robust_move(char *src, char *
+  * We will move the file to be deleted into a parallel directory tree. */
+ static int keep_backup(char *fname)
+ {
+-	STRUCT_STAT st;
++	statx sx;
+ 	struct file_struct *file;
+ 	char *buf;
+ 	int kept = 0;
+ 	int ret_code;
+ 
+ 	/* return if no file to keep */
+-	if (do_lstat(fname, &st) < 0)
++	if (do_lstat(fname, &sx.st) < 0)
+ 		return 1;
++#ifdef SUPPORT_ACLS
++	sx.acc_acl = sx.def_acl = NULL;
++#endif
+ 
+ 	if (!(file = make_file(fname, NULL, NULL, 0, NO_FILTERS)))
+ 		return 1; /* the file could have disappeared */
+@@ -186,6 +202,13 @@ static int keep_backup(char *fname)
  	if (!(buf = get_backup_name(fname)))
  		return 0;
  
 +#ifdef SUPPORT_ACLS
-+	if (preserve_acls)
-+		push_keep_backup_acl(file, fname, buf);
++	if (preserve_acls) {
++		get_acls(fname, &sx);
++		cache_acls(file, &sx);
++	}
 +#endif
 +
  	/* Check to see if this is a device file, or link */
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
  	 || (preserve_specials && IS_SPECIAL(file->mode))) {
-@@ -261,6 +271,10 @@ static int keep_backup(char *fname)
- 		}
- 	}
- 	set_file_attrs(buf, file, NULL, 0);
-+#ifdef SUPPORT_ACLS
-+	if (preserve_acls)
-+		cleanup_keep_backup_acl();
-+#endif
- 	free(file);
- 
- 	if (verbose > 1) {
+@@ -254,7 +277,7 @@ static int keep_backup(char *fname)
+ 		if (robust_move(fname, buf) != 0) {
+ 			rsyserr(FERROR, errno, "keep_backup failed: %s -> \"%s\"",
+ 				full_fname(fname), buf);
+-		} else if (st.st_nlink > 1) {
++		} else if (sx.st.st_nlink > 1) {
+ 			/* If someone has hard-linked the file into the backup
+ 			 * dir, rename() might return success but do nothing! */
+ 			robust_unlink(fname); /* Just in case... */
 --- old/configure.in
 +++ new/configure.in
 @@ -482,6 +482,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
@@ -1494,62 +1346,159 @@ TODO items:
  extern int preserve_links;
  extern int preserve_hard_links;
  extern int preserve_devices;
-@@ -961,6 +962,11 @@ static struct file_struct *send_file_nam
+@@ -133,6 +134,8 @@ static void list_file_entry(struct file_
+ 
+ 	permstring(permbuf, f->mode);
+ 
++	/* TODO: indicate '+' if the entry has ACLs. */
++
+ #ifdef SUPPORT_LINKS
+ 	if (preserve_links && S_ISLNK(f->mode)) {
+ 		rprintf(FINFO, "%s %11.0f %s %s -> %s\n",
+@@ -499,6 +502,9 @@ static struct file_struct *receive_file_
+ 	char thisname[MAXPATHLEN];
+ 	unsigned int l1 = 0, l2 = 0;
+ 	int alloc_len, basename_len, dirname_len, linkname_len, sum_len;
++#ifdef SUPPORT_ACLS
++	int acl_len;
++#endif
+ 	OFF_T file_length;
+ 	char *basename, *dirname, *bp;
+ 	struct file_struct *file;
+@@ -602,13 +608,27 @@ static struct file_struct *receive_file_
+ 
+ 	sum_len = always_checksum && S_ISREG(mode) ? MD4_SUM_LENGTH : 0;
+ 
++#ifdef SUPPORT_ACLS
++	/* We need one or two index int32s when we're preserving ACLs. */
++	if (preserve_acls)
++		acl_len = (S_ISDIR(mode) ? 2 : 1) * sizeof (int32);
++	else
++		acl_len = 0;
++#endif
++
+ 	alloc_len = file_struct_len + dirname_len + basename_len
++#ifdef SUPPORT_ACLS
++		  + acl_len
++#endif
+ 		  + linkname_len + sum_len;
+ 	bp = pool_alloc(flist->file_pool, alloc_len, "receive_file_entry");
+ 
+ 	file = (struct file_struct *)bp;
+ 	memset(bp, 0, file_struct_len);
+ 	bp += file_struct_len;
++#ifdef SUPPORT_ACLS
++	bp += acl_len;
++#endif
+ 
+ 	file->modtime = modtime;
+ 	file->length = file_length;
+@@ -703,6 +723,11 @@ static struct file_struct *receive_file_
+ 		read_buf(f, sum, checksum_len);
+ 	}
+ 
++#ifdef SUPPORT_ACLS
++	if (preserve_acls)
++		receive_acl(file, f);
++#endif
++
+ 	return file;
+ }
+ 
+@@ -733,6 +758,9 @@ struct file_struct *make_file(char *fnam
+ 	char thisname[MAXPATHLEN];
+ 	char linkname[MAXPATHLEN];
+ 	int alloc_len, basename_len, dirname_len, linkname_len, sum_len;
++#ifdef SUPPORT_ACLS
++	int acl_len;
++#endif
+ 	char *basename, *dirname, *bp;
+ 
+ 	if (!flist || !flist->count)	/* Ignore lastdir when invalid. */
+@@ -848,8 +876,19 @@ struct file_struct *make_file(char *fnam
+ 	sum_len = always_checksum && am_sender && S_ISREG(st.st_mode)
+ 	        ? MD4_SUM_LENGTH : 0;
+ 
++#ifdef SUPPORT_ACLS
++	/* We need one or two index int32s when we're preserving ACLs. */
++	if (preserve_acls)
++		acl_len = (S_ISDIR(st.st_mode) ? 2 : 1) * sizeof (int32);
++	else
++		acl_len = 0;
++#endif
++
+ 	alloc_len = file_struct_len + dirname_len + basename_len
+-	    + linkname_len + sum_len;
++#ifdef SUPPORT_ACLS
++		  + acl_len
++#endif
++		  + linkname_len + sum_len;
+ 	if (flist)
+ 		bp = pool_alloc(flist->file_pool, alloc_len, "make_file");
+ 	else {
+@@ -860,6 +899,9 @@ struct file_struct *make_file(char *fnam
+ 	file = (struct file_struct *)bp;
+ 	memset(bp, 0, file_struct_len);
+ 	bp += file_struct_len;
++#ifdef SUPPORT_ACLS
++	bp += acl_len;
++#endif
+ 
+ 	file->flags = flags;
+ 	file->modtime = st.st_mtime;
+@@ -952,6 +994,9 @@ static struct file_struct *send_file_nam
+ 					  unsigned short flags)
+ {
+ 	struct file_struct *file;
++#ifdef SUPPORT_ACLS
++	statx sx;
++#endif
+ 
+ 	file = make_file(fname, flist, stp, flags,
+ 			 f == -2 ? SERVER_FILTERS : ALL_FILTERS);
+@@ -961,6 +1006,15 @@ static struct file_struct *send_file_nam
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
  
 +#ifdef SUPPORT_ACLS
-+	if (preserve_acls && make_acl(file, fname) < 0)
-+		return NULL;
++	if (preserve_acls) {
++		sx.st.st_mode = file->mode;
++		sx.acc_acl = sx.def_acl = NULL;
++		if (get_acls(fname, &sx) < 0)
++			return NULL;
++	}
 +#endif
 +
  	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
  	flist_expand(flist);
-@@ -968,6 +974,16 @@ static struct file_struct *send_file_nam
+@@ -968,6 +1022,15 @@ static struct file_struct *send_file_nam
  	if (file->basename[0]) {
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f);
 +#ifdef SUPPORT_ACLS
 +		if (preserve_acls)
-+			send_acl(file, f);
++			send_acls(&sx, f);
 +#endif
 +	} else {
 +#ifdef SUPPORT_ACLS
-+		/* Cleanup unsent ACL(s). */
 +		if (preserve_acls)
-+			send_acl(file, -1);
++			free_acls(&sx);
 +#endif
  	}
  	return file;
  }
-@@ -1356,6 +1372,11 @@ struct file_list *recv_file_list(int f)
- 			flags |= read_byte(f) << 8;
- 		file = receive_file_entry(flist, flags, f);
- 
-+#ifdef SUPPORT_ACLS
-+		if (preserve_acls)
-+			receive_acl(file, f);
-+#endif
-+
- 		if (S_ISREG(file->mode) || S_ISLNK(file->mode))
- 			stats.total_size += file->length;
- 
-@@ -1378,6 +1399,11 @@ struct file_list *recv_file_list(int f)
- 
- 	clean_flist(flist, relative_paths, 1);
- 
-+#ifdef SUPPORT_ACLS
-+	if (preserve_acls)
-+		sort_file_acl_index_lists();
-+#endif
-+
- 	if (f >= 0) {
- 		recv_uid_list(f, flist);
- 
 --- old/generator.c
 +++ new/generator.c
-@@ -85,6 +85,7 @@ extern long block_size; /* "long" becaus
+@@ -36,6 +36,7 @@ extern int recurse;
+ extern int relative_paths;
+ extern int implied_dirs;
+ extern int keep_dirlinks;
++extern int preserve_acls;
+ extern int preserve_links;
+ extern int preserve_devices;
+ extern int preserve_specials;
+@@ -85,6 +86,7 @@ extern long block_size; /* "long" becaus
  extern int max_delete;
  extern int force_delete;
  extern int one_file_system;
@@ -1557,24 +1506,211 @@ TODO items:
  extern struct stats stats;
  extern dev_t filesystem_dev;
  extern char *backup_dir;
-@@ -319,6 +320,8 @@ static void do_delete_pass(struct file_l
+@@ -317,22 +319,27 @@ static void do_delete_pass(struct file_l
+ 		rprintf(FINFO, "                    \r");
+ }
  
- int unchanged_attrs(struct file_struct *file, STRUCT_STAT *st)
+-int unchanged_attrs(struct file_struct *file, STRUCT_STAT *st)
++int unchanged_attrs(struct file_struct *file, statx *sxp)
  {
-+	/* FIXME: Flag ACL changes. */
-+
  	if (preserve_perms
- 	 && (st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS))
+-	 && (st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS))
++	 && (sxp->st.st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS))
  		return 0;
-@@ -353,6 +356,7 @@ void itemize(struct file_struct *file, i
+ 
+-	if (am_root && preserve_uid && st->st_uid != file->uid)
++	if (am_root && preserve_uid && sxp->st.st_uid != file->uid)
+ 		return 0;
+ 
+-	if (preserve_gid && file->gid != GID_NONE && st->st_gid != file->gid)
++	if (preserve_gid && file->gid != GID_NONE && sxp->st.st_gid != file->gid)
+ 		return 0;
+ 
++#ifdef SUPPORT_ACLS
++	if (preserve_acls && set_acls(NULL, file, sxp) == 0)
++		return 0;
++#endif
++
+ 	return 1;
+ }
+ 
+-void itemize(struct file_struct *file, int ndx, int statret, STRUCT_STAT *st,
++void itemize(struct file_struct *file, int ndx, int statret, statx *sxp,
+ 	     int32 iflags, uchar fnamecmp_type, char *xname)
+ {
+ 	if (statret >= 0) { /* A from-dest-dir statret can == 1! */
+@@ -340,19 +347,23 @@ void itemize(struct file_struct *file, i
+ 		    : S_ISDIR(file->mode) ? !omit_dir_times
+ 		    : !S_ISLNK(file->mode);
+ 
+-		if (S_ISREG(file->mode) && file->length != st->st_size)
++		if (S_ISREG(file->mode) && file->length != sxp->st.st_size)
+ 			iflags |= ITEM_REPORT_SIZE;
+ 		if ((iflags & (ITEM_TRANSFER|ITEM_LOCAL_CHANGE) && !keep_time
+ 		     && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
+-		    || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
++		    || (keep_time && cmp_time(file->modtime, sxp->st.st_mtime) != 0))
+ 			iflags |= ITEM_REPORT_TIME;
+-		if ((file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
++		if ((file->mode & CHMOD_BITS) != (sxp->st.st_mode & CHMOD_BITS))
+ 			iflags |= ITEM_REPORT_PERMS;
+-		if (preserve_uid && am_root && file->uid != st->st_uid)
++		if (preserve_uid && am_root && file->uid != sxp->st.st_uid)
+ 			iflags |= ITEM_REPORT_OWNER;
  		if (preserve_gid && file->gid != GID_NONE
- 		    && st->st_gid != file->gid)
+-		    && st->st_gid != file->gid)
++		    && sxp->st.st_gid != file->gid)
  			iflags |= ITEM_REPORT_GROUP;
-+		/* FIXME: Itemize ACL changes.  ITEM_REPORT_XATTR? */
++#ifdef SUPPORT_ACLS
++		if (preserve_acls && set_acls(NULL, file, sxp) == 0)
++			iflags |= ITEM_REPORT_ACL;
++#endif
  	} else
  		iflags |= ITEM_IS_NEW;
  
-@@ -769,6 +773,7 @@ static int try_dests_non(struct file_str
+@@ -603,7 +614,7 @@ void check_for_finished_hlinks(int itemi
+  * handling the file, -1 if no dest-linking occurred, or a non-negative
+  * value if we found an alternate basis file. */
+ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+-			 char *cmpbuf, STRUCT_STAT *stp, int itemizing,
++			 char *cmpbuf, statx *sxp, int itemizing,
+ 			 int maybe_ATTRS_REPORT, enum logcode code)
+ {
+ 	int best_match = -1;
+@@ -612,7 +623,7 @@ static int try_dests_reg(struct file_str
+ 
+ 	do {
+ 		pathjoin(cmpbuf, MAXPATHLEN, basis_dir[j], fname);
+-		if (link_stat(cmpbuf, stp, 0) < 0 || !S_ISREG(stp->st_mode))
++		if (link_stat(cmpbuf, &sxp->st, 0) < 0 || !S_ISREG(sxp->st.st_mode))
+ 			continue;
+ 		switch (match_level) {
+ 		case 0:
+@@ -620,16 +631,20 @@ static int try_dests_reg(struct file_str
+ 			match_level = 1;
+ 			/* FALL THROUGH */
+ 		case 1:
+-			if (!unchanged_file(cmpbuf, file, stp))
++			if (!unchanged_file(cmpbuf, file, &sxp->st))
+ 				continue;
+ 			best_match = j;
+ 			match_level = 2;
+ 			/* FALL THROUGH */
+ 		case 2:
+-			if (!unchanged_attrs(file, stp))
++#ifdef SUPPORT_ACLS
++			if (preserve_acls)
++				get_acls(cmpbuf, sxp);
++#endif
++			if (!unchanged_attrs(file, sxp))
+ 				continue;
+ 			if ((always_checksum || ignore_times)
+-			 && cmp_time(stp->st_mtime, file->modtime))
++			 && cmp_time(sxp->st.st_mtime, file->modtime))
+ 				continue;
+ 			best_match = j;
+ 			match_level = 3;
+@@ -644,22 +659,27 @@ static int try_dests_reg(struct file_str
+ 	if (j != best_match) {
+ 		j = best_match;
+ 		pathjoin(cmpbuf, MAXPATHLEN, basis_dir[j], fname);
+-		if (link_stat(cmpbuf, stp, 0) < 0)
++		if (link_stat(cmpbuf, &sxp->st, 0) < 0)
+ 			match_level = 0;
+ 	}
+ 
+ #ifdef HAVE_LINK
+ 	if (match_level == 3 && !copy_dest) {
+ 		if (link_dest) {
+-			if (hard_link_one(file, ndx, fname, 0, stp,
++			if (hard_link_one(file, ndx, fname, 0, sxp,
+ 					  cmpbuf, 1,
+ 					  itemizing && verbose > 1,
+ 					  code) < 0)
+ 				goto try_a_copy;
+ 			if (preserve_hard_links && file->link_u.links)
+ 				hard_link_cluster(file, ndx, itemizing, code);
+-		} else if (itemizing)
+-			itemize(file, ndx, 0, stp, 0, 0, NULL);
++		} else if (itemizing) {
++#ifdef SUPPORT_ACLS
++			if (preserve_acls && !ACL_READY(*sxp))
++				get_acls(fname, sxp);
++#endif
++			itemize(file, ndx, 0, sxp, 0, 0, NULL);
++		}
+ 		if (verbose > 1 && maybe_ATTRS_REPORT) {
+ 			code = daemon_log_format_has_i || dry_run
+ 			     ? FCLIENT : FINFO;
+@@ -678,8 +698,13 @@ static int try_dests_reg(struct file_str
+ 			}
+ 			return -1;
+ 		}
+-		if (itemizing)
+-			itemize(file, ndx, 0, stp, ITEM_LOCAL_CHANGE, 0, NULL);
++		if (itemizing) {
++#ifdef SUPPORT_ACLS
++			if (preserve_acls && !ACL_READY(*sxp))
++				get_acls(fname, sxp);
++#endif
++			itemize(file, ndx, 0, sxp, ITEM_LOCAL_CHANGE, 0, NULL);
++		}
+ 		set_file_attrs(fname, file, NULL, 0);
+ 		if (maybe_ATTRS_REPORT
+ 		 && ((!itemizing && verbose && match_level == 2)
+@@ -704,13 +729,18 @@ static int try_dests_non(struct file_str
+ 			 enum logcode code)
+ {
+ 	char fnamebuf[MAXPATHLEN];
+-	STRUCT_STAT st;
++	statx sx;
+ 	int i = 0;
+ 
+ 	do {
+ 		pathjoin(fnamebuf, MAXPATHLEN, basis_dir[i], fname);
+-		if (link_stat(fnamebuf, &st, 0) < 0 || S_ISDIR(st.st_mode)
+-		 || !unchanged_attrs(file, &st))
++		if (link_stat(fnamebuf, &sx.st, 0) < 0 || S_ISDIR(sx.st.st_mode))
++			continue;
++#ifdef SUPPORT_ACLS
++		if (preserve_acls)
++			get_acls(fnamebuf, &sx);
++#endif
++		if (!unchanged_attrs(file, &sx))
+ 			continue;
+ 		if (S_ISLNK(file->mode)) {
+ #ifdef SUPPORT_LINKS
+@@ -723,10 +753,10 @@ static int try_dests_non(struct file_str
+ #endif
+ 				continue;
+ 		} else if (IS_SPECIAL(file->mode)) {
+-			if (!IS_SPECIAL(st.st_mode) || st.st_rdev != file->u.rdev)
++			if (!IS_SPECIAL(sx.st.st_mode) || sx.st.st_rdev != file->u.rdev)
+ 				continue;
+ 		} else if (IS_DEVICE(file->mode)) {
+-			if (!IS_DEVICE(st.st_mode) || st.st_rdev != file->u.rdev)
++			if (!IS_DEVICE(sx.st.st_mode) || sx.st.st_rdev != file->u.rdev)
+ 				continue;
+ 		} else {
+ 			rprintf(FERROR,
+@@ -755,7 +785,15 @@ static int try_dests_non(struct file_str
+ 			int changes = compare_dest ? 0 : ITEM_LOCAL_CHANGE
+ 				    + (link_dest ? ITEM_XNAME_FOLLOWS : 0);
+ 			char *lp = link_dest ? "" : NULL;
+-			itemize(file, ndx, 0, &st, changes, 0, lp);
++#ifdef SUPPORT_ACLS
++			if (preserve_acls)
++				get_acls(fname, &sx);
++#endif
++			itemize(file, ndx, 0, &sx, changes, 0, lp);
++#ifdef SUPPORT_ACLS
++			if (preserve_acls)
++				free_acls(&sx);
++#endif
+ 		}
+ 		if (verbose > 1 && maybe_ATTRS_REPORT) {
+ 			code = daemon_log_format_has_i || dry_run
+@@ -769,6 +807,7 @@ static int try_dests_non(struct file_str
  }
  
  static int phase = 0;
@@ -1582,7 +1718,36 @@ TODO items:
  
  /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
   * make sure it exists, and has the right permissions/timestamp info.  For
-@@ -860,6 +865,10 @@ static void recv_generator(char *fname, 
+@@ -790,7 +829,8 @@ static void recv_generator(char *fname, 
+ 	static int need_fuzzy_dirlist = 0;
+ 	struct file_struct *fuzzy_file = NULL;
+ 	int fd = -1, f_copy = -1;
+-	STRUCT_STAT st, real_st, partial_st;
++	statx sx, real_sx;
++	STRUCT_STAT partial_st;
+ 	struct file_struct *back_file = NULL;
+ 	int statret, real_ret, stat_errno;
+ 	char *fnamecmp, *partialptr, *backupptr = NULL;
+@@ -841,6 +881,9 @@ static void recv_generator(char *fname, 
+ 		dry_run--;
+ 		missing_below = -1;
+ 	}
++#ifdef SUPPORT_ACLS
++	sx.acc_acl = sx.def_acl = NULL;
++#endif
+ 	if (dry_run > 1) {
+ 		statret = -1;
+ 		stat_errno = ENOENT;
+@@ -848,7 +891,7 @@ static void recv_generator(char *fname, 
+ 		char *dn = file->dirname ? file->dirname : ".";
+ 		if (parent_dirname != dn && strcmp(parent_dirname, dn) != 0) {
+ 			if (relative_paths && !implied_dirs
+-			 && do_stat(dn, &st) < 0
++			 && do_stat(dn, &sx.st) < 0
+ 			 && create_directory_path(fname) < 0) {
+ 				rsyserr(FERROR, errno,
+ 					"recv_generator: mkdir %s failed",
+@@ -860,6 +903,10 @@ static void recv_generator(char *fname, 
  			}
  			if (fuzzy_basis)
  				need_fuzzy_dirlist = 1;
@@ -1593,17 +1758,398 @@ TODO items:
  		}
  		parent_dirname = dn;
  
-@@ -887,7 +896,8 @@ static void recv_generator(char *fname, 
+@@ -868,7 +915,7 @@ static void recv_generator(char *fname, 
+ 			need_fuzzy_dirlist = 0;
+ 		}
+ 
+-		statret = link_stat(fname, &st,
++		statret = link_stat(fname, &sx.st,
+ 				    keep_dirlinks && S_ISDIR(file->mode));
+ 		stat_errno = errno;
+ 	}
+@@ -886,8 +933,9 @@ static void recv_generator(char *fname, 
+ 	 * mode based on the local permissions and some heuristics. */
  	if (!preserve_perms) {
  		int exists = statret == 0
- 			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
+-			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
 -		file->mode = dest_mode(file->mode, st.st_mode, exists);
-+		file->mode = dest_mode(file->mode, st.st_mode, dflt_perms,
++			  && S_ISDIR(sx.st.st_mode) == S_ISDIR(file->mode);
++		file->mode = dest_mode(file->mode, sx.st.st_mode, dflt_perms,
 +				       exists);
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -1366,6 +1376,8 @@ void generate_files(int f_out, struct fi
+@@ -896,8 +944,8 @@ static void recv_generator(char *fname, 
+ 		 * file of that name and it is *not* a directory, then
+ 		 * we need to delete it.  If it doesn't exist, then
+ 		 * (perhaps recursively) create it. */
+-		if (statret == 0 && !S_ISDIR(st.st_mode)) {
+-			if (delete_item(fname, st.st_mode, del_opts) < 0)
++		if (statret == 0 && !S_ISDIR(sx.st.st_mode)) {
++			if (delete_item(fname, sx.st.st_mode, del_opts) < 0)
+ 				return;
+ 			statret = -1;
+ 		}
+@@ -906,7 +954,11 @@ static void recv_generator(char *fname, 
+ 			dry_run++;
+ 		}
+ 		if (itemizing && f_out != -1) {
+-			itemize(file, ndx, statret, &st,
++#ifdef SUPPORT_ACLS
++			if (preserve_acls && statret == 0)
++				get_acls(fname, &sx);
++#endif
++			itemize(file, ndx, statret, &sx,
+ 				statret ? ITEM_LOCAL_CHANGE : 0, 0, NULL);
+ 		}
+ 		if (statret != 0 && do_mkdir(fname,file->mode) < 0 && errno != EEXIST) {
+@@ -918,19 +970,19 @@ static void recv_generator(char *fname, 
+ 					full_fname(fname));
+ 			}
+ 		}
+-		if (set_file_attrs(fname, file, statret ? NULL : &st, 0)
++		if (set_file_attrs(fname, file, statret ? NULL : &sx, 0)
+ 		    && verbose && code && f_out != -1)
+ 			rprintf(code, "%s/\n", fname);
+ 		if (delete_during && f_out != -1 && !phase && dry_run < 2
+ 		    && (file->flags & FLAG_DEL_HERE))
+-			delete_in_dir(the_file_list, fname, file, &st);
+-		return;
++			delete_in_dir(the_file_list, fname, file, &sx.st);
++		goto cleanup;
+ 	}
+ 
+ 	if (preserve_hard_links && file->link_u.links
+-	    && hard_link_check(file, ndx, fname, statret, &st,
++	    && hard_link_check(file, ndx, fname, statret, &sx,
+ 			       itemizing, code, HL_CHECK_MASTER))
+-		return;
++		goto cleanup;
+ 
+ 	if (preserve_links && S_ISLNK(file->mode)) {
+ #ifdef SUPPORT_LINKS
+@@ -948,7 +1000,7 @@ static void recv_generator(char *fname, 
+ 			char lnk[MAXPATHLEN];
+ 			int len;
+ 
+-			if (!S_ISDIR(st.st_mode)
++			if (!S_ISDIR(sx.st.st_mode)
+ 			    && (len = readlink(fname, lnk, MAXPATHLEN-1)) > 0) {
+ 				lnk[len] = 0;
+ 				/* A link already pointing to the
+@@ -956,10 +1008,10 @@ static void recv_generator(char *fname, 
+ 				 * required. */
+ 				if (strcmp(lnk, file->u.link) == 0) {
+ 					if (itemizing) {
+-						itemize(file, ndx, 0, &st, 0,
++						itemize(file, ndx, 0, &sx, 0,
+ 							0, NULL);
+ 					}
+-					set_file_attrs(fname, file, &st,
++					set_file_attrs(fname, file, &sx,
+ 						       maybe_ATTRS_REPORT);
+ 					if (preserve_hard_links
+ 					    && file->link_u.links) {
+@@ -972,9 +1024,9 @@ static void recv_generator(char *fname, 
+ 			}
+ 			/* Not the right symlink (or not a symlink), so
+ 			 * delete it. */
+-			if (delete_item(fname, st.st_mode, del_opts) < 0)
++			if (delete_item(fname, sx.st.st_mode, del_opts) < 0)
+ 				return;
+-			if (!S_ISLNK(st.st_mode))
++			if (!S_ISLNK(sx.st.st_mode))
+ 				statret = -1;
+ 		} else if (basis_dir[0] != NULL) {
+ 			if (try_dests_non(file, fname, ndx, itemizing,
+@@ -990,7 +1042,7 @@ static void recv_generator(char *fname, 
+ 			}
+ 		}
+ 		if (preserve_hard_links && file->link_u.links
+-		    && hard_link_check(file, ndx, fname, -1, &st,
++		    && hard_link_check(file, ndx, fname, -1, &sx,
+ 				       itemizing, code, HL_SKIP))
+ 			return;
+ 		if (do_symlink(file->u.link,fname) != 0) {
+@@ -999,7 +1051,7 @@ static void recv_generator(char *fname, 
+ 		} else {
+ 			set_file_attrs(fname, file, NULL, 0);
+ 			if (itemizing) {
+-				itemize(file, ndx, statret, &st,
++				itemize(file, ndx, statret, &sx,
+ 					ITEM_LOCAL_CHANGE, 0, NULL);
+ 			}
+ 			if (code && verbose) {
+@@ -1033,18 +1085,22 @@ static void recv_generator(char *fname, 
+ 				itemizing = code = 0;
+ 			}
+ 		}
++#ifdef SUPPORT_ACLS
++		if (preserve_acls && statret == 0)
++			get_acls(fname, &sx);
++#endif
+ 		if (statret != 0
+-		 || (st.st_mode & ~CHMOD_BITS) != (file->mode & ~CHMOD_BITS)
+-		 || st.st_rdev != file->u.rdev) {
++		 || (sx.st.st_mode & ~CHMOD_BITS) != (file->mode & ~CHMOD_BITS)
++		 || sx.st.st_rdev != file->u.rdev) {
+ 			if (statret == 0
+-			 && delete_item(fname, st.st_mode, del_opts) < 0)
+-				return;
++			 && delete_item(fname, sx.st.st_mode, del_opts) < 0)
++				goto cleanup;
+ 			if (preserve_hard_links && file->link_u.links
+-			    && hard_link_check(file, ndx, fname, -1, &st,
++			    && hard_link_check(file, ndx, fname, -1, &sx,
+ 					       itemizing, code, HL_SKIP))
+-				return;
+-			if ((IS_DEVICE(file->mode) && !IS_DEVICE(st.st_mode))
+-			 || (IS_SPECIAL(file->mode) && !IS_SPECIAL(st.st_mode)))
++				goto cleanup;
++			if ((IS_DEVICE(file->mode) && !IS_DEVICE(sx.st.st_mode))
++			 || (IS_SPECIAL(file->mode) && !IS_SPECIAL(sx.st.st_mode)))
+ 				statret = -1;
+ 			if (verbose > 2) {
+ 				rprintf(FINFO,"mknod(%s,0%o,0x%x)\n",
+@@ -1057,7 +1113,7 @@ static void recv_generator(char *fname, 
+ 			} else {
+ 				set_file_attrs(fname, file, NULL, 0);
+ 				if (itemizing) {
+-					itemize(file, ndx, statret, &st,
++					itemize(file, ndx, statret, &sx,
+ 						ITEM_LOCAL_CHANGE, 0, NULL);
+ 				}
+ 				if (code && verbose)
+@@ -1069,12 +1125,12 @@ static void recv_generator(char *fname, 
+ 			}
+ 		} else {
+ 			if (itemizing)
+-				itemize(file, ndx, statret, &st, 0, 0, NULL);
+-			set_file_attrs(fname, file, &st, maybe_ATTRS_REPORT);
++				itemize(file, ndx, statret, &sx, 0, 0, NULL);
++			set_file_attrs(fname, file, &sx, maybe_ATTRS_REPORT);
+ 			if (preserve_hard_links && file->link_u.links)
+ 				hard_link_cluster(file, ndx, itemizing, code);
+ 		}
+-		return;
++		goto cleanup;
+ 	}
+ 
+ 	if (!S_ISREG(file->mode)) {
+@@ -1108,7 +1164,7 @@ static void recv_generator(char *fname, 
+ 	}
+ 
+ 	if (update_only && statret == 0
+-	    && cmp_time(st.st_mtime, file->modtime) > 0) {
++	    && cmp_time(sx.st.st_mtime, file->modtime) > 0) {
+ 		if (verbose > 1)
+ 			rprintf(FINFO, "%s is newer\n", fname);
+ 		return;
+@@ -1117,18 +1173,18 @@ static void recv_generator(char *fname, 
+ 	fnamecmp = fname;
+ 	fnamecmp_type = FNAMECMP_FNAME;
+ 
+-	if (statret == 0 && !S_ISREG(st.st_mode)) {
+-		if (delete_item(fname, st.st_mode, del_opts) != 0)
++	if (statret == 0 && !S_ISREG(sx.st.st_mode)) {
++		if (delete_item(fname, sx.st.st_mode, del_opts) != 0)
+ 			return;
+ 		statret = -1;
+ 		stat_errno = ENOENT;
+ 	}
+ 
+ 	if (statret != 0 && basis_dir[0] != NULL) {
+-		int j = try_dests_reg(file, fname, ndx, fnamecmpbuf, &st,
++		int j = try_dests_reg(file, fname, ndx, fnamecmpbuf, &sx,
+ 				      itemizing, maybe_ATTRS_REPORT, code);
+ 		if (j == -2)
+-			return;
++			goto cleanup;
+ 		if (j != -1) {
+ 			fnamecmp = fnamecmpbuf;
+ 			fnamecmp_type = j;
+@@ -1137,7 +1193,7 @@ static void recv_generator(char *fname, 
+ 	}
+ 
+ 	real_ret = statret;
+-	real_st = st;
++	real_sx = sx;
+ 
+ 	if (partial_dir && (partialptr = partial_dir_fname(fname)) != NULL
+ 	    && link_stat(partialptr, &partial_st, 0) == 0
+@@ -1156,7 +1212,7 @@ static void recv_generator(char *fname, 
+ 				rprintf(FINFO, "fuzzy basis selected for %s: %s\n",
+ 					fname, fnamecmpbuf);
+ 			}
+-			st.st_size = fuzzy_file->length;
++			sx.st.st_size = fuzzy_file->length;
+ 			statret = 0;
+ 			fnamecmp = fnamecmpbuf;
+ 			fnamecmp_type = FNAMECMP_FUZZY;
+@@ -1165,7 +1221,7 @@ static void recv_generator(char *fname, 
+ 
+ 	if (statret != 0) {
+ 		if (preserve_hard_links && file->link_u.links
+-		    && hard_link_check(file, ndx, fname, statret, &st,
++		    && hard_link_check(file, ndx, fname, statret, &sx,
+ 				       itemizing, code, HL_SKIP))
+ 			return;
+ 		if (stat_errno == ENOENT)
+@@ -1175,31 +1231,44 @@ static void recv_generator(char *fname, 
+ 		return;
+ 	}
+ 
+-	if (append_mode && st.st_size > file->length)
++	if (append_mode && sx.st.st_size > file->length)
+ 		return;
+ 
+ 	if (fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
+ 		;
+ 	else if (fnamecmp_type == FNAMECMP_FUZZY)
+ 		;
+-	else if (unchanged_file(fnamecmp, file, &st)) {
++	else if (unchanged_file(fnamecmp, file, &sx.st)) {
+ 		if (partialptr) {
+ 			do_unlink(partialptr);
+ 			handle_partial_dir(partialptr, PDIR_DELETE);
+ 		}
+ 		if (itemizing) {
+-			itemize(file, ndx, real_ret, &real_st,
++#ifdef SUPPORT_ACLS
++			if (preserve_acls && real_ret == 0)
++				get_acls(fname, &real_sx);
++#endif
++			itemize(file, ndx, real_ret, &real_sx,
+ 				0, 0, NULL);
++#ifdef SUPPORT_ACLS
++			if (preserve_acls) {
++				if (fnamecmp_type == FNAMECMP_FNAME) {
++					sx.acc_acl = real_sx.acc_acl;
++					sx.def_acl = real_sx.def_acl;
++				} else
++					free_acls(&real_sx);
++			}
++#endif
+ 		}
+-		set_file_attrs(fname, file, &st, maybe_ATTRS_REPORT);
++		set_file_attrs(fname, file, &sx, maybe_ATTRS_REPORT);
+ 		if (preserve_hard_links && file->link_u.links)
+ 			hard_link_cluster(file, ndx, itemizing, code);
+-		return;
++		goto cleanup;
+ 	}
+ 
+   prepare_to_open:
+ 	if (partialptr) {
+-		st = partial_st;
++		sx.st = partial_st;
+ 		fnamecmp = partialptr;
+ 		fnamecmp_type = FNAMECMP_PARTIAL_DIR;
+ 		statret = 0;
+@@ -1223,17 +1292,21 @@ static void recv_generator(char *fname, 
+ 	  pretend_missing:
+ 		/* pretend the file didn't exist */
+ 		if (preserve_hard_links && file->link_u.links
+-		    && hard_link_check(file, ndx, fname, statret, &st,
++		    && hard_link_check(file, ndx, fname, statret, &sx,
+ 				       itemizing, code, HL_SKIP))
+-			return;
++			goto cleanup;
+ 		statret = real_ret = -1;
++#ifdef SUPPORT_ACLS
++		if (preserve_acls && ACL_READY(sx))
++			free_acls(&sx);
++#endif
+ 		goto notify_others;
+ 	}
+ 
+ 	if (inplace && make_backups && fnamecmp_type == FNAMECMP_FNAME) {
+ 		if (!(backupptr = get_backup_name(fname))) {
+ 			close(fd);
+-			return;
++			goto cleanup;
+ 		}
+ 		if (!(back_file = make_file(fname, NULL, NULL, 0, NO_FILTERS))) {
+ 			close(fd);
+@@ -1244,7 +1317,7 @@ static void recv_generator(char *fname, 
+ 				full_fname(backupptr));
+ 			free(back_file);
+ 			close(fd);
+-			return;
++			goto cleanup;
+ 		}
+ 		if ((f_copy = do_open(backupptr,
+ 		    O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 0600)) < 0) {
+@@ -1252,14 +1325,14 @@ static void recv_generator(char *fname, 
+ 				full_fname(backupptr));
+ 			free(back_file);
+ 			close(fd);
+-			return;
++			goto cleanup;
+ 		}
+ 		fnamecmp_type = FNAMECMP_BACKUP;
+ 	}
+ 
+ 	if (verbose > 3) {
+ 		rprintf(FINFO, "gen mapped %s of size %.0f\n",
+-			fnamecmp, (double)st.st_size);
++			fnamecmp, (double)sx.st.st_size);
+ 	}
+ 
+ 	if (verbose > 2)
+@@ -1277,24 +1350,32 @@ static void recv_generator(char *fname, 
+ 			iflags |= ITEM_BASIS_TYPE_FOLLOWS;
+ 		if (fnamecmp_type == FNAMECMP_FUZZY)
+ 			iflags |= ITEM_XNAME_FOLLOWS;
+-		itemize(file, -1, real_ret, &real_st, iflags, fnamecmp_type,
++#ifdef SUPPORT_ACLS
++		if (preserve_acls && real_ret == 0)
++			get_acls(fname, &real_sx);
++#endif
++		itemize(file, -1, real_ret, &real_sx, iflags, fnamecmp_type,
+ 			fuzzy_file ? fuzzy_file->basename : NULL);
++#ifdef SUPPORT_ACLS
++		if (preserve_acls)
++			free_acls(&real_sx);
++#endif
+ 	}
+ 
+ 	if (!do_xfers) {
+ 		if (preserve_hard_links && file->link_u.links)
+ 			hard_link_cluster(file, ndx, itemizing, code);
+-		return;
++		goto cleanup;
+ 	}
+ 	if (read_batch)
+-		return;
++		goto cleanup;
+ 
+ 	if (statret != 0 || whole_file) {
+ 		write_sum_head(f_out, NULL);
+-		return;
++		goto cleanup;
+ 	}
+ 
+-	generate_and_send_sums(fd, st.st_size, f_out, f_copy);
++	generate_and_send_sums(fd, sx.st.st_size, f_out, f_copy);
+ 
+ 	if (f_copy >= 0) {
+ 		close(f_copy);
+@@ -1307,6 +1388,13 @@ static void recv_generator(char *fname, 
+ 	}
+ 
+ 	close(fd);
++
++  cleanup:
++#ifdef SUPPORT_ACLS
++	if (preserve_acls)
++		free_acls(&sx);
++#endif
++	return;
+ }
+ 
+ void generate_files(int f_out, struct file_list *flist, char *local_name)
+@@ -1366,6 +1454,8 @@ void generate_files(int f_out, struct fi
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
@@ -1612,29 +2158,161 @@ TODO items:
  	for (i = 0; i < flist->count; i++) {
  		struct file_struct *file = flist->files[i];
  
+--- old/hlink.c
++++ new/hlink.c
+@@ -25,6 +25,7 @@
+ 
+ extern int verbose;
+ extern int link_dest;
++extern int preserve_acls;
+ extern int make_backups;
+ extern int log_format_has_i;
+ extern char *basis_dir[];
+@@ -143,15 +144,19 @@ void init_hard_links(void)
+ 
+ #ifdef SUPPORT_HARD_LINKS
+ static int maybe_hard_link(struct file_struct *file, int ndx,
+-			   char *fname, int statret, STRUCT_STAT *st,
++			   char *fname, int statret, statx *sxp,
+ 			   char *toname, STRUCT_STAT *to_st,
+ 			   int itemizing, enum logcode code)
+ {
+ 	if (statret == 0) {
+-		if (st->st_dev == to_st->st_dev
+-		 && st->st_ino == to_st->st_ino) {
++		if (sxp->st.st_dev == to_st->st_dev
++		 && sxp->st.st_ino == to_st->st_ino) {
+ 			if (itemizing) {
+-				itemize(file, ndx, statret, st,
++#ifdef SUPPORT_ACLS
++				if (preserve_acls && !ACL_READY(*sxp))
++					get_acls(fname, sxp);
++#endif
++				itemize(file, ndx, statret, sxp,
+ 					ITEM_LOCAL_CHANGE | ITEM_XNAME_FOLLOWS,
+ 					0, "");
+ 			}
+@@ -166,13 +171,13 @@ static int maybe_hard_link(struct file_s
+ 			return -1;
+ 		}
+ 	}
+-	return hard_link_one(file, ndx, fname, statret, st, toname,
++	return hard_link_one(file, ndx, fname, statret, sxp, toname,
+ 			     0, itemizing, code);
+ }
+ #endif
+ 
+ int hard_link_check(struct file_struct *file, int ndx, char *fname,
+-		    int statret, STRUCT_STAT *st, int itemizing,
++		    int statret, statx *sxp, int itemizing,
+ 		    enum logcode code, int skip)
+ {
+ #ifdef SUPPORT_HARD_LINKS
+@@ -207,7 +212,7 @@ int hard_link_check(struct file_struct *
+ 						 || st2.st_ino != st3.st_ino)
+ 							continue;
+ 						statret = 1;
+-						st = &st3;
++						sxp->st = st3;
+ 						if (verbose < 2 || !log_format_has_i)
+ 							itemizing = code = 0;
+ 						break;
+@@ -215,12 +220,16 @@ int hard_link_check(struct file_struct *
+ 					if (!unchanged_file(cmpbuf, file, &st3))
+ 						continue;
+ 					statret = 1;
+-					st = &st3;
+-					if (unchanged_attrs(file, &st3))
++					sxp->st = st3;
++#ifdef SUPPORT_ACLS
++					if (preserve_acls)
++						get_acls(cmpbuf, sxp);
++#endif
++					if (unchanged_attrs(file, sxp))
+ 						break;
+ 				} while (basis_dir[++j] != NULL);
+ 			}
+-			maybe_hard_link(file, ndx, fname, statret, st,
++			maybe_hard_link(file, ndx, fname, statret, sxp,
+ 					toname, &st2, itemizing, code);
+ 			file->F_HLINDEX = FINISHED_LINK;
+ 		} else
+@@ -233,7 +242,7 @@ int hard_link_check(struct file_struct *
+ 
+ #ifdef SUPPORT_HARD_LINKS
+ int hard_link_one(struct file_struct *file, int ndx, char *fname,
+-		  int statret, STRUCT_STAT *st, char *toname, int terse,
++		  int statret, statx *sxp, char *toname, int terse,
+ 		  int itemizing, enum logcode code)
+ {
+ 	if (do_link(toname, fname)) {
+@@ -249,7 +258,11 @@ int hard_link_one(struct file_struct *fi
+ 	}
+ 
+ 	if (itemizing) {
+-		itemize(file, ndx, statret, st,
++#ifdef SUPPORT_ACLS
++		if (preserve_acls && statret == 0 && !ACL_READY(*sxp))
++			get_acls(fname, sxp);
++#endif
++		itemize(file, ndx, statret, sxp,
+ 			ITEM_LOCAL_CHANGE | ITEM_XNAME_FOLLOWS, 0,
+ 			terse ? "" : toname);
+ 	}
+@@ -266,11 +279,12 @@ void hard_link_cluster(struct file_struc
+ #ifdef SUPPORT_HARD_LINKS
+ 	char hlink1[MAXPATHLEN];
+ 	char *hlink2;
+-	STRUCT_STAT st1, st2;
++	statx sx;
++	STRUCT_STAT st;
+ 	int statret, ndx = master;
+ 
+ 	file->F_HLINDEX = FINISHED_LINK;
+-	if (link_stat(f_name(file, hlink1), &st1, 0) < 0)
++	if (link_stat(f_name(file, hlink1), &st, 0) < 0)
+ 		return;
+ 	if (!(file->flags & FLAG_HLINK_TOL)) {
+ 		while (!(file->flags & FLAG_HLINK_EOL)) {
+@@ -284,9 +298,13 @@ void hard_link_cluster(struct file_struc
+ 		if (file->F_HLINDEX != SKIPPED_LINK)
+ 			continue;
+ 		hlink2 = f_name(file, NULL);
+-		statret = link_stat(hlink2, &st2, 0);
+-		maybe_hard_link(file, ndx, hlink2, statret, &st2,
+-				hlink1, &st1, itemizing, code);
++		statret = link_stat(hlink2, &sx.st, 0);
++		maybe_hard_link(file, ndx, hlink2, statret, &sx,
++				hlink1, &st, itemizing, code);
++#ifdef SUPPORT_ACLS
++		if (preserve_acls)
++			free_acls(&sx);
++#endif
+ 		file->F_HLINDEX = FINISHED_LINK;
+ 	} while (!(file->flags & FLAG_HLINK_EOL));
+ #endif
 --- old/lib/sysacls.c
 +++ new/lib/sysacls.c
-@@ -0,0 +1,3241 @@
-+/*
-+ * Unix SMB/CIFS implementation.
-+ * Samba system utilities for ACL support.
-+ *
-+ * Copyright (C) Jeremy Allison 2000.
-+ *
-+ * This program is free software; you can redistribute it and/or modify
-+ * it under the terms of the GNU General Public License as published by
-+ * the Free Software Foundation; either version 2 of the License, or
-+ * (at your option) any later version.
-+ *
-+ * This program is distributed in the hope that it will be useful,
-+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ * GNU General Public License for more details.
-+ *
-+ * You should have received a copy of the GNU General Public License along
-+ * with this program; if not, write to the Free Software Foundation, Inc.,
-+ * 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.
-+ */
+@@ -0,0 +1,3240 @@
++/* 
++   Unix SMB/CIFS implementation.
++   Samba system utilities for ACL support.
++   Copyright (C) Jeremy Allison 2000.
++   
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++   
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++   
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++*/
 +
 +#include "rsync.h"
 +#include "sysacls.h" /****** ADDED ******/
@@ -4887,6 +5565,21 @@ TODO items:
 +int sys_acl_free_text(char *text);
 +int sys_acl_free_acl(SMB_ACL_T the_acl);
 +int sys_acl_free_qualifier(void *qual, SMB_ACL_TAG_T tagtype);
+--- old/log.c
++++ new/log.c
+@@ -603,8 +603,10 @@ static void log_formatted(enum logcode c
+ 			n[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
+ 			n[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
+ 			n[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
+-			n[8] = '.';
+-			n[9] = '\0';
++			n[8] = !(iflags & ITEM_REPORT_ATIME) ? '.' : 'u';
++			n[9] = !(iflags & ITEM_REPORT_ACL) ? '.' : 'a';
++			n[10] = !(iflags & ITEM_REPORT_XATTR) ? '.' : 'x';
++			n[11] = '\0';
+ 
+ 			if (iflags & (ITEM_IS_NEW|ITEM_MISSING_DATA)) {
+ 				char ch = iflags & ITEM_IS_NEW ? '+' : '?';
 --- old/mkproto.awk
 +++ new/mkproto.awk
 @@ -58,7 +58,7 @@ BEGIN {
@@ -5054,7 +5747,7 @@ TODO items:
  {
  	/* If the file already exists, we'll return the local permissions,
  	 * possibly tweaked by the --executability option. */
-@@ -116,7 +118,7 @@ mode_t dest_mode(mode_t flist_mode, mode
+@@ -116,55 +118,63 @@ mode_t dest_mode(mode_t flist_mode, mode
  				cur_mode |= (cur_mode & 0444) >> 2;
  		}
  	} else
@@ -5063,29 +5756,159 @@ TODO items:
  	if (daemon_chmod_modes && !S_ISLNK(flist_mode))
  		cur_mode = tweak_mode(cur_mode, daemon_chmod_modes);
  	return (flist_mode & ~CHMOD_BITS) | (cur_mode & CHMOD_BITS);
-@@ -203,6 +205,17 @@ int set_file_attrs(char *fname, struct f
+ }
+ 
+-int set_file_attrs(char *fname, struct file_struct *file, STRUCT_STAT *st,
++int set_file_attrs(char *fname, struct file_struct *file, statx *sxp,
+ 		   int flags)
+ {
+ 	int updated = 0;
+-	STRUCT_STAT st2;
++	statx sx2;
+ 	int change_uid, change_gid;
+ 
+-	if (!st) {
++	if (!sxp) {
+ 		if (dry_run)
+ 			return 1;
+-		if (link_stat(fname, &st2, 0) < 0) {
++		if (link_stat(fname, &sx2.st, 0) < 0) {
+ 			rsyserr(FERROR, errno, "stat %s failed",
+ 				full_fname(fname));
+ 			return 0;
+ 		}
+-		st = &st2;
++#ifdef SUPPORT_ACLS
++		sx2.acc_acl = sx2.def_acl = NULL;
++#endif
+ 		if (!preserve_perms && S_ISDIR(file->mode)
+-		 && st->st_mode & S_ISGID) {
++		 && sx2.st.st_mode & S_ISGID) {
+ 			/* We just created this directory and its setgid
+ 			 * bit is on, so make sure it stays on. */
+ 			file->mode |= S_ISGID;
+ 		}
++		sxp = &sx2;
+ 	}
+ 
+-	if (!preserve_times || (S_ISDIR(st->st_mode) && omit_dir_times))
++#ifdef SUPPORT_ACLS
++	if (preserve_acls && !ACL_READY(*sxp))
++		get_acls(fname, sxp);
++#endif
++
++	if (!preserve_times || (S_ISDIR(sxp->st.st_mode) && omit_dir_times))
+ 		flags |= ATTRS_SKIP_MTIME;
+ 	if (!(flags & ATTRS_SKIP_MTIME)
+-	    && cmp_time(st->st_mtime, file->modtime) != 0) {
+-		int ret = set_modtime(fname, file->modtime, st->st_mode);
++	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
++		int ret = set_modtime(fname, file->modtime, sxp->st.st_mode);
+ 		if (ret < 0) {
+ 			rsyserr(FERROR, errno, "failed to set times on %s",
+ 				full_fname(fname));
+-			return 0;
++			goto cleanup;
+ 		}
+ 		if (ret == 0) /* ret == 1 if symlink could not be set */
+ 			updated = 1;
+ 	}
+ 
+-	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
++	change_uid = am_root && preserve_uid && sxp->st.st_uid != file->uid;
+ 	change_gid = preserve_gid && file->gid != GID_NONE
+-		&& st->st_gid != file->gid;
++		&& sxp->st.st_gid != file->gid;
+ #if !defined HAVE_LCHOWN && !defined CHOWN_MODIFIES_SYMLINK
+-	if (S_ISLNK(st->st_mode))
++	if (S_ISLNK(sxp->st.st_mode))
+ 		;
+ 	else
+ #endif
+@@ -174,43 +184,55 @@ int set_file_attrs(char *fname, struct f
+ 				rprintf(FINFO,
+ 					"set uid of %s from %ld to %ld\n",
+ 					fname,
+-					(long)st->st_uid, (long)file->uid);
++					(long)sxp->st.st_uid, (long)file->uid);
+ 			}
+ 			if (change_gid) {
+ 				rprintf(FINFO,
+ 					"set gid of %s from %ld to %ld\n",
+ 					fname,
+-					(long)st->st_gid, (long)file->gid);
++					(long)sxp->st.st_gid, (long)file->gid);
+ 			}
+ 		}
+ 		if (do_lchown(fname,
+-		    change_uid ? file->uid : st->st_uid,
+-		    change_gid ? file->gid : st->st_gid) != 0) {
++		    change_uid ? file->uid : sxp->st.st_uid,
++		    change_gid ? file->gid : sxp->st.st_gid) != 0) {
+ 			/* shouldn't have attempted to change uid or gid
+ 			 * unless have the privilege */
+ 			rsyserr(FERROR, errno, "%s %s failed",
+ 			    change_uid ? "chown" : "chgrp",
+ 			    full_fname(fname));
+-			return 0;
++			goto cleanup;
+ 		}
+ 		/* a lchown had been done - we have to re-stat if the
+ 		 * destination had the setuid or setgid bits set due
+ 		 * to the side effect of the chown call */
+-		if (st->st_mode & (S_ISUID | S_ISGID)) {
+-			link_stat(fname, st,
+-				  keep_dirlinks && S_ISDIR(st->st_mode));
++		if (sxp->st.st_mode & (S_ISUID | S_ISGID)) {
++			link_stat(fname, &sxp->st,
++				  keep_dirlinks && S_ISDIR(sxp->st.st_mode));
+ 		}
  		updated = 1;
  	}
  
 +#ifdef SUPPORT_ACLS
-+	/* It's OK to call set_acl() now, even for a dir, as the generator
++	/* It's OK to call set_acls() now, even for a dir, as the generator
 +	 * will enable owner-writability using chmod, if necessary.
 +	 * 
 +	 * If set_acl changes permission bits in the process of setting
-+	 * an access ACL, it changes st->st_mode so we know whether we
++	 * an access ACL, it changes sxp->st.st_mode so we know whether we
 +	 * need to chmod. */
-+	if (preserve_acls && set_acl(fname, file, &st->st_mode) == 0)
++	if (preserve_acls && set_acls(fname, file, sxp) == 0)
 +		updated = 1;
 +#endif
 +
  #ifdef HAVE_CHMOD
- 	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
- 		int ret = do_chmod(fname, file->mode);
+-	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
+-		int ret = do_chmod(fname, file->mode);
++	if ((sxp->st.st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
++		mode_t mode = file->mode;
++		int ret = do_chmod(fname, mode);
+ 		if (ret < 0) {
+ 			rsyserr(FERROR, errno,
+ 				"failed to set permissions on %s",
+ 				full_fname(fname));
+-			return 0;
++			goto cleanup;
+ 		}
+ 		if (ret == 0) /* ret == 1 if symlink could not be set */
+ 			updated = 1;
+@@ -225,6 +247,11 @@ int set_file_attrs(char *fname, struct f
+ 		else
+ 			rprintf(code, "%s is uptodate\n", fname);
+ 	}
++  cleanup:
++#ifdef SUPPORT_ACLS
++	if (preserve_acls && sxp == &sx2)
++		free_acls(&sx2);
++#endif
+ 	return updated;
+ }
+ 
 --- old/rsync.h
 +++ new/rsync.h
-@@ -660,6 +660,20 @@ struct chmod_mode_struct;
- 
- #define UNUSED(x) x __attribute__((__unused__))
+@@ -485,6 +485,15 @@ struct idev {
+ #define IN_LOOPBACKNET 127
+ #endif
  
 +#if HAVE_POSIX_ACLS|HAVE_UNIXWARE_ACLS|HAVE_SOLARIS_ACLS|\
 +    HAVE_HPUX_ACLS|HAVE_IRIX_ACLS|HAVE_AIX_ACLS|HAVE_TRU64_ACLS
@@ -5096,10 +5919,27 @@ TODO items:
 +#define ACLS_NEED_MASK 1
 +#endif
 +
+ #define GID_NONE ((gid_t)-1)
+ 
+ #define HL_CHECK_MASTER	0
+@@ -660,6 +669,21 @@ struct chmod_mode_struct;
+ 
+ #define UNUSED(x) x __attribute__((__unused__))
+ 
 +#if defined SUPPORT_ACLS && defined HAVE_SYS_ACL_H
 +#include <sys/acl.h>
 +#endif
 +#include "smb_acls.h"
++
++typedef struct {
++    STRUCT_STAT st;
++#ifdef SUPPORT_ACLS
++    struct rsync_acl *acc_acl; /* access ACL */
++    struct rsync_acl *def_acl; /* default ACL */
++#endif
++} statx;
++
++#define ACL_READY(sx) ((sx).acc_acl != NULL)
 +
  #include "proto.h"
  
@@ -5156,30 +5996,53 @@ TODO items:
  dit(bf(--chmod)) This option tells rsync to apply one or more
  comma-separated "chmod" strings to the permission of the files in the
  transfer.  The resulting value is treated as though it was the permissions
+@@ -1372,8 +1386,8 @@ if the receiving rsync is at least versi
+ with older versions of rsync, but that also turns on the output of other
+ verbose messages).
+ 
+-The "%i" escape has a cryptic output that is 9 letters long.  The general
+-format is like the string bf(YXcstpogz), where bf(Y) is replaced by the
++The "%i" escape has a cryptic output that is 11 letters long.  The general
++format is like the string bf(YXcstpoguax), where bf(Y) is replaced by the
+ type of update being done, bf(X) is replaced by the file-type, and the
+ other letters represent attributes that may be output if they are being
+ modified.
+@@ -1422,7 +1436,11 @@ quote(itemize(
+   sender's value (requires bf(--owner) and super-user privileges).
+   it() A bf(g) means the group is different and is being updated to the
+   sender's value (requires bf(--group) and the authority to set the group).
+-  it() The bf(z) slot is reserved for future use.
++  it() The bf(u) slot is reserved for reporting update (access) time changes
++  (a feature that is not yet released).
++  it() The bf(a) means that the ACL information changed.
++  it() The bf(x) slot is reserved for reporting extended attribute changes
++  (a feature that is not yet released).
+ ))
+ 
+ One other output is possible:  when deleting files, the "%i" will output
 --- old/smb_acls.h
 +++ new/smb_acls.h
-@@ -0,0 +1,282 @@
-+/*
-+ * Unix SMB/Netbios implementation.
-+ * Version 2.2.x
-+ * Portable SMB ACL interface
-+ *
-+ * Copyright (C) 2000 Jeremy Allison
-+ *
-+ * This program is free software; you can redistribute it and/or modify
-+ * it under the terms of the GNU General Public License as published by
-+ * the Free Software Foundation; either version 2 of the License, or
-+ * (at your option) any later version.
-+ *
-+ * This program is distributed in the hope that it will be useful,
-+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ * GNU General Public License for more details.
-+ *
-+ * You should have received a copy of the GNU General Public License along
-+ * with this program; if not, write to the Free Software Foundation, Inc.,
-+ * 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.
-+ */
+@@ -0,0 +1,281 @@
++/* 
++   Unix SMB/Netbios implementation.
++   Version 2.2.x
++   Portable SMB ACL interface
++   Copyright (C) Jeremy Allison 2000
++   
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++   
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++   
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
++*/
 +
 +#ifndef _SMB_ACLS_H
 +#define _SMB_ACLS_H
@@ -5546,6 +6409,272 @@ TODO items:
 +
 +# Hooray
 +exit 0
+--- old/testsuite/devices.test
++++ new/testsuite/devices.test
+@@ -42,14 +42,14 @@ touch -r "$fromdir/block" "$fromdir/bloc
+ $RSYNC -ai "$fromdir/block" "$todir/block2" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-cD+++++++ block
++cD+++++++++ block
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 1 failed"
+ 
+ $RSYNC -ai "$fromdir/block2" "$todir/block" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-cD+++++++ block2
++cD+++++++++ block2
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 2 failed"
+ 
+@@ -58,7 +58,7 @@ sleep 1
+ $RSYNC -Di "$fromdir/block3" "$todir/block" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-cD..T.... block3
++cD..T...... block3
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
+ 
+@@ -66,15 +66,15 @@ $RSYNC -aiHvv "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ filter_outfile
+ cat <<EOT >"$chkfile"
+-.d..t.... ./
+-cD..t.... block
+-cD....... block2
+-cD+++++++ block3
+-hD+++++++ block2.5 => block3
+-cD+++++++ char
+-cD+++++++ char2
+-cD+++++++ char3
+-cS+++++++ fifo
++.d..t...... ./
++cD..t...... block
++cD......... block2
++cD+++++++++ block3
++hD+++++++++ block2.5 => block3
++cD+++++++++ char
++cD+++++++++ char2
++cD+++++++++ char3
++cS+++++++++ fifo
+ EOT
+ if test ! -b "$fromdir/block2.5"; then
+     sed -e '/block2\.5/d' \
+--- old/testsuite/itemize.test
++++ new/testsuite/itemize.test
+@@ -29,14 +29,14 @@ ln "$fromdir/foo/config1" "$fromdir/foo/
+ $RSYNC -iplr "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-cd+++++++ bar/
+-cd+++++++ bar/baz/
+->f+++++++ bar/baz/rsync
+-cd+++++++ foo/
+->f+++++++ foo/config1
+->f+++++++ foo/config2
+->f+++++++ foo/extra
+-cL+++++++ foo/sym -> ../bar/baz/rsync
++cd+++++++++ bar/
++cd+++++++++ bar/baz/
++>f+++++++++ bar/baz/rsync
++cd+++++++++ foo/
++>f+++++++++ foo/config1
++>f+++++++++ foo/config2
++>f+++++++++ foo/extra
++cL+++++++++ foo/sym -> ../bar/baz/rsync
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 1 failed"
+ 
+@@ -48,10 +48,10 @@ chmod 601 "$fromdir/foo/config2"
+ $RSYNC -iplrH "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+->f..T.... bar/baz/rsync
+->f..T.... foo/config1
+->f.sTp... foo/config2
+-hf..T.... foo/extra => foo/config1
++>f..T...... bar/baz/rsync
++>f..T...... foo/config1
++>f.sTp..... foo/config2
++hf..T...... foo/extra => foo/config1
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 2 failed"
+ 
+@@ -68,11 +68,11 @@ chmod 777 "$todir/bar/baz/rsync"
+ $RSYNC -iplrtc "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-.f..tp... bar/baz/rsync
+-.d..t.... foo/
+-.f..t.... foo/config1
+->fcstp... foo/config2
+-cL..T.... foo/sym -> ../bar/baz/rsync
++.f..tp..... bar/baz/rsync
++.d..t...... foo/
++.f..t...... foo/config1
++>fcstp..... foo/config2
++cL..T...... foo/sym -> ../bar/baz/rsync
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
+ 
+@@ -97,15 +97,15 @@ $RSYNC -ivvplrtH "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ filter_outfile
+ cat <<EOT >"$chkfile"
+-.d        ./
+-.d        bar/
+-.d        bar/baz/
+-.f...p... bar/baz/rsync
+-.d        foo/
+-.f        foo/config1
+->f..t.... foo/config2
+-hf        foo/extra
+-.L        foo/sym -> ../bar/baz/rsync
++.d          ./
++.d          bar/
++.d          bar/baz/
++.f...p..... bar/baz/rsync
++.d          foo/
++.f          foo/config1
++>f..t...... foo/config2
++hf          foo/extra
++.L          foo/sym -> ../bar/baz/rsync
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 5 failed"
+ 
+@@ -124,8 +124,8 @@ touch "$todir/foo/config2"
+ $RSYNC -iplrtH "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-.f...p... foo/config1
+->f..t.... foo/config2
++.f...p..... foo/config1
++>f..t...... foo/config2
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 7 failed"
+ 
+@@ -134,15 +134,15 @@ $RSYNC -ivvplrtH --copy-dest="$lddir" "$
+     | tee "$outfile"
+ filter_outfile
+ cat <<EOT >"$chkfile"
+-.d..t.... ./
+-cd+++++++ bar/
+-cd+++++++ bar/baz/
+-cf        bar/baz/rsync
+-cd+++++++ foo/
+-cf        foo/config1
+-cf        foo/config2
+-hf        foo/extra => foo/config1
+-cL..T.... foo/sym -> ../bar/baz/rsync
++.d..t...... ./
++cd+++++++++ bar/
++cd+++++++++ bar/baz/
++cf          bar/baz/rsync
++cd+++++++++ foo/
++cf          foo/config1
++cf          foo/config2
++hf          foo/extra => foo/config1
++cL..T...... foo/sym -> ../bar/baz/rsync
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 8 failed"
+ 
+@@ -150,11 +150,11 @@ rm -rf "$todir"
+ $RSYNC -iplrtH --copy-dest="$lddir" "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-.d..t.... ./
+-cd+++++++ bar/
+-cd+++++++ bar/baz/
+-cd+++++++ foo/
+-hf        foo/extra => foo/config1
++.d..t...... ./
++cd+++++++++ bar/
++cd+++++++++ bar/baz/
++cd+++++++++ foo/
++hf          foo/extra => foo/config1
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 9 failed"
+ 
+@@ -181,15 +181,15 @@ $RSYNC -ivvplrtH --link-dest="$lddir" "$
+     | tee "$outfile"
+ filter_outfile
+ cat <<EOT >"$chkfile"
+-.d..t.... ./
+-cd+++++++ bar/
+-cd+++++++ bar/baz/
+-hf        bar/baz/rsync
+-cd+++++++ foo/
+-hf        foo/config1
+-hf        foo/config2
+-hf        foo/extra => foo/config1
+-hL        foo/sym -> ../bar/baz/rsync
++.d..t...... ./
++cd+++++++++ bar/
++cd+++++++++ bar/baz/
++hf          bar/baz/rsync
++cd+++++++++ foo/
++hf          foo/config1
++hf          foo/config2
++hf          foo/extra => foo/config1
++hL          foo/sym -> ../bar/baz/rsync
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 11 failed"
+ 
+@@ -197,10 +197,10 @@ rm -rf "$todir"
+ $RSYNC -iplrtH --link-dest="$lddir" "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-.d..t.... ./
+-cd+++++++ bar/
+-cd+++++++ bar/baz/
+-cd+++++++ foo/
++.d..t...... ./
++cd+++++++++ bar/
++cd+++++++++ bar/baz/
++cd+++++++++ foo/
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 12 failed"
+ 
+@@ -228,14 +228,14 @@ filter_outfile
+ # TODO fix really-old problem when combining -H with --compare-dest:
+ # missing output for foo/extra hard-link (and it might not be updated)!
+ cat <<EOT >"$chkfile"
+-.d..t.... ./
+-cd+++++++ bar/
+-cd+++++++ bar/baz/
+-.f        bar/baz/rsync
+-cd+++++++ foo/
+-.f        foo/config1
+-.f        foo/config2
+-.L        foo/sym -> ../bar/baz/rsync
++.d..t...... ./
++cd+++++++++ bar/
++cd+++++++++ bar/baz/
++.f          bar/baz/rsync
++cd+++++++++ foo/
++.f          foo/config1
++.f          foo/config2
++.L          foo/sym -> ../bar/baz/rsync
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 14 failed"
+ 
+@@ -243,10 +243,10 @@ rm -rf "$todir"
+ $RSYNC -iplrtH --compare-dest="$lddir" "$fromdir/" "$todir/" \
+     | tee "$outfile"
+ cat <<EOT >"$chkfile"
+-.d..t.... ./
+-cd+++++++ bar/
+-cd+++++++ bar/baz/
+-cd+++++++ foo/
++.d..t...... ./
++cd+++++++++ bar/
++cd+++++++++ bar/baz/
++cd+++++++++ foo/
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 15 failed"
+ 
 --- old/uidlist.c
 +++ new/uidlist.c
 @@ -35,6 +35,7 @@
