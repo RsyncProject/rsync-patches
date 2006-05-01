@@ -30,7 +30,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1080 @@
+@@ -0,0 +1,1079 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -681,7 +681,6 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +		if ((ndx = find_matching_rsync_acl(type, racl_list, racl)) != -1) {
 +			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'a' : 'd');
 +			write_int(f, ndx);
-+			rsync_acl_free(racl);
 +		} else {
 +			new_racl = EXPAND_ITEM_LIST(racl_list, rsync_acl, 1000);
 +			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'A' : 'D');
@@ -835,7 +834,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +			duo_item->sacl = NULL;
 +		} else {
 +			ndx = read_int(f);
-+			if ((size_t)ndx >= racl_list->count) {
++			if (ndx < 0 || (size_t)ndx >= racl_list->count) {
 +				rprintf(FERROR, "receive_acl %s: %s ACL index %d out of range\n",
 +					f_name(file, NULL), str_acl_type(type), ndx);
 +				exit_cleanup(RERR_STREAMIO);
@@ -1365,48 +1364,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	return file;
  }
  
-@@ -733,6 +758,9 @@ struct file_struct *make_file(char *fnam
- 	char thisname[MAXPATHLEN];
- 	char linkname[MAXPATHLEN];
- 	int alloc_len, basename_len, dirname_len, linkname_len, sum_len;
-+#ifdef SUPPORT_ACLS
-+	int xtra_len;
-+#endif
- 	char *basename, *dirname, *bp;
- 
- 	if (!flist || !flist->count)	/* Ignore lastdir when invalid. */
-@@ -848,8 +876,19 @@ struct file_struct *make_file(char *fnam
- 	sum_len = always_checksum && am_sender && S_ISREG(st.st_mode)
- 	        ? MD4_SUM_LENGTH : 0;
- 
-+#ifdef SUPPORT_ACLS
-+	/* We need one or two index int32s when we're preserving an ACL. */
-+	if (preserve_acls)
-+		xtra_len = (S_ISDIR(st.st_mode) ? 2 : 1) * 4;
-+	else
-+		xtra_len = 0;
-+#endif
-+
- 	alloc_len = file_struct_len + dirname_len + basename_len
--	    + linkname_len + sum_len;
-+#ifdef SUPPORT_ACLS
-+		  + xtra_len
-+#endif
-+		  + linkname_len + sum_len;
- 	if (flist)
- 		bp = pool_alloc(flist->file_pool, alloc_len, "make_file");
- 	else {
-@@ -860,6 +899,9 @@ struct file_struct *make_file(char *fnam
- 	file = (struct file_struct *)bp;
- 	memset(bp, 0, file_struct_len);
- 	bp += file_struct_len;
-+#ifdef SUPPORT_ACLS
-+	bp += xtra_len;
-+#endif
- 
- 	file->flags = flags;
- 	file->modtime = st.st_mtime;
-@@ -952,6 +994,9 @@ static struct file_struct *send_file_nam
+@@ -952,6 +977,9 @@ static struct file_struct *send_file_nam
  					  unsigned short flags)
  {
  	struct file_struct *file;
@@ -1416,7 +1374,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  	file = make_file(fname, flist, stp, flags,
  			 f == -2 ? SERVER_FILTERS : ALL_FILTERS);
-@@ -961,6 +1006,15 @@ static struct file_struct *send_file_nam
+@@ -961,6 +989,15 @@ static struct file_struct *send_file_nam
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
  
@@ -1432,7 +1390,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
  	flist_expand(flist);
-@@ -968,6 +1022,15 @@ static struct file_struct *send_file_nam
+@@ -968,6 +1005,15 @@ static struct file_struct *send_file_nam
  	if (file->basename[0]) {
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f);
