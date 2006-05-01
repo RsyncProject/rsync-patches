@@ -6,6 +6,15 @@ After applying this patch, run these commands for a successful build:
     ./configure --enable-acl-support --enable-xattr-support
     make
 
+TODO:
+
+ - This patch needs to be rewritten to more efficiently handle large xattrs.
+
+ - We need to affect the itemized output to know when xattrs are being updated.
+
+ - We need to affect the --link-dest option to avoid hard-linking two files
+   that differ in their xattrs (when --xattrs was specified).
+
 --- old/Makefile.in
 +++ new/Makefile.in
 @@ -27,13 +27,13 @@ VERSION=@VERSION@
@@ -24,6 +33,49 @@ After applying this patch, run these commands for a successful build:
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
+--- old/acls.c
++++ new/acls.c
+@@ -29,6 +29,7 @@ extern int am_root;
+ extern int dry_run;
+ extern int orig_umask;
+ extern int preserve_acls;
++extern int preserve_xattrs;
+ extern unsigned int file_struct_len;
+ 
+ /* === ACL structures === */
+@@ -749,6 +750,10 @@ void receive_acl(struct file_struct *fil
+ 	type = SMB_ACL_TYPE_ACCESS;
+ 	racl_list = &access_acl_list;
+ 	ndx_ptr = (char*)file + file_struct_len;
++#ifdef SUPPORT_XATTRS
++	if (preserve_xattrs)
++		ndx_ptr += 4;
++#endif
+ 	do {
+ 		char tag = read_byte(f);
+ 		int ndx;
+@@ -807,6 +812,10 @@ void cache_acl(struct file_struct *file,
+ 	racl = sxp->acc_acl;
+ 	racl_list = &access_acl_list;
+ 	ndx_ptr = (char*)file + file_struct_len;
++#ifdef SUPPORT_XATTRS
++	if (preserve_xattrs)
++		ndx_ptr += 4;
++#endif
+ 	do {
+ 		if (!racl)
+ 			ndx = -1;
+@@ -922,6 +931,10 @@ int set_acl(const char *fname, const str
+ 
+ 	type = SMB_ACL_TYPE_ACCESS;
+ 	ndx_ptr = (char*)file + file_struct_len;
++#ifdef SUPPORT_XATTRS
++	if (preserve_xattrs)
++		ndx_ptr += 4;
++#endif
+ 	do {
+ 		acl_duo *duo_item;
+ 		BOOL eq;
 --- old/backup.c
 +++ new/backup.c
 @@ -30,6 +30,7 @@ extern char *backup_dir;
@@ -34,39 +86,52 @@ After applying this patch, run these commands for a successful build:
  extern int preserve_devices;
  extern int preserve_specials;
  extern int preserve_links;
-@@ -138,6 +139,10 @@ static int make_bak_dir(char *fullpath)
- 				if (preserve_acls)
- 					dup_acl(end, fullpath, st.st_mode);
+@@ -136,6 +137,9 @@ static int make_bak_dir(char *fullpath)
+ #ifdef SUPPORT_ACLS
+ 				sx.acc_acl = sx.def_acl = NULL;
  #endif
 +#ifdef SUPPORT_XATTRS
-+				if (preserve_xattrs)
-+					dup_xattr(end, fullpath );
++				sx.xattr = NULL;
 +#endif
- 			}
- 		}
- 		*p = '/';
-@@ -195,6 +200,10 @@ static int keep_backup(char *fname)
- 	if (preserve_acls)
- 		push_keep_backup_acl(file, fname, buf);
+ 				if (!(file = make_file(rel, NULL, NULL, 0, NO_FILTERS)))
+ 					continue;
+ #ifdef SUPPORT_ACLS
+@@ -144,6 +148,12 @@ static int make_bak_dir(char *fullpath)
+ 					cache_acl(file, &sx);
+ 				}
  #endif
 +#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs)
-+		push_keep_backup_xattr(file, fname, buf);
++				if (preserve_xattrs) {
++					get_xattr(rel, &sx);
++					cache_xattr(file, &sx);
++				}
++#endif
+ 				set_file_attrs(fullpath, file, NULL, 0);
+ 				free(file);
+ 			}
+@@ -195,6 +205,9 @@ static int keep_backup(char *fname)
+ #ifdef SUPPORT_ACLS
+ 	sx.acc_acl = sx.def_acl = NULL;
+ #endif
++#ifdef SUPPORT_XATTRS
++	sx.xattr = NULL;
++#endif
+ 
+ 	if (!(file = make_file(fname, NULL, NULL, 0, NO_FILTERS)))
+ 		return 1; /* the file could have disappeared */
+@@ -208,6 +221,12 @@ static int keep_backup(char *fname)
+ 		cache_acl(file, &sx);
+ 	}
+ #endif
++#ifdef SUPPORT_XATTRS
++	if (preserve_xattrs) {
++		get_xattr(fname, &sx);
++		cache_xattr(file, &sx);
++	}
 +#endif
  
  	/* Check to see if this is a device file, or link */
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
-@@ -275,6 +284,10 @@ static int keep_backup(char *fname)
- 	if (preserve_acls)
- 		cleanup_keep_backup_acl();
- #endif
-+#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs)
-+		cleanup_keep_backup_xattr();
-+#endif
- 	free(file);
- 
- 	if (verbose > 1) {
 --- old/configure.in
 +++ new/configure.in
 @@ -823,6 +823,30 @@ samba_cv_HAVE_ACL_GET_PERM_NP=yes,samba_
@@ -110,63 +175,90 @@ After applying this patch, run these commands for a successful build:
  extern int preserve_links;
  extern int preserve_hard_links;
  extern int preserve_devices;
-@@ -966,6 +967,10 @@ static struct file_struct *send_file_nam
- 	if (preserve_acls && make_acl(file, fname) < 0)
- 		return NULL;
+@@ -502,7 +503,7 @@ static struct file_struct *receive_file_
+ 	char thisname[MAXPATHLEN];
+ 	unsigned int l1 = 0, l2 = 0;
+ 	int alloc_len, basename_len, dirname_len, linkname_len, sum_len;
+-#ifdef SUPPORT_ACLS
++#if defined SUPPORT_ACLS || defined SUPPORT_XATTRS
+ 	int xtra_len;
+ #endif
+ 	OFF_T file_length;
+@@ -614,10 +615,16 @@ static struct file_struct *receive_file_
+ 		xtra_len = (S_ISDIR(mode) ? 2 : 1) * 4;
+ 	else
+ 		xtra_len = 0;
++#elif defined SUPPORT_XATTRS
++	xtra_len = 0;
++#endif
++#ifdef SUPPORT_XATTRS
++	if (preserve_xattrs)
++		xtra_len += 4;
+ #endif
+ 
+ 	alloc_len = file_struct_len + dirname_len + basename_len
+-#ifdef SUPPORT_ACLS
++#if defined SUPPORT_ACLS || defined SUPPORT_XATTRS
+ 		  + xtra_len
+ #endif
+ 		  + linkname_len + sum_len;
+@@ -626,7 +633,7 @@ static struct file_struct *receive_file_
+ 	file = (struct file_struct *)bp;
+ 	memset(bp, 0, file_struct_len);
+ 	bp += file_struct_len;
+-#ifdef SUPPORT_ACLS
++#if defined SUPPORT_ACLS || defined SUPPORT_XATTRS
+ 	bp += xtra_len;
+ #endif
+ 
+@@ -727,6 +734,10 @@ static struct file_struct *receive_file_
+ 	if (preserve_acls)
+ 		receive_acl(file, f);
  #endif
 +#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs && make_xattr(file, fname) < 0)
-+		return NULL;
++	if (preserve_xattrs)
++		receive_xattr(file, f );
++#endif
+ 
+ 	return file;
+ }
+@@ -997,6 +1008,13 @@ static struct file_struct *send_file_nam
+ 			return NULL;
+ 	}
+ #endif
++#ifdef SUPPORT_XATTRS
++	if (preserve_xattrs) {
++		sx.xattr = NULL;
++		if (get_xattr(fname, &sx) < 0)
++			return NULL;
++	}
 +#endif
  
  	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
-@@ -978,12 +983,20 @@ static struct file_struct *send_file_nam
+@@ -1009,11 +1027,19 @@ static struct file_struct *send_file_nam
  		if (preserve_acls)
- 			send_acl(file, f);
+ 			send_acl(&sx, f);
  #endif
 +#ifdef SUPPORT_XATTRS
 +		if (preserve_xattrs)
-+			send_xattr(file, f);
++			send_xattr(&sx, f);
 +#endif
  	} else {
  #ifdef SUPPORT_ACLS
- 		/* Cleanup unsent ACL(s). */
  		if (preserve_acls)
- 			send_acl(file, -1);
+ 			free_acl(&sx);
  #endif
 +#ifdef SUPPORT_XATTRS
 +		if (preserve_xattrs)
-+			send_xattr(file, -1);
++			free_xattr(&sx);
 +#endif
  	}
  	return file;
  }
-@@ -1376,6 +1389,10 @@ struct file_list *recv_file_list(int f)
- 		if (preserve_acls)
- 			receive_acl(file, f);
- #endif
-+#ifdef SUPPORT_XATTRS
-+		if (preserve_xattrs)
-+			receive_xattr(file, f );
-+#endif
- 
- 		if (S_ISREG(file->mode) || S_ISLNK(file->mode))
- 			stats.total_size += file->length;
-@@ -1403,6 +1420,10 @@ struct file_list *recv_file_list(int f)
- 	if (preserve_acls)
- 		sort_file_acl_index_lists();
- #endif
-+#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs)
-+		sort_file_xattr_index_lists();
-+#endif
- 
- 	if (f >= 0) {
- 		recv_uid_list(f, flist);
 --- old/lib/sysxattr.c
 +++ new/lib/sysxattr.c
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,44 @@
 +/*
 + * Extended attribute support for rsync.
 + *
@@ -189,6 +281,7 @@ After applying this patch, run these commands for a successful build:
 + */
 +
 +#include "rsync.h"
++#include "sysxattr.h"
 +
 +#if defined HAVE_LINUX_XATTRS
 +
@@ -212,7 +305,11 @@ After applying this patch, run these commands for a successful build:
 +#endif /* No xattrs */
 --- old/lib/sysxattr.h
 +++ new/lib/sysxattr.h
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,13 @@
++#if defined SUPPORT_XATTRS && defined HAVE_ATTR_XATTR_H
++#include <attr/xattr.h>
++#endif
++
 +#if defined HAVE_LINUX_XATTRS
 +
 +ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size);
@@ -283,7 +380,7 @@ After applying this patch, run these commands for a successful build:
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1097,6 +1107,17 @@ int parse_arguments(int *argc, const cha
+@@ -1099,6 +1109,17 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -301,7 +398,7 @@ After applying this patch, run these commands for a successful build:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1544,6 +1565,10 @@ void server_options(char **args,int *arg
+@@ -1538,6 +1559,10 @@ void server_options(char **args,int *arg
  	if (preserve_acls)
  		argstr[x++] = 'A';
  #endif
@@ -322,34 +419,40 @@ After applying this patch, run these commands for a successful build:
  extern int preserve_perms;
  extern int preserve_executability;
  extern int preserve_times;
-@@ -215,6 +216,10 @@ int set_file_attrs(char *fname, struct f
- 	if (preserve_acls && set_acl(fname, file, &st->st_mode) == 0)
+@@ -223,6 +224,10 @@ int set_file_attrs(char *fname, struct f
+ 	if (preserve_acls && set_acl(fname, file, sxp) == 0)
  		updated = 1;
  #endif
 +#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs && set_xattr(fname, file) == 0)
++	if (preserve_xattrs && set_xattr(fname, file, sxp) == 0)
 +		updated = 1;
 +#endif
  
  #ifdef HAVE_CHMOD
- 	if ((st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
+ 	if ((sxp->st.st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS)) {
 --- old/rsync.h
 +++ new/rsync.h
-@@ -674,6 +674,14 @@ struct chmod_mode_struct;
+@@ -494,6 +494,10 @@ struct idev {
+ #define ACLS_NEED_MASK 1
  #endif
- #include "smb_acls.h"
  
 +#ifdef HAVE_LINUX_XATTRS
 +#define SUPPORT_XATTRS 1
 +#endif
 +
-+#if defined SUPPORT_XATTRS && defined HAVE_ATTR_XATTR_H
-+#include <attr/xattr.h>
-+#endif
-+
- #include "proto.h"
+ #define GID_NONE ((gid_t)-1)
  
- /* We have replacement versions of these if they're missing. */
+ #define HL_CHECK_MASTER	0
+@@ -686,6 +690,9 @@ typedef struct {
+     struct rsync_acl *acc_acl; /* access ACL */
+     struct rsync_acl *def_acl; /* default ACL */
+ #endif
++#ifdef SUPPORT_XATTRS
++    item_list *xattr;
++#endif
+ } statx;
+ 
+ #define ACL_READY(sx) ((sx).acc_acl != NULL)
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -322,6 +322,7 @@ to the detailed description below for a 
@@ -374,12 +477,13 @@ After applying this patch, run these commands for a successful build:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,358 @@
 +/*
 + * Extended Attribute support for rsync.
++ * Written by Jay Fenlason, vaguely based on the ACLs patch.
 + *
 + * Copyright (C) 2004 Red Hat, Inc.
-+ * Written by Jay Fenlason, vaguely based on the ACLs patch.
++ * Copyright (C) 2006 Wayne Davison
 + *
 + * This program is free software; you can redistribute it and/or modify
 + * it under the terms of the GNU General Public License as published by
@@ -402,28 +506,17 @@ After applying this patch, run these commands for a successful build:
 +#ifdef SUPPORT_XATTRS
 +
 +extern int dry_run;
++extern unsigned int file_struct_len;
 +
 +#define RSYNC_XAL_INITIAL 5
 +#define RSYNC_XAL_LIST_INITIAL 100
 +
 +typedef struct {
-+	size_t name_len;
 +	char *name;
-+	size_t datum_len;
 +	char *datum;
++	size_t name_len;
++	size_t datum_len;
 +} rsync_xa;
-+
-+typedef struct {
-+	size_t count;
-+	size_t alloc;
-+	rsync_xa *rxas;
-+} rsync_xal;
-+
-+typedef struct {
-+	size_t count;
-+	size_t alloc;
-+	rsync_xal *rxals;
-+} rsync_xal_list;
 +
 +static size_t namebuf_len = 0;
 +static char *namebuf = NULL;
@@ -431,62 +524,38 @@ After applying this patch, run these commands for a successful build:
 +static size_t datumbuf_len = 0;
 +static char *datumbuf = NULL;
 +
-+static rsync_xal curr_rsync_xal = { 0, 0, NULL };
-+static rsync_xal_list rsync_xal_l = { 0, 0, NULL };
-+
-+
-+/* ------------------------------------------------------------------------- */
-+
-+/* the below stuff is only used by the receiver */
-+
-+/* structure to hold index to rsync_xal_l member corresponding to
-+ * flist->files[i] */
-+
-+typedef struct {
-+	const struct file_struct *file;
-+	int xalidx;
-+} file_xal_index;
-+
-+typedef struct {
-+	size_t count;
-+	size_t alloc;
-+	file_xal_index *filexalidxs;
-+} file_xal_index_list;
-+
-+static file_xal_index_list fxil = {0, 0, NULL };
-+
-+/* stuff for redirecting calls to set_acl() from set_perms()
-+ * for keep_backup() */
-+static const struct file_struct *backup_orig_file = NULL;
-+static const char null_string[] = "";
-+static const char *backup_orig_fname = null_string;
-+static const char *backup_dest_fname = null_string;
-+static rsync_xal backup_xal;
++static item_list empty_xattr = EMPTY_ITEM_LIST;
++static item_list rsync_xal_l = EMPTY_ITEM_LIST;
 +
 +/* ------------------------------------------------------------------------- */
 +
-+static void rsync_xal_free(rsync_xal *x)
++static void rsync_xal_free(item_list *xalp)
 +{
 +	size_t i;
++	rsync_xa *rxas = xalp->items;
 +
-+	for (i = 0; i < x->count; i++) {
-+		free(x->rxas[i].name);
-+		/* free(x->rxas[i].value); */
++	for (i = 0; i < xalp->count; i++) {
++		free(rxas[i].name);
++		/* free(rxas[i].value); */
 +	}
-+	x->count = 0;
++	xalp->count = 0;
++}
++
++void free_xattr(statx *sxp)
++{
++	rsync_xal_free(sxp->xattr);
++	free(sxp->xattr);
++	sxp->xattr = NULL;
 +}
 +
 +static int rsync_xal_compare_names(const void *x1, const void *x2)
 +{
-+	const rsync_xa *xa1;
-+	const rsync_xa *xa2;
-+
-+	xa1 = x1;
-+	xa2 = x2;
++	const rsync_xa *xa1 = x1;
++	const rsync_xa *xa2 = x2;
 +	return strcmp(xa1->name, xa2->name);
 +}
 +
-+static int rsync_xal_get(const char *fname, rsync_xal *x)
++static int rsync_xal_get(const char *fname, item_list *xalp)
 +{
 +	ssize_t name_size;
 +	ssize_t datum_size;
@@ -511,12 +580,12 @@ After applying this patch, run these commands for a successful build:
 +	}
 +	if (name_size < 0) {
 +		if (errno == ENOTSUP)
-+			return -1;
++			return 0;
 +		if (errno == ERANGE) {
 +			name_size = sys_llistxattr(fname, NULL, 0);
 +			if (name_size < 0) {
-+				rprintf(FERROR, "%s: rsync_xal_get: llistxattr: %s\n",
-+					fname, strerror(errno));
++				rsyserr(FERROR, errno, "%s: rsync_xal_get: llistxattr",
++					fname);
 +				return -1;
 +			}
 +			namebuf = realloc_array(namebuf, char, name_size + 1);
@@ -525,35 +594,24 @@ After applying this patch, run these commands for a successful build:
 +			namebuf_len = name_size;
 +			name_size = sys_llistxattr(fname, namebuf, namebuf_len);
 +			if (name_size < 0) {
-+				rprintf(FERROR,
-+				    "%s: rsync_xal_get: re-llistxattr failed: %s\n",
-+				    fname, strerror(errno));
++				rsyserr(FERROR, errno,
++				    "%s: rsync_xal_get: re-llistxattr failed",
++				    fname);
 +				return -1;
 +			}
 +		} else {
-+			rprintf(FERROR,
-+			    "%s: rsync_xal_get: llistxattr failed: %s\n",
-+			    fname, strerror(errno));
++			rsyserr(FERROR, errno,
++			    "%s: rsync_xal_get: llistxattr failed:",
++			    fname);
 +			return -1;
 +		}
 +	}
-+	rsync_xal_free(x);
 +	if (name_size == 0)
 +		return 0;
 +	for (left = name_size, name = namebuf; left > 0 ; left -= len, name += len) {
++		rsync_xa *rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
++
 +		len = strlen(name) + 1;
-+
-+		if (x->count >= x->alloc) {
-+			size_t new_alloc;
-+			rsync_xa *new_rxas;
-+
-+			new_alloc = x->alloc < RSYNC_XAL_INITIAL ? RSYNC_XAL_INITIAL : x->alloc * 2;
-+			new_rxas = realloc_array(x->rxas, rsync_xa, new_alloc);
-+			if (!new_rxas)
-+				out_of_memory("rsync_xal_get");
-+			x->alloc = new_alloc;
-+			x->rxas = new_rxas;
-+		}
 +		datum_size = sys_lgetxattr(fname, name, datumbuf, datumbuf_len);
 +		if (datum_size > (ssize_t)datumbuf_len) {
 +			datum_size = -1;
@@ -565,9 +623,9 @@ After applying this patch, run these commands for a successful build:
 +			if (errno == ERANGE) {
 +				datum_size = sys_lgetxattr(fname, name, NULL, 0);
 +				if (datum_size < 0) {
-+					rprintf(FERROR,
-+					    "%s: rsync_xal_get: lgetxattr %s failed: %s\n",
-+					    fname, name, strerror(errno));
++					rsyserr(FERROR, errno,
++					    "%s: rsync_xal_get: lgetxattr %s failed",
++					    fname, name);
 +					return -1;
 +				}
 +				datumbuf = realloc_array(datumbuf, char, datum_size + 1);
@@ -576,327 +634,205 @@ After applying this patch, run these commands for a successful build:
 +				datumbuf_len = datum_size;
 +				datum_size = sys_lgetxattr(fname, name, datumbuf, datumbuf_len);
 +				if (datum_size < 0) {
-+					rprintf(FERROR,
-+					    "%s: rsync_xal_get: re-lgetxattr of %s failed: %s\n",
-+					    name, fname, strerror(errno));
++					rsyserr(FERROR, errno,
++					    "%s: rsync_xal_get: re-lgetxattr of %s failed",
++					    name, fname);
 +					return -1;
 +				}
 +			} else {
-+				rprintf(FERROR,
-+				    "%s: rsync_xal_get: lgetxattr %s failed: %s\n",
-+				    fname, name, strerror(errno));
++				rsyserr(FERROR, errno,
++				    "%s: rsync_xal_get: lgetxattr %s failed",
++				    fname, name);
 +				return -1;
 +			}
 +		}
 +		ptr = new_array(char, len + datum_size);
 +		if (!ptr)
 +			out_of_memory("rsync_xal_get");
-+		strcpy(ptr, name);
++		memcpy(ptr, name, len);
 +		if (datum_size)
 +			memcpy(ptr + len, datumbuf, datum_size);
-+		x->rxas[curr_rsync_xal.count].name_len = len;
-+		x->rxas[curr_rsync_xal.count].name = ptr;
-+		x->rxas[curr_rsync_xal.count].datum_len = datum_size;
-+		x->rxas[curr_rsync_xal.count].datum = ptr + len;
-+		x->count++;
++		rxas->name_len = len;
++		rxas->name = ptr;
++		rxas->datum_len = datum_size;
++		rxas->datum = ptr + len;
 +	}
-+	if (x->count > 1) {
-+		qsort(x->rxas, x->count, sizeof (rsync_xa), rsync_xal_compare_names);
++	if (xalp->count > 1)
++		qsort(xalp->items, xalp->count, sizeof (rsync_xa), rsync_xal_compare_names);
++	return 0;
++}
++
++/* Read the xattr(s) for this filename. */
++int get_xattr(const char *fname, statx *sxp)
++{
++	sxp->xattr = new(item_list);
++	*sxp->xattr = empty_xattr;
++	if (rsync_xal_get(fname, sxp->xattr) < 0) {
++		free_xattr(sxp);
++		return -1;
 +	}
 +	return 0;
 +}
 +
-+
-+/* generate the xattr(s) for this flist entry;
-+ * xattr(s) are either sent or cleaned-up by send_xattr() below */
-+
-+int make_xattr(UNUSED(const struct file_struct *file), const char *fname)
++static int find_matching_xattr(item_list *xalp)
 +{
-+	rsync_xal_get(fname, &curr_rsync_xal);
-+	return 0; /* TODO:  This needs to return 1 if no xattrs changed! */
-+}
-+
-+static ssize_t rsync_xal_find_matching(void)
-+{
-+	size_t i;
-+	size_t j;
++	size_t i, j;
++	item_list *lst = rsync_xal_l.items;
 +
 +	for (i = 0; i < rsync_xal_l.count; i++) {
++		rsync_xa *rxas1 = lst[i].items;
++		rsync_xa *rxas2 = xalp->items;
++
 +		/* Wrong number of elements? */
-+		if (rsync_xal_l.rxals[i].count != curr_rsync_xal.count)
++		if (lst[i].count != xalp->count)
 +			continue;
 +		/* any elements different? */
-+		for (j = 0; j < curr_rsync_xal.count; j++) {
-+			if (rsync_xal_l.rxals[i].rxas[j].name_len != curr_rsync_xal.rxas[j].name_len
-+			 || rsync_xal_l.rxals[i].rxas[j].datum_len != curr_rsync_xal.rxas[j].datum_len
-+			 || strcmp(rsync_xal_l.rxals[i].rxas[j].name, curr_rsync_xal.rxas[j].name)
-+			 || memcmp(rsync_xal_l.rxals[i].rxas[j].datum, curr_rsync_xal.rxas[j].datum, curr_rsync_xal.rxas[j].datum_len))
++		for (j = 0; j < xalp->count; j++) {
++			if (rxas1[j].name_len != rxas2[j].name_len
++			 || rxas1[j].datum_len != rxas2[j].datum_len
++			 || strcmp(rxas1[j].name, rxas2[j].name)
++			 || memcmp(rxas1[j].datum, rxas2[j].datum, rxas2[j].datum_len))
 +				break;
 +		}
 +		/* no differences found.  This is The One! */
-+		if (j == curr_rsync_xal.count)
-+			break;
++		if (j == xalp->count)
++			return i;
 +	}
-+	if (i < rsync_xal_l.count)
-+		return i;
-+	return (ssize_t)-1;
++
++	return -1;
 +}
 +
-+/* Store curr_rsync_xal on the end of rsync_xal_l */
-+static void rsync_xal_store(void)
++/* Store *xalp on the end of rsync_xal_l */
++static void rsync_xal_store(item_list *xalp)
 +{
-+	if (rsync_xal_l.count <= rsync_xal_l.alloc) {
-+		size_t new_alloc;
-+		void *new_xal;
-+
-+		new_alloc = rsync_xal_l.count < RSYNC_XAL_LIST_INITIAL ? RSYNC_XAL_LIST_INITIAL : rsync_xal_l.count * 2;
-+		new_xal = realloc_array(rsync_xal_l.rxals, rsync_xal, new_alloc);
-+		if (!new_xal)
-+			out_of_memory("rsync_xal_store");
-+		rsync_xal_l.alloc = new_alloc;
-+		rsync_xal_l.rxals = new_xal;
-+	}
-+	rsync_xal_l.rxals[rsync_xal_l.count] = curr_rsync_xal;
-+	rsync_xal_l.count++;
-+	curr_rsync_xal.count = 0;
-+	curr_rsync_xal.alloc = 0;
++	item_list *new_lst = EXPAND_ITEM_LIST(&rsync_xal_l, item_list, RSYNC_XAL_LIST_INITIAL);
++	EXPAND_ITEM_LIST(new_lst, item_list, xalp->count);
++	memcpy(new_lst->items, xalp->items, xalp->count * sizeof (item_list));
++	new_lst->count = xalp->count;
++	xalp->count = 0;
 +}
 +
-+/* send the make_xattr()-generated xattr list for this flist entry,
-+ * or clean up after an flist entry that's not being sent (f == -1) */
-+
-+void send_xattr(UNUSED(const struct file_struct *file), int f)
++/* Send the make_xattr()-generated xattr list for this flist entry. */
++void send_xattr(statx *sxp, int f)
 +{
-+	ssize_t index;
-+
-+	if (f == -1) {
-+		rsync_xal_free(&curr_rsync_xal);
-+		return;
-+	}
-+	index = rsync_xal_find_matching();
-+	if (index != -1) {
++	int ndx = find_matching_xattr(sxp->xattr);
++	if (ndx != -1) {
 +		write_byte(f, 'x');
-+		write_int(f, index);
-+		rsync_xal_free(&curr_rsync_xal);
++		write_int(f, ndx);
++		rsync_xal_free(sxp->xattr);
 +	} else {
 +		rsync_xa *rxa;
-+		size_t count;
-+
-+		count = curr_rsync_xal.count;
++		int count = sxp->xattr->count;
 +		write_byte(f, 'X');
 +		write_int(f, count);
-+		for (rxa = curr_rsync_xal.rxas; count--; rxa++) {
++		for (rxa = sxp->xattr->items; count--; rxa++) {
 +			write_int(f, rxa->name_len);
 +			write_int(f, rxa->datum_len);
 +			write_buf(f, rxa->name, rxa->name_len);
 +			write_buf(f, rxa->datum, rxa->datum_len);
 +		}
-+		rsync_xal_store();
++		rsync_xal_store(sxp->xattr);
 +	}
++	free_xattr(sxp);
 +}
 +
-+
 +/* ------------------------------------------------------------------------- */
-+/* receive and build the rsync_xattr_lists */
 +
++/* receive and build the rsync_xattr_lists */
 +void receive_xattr(struct file_struct *file, int f)
 +{
-+	char *fname;
-+	int tag;
++	static item_list temp_xattr = EMPTY_ITEM_LIST;
++	int tag = read_byte(f);
++	char *ndx_ptr = (char*)file + file_struct_len;
++	int ndx;
 +
-+	fname = f_name(file, NULL);
-+	tag = read_byte(f);
-+	if (tag != 'X' && tag != 'x') {
-+		rprintf(FERROR,
-+		    "%s: receive_xattr: unknown extended attribute type tag: %c\n",
-+		    fname, tag);
-+		exit_cleanup(RERR_STREAMIO);
-+	}
-+
-+	if (fxil.alloc <= fxil.count) {
-+		void *new_ptr;
-+		size_t new_alloc;
-+
-+		if (fxil.count <  RSYNC_XAL_LIST_INITIAL)
-+			new_alloc = fxil.alloc + RSYNC_XAL_LIST_INITIAL;
-+		else
-+			new_alloc = fxil.alloc * 2;
-+		new_ptr = realloc_array(fxil.filexalidxs, file_xal_index, new_alloc);
-+		if (!new_ptr)
-+			out_of_memory("receive_xattr");
-+		if (verbose >= 3) {
-+			rprintf(FINFO, "receive_xattr to %lu bytes, %s move\n",
-+				(unsigned long)(new_alloc * sizeof (file_xal_index)),
-+				fxil.filexalidxs == new_ptr ? "did not" : "did");
-+		}
-+
-+		fxil.filexalidxs = new_ptr;
-+		fxil.alloc = new_alloc;
-+	}
-+
-+	fxil.filexalidxs[fxil.count].file = file;
 +	if (tag == 'X') {
-+		size_t count;
-+		size_t i;
-+
-+		fxil.filexalidxs[fxil.count].xalidx = rsync_xal_l.count;
-+
-+		count = read_int(f);
-+		curr_rsync_xal.count = count;
-+		curr_rsync_xal.alloc = count;
-+		curr_rsync_xal.rxas = new_array(rsync_xa, count);
-+		if (!curr_rsync_xal.rxas)
-+			out_of_memory("receive_xattr");
++		int i, count = read_int(f);
 +		for (i = 0; i < count; i++) {
-+			size_t name_len;
-+			size_t datum_len;
 +			char *ptr;
-+
-+			name_len = read_int(f);
-+			datum_len = read_int(f);
++			rsync_xa *rxa;
++			size_t name_len = read_int(f);
++			size_t datum_len = read_int(f);
 +			if (name_len + datum_len < name_len)
 +				out_of_memory("receive_xattr"); /* overflow */
++			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
 +			ptr = new_array(char, name_len + datum_len);
 +			if (!ptr)
 +				out_of_memory("receive_xattr");
 +			read_buf(f, ptr, name_len);
 +			read_buf(f, ptr + name_len, datum_len);
-+			curr_rsync_xal.rxas[i].name_len = name_len;
-+			curr_rsync_xal.rxas[i].datum_len = datum_len;
-+			curr_rsync_xal.rxas[i].name = ptr;
-+			curr_rsync_xal.rxas[i].datum = ptr + name_len;
++			rxa->name_len = name_len;
++			rxa->datum_len = datum_len;
++			rxa->name = ptr;
++			rxa->datum = ptr + name_len;
 +		}
-+		rsync_xal_store();
-+	} else {
-+		size_t index;
-+
-+		index = read_int(f);
-+		if (index >= rsync_xal_l.count) {
-+			rprintf(FERROR, "%s: receive_xattr: xa index %lu out of range\n",
-+				fname, (unsigned long)index);
++		ndx = rsync_xal_l.count;
++		rsync_xal_store(&temp_xattr);
++	} else if (tag == 'x') {
++		ndx = read_int(f);
++		if (ndx < 0 || (size_t)ndx >= rsync_xal_l.count) {
++			rprintf(FERROR, "%s: receive_xattr: xa index %d out of range\n",
++				f_name(file, NULL), ndx);
 +			exit_cleanup(RERR_STREAMIO);
 +		}
-+		fxil.filexalidxs[fxil.count].xalidx = index;
++	} else {
++		rprintf(FERROR,
++		    "%s: receive_xattr: unknown extended attribute type tag: %c\n",
++		    f_name(file, NULL), tag);
++		exit_cleanup(RERR_STREAMIO);
++		ndx = 0; /* silence a compiler warning... */
 +	}
-+	fxil.count++;
++
++	SIVAL(ndx_ptr, 0, ndx);
 +}
 +
-+static int rsync_xal_set(const char *fname, rsync_xal *x)
++/* Turn the xattr data in statx into cached xattr data, setting the index
++ * values in the file struct. */
++void cache_xattr(struct file_struct *file, statx *sxp)
 +{
++	char *ndx_ptr = (char*)file + file_struct_len;
++	int ndx;
++
++	if (!sxp->xattr)
++		return;
++
++	ndx = find_matching_xattr(sxp->xattr);
++	if (ndx == -1)
++		rsync_xal_store(sxp->xattr);
++	free_xattr(sxp);
++
++	SIVAL(ndx_ptr, 0, ndx);
++}
++
++static int rsync_xal_set(const char *fname, item_list *xalp)
++{
++	rsync_xa *rxas = xalp->items;
 +	size_t i;
 +	int ret = 0;
 +
-+	for (i = 0; i < x->count; i++) {
-+		int status = sys_lsetxattr(fname, x->rxas[i].name, x->rxas[i].datum, x->rxas[i].datum_len, 0);
++	for (i = 0; i < xalp->count; i++) {
++		int status = sys_lsetxattr(fname, rxas[i].name, rxas[i].datum, rxas[i].datum_len, 0);
 +		if (status < 0) {
-+			rprintf(FERROR, "%s: rsync_xal_set: lsetxattr %s failed: %s\n",
-+				fname, x->rxas[i].name, strerror(errno));
++			rsyserr(FERROR, errno, "%s: rsync_xal_set: lsetxattr %s failed",
++				fname, rxas[i].name);
 +			ret = -1;
 +		}
 +	}
 +	return ret;
 +}
 +
-+/* for duplicating xattrs on backups when using backup_dir */
-+
-+int dup_xattr(const char *orig, const char *bak)
++/* Set extended attributes on indicated filename. */
++int set_xattr(const char *fname, const struct file_struct *file, UNUSED(statx *sxp))
 +{
-+	int ret;
-+
-+	if (rsync_xal_get(orig, &backup_xal) < 0)
-+		ret = rsync_xal_set(bak, &backup_xal);
-+	else
-+		ret = 0;
-+	rsync_xal_free(&backup_xal);
-+
-+	return ret;
-+}
-+
-+void push_keep_backup_xattr(const struct file_struct *file, const char *orig, const char *dest)
-+{
-+	backup_orig_file = file;
-+	backup_orig_fname = orig;
-+	backup_dest_fname = dest;
-+	rsync_xal_get(orig, &backup_xal);
-+}
-+
-+static int set_keep_backup_xal(void)
-+{
-+	return rsync_xal_set(backup_dest_fname, &backup_xal);
-+}
-+
-+void cleanup_keep_backup_xattr(void)
-+{
-+	backup_orig_file = NULL;
-+	backup_orig_fname = null_string;
-+	backup_dest_fname = null_string;
-+	rsync_xal_free(&backup_xal);
-+}
-+
-+static int file_xal_index_compare(const void *x1, const void *x2)
-+{
-+	const file_xal_index *xa1;
-+	const file_xal_index *xa2;
-+
-+	xa1 = x1;
-+	xa2 = x2;
-+	return xa1->file == xa2->file ? 0 : xa1->file < xa2->file ? -1 : 1;
-+}
-+
-+void sort_file_xattr_index_lists(void)
-+{
-+	qsort(fxil.filexalidxs, fxil.count, sizeof (file_xal_index), file_xal_index_compare);
-+}
-+
-+static int find_file_xal_index(const struct file_struct *file)
-+{
-+	int low = 0, high = fxil.count;
-+	const struct file_struct *file_mid;
-+
-+	if (!high--) {
-+		rprintf(FERROR, "find_file_xal_index: no entries\n");
-+		exit_cleanup(RERR_STREAMIO);
-+		return -1;
-+	}
-+	do {
-+		int mid = (high + low) / 2;
-+		file_mid = fxil.filexalidxs[mid].file;
-+		if (file_mid == file)
-+			return fxil.filexalidxs[mid].xalidx;
-+		if (file_mid > file)
-+			high = mid - 1;
-+		else
-+			low = mid + 1;
-+	} while (low < high);
-+	if (low == high) {
-+		file_mid = fxil.filexalidxs[low].file;
-+		if (file_mid == file)
-+			return fxil.filexalidxs[low].xalidx;
-+	}
-+	rprintf(FERROR,
-+		"find_file_xal_index: can't find entry for file in list\n");
-+	exit_cleanup(RERR_STREAMIO);
-+	return -1;
-+}
-+
-+/* set extended attributes on rsync-ed or keep_backup-ed file */
-+
-+int set_xattr(const char *fname, const struct file_struct *file)
-+{
-+	int xalidx;
-+	rsync_xal *x;
++	int ndx;
++	char *ndx_ptr = (char*)file + file_struct_len;
++	item_list *lst = rsync_xal_l.items;
 +
 +	if (dry_run)
 +		return 1; /* FIXME: --dry-run needs to compute this value */
 +
-+	if (file == backup_orig_file) {
-+		if (!strcmp(fname, backup_dest_fname))
-+			return set_keep_backup_xal();
-+	}
-+	xalidx = find_file_xal_index(file);
-+	x = &(rsync_xal_l.rxals[xalidx]);
-+
-+	return rsync_xal_set(fname, x);
++	ndx = IVAL(ndx_ptr, 0);
++	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
 +}
 +
 +#endif /* SUPPORT_XATTRS */
