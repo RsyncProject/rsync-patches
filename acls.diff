@@ -30,7 +30,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1079 @@
+@@ -0,0 +1,1099 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -522,40 +522,6 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	return *match;
 +}
 +
-+/* Turn the ACL data in statx into cached ACL data, setting the index
-+ * values in the file struct. */
-+void cache_acl(struct file_struct *file, statx *sxp)
-+{
-+	SMB_ACL_TYPE_T type;
-+	rsync_acl *racl;
-+	item_list *racl_list;
-+	char *ndx_ptr;
-+
-+	if (!sxp->acc_acl)
-+		return;
-+
-+	type = SMB_ACL_TYPE_ACCESS;
-+	racl = sxp->acc_acl;
-+	racl_list = &access_acl_list;
-+	ndx_ptr = (char*)file + file_struct_len;
-+	do {
-+		int ndx = find_matching_rsync_acl(type, racl_list, racl);
-+		if (ndx == -1) {
-+			acl_duo *new_duo;
-+			ndx = racl_list->count;
-+			new_duo = EXPAND_ITEM_LIST(racl_list, acl_duo, 1000);
-+			new_duo->racl = *racl;
-+			new_duo->sacl = NULL;
-+			*racl = empty_rsync_acl;
-+		} else
-+			rsync_acl_free(racl);
-+		SIVAL(ndx_ptr, 0, ndx);
-+		racl = sxp->def_acl;
-+		racl_list = &default_acl_list;
-+		ndx_ptr += 4;
-+	} while (BUMP_TYPE(type) && S_ISDIR(sxp->st.st_mode));
-+}
-+
 +/* Return the ACL(s) for the given filename. */
 +int get_acl(const char *fname, statx *sxp)
 +{
@@ -660,6 +626,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	SMB_ACL_TYPE_T type;
 +	rsync_acl *racl, *new_racl;
 +	item_list *racl_list;
++	int ndx;
 +
 +	if (S_ISLNK(sxp->st.st_mode))
 +		return;
@@ -668,7 +635,17 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	racl = sxp->acc_acl;
 +	racl_list = &access_acl_list;
 +	do {
-+		int ndx;
++		if (!racl) {
++			racl = new(rsync_acl);
++			if (!racl)
++				out_of_memory("send_acl");
++			*racl = empty_rsync_acl;
++			if (type == SMB_ACL_TYPE_ACCESS) {
++				rsync_acl_fake_perms(racl, sxp->st.st_mode);
++				sxp->acc_acl = racl;
++			} else
++				sxp->def_acl = racl;
++		}
 +
 +		/* Discard a superfluous mask. */
 +		if (racl->mask != NO_ENTRY && !racl->users.count && !racl->groups.count)
@@ -846,6 +823,43 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	} while (BUMP_TYPE(type) && S_ISDIR(file->mode));
 +}
 +
++/* Turn the ACL data in statx into cached ACL data, setting the index
++ * values in the file struct. */
++void cache_acl(struct file_struct *file, statx *sxp)
++{
++	SMB_ACL_TYPE_T type;
++	rsync_acl *racl;
++	item_list *racl_list;
++	char *ndx_ptr;
++	int ndx;
++
++	if (S_ISLNK(file->mode))
++		return;
++
++	type = SMB_ACL_TYPE_ACCESS;
++	racl = sxp->acc_acl;
++	racl_list = &access_acl_list;
++	ndx_ptr = (char*)file + file_struct_len;
++	do {
++		if (!racl)
++			ndx = -1;
++		else if ((ndx = find_matching_rsync_acl(type, racl_list, racl)) == -1) {
++			acl_duo *new_duo;
++			ndx = racl_list->count;
++			new_duo = EXPAND_ITEM_LIST(racl_list, acl_duo, 1000);
++			new_duo->racl = *racl;
++			new_duo->sacl = NULL;
++			*racl = empty_rsync_acl;
++		}
++		SIVAL(ndx_ptr, 0, ndx);
++		racl = sxp->def_acl;
++		racl_list = &default_acl_list;
++		ndx_ptr += 4;
++	} while (BUMP_TYPE(type) && S_ISDIR(sxp->st.st_mode));
++
++	free_acl(sxp);
++}
++
 +static mode_t change_sacl_perms(SMB_ACL_T sacl, rsync_acl *racl, mode_t old_mode, mode_t mode)
 +{
 +	SMB_ACL_ENTRY_T entry;
@@ -944,18 +958,24 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	do {
 +		acl_duo *duo_item;
 +		BOOL eq;
-+		int ndx = IVAL(ndx_ptr, 0);
++		int32 ndx = IVAL(ndx_ptr, 0);
 +
 +		ndx_ptr += 4;
 +
 +		if (type == SMB_ACL_TYPE_ACCESS) {
++			if (ndx < 0 || (size_t)ndx >= access_acl_list.count)
++				continue;
 +			duo_item = access_acl_list.items;
 +			duo_item += ndx;
-+			eq = rsync_acl_equal_enough(sxp->acc_acl, &duo_item->racl, file->mode);
++			eq = sxp->acc_acl
++			    && rsync_acl_equal_enough(sxp->acc_acl, &duo_item->racl, file->mode);
 +		} else {
++			if (ndx < 0 || (size_t)ndx >= default_acl_list.count)
++				continue;
 +			duo_item = default_acl_list.items;
 +			duo_item += ndx;
-+			eq = rsync_acl_equal(sxp->def_acl, &duo_item->racl);
++			eq = sxp->def_acl
++			    && rsync_acl_equal(sxp->def_acl, &duo_item->racl);
 +		}
 +		if (eq)
 +			continue;
