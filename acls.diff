@@ -363,7 +363,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +				save_idas(&temp_ida_list, racl, prior_list_type);
 +			prior_list_type = tag_type;
 +		}
-+		ida = EXPAND_ITEM_LIST(&temp_ida_list, id_access, 0);
++		ida = EXPAND_ITEM_LIST(&temp_ida_list, id_access, -10);
 +		ida->id = *((id_t *)qualifier);
 +		ida->access = access;
 +		sys_acl_free_qualifier(qualifier, tag_type);
@@ -543,7 +543,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +		if (ndx == -1) {
 +			acl_duo *new_duo;
 +			ndx = racl_list->count;
-+			new_duo = EXPAND_ITEM_LIST(racl_list, acl_duo, 1);
++			new_duo = EXPAND_ITEM_LIST(racl_list, acl_duo, 1000);
 +			new_duo->racl = *racl;
 +			new_duo->sacl = NULL;
 +			*racl = empty_rsync_acl;
@@ -683,7 +683,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +			write_int(f, ndx);
 +			rsync_acl_free(racl);
 +		} else {
-+			new_racl = EXPAND_ITEM_LIST(racl_list, rsync_acl, 1);
++			new_racl = EXPAND_ITEM_LIST(racl_list, rsync_acl, 1000);
 +			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'A' : 'D');
 +			send_rsync_acl(f, racl);
 +			*new_racl = *racl;
@@ -764,7 +764,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +				save_idas(&temp_ida_list, racl, prior_list_type);
 +			prior_list_type = tag_type;
 +		}
-+		ida = EXPAND_ITEM_LIST(&temp_ida_list, id_access, 0);
++		ida = EXPAND_ITEM_LIST(&temp_ida_list, id_access, -10);
 +		ida->access = access;
 +		ida->id = read_int(f);
 +		computed_mask_bits |= access;
@@ -830,7 +830,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +		if (tag == 'A' || tag == 'D') {
 +			acl_duo *duo_item;
 +			ndx = racl_list->count;
-+			duo_item = EXPAND_ITEM_LIST(racl_list, acl_duo, 1);
++			duo_item = EXPAND_ITEM_LIST(racl_list, acl_duo, 1000);
 +			receive_rsync_acl(&duo_item->racl, f, type);
 +			duo_item->sacl = NULL;
 +		} else {
@@ -5894,8 +5894,8 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	size_t malloced;
 +} item_list;
 +
-+#define EXPAND_ITEM_LIST(lp, type, fast) \
-+	(type*)expand_item_list(lp, sizeof (type), #type, fast)
++#define EXPAND_ITEM_LIST(lp, type, incr) \
++	(type*)expand_item_list(lp, sizeof (type), #type, incr)
 +
  #include "byteorder.h"
  #include "lib/mdfour.h"
@@ -6728,25 +6728,24 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		for (i = 0; i < flist->count; i++)
 --- old/util.c
 +++ new/util.c
-@@ -1446,3 +1446,32 @@ int bitbag_next_bit(struct bitbag *bb, i
+@@ -1446,3 +1446,31 @@ int bitbag_next_bit(struct bitbag *bb, i
  
  	return -1;
  }
 +
 +void *expand_item_list(item_list *lp, size_t item_size,
-+		       const char *desc, int fast)
++		       const char *desc, int incr)
 +{
 +	/* First time through, 0 <= 0, so list is expanded. */
 +	if (lp->malloced <= lp->count) {
 +		void *new_ptr;
 +		size_t new_size = lp->malloced;
-+		if (fast) {
-+			if (new_size < 1000)
-+				new_size += 1000;
-+			else
-+				new_size *= 2;
-+		} else
-+			new_size += 10;
++		if (incr < 0)
++			new_size -= incr; /* increase slowly */
++		else if (new_size < incr)
++			new_size += incr;
++		else
++			new_size *= 2;
 +		new_ptr = realloc_array(lp->items, char, new_size * item_size);
 +		if (verbose >= 4) {
 +			rprintf(FINFO, "[%s] expand %s to %.0f bytes, did%s move\n",
