@@ -30,7 +30,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1099 @@
+@@ -0,0 +1,1093 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -160,9 +160,6 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +{
 +	racl->user_obj = (mode >> 6) & 7;
 +	racl->group_obj = (mode >> 3) & 7;
-+#ifdef ACLS_NEED_MASK
-+	racl->mask = (mode >> 3) & 7;
-+#endif
 +	racl->other = mode & 7;
 +}
 +
@@ -185,19 +182,19 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +static BOOL rsync_acl_equal(const rsync_acl *racl1, const rsync_acl *racl2)
 +{
-+	return (racl1->user_obj == racl2->user_obj
-+	     && racl1->group_obj == racl2->group_obj
-+	     && racl1->mask == racl2->mask
-+	     && racl1->other == racl2->other
-+	     && ida_entries_equal(&racl1->users, &racl2->users)
-+	     && ida_entries_equal(&racl1->groups, &racl2->groups));
++	return racl1->user_obj == racl2->user_obj
++	    && racl1->group_obj == racl2->group_obj
++	    && racl1->mask == racl2->mask
++	    && racl1->other == racl2->other
++	    && ida_entries_equal(&racl1->users, &racl2->users)
++	    && ida_entries_equal(&racl1->groups, &racl2->groups);
 +}
 +
 +/* Are the extended (non-permission-bit) entries equal?  If so, the rest of
 + * the ACL will be handled by the normal mode-preservation code.  This is
 + * only meaningful for access ACLs!  Note: the 1st arg is a fully-populated
 + * rsync_acl, but the 2nd parameter can be a condensed rsync_acl, which means
-+ * that it might have several of its perm objects set to NO_ENTRY. */
++ * that it might have several of its permission objects set to NO_ENTRY. */
 +static BOOL rsync_acl_equal_enough(const rsync_acl *racl1,
 +				   const rsync_acl *racl2, mode_t m)
 +{
@@ -289,7 +286,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +/* === System ACLs === */
 +
-+/* Unpack system acl -> rsync acl verbatim.  Return whether we succeeded. */
++/* Unpack system ACL -> rsync ACL verbatim.  Return whether we succeeded. */
 +static BOOL unpack_smb_acl(rsync_acl *racl, SMB_ACL_T sacl)
 +{
 +	static item_list temp_ida_list = EMPTY_ITEM_LIST;
@@ -427,7 +424,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	return -1;
 +}
 +
-+/* Pack rsync acl -> system acl verbatim.  Return whether we succeeded. */
++/* Pack rsync ACL -> system ACL verbatim.  Return whether we succeeded. */
 +static BOOL pack_smb_acl(SMB_ACL_T *smb_acl, const rsync_acl *racl)
 +{
 +#ifdef ACLS_NEED_MASK
@@ -522,7 +519,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	return *match;
 +}
 +
-+/* Return the ACL(s) for the given filename. */
++/* Return the Access Control List for the given filename. */
 +int get_acl(const char *fname, statx *sxp)
 +{
 +	SMB_ACL_TYPE_T type;
@@ -570,7 +567,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +/* The general strategy with the tag_type <-> character mapping is that
 + * lowercase implies that no qualifier follows, where uppercase does.
-+ * A similar idiom for the acl type (access or default) itself, but
++ * A similar idiom for the ACL type (access or default) itself, but
 + * lowercase in this instance means there's no ACL following, so the
 + * ACL is a repeat, so the receiver should reuse the last of the same
 + * type ACL. */
@@ -594,7 +591,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	}
 +}
 +
-+/* Send an rsync acl over the file descriptor. */
++/* Send an rsync ACL over the file descriptor. */
 +static void send_rsync_acl(int f, const rsync_acl *racl)
 +{
 +	size_t count = count_racl_entries(racl);
@@ -647,9 +644,6 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +				sxp->def_acl = racl;
 +		}
 +
-+		/* Discard a superfluous mask. */
-+		if (racl->mask != NO_ENTRY && !racl->users.count && !racl->groups.count)
-+			racl->mask = NO_ENTRY;
 +		/* Avoid sending values that can be inferred from other data,
 +		 * but only when preserve_acls == 1 (it is 2 when we must be
 +		 * backward compatible with older acls.diff versions). */
@@ -868,7 +862,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +	if (S_ISDIR(mode)) {
 +		/* If the sticky bit is going on, it's not safe to allow all
-+		 * the new ACLs to go into effect before it gets set. */
++		 * the new ACL to go into effect before it gets set. */
 +#ifdef SMB_ACL_LOSES_SPECIAL_MODE_BITS
 +		if (mode & S_ISVTX)
 +			mode &= ~0077;
@@ -877,7 +871,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +			mode &= ~0077;
 +	} else {
 +		/* If setuid or setgid is going off, it's not safe to allow all
-+		 * the new ACLs to go into effect before they get cleared. */
++		 * the new ACL to go into effect before they get cleared. */
 +		if ((old_mode & S_ISUID && !(mode & S_ISUID))
 +		 || (old_mode & S_ISGID && !(mode & S_ISGID)))
 +			mode &= ~0077;
@@ -938,12 +932,12 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +/* Set ACL on indicated filename.
 + *
-+ * This sets extended access ACL entries and default ACLs.  If convenient,
-+ * it sets permission bits along with the access ACLs and signals having
++ * This sets extended access ACL entries and default ACL.  If convenient,
++ * it sets permission bits along with the access ACL and signals having
 + * done so by modifying sxp->st.st_mode.
 + *
 + * Returns 1 for unchanged, 0 for changed, -1 for failed.  Call this
-+ * with fname set to NULL to just check if the ACLs are unchanged. */
++ * with fname set to NULL to just check if the ACL is unchanged. */
 +int set_acl(const char *fname, const struct file_struct *file, statx *sxp)
 +{
 +	int unchanged = 1;
@@ -1030,7 +1024,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +static int enum_ida_index = 0;
 +static size_t enum_racl_index = 0;
 +
-+/* This returns the next tag_type id from the given acl for the next entry,
++/* This returns the next tag_type id from the given ACL for the next entry,
 + * or it returns 0 if there are no more tag_type ids in the acl. */
 +static id_t *next_ace_id(SMB_ACL_TAG_T tag_type, const rsync_acl *racl)
 +{
