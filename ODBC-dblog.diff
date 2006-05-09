@@ -21,23 +21,23 @@ See the file "instructions" (after applying this patch) for more info.
  OBJS3=progress.o pipe.o
 --- old/cleanup.c
 +++ new/cleanup.c
-@@ -23,6 +23,7 @@
- 
+@@ -27,6 +27,7 @@ extern int am_server;
+ extern int am_daemon;
  extern int io_error;
  extern int keep_partial;
 +extern int am_generator;
  extern int log_got_error;
  extern char *partial_dir;
- 
-@@ -149,8 +150,13 @@ void _exit_cleanup(int code, const char 
+ extern char *logfile_name;
+@@ -154,8 +155,13 @@ void _exit_cleanup(int code, const char 
  			code = RERR_PARTIAL;
  	}
  
--	if (code)
-+	if (code) {
+-	if (code || am_daemon || (logfile_name && (am_server || !verbose)))
++	if (code || am_daemon || (logfile_name && (am_server || !verbose))) {
  		log_exit(code, file, line);
 +#ifdef HAVE_LIBODBC
-+		db_log_exit(code,file,line);
++		db_log_exit(code, file, line);
 +		db_log_close();
 +#endif
 +	}
@@ -68,7 +68,7 @@ See the file "instructions" (after applying this patch) for more info.
  				am_sender ? "on" : "to",
 --- old/configure.in
 +++ new/configure.in
-@@ -540,6 +540,12 @@ if test x"$with_included_popt" != x"yes"
+@@ -577,6 +577,12 @@ if test x"$with_included_popt" != x"yes"
      AC_CHECK_LIB(popt, poptGetContext, , [with_included_popt=yes])
  fi
  
@@ -1046,7 +1046,7 @@ See the file "instructions" (after applying this patch) for more info.
  FN_LOCAL_BOOL(lp_list, list)
 --- old/log.c
 +++ new/log.c
-@@ -94,7 +94,7 @@ struct {
+@@ -91,7 +91,7 @@ struct {
  /*
   * Map from rsync error code to name, or return NULL.
   */
@@ -1055,21 +1055,9 @@ See the file "instructions" (after applying this patch) for more info.
  {
  	int i;
  	for (i = 0; rerr_names[i].name; i++) {
---- old/main.c
-+++ new/main.c
-@@ -168,6 +168,9 @@ static void handle_stats(int f)
- 
- 	if (am_daemon) {
- 		log_exit(0, __FILE__, __LINE__);
-+#ifdef HAVE_LIBODBC
-+		db_log_exit(0,__FILE__,__LINE__);
-+#endif
- 		if (f == -1 || !am_sender)
- 			return;
- 	}
 --- old/receiver.c
 +++ new/receiver.c
-@@ -113,6 +113,10 @@ static int get_tmpname(char *fnametmp, c
+@@ -109,6 +109,10 @@ static int get_tmpname(char *fnametmp, c
  
  	if (maxname < 1) {
  		rprintf(FERROR, "temporary filename too long: %s\n", fname);
@@ -1080,7 +1068,7 @@ See the file "instructions" (after applying this patch) for more info.
  		fnametmp[0] = '\0';
  		return 0;
  	}
-@@ -229,6 +233,11 @@ static int receive_data(int f_in, char *
+@@ -225,6 +229,11 @@ static int receive_data(int f_in, char *
  					rsyserr(FERROR, errno,
  						"lseek failed on %s",
  						full_fname(fname));
@@ -1092,7 +1080,7 @@ See the file "instructions" (after applying this patch) for more info.
  					exit_cleanup(RERR_FILEIO);
  				}
  				continue;
-@@ -254,6 +263,9 @@ static int receive_data(int f_in, char *
+@@ -250,6 +259,9 @@ static int receive_data(int f_in, char *
  	    report_write_error:
  		rsyserr(FERROR, errno, "write failed on %s",
  			full_fname(fname));
@@ -1102,7 +1090,7 @@ See the file "instructions" (after applying this patch) for more info.
  		exit_cleanup(RERR_FILEIO);
  	}
  
-@@ -297,6 +309,12 @@ static void handle_delayed_updates(struc
+@@ -293,6 +305,12 @@ static void handle_delayed_updates(struc
  				rsyserr(FERROR, errno,
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
@@ -1115,7 +1103,7 @@ See the file "instructions" (after applying this patch) for more info.
  			} else {
  				if (remove_sent_files
  				    || (preserve_hard_links
-@@ -419,6 +437,9 @@ int recv_files(int f_in, struct file_lis
+@@ -414,6 +432,9 @@ int recv_files(int f_in, struct file_lis
  		if (server_filter_list.head
  		    && check_filter(&server_filter_list, fname, 0) < 0) {
  			rprintf(FERROR, "attempt to hack rsync failed.\n");
@@ -1125,7 +1113,7 @@ See the file "instructions" (after applying this patch) for more info.
  			exit_cleanup(RERR_PROTOCOL);
  		}
  
-@@ -474,6 +495,11 @@ int recv_files(int f_in, struct file_lis
+@@ -469,6 +490,11 @@ int recv_files(int f_in, struct file_lis
  					rprintf(FERROR,
  						"invalid basis_dir index: %d.\n",
  						fnamecmp_type);
@@ -1137,7 +1125,7 @@ See the file "instructions" (after applying this patch) for more info.
  					exit_cleanup(RERR_PROTOCOL);
  				}
  				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
-@@ -519,6 +545,9 @@ int recv_files(int f_in, struct file_lis
+@@ -514,6 +540,9 @@ int recv_files(int f_in, struct file_lis
  		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR, errno, "fstat %s failed",
  				full_fname(fnamecmp));
@@ -1147,7 +1135,7 @@ See the file "instructions" (after applying this patch) for more info.
  			discard_receive_data(f_in, file->length);
  			close(fd1);
  			continue;
-@@ -532,6 +561,9 @@ int recv_files(int f_in, struct file_lis
+@@ -527,6 +556,9 @@ int recv_files(int f_in, struct file_lis
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -1157,7 +1145,7 @@ See the file "instructions" (after applying this patch) for more info.
  			discard_receive_data(f_in, file->length);
  			close(fd1);
  			continue;
-@@ -555,6 +587,9 @@ int recv_files(int f_in, struct file_lis
+@@ -550,6 +582,9 @@ int recv_files(int f_in, struct file_lis
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "open %s failed",
  					full_fname(fname));
@@ -1167,7 +1155,7 @@ See the file "instructions" (after applying this patch) for more info.
  				discard_receive_data(f_in, file->length);
  				if (fd1 != -1)
  					close(fd1);
-@@ -588,6 +623,10 @@ int recv_files(int f_in, struct file_lis
+@@ -583,6 +618,10 @@ int recv_files(int f_in, struct file_lis
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "mkstemp %s failed",
  					full_fname(fnametmp));
@@ -1178,7 +1166,7 @@ See the file "instructions" (after applying this patch) for more info.
  				discard_receive_data(f_in, file->length);
  				if (fd1 != -1)
  					close(fd1);
-@@ -610,12 +649,19 @@ int recv_files(int f_in, struct file_lis
+@@ -605,12 +644,19 @@ int recv_files(int f_in, struct file_lis
  
  		if (!log_before_transfer)
  			log_item(file, &initial_stats, iflags, NULL);
@@ -1213,7 +1201,7 @@ See the file "instructions" (after applying this patch) for more info.
  				SIVAL(numbuf, 0, i);
 --- old/sender.c
 +++ new/sender.c
-@@ -352,6 +352,9 @@ void send_files(struct file_list *flist,
+@@ -354,6 +354,9 @@ void send_files(struct file_list *flist,
  
  		if (!log_before_transfer)
  			log_item(file, &initial_stats, iflags, NULL);
