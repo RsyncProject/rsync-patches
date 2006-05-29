@@ -69,9 +69,9 @@ After applying this patch, run these commands for a successful build:
  int daemon_bwlimit = 0;
  int bwlimit = 0;
  int fuzzy_basis = 0;
-@@ -151,6 +152,8 @@ char *log_format = NULL;
- char *logfile_name = NULL;
+@@ -151,6 +152,8 @@ char *logfile_name = NULL;
  char *logfile_format = NULL;
+ char *stdout_format = NULL;
  char *password_file = NULL;
 +char *source_filter = NULL;
 +char *dest_filter = NULL;
@@ -86,7 +86,7 @@ After applying this patch, run these commands for a successful build:
    rprintf(F,"     --modify-window=NUM     compare mod-times with reduced accuracy\n");
    rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F," -y, --fuzzy                 find similar file for basis if no dest file\n");
-@@ -373,6 +377,8 @@ void usage(enum logcode F)
+@@ -374,6 +378,8 @@ void usage(enum logcode F)
    rprintf(F,"     --write-batch=FILE      write a batched update to FILE\n");
    rprintf(F,"     --only-write-batch=FILE like --write-batch but w/o updating destination\n");
    rprintf(F,"     --read-batch=FILE       read a batched update from FILE\n");
@@ -95,7 +95,7 @@ After applying this patch, run these commands for a successful build:
    rprintf(F,"     --protocol=NUM          force an older protocol version to be used\n");
  #ifdef INET6
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
-@@ -453,6 +459,7 @@ static struct poptOption long_options[] 
+@@ -454,6 +460,7 @@ static struct poptOption long_options[] 
    {"chmod",            0,  POPT_ARG_STRING, 0, OPT_CHMOD, 0, 0 },
    {"ignore-times",    'I', POPT_ARG_NONE,   &ignore_times, 0, 0, 0 },
    {"size-only",        0,  POPT_ARG_NONE,   &size_only, 0, 0, 0 },
@@ -103,7 +103,7 @@ After applying this patch, run these commands for a successful build:
    {"one-file-system", 'x', POPT_ARG_NONE,   0, 'x', 0, 0 },
    {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
    {"existing",         0,  POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
-@@ -528,6 +535,8 @@ static struct poptOption long_options[] 
+@@ -531,6 +538,8 @@ static struct poptOption long_options[] 
    {"password-file",    0,  POPT_ARG_STRING, &password_file, 0, 0, 0 },
    {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
    {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
@@ -112,7 +112,7 @@ After applying this patch, run these commands for a successful build:
    {"protocol",         0,  POPT_ARG_INT,    &protocol_version, 0, 0, 0 },
    {"checksum-seed",    0,  POPT_ARG_INT,    &checksum_seed, 0, 0, 0 },
    {"server",           0,  POPT_ARG_NONE,   0, OPT_SERVER, 0, 0 },
-@@ -1406,6 +1415,16 @@ int parse_arguments(int *argc, const cha
+@@ -1409,6 +1418,16 @@ int parse_arguments(int *argc, const cha
  		}
  	}
  
@@ -129,7 +129,7 @@ After applying this patch, run these commands for a successful build:
  	if (files_from) {
  		char *h, *p;
  		int q;
-@@ -1671,6 +1690,25 @@ void server_options(char **args,int *arg
+@@ -1675,6 +1694,25 @@ void server_options(char **args,int *arg
  			args[ac++] = "--size-only";
  	}
  
@@ -157,7 +157,7 @@ After applying this patch, run these commands for a successful build:
  			goto oom;
 --- old/pipe.c
 +++ new/pipe.c
-@@ -159,3 +159,77 @@ pid_t local_child(int argc, char **argv,
+@@ -166,3 +166,77 @@ pid_t local_child(int argc, char **argv,
  
  	return pid;
  }
@@ -237,16 +237,16 @@ After applying this patch, run these commands for a successful build:
 +}
 --- old/receiver.c
 +++ new/receiver.c
-@@ -49,6 +49,7 @@ extern int inplace;
+@@ -48,6 +48,7 @@ extern int checksum_seed;
+ extern int inplace;
  extern int delay_updates;
  extern struct stats stats;
- extern char *log_format;
 +extern char *dest_filter;
+ extern char *stdout_format;
  extern char *tmpdir;
  extern char *partial_dir;
- extern char *basis_dir[];
-@@ -345,6 +346,8 @@ int recv_files(int f_in, struct file_lis
- 	int itemizing = am_server ? logfile_format_has_i : log_format_has_i;
+@@ -348,6 +349,8 @@ int recv_files(int f_in, struct file_lis
+ 	enum logcode log_code = log_before_transfer ? FLOG : FINFO;
  	int max_phase = protocol_version >= 29 ? 2 : 1;
  	int i, recv_ok;
 +	pid_t pid = 0;
@@ -254,7 +254,7 @@ After applying this patch, run these commands for a successful build:
  
  	if (verbose > 2)
  		rprintf(FINFO,"recv_files(%d) starting\n",flist->count);
-@@ -357,6 +360,23 @@ int recv_files(int f_in, struct file_lis
+@@ -360,6 +363,23 @@ int recv_files(int f_in, struct file_lis
  	if (delay_updates)
  		delayed_bits = bitbag_create(flist->count);
  
@@ -278,7 +278,7 @@ After applying this patch, run these commands for a successful build:
  	while (1) {
  		cleanup_disable();
  
-@@ -599,6 +619,9 @@ int recv_files(int f_in, struct file_lis
+@@ -600,6 +620,9 @@ int recv_files(int f_in, struct file_lis
  		else if (!am_server && verbose && do_progress)
  			rprintf(FINFO, "%s\n", fname);
  
@@ -325,7 +325,7 @@ After applying this patch, run these commands for a successful build:
       --modify-window=NUM     compare mod-times with reduced accuracy
   -T, --temp-dir=DIR          create temporary files in directory DIR
   -y, --fuzzy                 find similar file for basis if no dest file
-@@ -395,6 +396,8 @@ to the detailed description below for a 
+@@ -396,6 +397,8 @@ to the detailed description below for a 
       --write-batch=FILE      write a batched update to FILE
       --only-write-batch=FILE like --write-batch but w/o updating dest
       --read-batch=FILE       read a batched update from FILE
@@ -334,7 +334,7 @@ After applying this patch, run these commands for a successful build:
       --protocol=NUM          force an older protocol version to be used
       --checksum-seed=NUM     set block/file checksum seed (advanced)
   -4, --ipv4                  prefer IPv4
-@@ -1732,6 +1735,33 @@ file previously generated by bf(--write-
+@@ -1733,6 +1736,33 @@ file previously generated by bf(--write-
  If em(FILE) is bf(-), the batch data will be read from standard input.
  See the "BATCH MODE" section for details.
  
@@ -370,16 +370,16 @@ After applying this patch, run these commands for a successful build:
  version of rsync.  For instance, if rsync 2.6.4 is being used with the
 --- old/sender.c
 +++ new/sender.c
-@@ -44,6 +44,7 @@ extern int write_batch;
+@@ -43,6 +43,7 @@ extern int batch_fd;
+ extern int write_batch;
  extern struct stats stats;
  extern struct file_list *the_file_list;
- extern char *log_format;
 +extern char *source_filter;
+ extern char *stdout_format;
  
  
- /**
-@@ -221,6 +222,26 @@ void send_files(struct file_list *flist,
- 	int itemizing = am_server ? logfile_format_has_i : log_format_has_i;
+@@ -222,6 +223,26 @@ void send_files(struct file_list *flist,
+ 	enum logcode log_code = log_before_transfer ? FLOG : FINFO;
  	int f_xfer = write_batch < 0 ? batch_fd : f_out;
  	int i, j;
 +	char *filter_argv[MAX_FILTER_ARGS + 1];
@@ -447,7 +447,7 @@ After applying this patch, run these commands for a successful build:
  		if (st.st_size) {
  			int32 read_size = MAX(s->blength * 3, MAX_MAP_SIZE);
  			mbuf = map_file(fd, st.st_size, read_size, s->blength);
-@@ -365,6 +414,8 @@ void send_files(struct file_list *flist,
+@@ -364,6 +413,8 @@ void send_files(struct file_list *flist,
  			}
  		}
  		close(fd);
