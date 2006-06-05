@@ -367,15 +367,15 @@ the file's name.
 +#endif
 --- old/options.c
 +++ new/options.c
-@@ -144,6 +144,7 @@ char *backup_suffix = NULL;
+@@ -145,6 +145,7 @@ char *backup_suffix = NULL;
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
 +char *link_by_hash_dir = NULL;
  char *config_file = NULL;
  char *shell_cmd = NULL;
- char *log_format = NULL;
-@@ -337,6 +338,7 @@ void usage(enum logcode F)
+ char *logfile_name = NULL;
+@@ -347,6 +348,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -383,7 +383,7 @@ the file's name.
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
-@@ -383,7 +385,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -396,7 +398,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -392,7 +392,7 @@ the file's name.
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -477,6 +479,7 @@ static struct poptOption long_options[] 
+@@ -494,6 +496,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -400,7 +400,7 @@ the file's name.
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
-@@ -1062,6 +1065,21 @@ int parse_arguments(int *argc, const cha
+@@ -1083,6 +1086,21 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
@@ -422,7 +422,7 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1710,6 +1728,11 @@ void server_options(char **args,int *arg
+@@ -1737,6 +1755,11 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -436,15 +436,15 @@ the file's name.
  			args[ac++] = "--files-from";
 --- old/receiver.c
 +++ new/receiver.c
-@@ -53,6 +53,7 @@ extern int delay_updates;
+@@ -50,6 +50,7 @@ extern int delay_updates;
  extern struct stats stats;
- extern char *log_format;
+ extern char *stdout_format;
  extern char *tmpdir;
 +extern char *link_by_hash_dir;
  extern char *partial_dir;
  extern char *basis_dir[];
  extern struct file_list *the_file_list;
-@@ -124,12 +125,13 @@ static int get_tmpname(char *fnametmp, c
+@@ -121,12 +122,13 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -459,7 +459,7 @@ the file's name.
  	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -149,6 +151,9 @@ static int receive_data(int f_in, char *
+@@ -146,6 +148,9 @@ static int receive_data(int f_in, char *
  	} else
  		mapbuf = NULL;
  
@@ -469,7 +469,7 @@ the file's name.
  	sum_init(checksum_seed);
  
  	if (append_mode) {
-@@ -191,6 +196,8 @@ static int receive_data(int f_in, char *
+@@ -188,6 +193,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -478,7 +478,7 @@ the file's name.
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -217,6 +224,8 @@ static int receive_data(int f_in, char *
+@@ -214,6 +221,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -487,7 +487,7 @@ the file's name.
  		}
  
  		if (inplace) {
-@@ -257,6 +266,8 @@ static int receive_data(int f_in, char *
+@@ -256,6 +265,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_end(file_sum1);
@@ -496,7 +496,7 @@ the file's name.
  
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -272,7 +283,7 @@ static int receive_data(int f_in, char *
+@@ -271,7 +282,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -505,7 +505,7 @@ the file's name.
  }
  
  static void handle_delayed_updates(struct file_list *flist, char *local_name)
-@@ -604,8 +615,12 @@ int recv_files(int f_in, struct file_lis
+@@ -601,8 +612,12 @@ int recv_files(int f_in, struct file_lis
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
@@ -517,11 +517,11 @@ the file's name.
 -				       fname, fd2, file->length);
 +				       fname, fd2, file->length, file->u.sum);
  
- 		if (!log_before_transfer)
- 			log_item(file, &initial_stats, iflags, NULL);
+ 		log_item(log_code, file, &initial_stats, iflags, NULL);
+ 
 --- old/rsync.c
 +++ new/rsync.c
-@@ -49,6 +49,7 @@ extern int inplace;
+@@ -48,6 +48,7 @@ extern int inplace;
  extern int keep_dirlinks;
  extern int make_backups;
  extern mode_t orig_umask;
@@ -529,7 +529,7 @@ the file's name.
  extern struct stats stats;
  extern struct chmod_mode_struct *daemon_chmod_modes;
  
-@@ -269,8 +270,15 @@ void finish_transfer(char *fname, char *
+@@ -266,8 +267,15 @@ void finish_transfer(char *fname, char *
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
@@ -549,7 +549,7 @@ the file's name.
  			ret == -2 ? "copy" : "rename",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -640,6 +640,14 @@ struct stats {
+@@ -644,6 +644,14 @@ struct stats {
  	int current_file_index;
  };
  
@@ -566,7 +566,7 @@ the file's name.
  #include "byteorder.h"
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -363,6 +363,7 @@ to the detailed description below for a 
+@@ -365,6 +365,7 @@ to the detailed description below for a 
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
