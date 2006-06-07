@@ -46,17 +46,17 @@ See the file "instructions" (after applying this patch) for more info.
  		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): about to call exit(%d)\n",
 --- old/clientserver.c
 +++ new/clientserver.c
-@@ -392,6 +392,9 @@ static int rsync_module(int f_in, int f_
+@@ -390,6 +390,9 @@ static int rsync_module(int f_in, int f_
  		   XFLG_ABS_IF_SLASH | XFLG_OLD_PREFIXES);
  
- 	log_init();
+ 	log_init(1);
 +#ifdef HAVE_LIBODBC
 +	db_log_open();
 +#endif
  
  #ifdef HAVE_PUTENV
  	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i)) {
-@@ -630,6 +633,9 @@ static int rsync_module(int f_in, int f_
+@@ -628,6 +631,9 @@ static int rsync_module(int f_in, int f_
  			rprintf(FLOG, "rsync %s %s from %s@%s (%s)\n",
  				am_sender ? "on" : "to",
  				request, auth_user, host, addr);
@@ -897,7 +897,7 @@ See the file "instructions" (after applying this patch) for more info.
 +    automatically generates unique IDs).  Defaults to True.
 --- old/loadparm.c
 +++ new/loadparm.c
-@@ -120,9 +120,16 @@ typedef struct
+@@ -122,9 +122,16 @@ typedef struct
  {
  	char *auth_users;
  	char *comment;
@@ -914,7 +914,7 @@ See the file "instructions" (after applying this patch) for more info.
  	char *filter;
  	char *gid;
  	char *hosts_allow;
-@@ -139,13 +146,19 @@ typedef struct
+@@ -142,14 +149,20 @@ typedef struct
  	char *prexfer_exec;
  	char *refuse_options;
  	char *secrets_file;
@@ -927,6 +927,7 @@ See the file "instructions" (after applying this patch) for more info.
  
  	int max_connections;
  	int max_verbosity;
+ 	int syslog_facility;
  	int timeout;
  
 +	BOOL database_logging;
@@ -934,7 +935,7 @@ See the file "instructions" (after applying this patch) for more info.
  	BOOL ignore_errors;
  	BOOL ignore_nonreadable;
  	BOOL list;
-@@ -165,9 +178,16 @@ static service sDefault =
+@@ -169,9 +182,16 @@ static service sDefault =
  {
   /* auth_users; */		NULL,
   /* comment; */			NULL,
@@ -951,7 +952,7 @@ See the file "instructions" (after applying this patch) for more info.
   /* filter; */			NULL,
   /* gid; */			NOBODY_GROUP,
   /* hosts_allow; */		NULL,
-@@ -184,13 +204,19 @@ static service sDefault =
+@@ -189,14 +209,20 @@ static service sDefault =
   /* prexfer_exec; */		NULL,
   /* refuse_options; */		NULL,
   /* secrets_file; */		NULL,
@@ -964,6 +965,7 @@ See the file "instructions" (after applying this patch) for more info.
  
   /* max_connections; */		0,
   /* max_verbosity; */		1,
+  /* syslog_facility; */		LOG_DAEMON,
   /* timeout; */			0,
  
 + /* database_logging; */	False,
@@ -971,7 +973,7 @@ See the file "instructions" (after applying this patch) for more info.
   /* ignore_errors; */		False,
   /* ignore_nonreadable; */	False,
   /* list; */			True,
-@@ -291,10 +317,19 @@ static struct parm_struct parm_table[] =
+@@ -295,10 +321,19 @@ static struct parm_struct parm_table[] =
  
   {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
   {"comment",           P_STRING, P_LOCAL, &sDefault.comment,           NULL,0},
@@ -991,13 +993,14 @@ See the file "instructions" (after applying this patch) for more info.
   {"gid",               P_STRING, P_LOCAL, &sDefault.gid,               NULL,0},
   {"hosts allow",       P_STRING, P_LOCAL, &sDefault.hosts_allow,       NULL,0},
   {"hosts deny",        P_STRING, P_LOCAL, &sDefault.hosts_deny,        NULL,0},
-@@ -318,11 +353,15 @@ static struct parm_struct parm_table[] =
+@@ -323,12 +358,16 @@ static struct parm_struct parm_table[] =
   {"read only",         P_BOOL,   P_LOCAL, &sDefault.read_only,         NULL,0},
   {"refuse options",    P_STRING, P_LOCAL, &sDefault.refuse_options,    NULL,0},
   {"secrets file",      P_STRING, P_LOCAL, &sDefault.secrets_file,      NULL,0},
 + {"sequence name",     P_STRING, P_LOCAL, &sDefault.sequence_name,     NULL,0},
 + {"session table name",P_STRING, P_LOCAL, &sDefault.session_table_name,NULL,0},
   {"strict modes",      P_BOOL,   P_LOCAL, &sDefault.strict_modes,      NULL,0},
+  {"syslog facility",   P_ENUM,   P_LOCAL, &sDefault.syslog_facility,enum_facilities,0},
   {"temp dir",          P_PATH,   P_LOCAL, &sDefault.temp_dir,          NULL,0},
   {"timeout",           P_INTEGER,P_LOCAL, &sDefault.timeout,           NULL,0},
   {"transfer logging",  P_BOOL,   P_LOCAL, &sDefault.transfer_logging,  NULL,0},
@@ -1007,7 +1010,7 @@ See the file "instructions" (after applying this patch) for more info.
   {"use chroot",        P_BOOL,   P_LOCAL, &sDefault.use_chroot,        NULL,0},
   {"write only",        P_BOOL,   P_LOCAL, &sDefault.write_only,        NULL,0},
   {NULL,                P_BOOL,   P_NONE,  NULL,                        NULL,0}
-@@ -383,9 +422,16 @@ FN_GLOBAL_INTEGER(lp_syslog_facility, &G
+@@ -384,9 +423,16 @@ FN_GLOBAL_INTEGER(lp_rsync_port, &Global
  
  FN_LOCAL_STRING(lp_auth_users, auth_users)
  FN_LOCAL_STRING(lp_comment, comment)
@@ -1024,12 +1027,13 @@ See the file "instructions" (after applying this patch) for more info.
  FN_LOCAL_STRING(lp_filter, filter)
  FN_LOCAL_STRING(lp_gid, gid)
  FN_LOCAL_STRING(lp_hosts_allow, hosts_allow)
-@@ -402,13 +448,19 @@ FN_LOCAL_STRING(lp_postxfer_exec, postxf
+@@ -404,14 +450,20 @@ FN_LOCAL_STRING(lp_postxfer_exec, postxf
  FN_LOCAL_STRING(lp_prexfer_exec, prexfer_exec)
  FN_LOCAL_STRING(lp_refuse_options, refuse_options)
  FN_LOCAL_STRING(lp_secrets_file, secrets_file)
 +FN_LOCAL_STRING(lp_sequence_name,sequence_name)
 +FN_LOCAL_STRING(lp_session_table_name,session_table_name)
+ FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
  FN_LOCAL_STRING(lp_temp_dir, temp_dir)
 +FN_LOCAL_STRING(lp_transfer_table_name, transfer_table_name)
  FN_LOCAL_STRING(lp_uid, uid)
@@ -1046,7 +1050,7 @@ See the file "instructions" (after applying this patch) for more info.
  FN_LOCAL_BOOL(lp_list, list)
 --- old/log.c
 +++ new/log.c
-@@ -91,7 +91,7 @@ struct {
+@@ -92,7 +92,7 @@ struct {
  /*
   * Map from rsync error code to name, or return NULL.
   */
