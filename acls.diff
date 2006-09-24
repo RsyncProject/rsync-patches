@@ -9,7 +9,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 
 --- old/Makefile.in
 +++ new/Makefile.in
-@@ -25,15 +25,15 @@ VERSION=@VERSION@
+@@ -26,15 +26,15 @@ VERSION=@VERSION@
  .SUFFIXES:
  .SUFFIXES: .c .o
  
@@ -1218,7 +1218,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			robust_unlink(fname); /* Just in case... */
 --- old/configure.in
 +++ new/configure.in
-@@ -490,6 +490,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
+@@ -515,6 +515,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
      AC_CHECK_LIB(resolv, strcasecmp)
  fi
  
@@ -1230,7 +1230,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  dnl At the moment we don't test for a broken memcmp(), because all we
  dnl need to do is test for equality, not comparison, and it seems that
  dnl every platform has a memcmp that can do at least that.
-@@ -754,6 +759,78 @@ AC_SUBST(OBJ_RESTORE)
+@@ -779,6 +784,78 @@ AC_SUBST(OBJ_RESTORE)
  AC_SUBST(CC_SHOBJ_FLAG)
  AC_SUBST(BUILD_POPT)
  
@@ -5658,7 +5658,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern struct stats stats;
  extern char *stdout_format;
  extern char *tmpdir;
-@@ -347,6 +348,10 @@ int recv_files(int f_in, struct file_lis
+@@ -349,6 +350,10 @@ int recv_files(int f_in, struct file_lis
  	int itemizing = am_server ? logfile_format_has_i : stdout_format_has_i;
  	enum logcode log_code = log_before_transfer ? FLOG : FINFO;
  	int max_phase = protocol_version >= 29 ? 2 : 1;
@@ -5669,7 +5669,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	int i, recv_ok;
  
  	if (verbose > 2)
-@@ -543,7 +548,16 @@ int recv_files(int f_in, struct file_lis
+@@ -549,7 +554,16 @@ int recv_files(int f_in, struct file_lis
  		 * mode based on the local permissions and some heuristics. */
  		if (!preserve_perms) {
  			int exists = fd1 != -1;
@@ -5686,7 +5686,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +					       dflt_perms, exists);
  		}
  
- 		/* We now check to see if we are writing file "inplace" */
+ 		/* We now check to see if we are writing the file "inplace" */
 --- old/rsync.c
 +++ new/rsync.c
 @@ -32,6 +32,7 @@
@@ -5701,21 +5701,25 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  /* This is only called when we aren't preserving permissions.  Figure out what
   * the permissions should be and return them merged back into the mode. */
--mode_t dest_mode(mode_t flist_mode, mode_t cur_mode, int exists)
-+mode_t dest_mode(mode_t flist_mode, mode_t cur_mode, int dflt_perms,
+-mode_t dest_mode(mode_t flist_mode, mode_t stat_mode, int exists)
++mode_t dest_mode(mode_t flist_mode, mode_t stat_mode, int dflt_perms,
 +		 int exists)
  {
+ 	int new_mode;
  	/* If the file already exists, we'll return the local permissions,
- 	 * possibly tweaked by the --executability option. */
-@@ -115,55 +117,63 @@ mode_t dest_mode(mode_t flist_mode, mode
- 				cur_mode |= (cur_mode & 0444) >> 2;
+@@ -117,57 +119,66 @@ mode_t dest_mode(mode_t flist_mode, mode
+ 				new_mode |= (new_mode & 0444) >> 2;
  		}
- 	} else
--		cur_mode = flist_mode & ACCESSPERMS & ~orig_umask;
-+		cur_mode = flist_mode & ACCESSPERMS & dflt_perms;
+ 	} else {
+-		/* Apply the umask and turn off special permissions. */
+-		new_mode = flist_mode & (~CHMOD_BITS | (ACCESSPERMS & ~orig_umask));
++		/* Apply destination default permissions and turn
++		 * off special permissions. */
++		new_mode = flist_mode & (~CHMOD_BITS | dflt_perms);
+ 	}
  	if (daemon_chmod_modes && !S_ISLNK(flist_mode))
- 		cur_mode = tweak_mode(cur_mode, daemon_chmod_modes);
- 	return (flist_mode & ~CHMOD_BITS) | (cur_mode & CHMOD_BITS);
+ 		new_mode = tweak_mode(new_mode, daemon_chmod_modes);
+ 	return new_mode;
  }
  
 -int set_file_attrs(char *fname, struct file_struct *file, STRUCT_STAT *st,
@@ -5785,7 +5789,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		;
  	else
  #endif
-@@ -173,43 +183,55 @@ int set_file_attrs(char *fname, struct f
+@@ -177,43 +188,55 @@ int set_file_attrs(char *fname, struct f
  				rprintf(FINFO,
  					"set uid of %s from %ld to %ld\n",
  					fname,
@@ -5852,7 +5856,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		}
  		if (ret == 0) /* ret == 1 if symlink could not be set */
  			updated = 1;
-@@ -222,6 +244,11 @@ int set_file_attrs(char *fname, struct f
+@@ -226,6 +249,11 @@ int set_file_attrs(char *fname, struct f
  		else
  			rprintf(FCLIENT, "%s is uptodate\n", fname);
  	}
@@ -5866,7 +5870,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/rsync.h
 +++ new/rsync.h
-@@ -486,6 +486,15 @@ struct idev {
+@@ -492,6 +492,15 @@ struct idev {
  #define IN_LOOPBACKNET 127
  #endif
  
@@ -5882,7 +5886,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #define GID_NONE ((gid_t)-1)
  
  #define HL_CHECK_MASTER	0
-@@ -646,6 +655,17 @@ struct stats {
+@@ -652,6 +661,17 @@ struct stats {
  
  struct chmod_mode_struct;
  
@@ -5900,7 +5904,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #include "byteorder.h"
  #include "lib/mdfour.h"
  #include "lib/wildmatch.h"
-@@ -661,6 +681,16 @@ struct chmod_mode_struct;
+@@ -667,6 +687,16 @@ struct chmod_mode_struct;
  
  #define UNUSED(x) x __attribute__((__unused__))
  
@@ -6286,17 +6290,6 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +#endif /* No ACLs. */
 +#endif /* _SMB_ACLS_H */
---- old/t_stub.c
-+++ new/t_stub.c
-@@ -78,3 +78,8 @@ struct filter_list_struct server_filter_
- {
- 	return NULL;
- }
-+
-+ const char *who_am_i(void)
-+{
-+	return "test";
-+}
 --- old/testsuite/acls.test
 +++ new/testsuite/acls.test
 @@ -0,0 +1,34 @@
@@ -6733,7 +6726,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		for (i = 0; i < flist->count; i++)
 --- old/util.c
 +++ new/util.c
-@@ -1548,3 +1548,31 @@ int bitbag_next_bit(struct bitbag *bb, i
+@@ -1549,3 +1549,31 @@ int bitbag_next_bit(struct bitbag *bb, i
  
  	return -1;
  }
