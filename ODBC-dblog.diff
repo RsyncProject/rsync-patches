@@ -29,21 +29,21 @@ See the file "instructions" (after applying this patch) for more info.
  extern int log_got_error;
  extern char *partial_dir;
  extern char *logfile_name;
-@@ -154,8 +155,13 @@ void _exit_cleanup(int code, const char 
- 			code = RERR_PARTIAL;
- 	}
+@@ -179,8 +180,13 @@ NORETURN void _exit_cleanup(int code, co
+ 				code = exit_code = RERR_PARTIAL;
+ 		}
  
--	if (code || am_daemon || (logfile_name && (am_server || !verbose)))
-+	if (code || am_daemon || (logfile_name && (am_server || !verbose))) {
- 		log_exit(code, file, line);
+-		if (code || am_daemon || (logfile_name && (am_server || !verbose)))
++		if (code || am_daemon || (logfile_name && (am_server || !verbose))) {
+ 			log_exit(code, file, line);
 +#ifdef HAVE_LIBODBC
-+		db_log_exit(code, file, line);
-+		db_log_close();
++			db_log_exit(code, file, line);
++			db_log_close();
 +#endif
-+	}
++		}
  
- 	if (verbose > 2) {
- 		rprintf(FINFO,"_exit_cleanup(code=%d, file=%s, line=%d): about to call exit(%d)\n",
+ 		/* FALLTHROUGH */
+ 	case 5:
 --- old/clientserver.c
 +++ new/clientserver.c
 @@ -390,6 +390,9 @@ static int rsync_module(int f_in, int f_
@@ -1050,7 +1050,7 @@ See the file "instructions" (after applying this patch) for more info.
  FN_LOCAL_BOOL(lp_list, list)
 --- old/log.c
 +++ new/log.c
-@@ -94,7 +94,7 @@ struct {
+@@ -93,7 +93,7 @@ struct {
  /*
   * Map from rsync error code to name, or return NULL.
   */
@@ -1061,7 +1061,7 @@ See the file "instructions" (after applying this patch) for more info.
  	for (i = 0; rerr_names[i].name; i++) {
 --- old/receiver.c
 +++ new/receiver.c
-@@ -111,6 +111,10 @@ static int get_tmpname(char *fnametmp, c
+@@ -110,6 +110,10 @@ static int get_tmpname(char *fnametmp, c
  
  	if (maxname < 1) {
  		rprintf(FERROR, "temporary filename too long: %s\n", fname);
@@ -1072,7 +1072,7 @@ See the file "instructions" (after applying this patch) for more info.
  		fnametmp[0] = '\0';
  		return 0;
  	}
-@@ -172,6 +176,10 @@ static int receive_data(int f_in, char *
+@@ -173,6 +177,10 @@ static int receive_data(int f_in, char *
  		if (fd != -1 && (j = do_lseek(fd, offset, SEEK_SET)) != offset) {
  			rsyserr(FERROR, errno, "lseek of %s returned %.0f, not %.0f",
  				full_fname(fname), (double)j, (double)offset);
@@ -1083,7 +1083,7 @@ See the file "instructions" (after applying this patch) for more info.
  			exit_cleanup(RERR_FILEIO);
  		}
  	}
-@@ -229,6 +237,11 @@ static int receive_data(int f_in, char *
+@@ -230,6 +238,11 @@ static int receive_data(int f_in, char *
  						"lseek of %s returned %.0f, not %.0f",
  						full_fname(fname),
  						(double)pos, (double)offset);
@@ -1095,7 +1095,7 @@ See the file "instructions" (after applying this patch) for more info.
  					exit_cleanup(RERR_FILEIO);
  				}
  				continue;
-@@ -254,6 +267,9 @@ static int receive_data(int f_in, char *
+@@ -255,6 +268,9 @@ static int receive_data(int f_in, char *
  	    report_write_error:
  		rsyserr(FERROR, errno, "write failed on %s",
  			full_fname(fname));
@@ -1105,7 +1105,7 @@ See the file "instructions" (after applying this patch) for more info.
  		exit_cleanup(RERR_FILEIO);
  	}
  
-@@ -297,6 +313,12 @@ static void handle_delayed_updates(struc
+@@ -298,6 +314,12 @@ static void handle_delayed_updates(struc
  				rsyserr(FERROR, errno,
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
@@ -1118,7 +1118,7 @@ See the file "instructions" (after applying this patch) for more info.
  			} else {
  				if (remove_source_files
  				    || (preserve_hard_links
-@@ -421,6 +443,9 @@ int recv_files(int f_in, struct file_lis
+@@ -422,6 +444,9 @@ int recv_files(int f_in, struct file_lis
  		if (server_filter_list.head
  		    && check_filter(&server_filter_list, fname, 0) < 0) {
  			rprintf(FERROR, "attempt to hack rsync failed.\n");
@@ -1128,7 +1128,7 @@ See the file "instructions" (after applying this patch) for more info.
  			exit_cleanup(RERR_PROTOCOL);
  		}
  
-@@ -477,6 +502,11 @@ int recv_files(int f_in, struct file_lis
+@@ -478,6 +503,11 @@ int recv_files(int f_in, struct file_lis
  					rprintf(FERROR,
  						"invalid basis_dir index: %d.\n",
  						fnamecmp_type);
@@ -1140,8 +1140,8 @@ See the file "instructions" (after applying this patch) for more info.
  					exit_cleanup(RERR_PROTOCOL);
  				}
  				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
-@@ -522,6 +552,9 @@ int recv_files(int f_in, struct file_lis
- 		if (fd1 != -1 && do_fstat(fd1,&st) != 0) {
+@@ -526,6 +556,9 @@ int recv_files(int f_in, struct file_lis
+ 		} else if (do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR, errno, "fstat %s failed",
  				full_fname(fnamecmp));
 +#ifdef HAVE_LIBODBC
@@ -1150,7 +1150,7 @@ See the file "instructions" (after applying this patch) for more info.
  			discard_receive_data(f_in, file->length);
  			close(fd1);
  			continue;
-@@ -535,6 +568,9 @@ int recv_files(int f_in, struct file_lis
+@@ -539,6 +572,9 @@ int recv_files(int f_in, struct file_lis
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -1160,7 +1160,7 @@ See the file "instructions" (after applying this patch) for more info.
  			discard_receive_data(f_in, file->length);
  			close(fd1);
  			continue;
-@@ -558,6 +594,9 @@ int recv_files(int f_in, struct file_lis
+@@ -562,6 +598,9 @@ int recv_files(int f_in, struct file_lis
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "open %s failed",
  					full_fname(fname));
@@ -1170,7 +1170,7 @@ See the file "instructions" (after applying this patch) for more info.
  				discard_receive_data(f_in, file->length);
  				if (fd1 != -1)
  					close(fd1);
-@@ -591,6 +630,10 @@ int recv_files(int f_in, struct file_lis
+@@ -595,6 +634,10 @@ int recv_files(int f_in, struct file_lis
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "mkstemp %s failed",
  					full_fname(fnametmp));
@@ -1181,7 +1181,7 @@ See the file "instructions" (after applying this patch) for more info.
  				discard_receive_data(f_in, file->length);
  				if (fd1 != -1)
  					close(fd1);
-@@ -611,12 +654,19 @@ int recv_files(int f_in, struct file_lis
+@@ -615,12 +658,19 @@ int recv_files(int f_in, struct file_lis
  				       fname, fd2, file->length);
  
  		log_item(log_code, file, &initial_stats, iflags, NULL);
@@ -1201,7 +1201,7 @@ See the file "instructions" (after applying this patch) for more info.
  			exit_cleanup(RERR_FILEIO);
  		}
  
-@@ -675,6 +725,12 @@ int recv_files(int f_in, struct file_lis
+@@ -679,6 +729,12 @@ int recv_files(int f_in, struct file_lis
  				rprintf(msgtype,
  					"%s: %s failed verification -- update %s%s.\n",
  					errstr, fname, keptstr, redostr);

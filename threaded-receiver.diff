@@ -49,24 +49,24 @@ After applying this patch, run these commands for a successful build:
   * Close all open sockets and files, allowing a (somewhat) graceful
   * shutdown() of socket connections.  This eliminates the abortive
 @@ -98,9 +94,6 @@ NORETURN void _exit_cleanup(int code, co
- {
- 	int ocode = code;
+ 	static int exit_code = 0;
+ 	static int unmodified_code = 0;
  
 -	SIGACTION(SIGUSR1, SIG_IGN);
 -	SIGACTION(SIGUSR2, SIG_IGN);
 -
- 	in_exit_cleanup = 1;
+ 	if (exit_code) /* Preserve first error code when recursing. */
+ 		code = exit_code;
  
- 	if (verbose > 3) {
-@@ -133,8 +126,6 @@ NORETURN void _exit_cleanup(int code, co
- 	io_flush(FULL_FLUSH);
- 	if (cleanup_fname)
- 		do_unlink(cleanup_fname);
--	if (code)
--		kill_all(SIGUSR1);
- 	if (cleanup_pid && cleanup_pid == getpid()) {
- 		char *pidf = lp_pid_file();
- 		if (pidf && *pidf)
+@@ -162,8 +155,6 @@ NORETURN void _exit_cleanup(int code, co
+ 
+ 		if (cleanup_fname)
+ 			do_unlink(cleanup_fname);
+-		if (code)
+-			kill_all(SIGUSR1);
+ 		if (cleanup_pid && cleanup_pid == getpid()) {
+ 			char *pidf = lp_pid_file();
+ 			if (pidf && *pidf)
 --- old/errcode.h
 +++ new/errcode.h
 @@ -37,7 +37,6 @@
@@ -760,7 +760,7 @@ After applying this patch, run these commands for a successful build:
  extern int allow_8bit_chars;
  extern int protocol_version;
  extern int preserve_times;
-@@ -76,7 +75,6 @@ struct {
+@@ -75,7 +74,6 @@ struct {
  	{ RERR_IPC        , "error in IPC code" },
  	{ RERR_CRASHED    , "sibling process crashed" },
  	{ RERR_TERMINATED , "sibling process terminated abnormally" },
@@ -768,9 +768,9 @@ After applying this patch, run these commands for a successful build:
  	{ RERR_SIGNAL     , "received SIGINT, SIGTERM, or SIGHUP" },
  	{ RERR_WAITCHILD  , "waitpid() failed" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
-@@ -250,8 +248,8 @@ void rwrite(enum logcode code, char *buf
+@@ -241,8 +239,8 @@ void rwrite(enum logcode code, char *buf
  	if (len < 0)
- 		EXIT_OR_RETURN(RERR_MESSAGEIO);
+ 		exit_cleanup(RERR_MESSAGEIO);
  
 -	if (am_server && msg_fd_out >= 0) {
 -		/* Pass the message to our sibling. */
@@ -1035,7 +1035,7 @@ After applying this patch, run these commands for a successful build:
  int keep_partial = 0;
  int safe_symlinks = 0;
  int copy_unsafe_links = 0;
-@@ -1299,6 +1299,7 @@ int parse_arguments(int *argc, const cha
+@@ -1302,6 +1302,7 @@ int parse_arguments(int *argc, const cha
  
  	if (do_progress && !verbose && !log_before_transfer && !am_server)
  		verbose = 1;
