@@ -52,31 +52,34 @@ can't say if I've left any cleanup/compatibility errors in the code.
  extern int am_server;
  extern int am_daemon;
  extern int io_error;
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +extern int use_ssl;
 +#endif
  extern int keep_partial;
  extern int log_got_error;
  extern char *partial_dir;
-@@ -122,6 +125,11 @@ NORETURN void _exit_cleanup(int code, co
- 	case 1:
- 		cleanup_step++;
+@@ -117,6 +120,14 @@ NORETURN void _exit_cleanup(int code, co
+ 				code, file, line);
+ 		}
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
++		/* FALLTHROUGH */
++#include "case_N.h"
++
 +		if (use_ssl)
 +			end_tls();
 +#endif
 +
- 		if (cleanup_child_pid != -1) {
- 			int status;
- 			int pid = wait_process(cleanup_child_pid, &status, WNOHANG);
+ 		/* FALLTHROUGH */
+ #include "case_N.h"
+ 
 --- old/clientserver.c
 +++ new/clientserver.c
 @@ -29,6 +29,9 @@ extern int am_sender;
  extern int am_server;
  extern int am_daemon;
  extern int am_root;
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +extern int use_ssl;
 +#endif
  extern int rsync_port;
@@ -89,7 +92,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
 +	if (ret)
 +		return ret;
 +
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +	if (use_ssl) {
 +		int f_in = get_tls_rfd();
 +		int f_out = get_tls_wfd();
@@ -106,7 +109,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (verbose > 1)
  		print_child_argv(sargs);
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +	if (use_ssl) {
 +		io_printf(f_out, "#starttls\n");
 +		while (1) {
@@ -140,7 +143,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			 * server to terminate the listing of modules.
  			 * We don't want to go on and transfer
  			 * anything; just exit. */
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +			if (use_ssl)
 +				end_tls();
 +#endif
@@ -151,7 +154,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			rprintf(FERROR, "%s\n", line);
  			/* This is always fatal; the server will now
  			 * close the socket. */
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +			if (use_ssl)
 +				end_tls();
 +#endif
@@ -170,7 +173,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (protocol_version > remote_protocol)
  		protocol_version = remote_protocol;
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +retry:
 +#endif
  	line[0] = 0;
@@ -180,7 +183,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		return -1;
  	}
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +	if (use_ssl && strcmp(line, "#starttls") == 0) {
 +		io_printf(f_out, "@RSYNCD: starttls\n");
 +		if (start_tls(f_in, f_out)) {
@@ -227,7 +230,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  int always_checksum = 0;
  int list_only = 0;
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +int use_ssl = 0;
 +char *ssl_cert_path = NULL;
 +char *ssl_key_path = NULL;
@@ -250,7 +253,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	ipv6 = "";
  #endif
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +	ssl = "";
 +#endif
 +
@@ -273,7 +276,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
  #endif
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +  rprintf(F,"     --ssl                   allow socket connections to use SSL\n");
 +  rprintf(F,"     --ssl-cert=FILE         path to daemon's SSL certificate\n");
 +  rprintf(F,"     --ssl-key=FILE          path to daemon's SSL private key\n");
@@ -296,7 +299,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    {"checksum-seed",    0,  POPT_ARG_INT,    &checksum_seed, 0, 0, 0 },
    {"server",           0,  POPT_ARG_NONE,   0, OPT_SERVER, 0, 0 },
    {"sender",           0,  POPT_ARG_NONE,   0, OPT_SENDER, 0, 0 },
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +  {"ssl",              0,  POPT_ARG_NONE,   0, OPT_USE_SSL, 0, 0},
 +  {"ssl-cert",         0,  POPT_ARG_STRING, &ssl_cert_path, OPT_USE_SSL, 0, 0},
 +  {"ssl-key",          0,  POPT_ARG_STRING, &ssl_key_path, OPT_USE_SSL, 0, 0},
@@ -310,7 +313,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
  #endif
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +  rprintf(F,"     --ssl                   allow socket connections to use SSL\n");
 +  rprintf(F,"     --ssl-cert=FILE         path to daemon's SSL certificate\n");
 +  rprintf(F,"     --ssl-key=FILE          path to daemon's SSL private key\n");
@@ -324,7 +327,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    {"protocol",         0,  POPT_ARG_INT,    &protocol_version, 0, 0, 0 },
    {"server",           0,  POPT_ARG_NONE,   &am_server, 0, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +  {"ssl",              0,  POPT_ARG_NONE,   0, OPT_USE_SSL, 0, 0},
 +  {"ssl-cert",         0,  POPT_ARG_STRING, &ssl_cert_path, OPT_USE_SSL, 0, 0},
 +  {"ssl-key",          0,  POPT_ARG_STRING, &ssl_key_path, OPT_USE_SSL, 0, 0},
@@ -369,7 +372,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			usage(FINFO);
  			exit_cleanup(0);
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +		case OPT_USE_SSL:
 +			use_ssl = 1;
 +			break;
@@ -382,7 +385,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (delay_updates && !partial_dir)
  		partial_dir = tmp_partialdir;
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +	if (use_ssl) {
 +		if (init_tls()) {
 +			snprintf(err_buf, sizeof(err_buf),
@@ -406,7 +409,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
 +	if (!port_ptr)
 +		url_prefix_len = 0;
 +	else if (strncasecmp(URL_PREFIX, s, url_prefix_len) != 0) {
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +		url_prefix_len = sizeof SSL_URL_PREFIX - 1;
 +		if (strncasecmp(SSL_URL_PREFIX, s, url_prefix_len) != 0)
 +			url_prefix_len = 0;
@@ -440,7 +443,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  # define SIZEOF_INT64 SIZEOF_OFF_T
  #endif
  
-+#if HAVE_OPENSSL
++#ifdef HAVE_OPENSSL
 +#include <openssl/ssl.h>
 +#include <openssl/err.h>
 +#endif
@@ -473,7 +476,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
 +
 +#include "rsync.h"
 +
-+#if HAVE_SYS_SELECT_H
++#ifdef HAVE_SYS_SELECT_H
 +#include <sys/select.h>
 +#else
 +#include <sys/time.h>
