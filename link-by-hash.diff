@@ -14,7 +14,7 @@ the file's name.
 
 --- old/Makefile.in
 +++ new/Makefile.in
-@@ -34,7 +34,7 @@ OBJS1=rsync.o generator.o receiver.o cle
+@@ -35,7 +35,7 @@ OBJS1=rsync.o generator.o receiver.o cle
  	main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
  	fileio.o batch.o clientname.o chmod.o
@@ -392,7 +392,7 @@ the file's name.
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -494,6 +496,7 @@ static struct poptOption long_options[] 
+@@ -495,6 +497,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -400,7 +400,7 @@ the file's name.
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
-@@ -1083,6 +1086,21 @@ int parse_arguments(int *argc, const cha
+@@ -1085,6 +1088,21 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
@@ -408,7 +408,7 @@ the file's name.
 +#if HAVE_LINK
 +			arg = poptGetOptArg(pc);
 +			if (sanitize_paths)
-+				arg = sanitize_path(NULL, arg, NULL, 0);
++				arg = sanitize_path(NULL, arg, NULL, 0, NULL);
 +			link_by_hash_dir = (char *)arg;
 +			break;
 +#else
@@ -422,7 +422,7 @@ the file's name.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1737,6 +1755,11 @@ void server_options(char **args,int *arg
+@@ -1735,6 +1753,11 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -444,7 +444,7 @@ the file's name.
  extern char *partial_dir;
  extern char *basis_dir[];
  extern struct file_list *the_file_list;
-@@ -121,12 +122,13 @@ static int get_tmpname(char *fnametmp, c
+@@ -124,12 +125,13 @@ static int get_tmpname(char *fnametmp, c
  
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -459,7 +459,7 @@ the file's name.
  	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -146,6 +148,9 @@ static int receive_data(int f_in, char *
+@@ -149,6 +151,9 @@ static int receive_data(int f_in, char *
  	} else
  		mapbuf = NULL;
  
@@ -469,7 +469,7 @@ the file's name.
  	sum_init(checksum_seed);
  
  	if (append_mode) {
-@@ -188,6 +193,8 @@ static int receive_data(int f_in, char *
+@@ -191,6 +196,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -478,7 +478,7 @@ the file's name.
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -214,6 +221,8 @@ static int receive_data(int f_in, char *
+@@ -217,6 +224,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -486,8 +486,8 @@ the file's name.
 +				mdfour_update(&mdfour_data, (uchar*)map, len);
  		}
  
- 		if (inplace) {
-@@ -256,6 +265,8 @@ static int receive_data(int f_in, char *
+ 		if (updating_basis) {
+@@ -259,6 +268,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_end(file_sum1);
@@ -496,7 +496,7 @@ the file's name.
  
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -271,7 +282,7 @@ static int receive_data(int f_in, char *
+@@ -274,7 +285,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -505,7 +505,7 @@ the file's name.
  }
  
  static void handle_delayed_updates(struct file_list *flist, char *local_name)
-@@ -601,8 +612,12 @@ int recv_files(int f_in, struct file_lis
+@@ -611,8 +622,12 @@ int recv_files(int f_in, struct file_lis
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
@@ -529,7 +529,7 @@ the file's name.
  extern struct stats stats;
  extern struct chmod_mode_struct *daemon_chmod_modes;
  
-@@ -266,8 +267,15 @@ void finish_transfer(char *fname, char *
+@@ -271,8 +272,15 @@ void finish_transfer(char *fname, char *
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
@@ -549,7 +549,7 @@ the file's name.
  			ret == -2 ? "copy" : "rename",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -644,6 +644,14 @@ struct stats {
+@@ -651,6 +651,14 @@ struct stats {
  	int current_file_index;
  };
  
