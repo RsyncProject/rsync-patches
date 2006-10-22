@@ -30,7 +30,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1093 @@
+@@ -0,0 +1,1092 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -295,7 +295,6 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	const char *errfun;
 +	int rc;
 +
-+	*racl = empty_rsync_acl;
 +	errfun = "sys_acl_get_entry";
 +	for (rc = sys_acl_get_entry(sacl, SMB_ACL_FIRST_ENTRY, &entry);
 +	     rc == 1;
@@ -534,6 +533,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +		if (!racl)
 +			out_of_memory("get_acl");
++		*racl = empty_rsync_acl;
 +		if (type == SMB_ACL_TYPE_ACCESS)
 +			sxp->acc_acl = racl;
 +		else
@@ -549,7 +549,6 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +			}
 +		} else if (errno == ENOTSUP) {
 +			/* ACLs are not supported, so pretend we have a basic ACL. */
-+			*racl = empty_rsync_acl;
 +			if (type == SMB_ACL_TYPE_ACCESS)
 +				rsync_acl_fake_perms(racl, sxp->st.st_mode);
 +		} else {
@@ -676,8 +675,6 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	id_access *ida;
 +	size_t count;
 +
-+	*racl = empty_rsync_acl;
-+
 +	if (!(count = read_int(f)))
 +		return;
 +
@@ -801,6 +798,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +			acl_duo *duo_item;
 +			ndx = racl_list->count;
 +			duo_item = EXPAND_ITEM_LIST(racl_list, acl_duo, 1000);
++			duo_item->racl = empty_rsync_acl;
 +			receive_rsync_acl(&duo_item->racl, f, type);
 +			duo_item->sacl = NULL;
 +		} else {
@@ -1105,6 +1103,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	}
 +
 +	/* Convert it. */
++	racl = empty_rsync_acl;
 +	ok = unpack_smb_acl(&racl, sacl);
 +	sys_acl_free_acl(sacl);
 +	if (!ok) {
@@ -2050,7 +2049,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 -		itemize(file, -1, real_ret, &real_st, iflags, fnamecmp_type,
 +#ifdef SUPPORT_ACLS
 +		if (preserve_acls && real_ret == 0)
-+			get_acl(fname, &real_sx);
++			get_acl(fnamecmp, &real_sx);
 +#endif
 +		itemize(file, -1, real_ret, &real_sx, iflags, fnamecmp_type,
  			fuzzy_file ? fuzzy_file->basename : NULL);
