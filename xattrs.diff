@@ -15,6 +15,9 @@ TODO:
  - We need to affect the --link-dest option to avoid hard-linking two files
    that differ in their xattrs (when --xattrs was specified).
 
+ - Mac OS X support should probably escape names that don't begin with "user."
+   or "system." so that the xattr names can be stored on non-macs.
+
 --- old/Makefile.in
 +++ new/Makefile.in
 @@ -28,13 +28,13 @@ VERSION=@VERSION@
@@ -134,11 +137,12 @@ TODO:
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
 --- old/configure.in
 +++ new/configure.in
-@@ -856,6 +856,30 @@ samba_cv_HAVE_ACL_GET_PERM_NP=yes,samba_
+@@ -856,6 +856,35 @@ samba_cv_HAVE_ACL_GET_PERM_NP=yes,samba_
    AC_MSG_RESULT(no)
  )
  
 +AC_CHECK_HEADERS(attr/xattr.h)
++AC_CHECK_HEADERS(sys/xattr.h)
 +AC_MSG_CHECKING(whether to support extended attributes)
 +AC_ARG_ENABLE(xattr-support,
 +AC_HELP_STRING([--enable-xattr-support], [Include extended attribute support (default=no)]),
@@ -149,8 +153,12 @@ TODO:
 +            AC_MSG_RESULT(Using Linux xattrs)
 +            AC_DEFINE(HAVE_LINUX_XATTRS, 1, [True if you have Linux xattrs])
 +            ;;
++      darwin*)
++            AC_MSG_RESULT(Using OS X xattrs)
++            AC_DEFINE(HAVE_OSX_XATTRS, 1, [True if you have Mac OS X xattrs])
++            ;;
 +      *)
-+            AC_MSG_RESULT(Xattrs requested but not linux.  Good luck)
++            AC_MSG_RESULT(Xattrs requested but not Linux or OS X.  Good luck...)
 +            ;;
 +      esac
 +      ;;
@@ -258,7 +266,7 @@ TODO:
  }
 --- old/lib/sysxattr.c
 +++ new/lib/sysxattr.c
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,61 @@
 +/*
 + * Extended attribute support for rsync.
 + *
@@ -300,17 +308,38 @@ TODO:
 +	return llistxattr(path, list, size);
 +}
 +
++#elif HAVE_OSX_XATTRS
++
++ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size)
++{
++	return getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
++}
++
++int sys_lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags)
++{
++	return setxattr(path, name, value, size, 0, XATTR_NOFOLLOW | flags);
++}
++
++ssize_t sys_llistxattr(const char *path, char *list, size_t size)
++{
++	return listxattr(path, list, size, XATTR_NOFOLLOW);
++}
++
 +#else
 +
 +#endif /* No xattrs */
 --- old/lib/sysxattr.h
 +++ new/lib/sysxattr.h
-@@ -0,0 +1,13 @@
-+#if defined SUPPORT_XATTRS && defined HAVE_ATTR_XATTR_H
+@@ -0,0 +1,19 @@
++#ifdef SUPPORT_XATTRS
++#if defined HAVE_ATTR_XATTR_H
 +#include <attr/xattr.h>
++#elif defined HAVE_SYS_XATTR_H
++#include <sys/xattr.h>
++#endif
 +#endif
 +
-+#if defined HAVE_LINUX_XATTRS
++#if defined HAVE_LINUX_XATTRS || defined HAVE_OSX_XATTRS
 +
 +ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size);
 +int sys_lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags);
@@ -318,7 +347,9 @@ TODO:
 +
 +#else
 +
-+#endif /* No xattrs */
++/* No xattrs */
++
++#endif
 --- old/options.c
 +++ new/options.c
 @@ -48,6 +48,7 @@ int copy_links = 0;
@@ -445,7 +476,7 @@ TODO:
  #define ACLS_NEED_MASK 1
  #endif
  
-+#ifdef HAVE_LINUX_XATTRS
++#if defined HAVE_LINUX_XATTRS || defined HAVE_OSX_XATTRS
 +#define SUPPORT_XATTRS 1
 +#endif
 +
@@ -495,7 +526,7 @@ TODO:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,360 @@
+@@ -0,0 +1,346 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -539,9 +570,6 @@ TODO:
 +static size_t namebuf_len = 0;
 +static char *namebuf = NULL;
 +
-+static size_t datumbuf_len = 0;
-+static char *datumbuf = NULL;
-+
 +static item_list empty_xattr = EMPTY_ITEM_LIST;
 +static item_list rsync_xal_l = EMPTY_ITEM_LIST;
 +
@@ -583,14 +611,13 @@ TODO:
 +	char *ptr;
 +
 +	if (!namebuf) {
-+		namebuf_len = 100;
++		namebuf_len = 1024;
 +		namebuf = new_array(char, namebuf_len);
-+		datumbuf_len = 100;
-+		datumbuf = new_array(char, datumbuf_len);
-+		if (!namebuf || !datumbuf)
++		if (!namebuf)
 +			out_of_memory("rsync_xal_get");
 +	}
 +
++	/* The length returned includes all the '\0' terminators. */
 +	name_size = sys_llistxattr(fname, namebuf, namebuf_len);
 +	if (name_size > (ssize_t)namebuf_len) {
 +		name_size = -1;
@@ -606,10 +633,10 @@ TODO:
 +					fname);
 +				return -1;
 +			}
-+			namebuf = realloc_array(namebuf, char, name_size + 1);
++			namebuf = realloc_array(namebuf, char, name_size + 1024);
 +			if (!namebuf)
 +				out_of_memory("rsync_xal_get");
-+			namebuf_len = name_size;
++			namebuf_len = name_size + 1024;
 +			name_size = sys_llistxattr(fname, namebuf, namebuf_len);
 +			if (name_size < 0) {
 +				rsyserr(FERROR, errno,
@@ -630,50 +657,39 @@ TODO:
 +		rsync_xa *rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
 +
 +		len = strlen(name) + 1;
-+		datum_size = sys_lgetxattr(fname, name, datumbuf, datumbuf_len);
-+		if (datum_size > (ssize_t)datumbuf_len) {
-+			datum_size = -1;
-+			errno = ERANGE;
-+		}
++		datum_size = sys_lgetxattr(fname, name, NULL, 0);
 +		if (datum_size < 0) {
 +			if (errno == ENOTSUP)
 +				return -1;
-+			if (errno == ERANGE) {
-+				datum_size = sys_lgetxattr(fname, name, NULL, 0);
-+				if (datum_size < 0) {
-+					rsyserr(FERROR, errno,
-+					    "%s: rsync_xal_get: lgetxattr %s failed",
-+					    fname, name);
-+					return -1;
-+				}
-+				datumbuf = realloc_array(datumbuf, char, datum_size + 1);
-+				if (!datumbuf)
-+					out_of_memory("rsync_xal_get");
-+				datumbuf_len = datum_size;
-+				datum_size = sys_lgetxattr(fname, name, datumbuf, datumbuf_len);
-+				if (datum_size < 0) {
-+					rsyserr(FERROR, errno,
-+					    "%s: rsync_xal_get: re-lgetxattr of %s failed",
-+					    name, fname);
-+					return -1;
-+				}
-+			} else {
-+				rsyserr(FERROR, errno,
-+				    "%s: rsync_xal_get: lgetxattr %s failed",
-+				    fname, name);
-+				return -1;
-+			}
++			rsyserr(FERROR, errno,
++			    "%s: rsync_xal_get: lgetxattr %s failed",
++			    fname, name);
++			return -1;
 +		}
 +		ptr = new_array(char, len + datum_size);
 +		if (!ptr)
 +			out_of_memory("rsync_xal_get");
 +		memcpy(ptr, name, len);
-+		if (datum_size)
-+			memcpy(ptr + len, datumbuf, datum_size);
 +		rxas->name_len = len;
 +		rxas->name = ptr;
 +		rxas->datum_len = datum_size;
 +		rxas->datum = ptr + len;
++		if (datum_size) {
++			ssize_t size = sys_lgetxattr(fname, name, rxas->datum, datum_size);
++			if (size != datum_size) {
++				if (size < 0) {
++					rsyserr(FERROR, errno,
++					    "rsync_xal_get: lgetxattr(%s,%s)"
++					    " failed", fname, name);
++				} else {
++					rprintf(FERROR,
++					    "rsync_xal_get: lgetxattr(%s,%s)"
++					    " returned %d instead of %d\n",
++					    fname, name, size, datum_size);
++				}
++				return -1;
++			}
++		}
 +	}
 +	if (xalp->count > 1)
 +		qsort(xalp->items, xalp->count, sizeof (rsync_xa), rsync_xal_compare_names);
@@ -726,8 +742,9 @@ TODO:
 +	item_list *new_lst = EXPAND_ITEM_LIST(&rsync_xal_l, item_list, RSYNC_XAL_LIST_INITIAL);
 +	/* Since the following call starts a new list, we know it will hold the
 +	 * entire initial-count, not just enough space for one new item. */
-+	(void)EXPAND_ITEM_LIST(new_lst, item_list, xalp->count);
-+	memcpy(new_lst->items, xalp->items, xalp->count * sizeof (item_list));
++	*new_lst = empty_xattr;
++	(void)EXPAND_ITEM_LIST(new_lst, rsync_xa, xalp->count);
++	memcpy(new_lst->items, xalp->items, xalp->count * sizeof (rsync_xa));
 +	new_lst->count = xalp->count;
 +	xalp->count = 0;
 +}
@@ -751,7 +768,7 @@ TODO:
 +			write_buf(f, rxa->name, rxa->name_len);
 +			write_buf(f, rxa->datum, rxa->datum_len);
 +		}
-+		rsync_xal_store(sxp->xattr);
++		rsync_xal_store(sxp->xattr); /* adds item to rsync_xal_l */
 +	}
 +	free_xattr(sxp);
 +}
@@ -786,8 +803,8 @@ TODO:
 +			rxa->name = ptr;
 +			rxa->datum = ptr + name_len;
 +		}
-+		ndx = rsync_xal_l.count;
-+		rsync_xal_store(&temp_xattr);
++		ndx = rsync_xal_l.count; /* pre-incremented count */
++		rsync_xal_store(&temp_xattr); /* adds item to rsync_xal_l */
 +	} else if (tag == 'x') {
 +		ndx = read_int(f);
 +		if (ndx < 0 || (size_t)ndx >= rsync_xal_l.count) {
@@ -818,7 +835,7 @@ TODO:
 +
 +	ndx = find_matching_xattr(sxp->xattr);
 +	if (ndx == -1)
-+		rsync_xal_store(sxp->xattr);
++		rsync_xal_store(sxp->xattr); /* adds item to rsync_xal_l */
 +	free_xattr(sxp);
 +
 +	SIVAL(ndx_ptr, 0, ndx);
