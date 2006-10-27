@@ -10,6 +10,9 @@ TODO:
 
  - This patch needs to be rewritten to more efficiently handle large xattrs.
 
+ - Extraneous xattr values need to be removed from files that are not being
+   recreated.
+
  - We need to affect the itemized output to know when xattrs are being updated.
 
  - We need to affect the --link-dest option to avoid hard-linking two files
@@ -272,7 +275,7 @@ TODO:
  }
 --- old/lib/sysxattr.c
 +++ new/lib/sysxattr.c
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,71 @@
 +/*
 + * Extended attribute support for rsync.
 + *
@@ -309,6 +312,11 @@ TODO:
 +	return lsetxattr(path, name, value, size, flags);
 +}
 +
++int sys_lremovexattr(const char *path, const char *name)
++{
++	return lremovexattr(path, name);
++}
++
 +ssize_t sys_llistxattr(const char *path, char *list, size_t size)
 +{
 +	return llistxattr(path, list, size);
@@ -326,6 +334,11 @@ TODO:
 +	return setxattr(path, name, value, size, 0, XATTR_NOFOLLOW | flags);
 +}
 +
++int sys_lremovexattr(const char *path, const char *name)
++{
++	return removexattr(path, name, XATTR_NOFOLLOW);
++}
++
 +ssize_t sys_llistxattr(const char *path, char *list, size_t size)
 +{
 +	return listxattr(path, list, size, XATTR_NOFOLLOW);
@@ -336,7 +349,7 @@ TODO:
 +#endif /* No xattrs */
 --- old/lib/sysxattr.h
 +++ new/lib/sysxattr.h
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,25 @@
 +#ifdef SUPPORT_XATTRS
 +#if defined HAVE_ATTR_XATTR_H
 +#include <attr/xattr.h>
@@ -347,8 +360,14 @@ TODO:
 +
 +#if defined HAVE_LINUX_XATTRS || defined HAVE_OSX_XATTRS
 +
++/* Linux 2.4 does not define this as a distinct errno value: */
++#ifndef ENOATTR
++#define ENOATTR ENODATA
++#endif
++
 +ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size);
 +int sys_lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags);
++int sys_lremovexattr(const char *path, const char *name);
 +ssize_t sys_llistxattr(const char *path, char *list, size_t size);
 +
 +#else
