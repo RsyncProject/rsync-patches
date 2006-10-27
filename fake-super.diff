@@ -242,12 +242,16 @@ After applying this patch, run these commands for a successful build:
  		/* a lchown had been done - we have to re-stat if the
  		 * destination had the setuid or setgid bits set due
  		 * to the side effect of the chown call */
-@@ -224,6 +226,24 @@ int set_file_attrs(char *fname, struct f
+@@ -224,6 +226,28 @@ int set_file_attrs(char *fname, struct f
  	if (preserve_xattrs && set_xattr(fname, file, sxp) == 0)
  		updated = 1;
  #endif
 +
 +	if (am_root < 0 && !S_ISLNK(file->mode)) {
++		mode_t mode = sxp->st.st_mode & ~CHMOD_BITS;
++		mode |= (S_ISDIR(mode) ? 0777 : 0666) & (~orig_umask | S_IRWXU);
++		if (sxp->st.st_mode != mode)
++			do_chmod(fname, mode);
 +		switch (set_stat_xattr(fname, file)) {
 +		case 0:
 +			break;
@@ -267,20 +271,12 @@ After applying this patch, run these commands for a successful build:
  #ifdef SUPPORT_ACLS
  	/* It's OK to call set_acl() now, even for a dir, as the generator
  	 * will enable owner-writability using chmod, if necessary.
-@@ -237,7 +257,15 @@ int set_file_attrs(char *fname, struct f
+@@ -237,7 +261,7 @@ int set_file_attrs(char *fname, struct f
  
  #ifdef HAVE_CHMOD
  	if ((sxp->st.st_mode & CHMOD_BITS) != (new_mode & CHMOD_BITS)) {
 -		int ret = do_chmod(fname, new_mode);
-+		int ret;
-+		if (am_root < 0) {
-+			mode_t mode = (S_ISDIR(file->mode) ? 0777 : 0666) & ~orig_umask;
-+			if ((sxp->st.st_mode & CHMOD_BITS) != mode)
-+				ret = do_chmod(fname, mode);
-+			else
-+				ret = 0;
-+		} else
-+			ret = do_chmod(fname, new_mode);
++		int ret = am_root < 0 ? 0 : do_chmod(fname, new_mode);
  		if (ret < 0) {
  			rsyserr(FERROR, errno,
  				"failed to set permissions on %s",
