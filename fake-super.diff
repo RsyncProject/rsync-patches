@@ -234,7 +234,7 @@ After applying this patch, run these commands for a successful build:
  
  #define BACKUP_SUFFIX "~"
  
-+#define FAKE_XATTR "user.fake%stat"
++#define FAKE_XATTR "user.rsync%stat"
 +
  /* a non-zero CHAR_OFFSET makes the rolling sum stronger, but is
     incompatible with older versions :-( */
@@ -272,21 +272,13 @@ After applying this patch, run these commands for a successful build:
  #if !defined MKNOD_CREATES_FIFOS && defined HAVE_MKFIFO
  	if (S_ISFIFO(mode))
  		return mkfifo(pathname, mode);
-@@ -133,6 +144,7 @@ int do_open(const char *pathname, int fl
- }
- 
- #ifdef HAVE_CHMOD
-+
- int do_chmod(const char *path, mode_t mode)
- {
- 	int code;
-@@ -215,23 +227,69 @@ int do_mkstemp(char *template, mode_t pe
+@@ -215,23 +226,71 @@ int do_mkstemp(char *template, mode_t pe
  #endif
  }
  
 +int get_stat_xattr(const char *fname, STRUCT_STAT *st)
 +{
-+	int mode, rdev, uid, gid, len;
++	int mode, rdev_major, rdev_minor, uid, gid, len;
 +	char buf[256];
 +
 +	len = sys_lgetxattr(fname, FAKE_XATTR, buf, sizeof buf - 1);
@@ -297,13 +289,14 @@ After applying this patch, run these commands for a successful build:
 +	}
 +	buf[len] = '\0';
 +
-+	if (sscanf(buf, "%o %d %d:%d", &mode, &rdev, &uid, &gid) != 4) {
++	if (sscanf(buf, "%o %d,%d %d:%d",
++		   &mode, &rdev_major, &rdev_minor, &uid, &gid) != 4) {
 +		errno = EINVAL;
 +		return -1;
 +	}
 +
 +	st->st_mode = mode;
-+	st->st_rdev = rdev;
++	st->st_rdev = MAKEDEV(rdev_major, rdev_minor);
 +	st->st_uid = uid;
 +	st->st_gid = gid;
 +
@@ -316,8 +309,9 @@ After applying this patch, run these commands for a successful build:
 +	int len;
 +	if (dry_run) return 0;
 +	RETURN_ERROR_IF_RO_OR_LO;
-+	len = snprintf(buf, sizeof buf, "%o %d %d:%d",
-+		       (int)st->st_mode, (int)st->st_rdev,
++	len = snprintf(buf, sizeof buf, "%o %u,%u %u:%u",
++		       (int)st->st_mode,
++		       (int)major(st->st_rdev), (int)minor(st->st_rdev),
 +		       (int)st->st_uid, (int)st->st_gid);
 +	return sys_lsetxattr(fname, FAKE_XATTR, buf, len, 0);
 +}
@@ -408,7 +402,7 @@ After applying this patch, run these commands for a successful build:
  
  		len = strlen(name) + 1;
 +		if (am_root < 0 && len == sizeof FAKE_XATTR
-+		 && name[9] == '%' && strcmp(name, FAKE_XATTR) == 0)
++		 && name[10] == '%' && strcmp(name, FAKE_XATTR) == 0)
 +			continue;
 +
 +		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
@@ -422,7 +416,7 @@ After applying this patch, run these commands for a successful build:
  			read_buf(f, ptr + name_len, datum_len);
 +
 +			if (am_root < 0 && name_len == sizeof FAKE_XATTR
-+			 && ptr[9] == '%' && strcmp(ptr, FAKE_XATTR) == 0) {
++			 && ptr[10] == '%' && strcmp(ptr, FAKE_XATTR) == 0) {
 +				free(ptr);
 +				temp_xattr.count--;
 +				continue;
