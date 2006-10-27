@@ -34,31 +34,26 @@ After applying this patch, run these commands for a successful build:
     ./configure
     make
 
---- old/Makefile.in
-+++ new/Makefile.in
-@@ -41,7 +41,7 @@ popt_OBJS=popt/findme.o  popt/popt.o  po
- 	popt/popthelp.o popt/poptparse.o
- OBJS=$(OBJS1) $(OBJS2) $(OBJS3) $(DAEMON_OBJ) $(LIBOBJ) $(ZLIBOBJ) @BUILD_POPT@
+--- old/backup.c
++++ new/backup.c
+@@ -129,7 +129,7 @@ static int make_bak_dir(char *fullpath)
+ 		if (p >= rel) {
+ 			/* Try to transfer the directory settings of the
+ 			 * actual dir that the files are coming from. */
+-			if (do_stat(rel, &sx.st) < 0) {
++			if (x_stat(rel, &sx.st, NULL) < 0) {
+ 				rsyserr(FERROR, errno,
+ 					"make_bak_dir stat %s failed",
+ 					full_fname(rel));
+@@ -200,7 +200,7 @@ static int keep_backup(char *fname)
+ 	int ret_code;
  
--TLS_OBJ = tls.o syscall.o lib/compat.o lib/snprintf.o lib/permstring.o
-+TLS_OBJ = tls.o syscall.o lib/compat.o lib/snprintf.o lib/permstring.o lib/sysxattr.o
- 
- # Programs we must have to run the test cases
- CHECK_PROGS = rsync$(EXEEXT) tls$(EXEEXT) getgroups$(EXEEXT) getfsdev$(EXEEXT) \
-@@ -83,11 +83,11 @@ getgroups$(EXEEXT): getgroups.o
- getfsdev$(EXEEXT): getfsdev.o
- 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ getfsdev.o $(LIBS)
- 
--TRIMSLASH_OBJ = trimslash.o syscall.o lib/compat.o lib/snprintf.o
-+TRIMSLASH_OBJ = trimslash.o syscall.o lib/compat.o lib/snprintf.o lib/sysxattr.o
- trimslash$(EXEEXT): $(TRIMSLASH_OBJ)
- 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TRIMSLASH_OBJ) $(LIBS)
- 
--T_UNSAFE_OBJ = t_unsafe.o syscall.o util.o t_stub.o lib/compat.o lib/snprintf.o
-+T_UNSAFE_OBJ = t_unsafe.o syscall.o util.o t_stub.o lib/compat.o lib/snprintf.o lib/sysxattr.o
- t_unsafe$(EXEEXT): $(T_UNSAFE_OBJ)
- 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(T_UNSAFE_OBJ) $(LIBS)
- 
+ 	/* return if no file to keep */
+-	if (do_lstat(fname, &sx.st) < 0)
++	if (x_lstat(fname, &sx.st, NULL) < 0)
+ 		return 1;
+ #ifdef SUPPORT_ACLS
+ 	sx.acc_acl = sx.def_acl = NULL;
 --- old/clientserver.c
 +++ new/clientserver.c
 @@ -625,6 +625,11 @@ static int rsync_module(int f_in, int f_
@@ -73,6 +68,57 @@ After applying this patch, run these commands for a successful build:
  	if (filesfrom_fd == 0)
  		filesfrom_fd = f_in;
  
+--- old/flist.c
++++ new/flist.c
+@@ -181,7 +181,7 @@ static int readlink_stat(const char *pat
+ 	}
+ 	return 0;
+ #else
+-	return do_stat(path, stp);
++	return x_stat(path, stp, NULL);
+ #endif
+ }
+ 
+@@ -189,17 +189,17 @@ int link_stat(const char *path, STRUCT_S
+ {
+ #ifdef SUPPORT_LINKS
+ 	if (copy_links)
+-		return do_stat(path, stp);
+-	if (do_lstat(path, stp) < 0)
++		return x_stat(path, stp, NULL);
++	if (x_lstat(path, stp, NULL) < 0)
+ 		return -1;
+ 	if (follow_dirlinks && S_ISLNK(stp->st_mode)) {
+ 		STRUCT_STAT st;
+-		if (do_stat(path, &st) == 0 && S_ISDIR(st.st_mode))
++		if (x_stat(path, &st, NULL) == 0 && S_ISDIR(st.st_mode))
+ 			*stp = st;
+ 	}
+ 	return 0;
+ #else
+-	return do_stat(path, stp);
++	return x_stat(path, stp, NULL);
+ #endif
+ }
+ 
+@@ -793,7 +793,7 @@ struct file_struct *make_file(char *fnam
+ 		if (save_errno == ENOENT) {
+ #ifdef SUPPORT_LINKS
+ 			/* Avoid "vanished" error if symlink points nowhere. */
+-			if (copy_links && do_lstat(thisname, &st) == 0
++			if (copy_links && x_lstat(thisname, &st, NULL) == 0
+ 			    && S_ISLNK(st.st_mode)) {
+ 				io_error |= IOERR_GENERAL;
+ 				rprintf(FERROR, "symlink has no referent: %s\n",
+@@ -963,7 +963,7 @@ struct file_struct *make_file(char *fnam
+ 		int save_mode = file->mode;
+ 		file->mode = S_IFDIR; /* Find a directory with our name. */
+ 		if (flist_find(the_file_list, file) >= 0
+-		    && do_stat(thisname, &st2) == 0 && S_ISDIR(st2.st_mode)) {
++		    && x_stat(thisname, &st2, NULL) == 0 && S_ISDIR(st2.st_mode)) {
+ 			file->modtime = st2.st_mtime;
+ 			file->length = st2.st_size;
+ 			file->mode = st2.st_mode;
 --- old/generator.c
 +++ new/generator.c
 @@ -1510,13 +1510,14 @@ void generate_files(int f_out, struct fi
@@ -163,6 +209,17 @@ After applying this patch, run these commands for a successful build:
    {"owner",           'o', POPT_ARG_VAL,    &preserve_uid, 1, 0, 0 },
    {"no-owner",         0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
    {"no-o",             0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
+--- old/receiver.c
++++ new/receiver.c
+@@ -528,7 +528,7 @@ int recv_files(int f_in, struct file_lis
+ 		if (fd1 == -1) {
+ 			st.st_mode = 0;
+ 			st.st_size = 0;
+-		} else if (do_fstat(fd1,&st) != 0) {
++		} else if (x_fstat(fd1, &st, NULL) != 0) {
+ 			rsyserr(FERROR, errno, "fstat %s failed",
+ 				full_fname(fnamecmp));
+ 			discard_receive_data(f_in, file->length);
 --- old/rsync.c
 +++ new/rsync.c
 @@ -197,7 +197,9 @@ int set_file_attrs(char *fname, struct f
@@ -185,28 +242,12 @@ After applying this patch, run these commands for a successful build:
  		/* a lchown had been done - we have to re-stat if the
  		 * destination had the setuid or setgid bits set due
  		 * to the side effect of the chown call */
-@@ -237,7 +239,15 @@ int set_file_attrs(char *fname, struct f
- 
- #ifdef HAVE_CHMOD
- 	if ((sxp->st.st_mode & CHMOD_BITS) != (new_mode & CHMOD_BITS)) {
--		int ret = do_chmod(fname, new_mode);
-+		int ret;
-+		if (am_root < 0) {
-+			mode_t mode = 0666 & ~orig_umask;
-+			if ((sxp->st.st_mode & CHMOD_BITS) != mode)
-+				ret = do_chmod(fname, mode);
-+			else
-+				ret = 0;
-+		} else
-+			ret = do_chmod(fname, new_mode);
- 		if (ret < 0) {
- 			rsyserr(FERROR, errno,
- 				"failed to set permissions on %s",
-@@ -249,6 +259,23 @@ int set_file_attrs(char *fname, struct f
- 	}
+@@ -224,6 +226,24 @@ int set_file_attrs(char *fname, struct f
+ 	if (preserve_xattrs && set_xattr(fname, file, sxp) == 0)
+ 		updated = 1;
  #endif
- 
-+	if (am_root < 0) {
++
++	if (am_root < 0 && !S_ISLNK(file->mode)) {
 +		switch (set_stat_xattr(fname, file)) {
 +		case 0:
 +			break;
@@ -223,30 +264,29 @@ After applying this patch, run these commands for a successful build:
 +		}
 +	}
 +
- 	if (verbose > 1 && flags & ATTRS_REPORT) {
- 		if (updated)
- 			rprintf(FCLIENT, "%s\n", fname);
---- old/rsync.h
-+++ new/rsync.h
-@@ -35,6 +35,8 @@
+ #ifdef SUPPORT_ACLS
+ 	/* It's OK to call set_acl() now, even for a dir, as the generator
+ 	 * will enable owner-writability using chmod, if necessary.
+@@ -237,7 +257,15 @@ int set_file_attrs(char *fname, struct f
  
- #define BACKUP_SUFFIX "~"
- 
-+#define FAKE_XATTR "user.rsync%stat"
-+
- /* a non-zero CHAR_OFFSET makes the rolling sum stronger, but is
-    incompatible with older versions :-( */
- #define CHAR_OFFSET 0
+ #ifdef HAVE_CHMOD
+ 	if ((sxp->st.st_mode & CHMOD_BITS) != (new_mode & CHMOD_BITS)) {
+-		int ret = do_chmod(fname, new_mode);
++		int ret;
++		if (am_root < 0) {
++			mode_t mode = (S_ISDIR(file->mode) ? 0777 : 0666) & ~orig_umask;
++			if ((sxp->st.st_mode & CHMOD_BITS) != mode)
++				ret = do_chmod(fname, mode);
++			else
++				ret = 0;
++		} else
++			ret = do_chmod(fname, new_mode);
+ 		if (ret < 0) {
+ 			rsyserr(FERROR, errno,
+ 				"failed to set permissions on %s",
 --- old/syscall.c
 +++ new/syscall.c
-@@ -22,12 +22,14 @@
-  */
- 
- #include "rsync.h"
-+#include "lib/sysxattr.h"
- 
- #if !defined MKNOD_CREATES_SOCKETS && defined HAVE_SYS_UN_H
- #include <sys/un.h>
+@@ -28,6 +28,7 @@
  #endif
  
  extern int dry_run;
@@ -254,7 +294,7 @@ After applying this patch, run these commands for a successful build:
  extern int read_only;
  extern int list_only;
  extern int preserve_perms;
-@@ -79,6 +81,15 @@ int do_mknod(char *pathname, mode_t mode
+@@ -79,6 +80,15 @@ int do_mknod(char *pathname, mode_t mode
  {
  	if (dry_run) return 0;
  	RETURN_ERROR_IF_RO_OR_LO;
@@ -270,109 +310,6 @@ After applying this patch, run these commands for a successful build:
  #if !defined MKNOD_CREATES_FIFOS && defined HAVE_MKFIFO
  	if (S_ISFIFO(mode))
  		return mkfifo(pathname, mode);
-@@ -215,23 +226,98 @@ int do_mkstemp(char *template, mode_t pe
- #endif
- }
- 
-+int get_stat_xattr(const char *fname, STRUCT_STAT *st)
-+{
-+	int mode, rdev_major, rdev_minor, uid, gid, len;
-+	char buf[256];
-+
-+	len = sys_lgetxattr(fname, FAKE_XATTR, buf, sizeof buf - 1);
-+	if (len < 0 || len >= (int)sizeof buf) {
-+		if (errno == ENOTSUP || errno == ENOATTR)
-+			return -1;
-+		return -1;
-+	}
-+	buf[len] = '\0';
-+
-+	if (sscanf(buf, "%o %d,%d %d:%d",
-+		   &mode, &rdev_major, &rdev_minor, &uid, &gid) != 5) {
-+		errno = EINVAL;
-+		return -1;
-+	}
-+
-+	st->st_mode = mode;
-+	st->st_rdev = MAKEDEV(rdev_major, rdev_minor);
-+	st->st_uid = uid;
-+	st->st_gid = gid;
-+
-+	return 0;
-+}
-+
-+int set_stat_xattr(const char *fname, struct file_struct *file)
-+{
-+	STRUCT_STAT fst, xst;
-+	int have_xattr;
-+	dev_t rdev;
-+	if (dry_run) return 0;
-+	RETURN_ERROR_IF_RO_OR_LO;
-+
-+	am_root = 2; /* get real stat() w/o xattr overlay */
-+	do_stat(fname, &fst);
-+	am_root = -1;
-+	have_xattr = get_stat_xattr(fname, &xst) == 0;
-+
-+	if (IS_DEVICE(file->mode) || IS_SPECIAL(file->mode))
-+		rdev = file->u.rdev;
-+	else
-+		rdev = 0;
-+	if (!IS_DEVICE(fst.st_mode) && !IS_SPECIAL(fst.st_mode))
-+		fst.st_rdev = 0; /* just in case */
-+
-+	if (fst.st_mode == file->mode && fst.st_rdev == rdev
-+	 && fst.st_uid == file->uid && fst.st_gid == file->gid) {
-+		if (have_xattr && sys_lremovexattr(fname, FAKE_XATTR) < 0)
-+			return -2;
-+		return 0;
-+	}
-+
-+	if (!have_xattr
-+	 || xst.st_mode != file->mode || xst.st_rdev != rdev
-+	 || xst.st_uid != file->uid || xst.st_gid != file->gid) {
-+		char buf[256];
-+		int len = snprintf(buf, sizeof buf, "%o %u,%u %u:%u",
-+			(int)file->mode,
-+			(int)major(rdev), (int)minor(rdev),
-+			(int)file->uid, (int)file->gid);
-+		return sys_lsetxattr(fname, FAKE_XATTR, buf, len, 0);
-+	}
-+	return 0;
-+}
-+
- int do_stat(const char *fname, STRUCT_STAT *st)
- {
-+	int ret;
- #ifdef USE_STAT64_FUNCS
--	return stat64(fname, st);
-+	ret = stat64(fname, st);
- #else
--	return stat(fname, st);
-+	ret = stat(fname, st);
- #endif
-+	if (am_root < 0 && ret == 0)
-+		get_stat_xattr(fname, st);
-+	return ret;
- }
- 
- int do_lstat(const char *fname, STRUCT_STAT *st)
- {
- #ifdef SUPPORT_LINKS
-+	int ret;
- # ifdef USE_STAT64_FUNCS
--	return lstat64(fname, st);
-+	ret = lstat64(fname, st);
- # else
--	return lstat(fname, st);
-+	ret = lstat(fname, st);
- # endif
-+	if (am_root < 0 && ret == 0)
-+		get_stat_xattr(fname, st);
-+	return ret;
- #else
- 	return do_stat(fname, st);
- #endif
 --- old/t_unsafe.c
 +++ new/t_unsafe.c
 @@ -24,7 +24,11 @@
@@ -410,15 +347,23 @@ After applying this patch, run these commands for a successful build:
  int preserve_perms = 0;
 --- old/xattr.c
 +++ new/xattr.c
-@@ -26,6 +26,7 @@
+@@ -26,11 +26,15 @@
  #ifdef SUPPORT_XATTRS
  
  extern int dry_run;
 +extern int am_root;
++extern mode_t orig_umask;
  extern unsigned int file_struct_len;
  
  #define RSYNC_XAL_INITIAL 5
-@@ -130,9 +131,15 @@ static int rsync_xal_get(const char *fna
+ #define RSYNC_XAL_LIST_INITIAL 100
+ 
++#define FAKE_XATTR "user.rsync%stat"
++
+ typedef struct {
+ 	char *name;
+ 	char *datum;
+@@ -130,9 +134,15 @@ static int rsync_xal_get(const char *fna
  	if (name_size == 0)
  		return 0;
  	for (left = name_size, name = namebuf; left > 0 ; left -= len, name += len) {
@@ -435,7 +380,7 @@ After applying this patch, run these commands for a successful build:
  		datum_size = sys_lgetxattr(fname, name, NULL, 0);
  		if (datum_size < 0) {
  			if (errno == ENOTSUP)
-@@ -285,10 +292,19 @@ void receive_xattr(struct file_struct *f
+@@ -285,10 +295,19 @@ void receive_xattr(struct file_struct *f
  				out_of_memory("receive_xattr");
  			read_buf(f, ptr, name_len);
  			read_buf(f, ptr + name_len, datum_len);
@@ -455,3 +400,104 @@ After applying this patch, run these commands for a successful build:
  #ifdef HAVE_OSX_XATTRS
  			if (strncmp(rxa->name, unique_prefix, upre_len) == 0) {
  				rxa->name_len -= upre_len;
+@@ -365,4 +384,100 @@ int set_xattr(const char *fname, const s
+ 	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
+ }
+ 
++int get_stat_xattr(const char *fname, int fd, STRUCT_STAT *st)
++{
++	int mode, rdev_major, rdev_minor, uid, gid, len;
++	char buf[256];
++
++	if (fname)
++		len = sys_lgetxattr(fname, FAKE_XATTR, buf, sizeof buf - 1);
++	else
++		len = sys_fgetxattr(fd, FAKE_XATTR, buf, sizeof buf - 1);
++	if (len < 0 || len >= (int)sizeof buf) {
++		if (errno == ENOTSUP || errno == ENOATTR)
++			return -1;
++		return -1;
++	}
++	buf[len] = '\0';
++
++	if (sscanf(buf, "%o %d,%d %d:%d",
++		   &mode, &rdev_major, &rdev_minor, &uid, &gid) != 5) {
++		errno = EINVAL;
++		return -1;
++	}
++
++	st->st_mode = mode;
++	st->st_rdev = MAKEDEV(rdev_major, rdev_minor);
++	st->st_uid = uid;
++	st->st_gid = gid;
++
++	return 0;
++}
++
++int set_stat_xattr(const char *fname, struct file_struct *file)
++{
++	STRUCT_STAT fst, xst;
++	dev_t rdev;
++
++	if (dry_run)
++		return 0;
++
++	if (x_stat(fname, &fst, &xst) < 0)
++		return -1;
++
++	if (IS_DEVICE(file->mode) || IS_SPECIAL(file->mode))
++		rdev = file->u.rdev;
++	else
++		rdev = 0;
++
++	/* This is the mode that the file will be. */
++	fst.st_mode &= ~CHMOD_BITS;
++	fst.st_mode |= (S_ISDIR(file->mode) ? 0777 : 0666) & ~orig_umask;
++	if (!IS_DEVICE(fst.st_mode) && !IS_SPECIAL(fst.st_mode))
++		fst.st_rdev = 0; /* just in case */
++
++	if (fst.st_mode == file->mode && fst.st_rdev == rdev
++	 && fst.st_uid == file->uid && fst.st_gid == file->gid) {
++		/* xst.st_mode will be 0 if there's no current stat xattr */
++		if (xst.st_mode && sys_lremovexattr(fname, FAKE_XATTR) < 0)
++			return -2;
++		return 0;
++	}
++
++	if (xst.st_mode != file->mode || xst.st_rdev != rdev
++	 || xst.st_uid != file->uid || xst.st_gid != file->gid) {
++		char buf[256];
++		int len = snprintf(buf, sizeof buf, "%o %u,%u %u:%u",
++			(int)file->mode,
++			(int)major(rdev), (int)minor(rdev),
++			(int)file->uid, (int)file->gid);
++		return sys_lsetxattr(fname, FAKE_XATTR, buf, len, 0);
++	}
++	return 0;
++}
++
++int x_stat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
++{
++	int ret = do_stat(fname, fst);
++	if (get_stat_xattr(fname, -1, xst? xst : fst) != 0 && xst)
++		xst->st_mode = 0;
++	return ret;
++}
++
++int x_lstat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
++{
++	int ret = do_lstat(fname, fst);
++	if (get_stat_xattr(fname, -1, xst? xst : fst) != 0 && xst)
++		xst->st_mode = 0;
++	return ret;
++}
++
++int x_fstat(int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
++{
++	int ret = do_fstat(fd, fst);
++	if (get_stat_xattr(NULL, fd, xst? xst : fst) != 0 && xst)
++		xst->st_mode = 0;
++	return ret;
++}
++
+ #endif /* SUPPORT_XATTRS */
