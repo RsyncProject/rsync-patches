@@ -1,0 +1,436 @@
+Depends-On-Patch: acls.diff
+Depends-On-Patch: xattrs.diff
+
+This patch adds a new option:  --fake-super, which tells rsync to copy in a
+fake super-user mode that stores various file attributes in an extended-
+attribute value instead of as real file-system attributes.  The items
+affected are:
+
+  mode  the real mode of a file is always (666 & umask) while
+        the real mode of a directory is always (777 & umask).
+
+  rdev  devices and special files are created as zero-length
+        normal files.
+
+  uid   the real owner is always left unchanged.
+
+  gid   the real group is always left unchanged.
+
+A daemon can set "fake super = yes" in the rsync.conf file for any module
+that you'd like to run without root perms while pretending it has them (the
+client cannot affect this).
+
+The --fake-super option only affects the side where the option is used.  To
+affect the remote side of a remote-shell connection, specify an rsync path:
+
+  rsync -av --rsync-path='rsync --fake-super' /src/ host:/dest/
+
+For a local copy where you want to affect only one side or the other,
+you'll need to turn the copy into a remote copy to localhost.
+
+After applying this patch, run these commands for a successful build:
+
+    ./prepare-source
+    ./configure
+    make
+
+--- old/Makefile.in
++++ new/Makefile.in
+@@ -41,7 +41,7 @@ popt_OBJS=popt/findme.o  popt/popt.o  po
+ 	popt/popthelp.o popt/poptparse.o
+ OBJS=$(OBJS1) $(OBJS2) $(OBJS3) $(DAEMON_OBJ) $(LIBOBJ) $(ZLIBOBJ) @BUILD_POPT@
+ 
+-TLS_OBJ = tls.o syscall.o lib/compat.o lib/snprintf.o lib/permstring.o
++TLS_OBJ = tls.o syscall.o lib/compat.o lib/snprintf.o lib/permstring.o lib/sysxattr.o
+ 
+ # Programs we must have to run the test cases
+ CHECK_PROGS = rsync$(EXEEXT) tls$(EXEEXT) getgroups$(EXEEXT) getfsdev$(EXEEXT) \
+@@ -83,11 +83,11 @@ getgroups$(EXEEXT): getgroups.o
+ getfsdev$(EXEEXT): getfsdev.o
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ getfsdev.o $(LIBS)
+ 
+-TRIMSLASH_OBJ = trimslash.o syscall.o lib/compat.o lib/snprintf.o
++TRIMSLASH_OBJ = trimslash.o syscall.o lib/compat.o lib/snprintf.o lib/sysxattr.o
+ trimslash$(EXEEXT): $(TRIMSLASH_OBJ)
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TRIMSLASH_OBJ) $(LIBS)
+ 
+-T_UNSAFE_OBJ = t_unsafe.o syscall.o util.o t_stub.o lib/compat.o lib/snprintf.o
++T_UNSAFE_OBJ = t_unsafe.o syscall.o util.o t_stub.o lib/compat.o lib/snprintf.o lib/sysxattr.o
+ t_unsafe$(EXEEXT): $(T_UNSAFE_OBJ)
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(T_UNSAFE_OBJ) $(LIBS)
+ 
+--- old/clientserver.c
++++ new/clientserver.c
+@@ -284,6 +284,9 @@ static int rsync_module(int f_in, int f_
+ 	pid_t pre_exec_pid = 0;
+ 	char *request = NULL;
+ 
++	if (lp_fake_super(i) != 0)
++		am_root = -1;
++
+ 	if (!allow_access(addr, host, lp_hosts_allow(i), lp_hosts_deny(i))) {
+ 		rprintf(FLOG, "rsync denied on module %s from %s (%s)\n",
+ 			name, host, addr);
+--- old/generator.c
++++ new/generator.c
+@@ -1510,13 +1510,14 @@ void generate_files(int f_out, struct fi
+ 		recv_generator(fbuf, file, i, itemizing, maybe_ATTRS_REPORT,
+ 			       code, f_out);
+ 
+-		/* We need to ensure that any dirs we create have writeable
++		/* We need to ensure that any dirs we create have rwx
+ 		 * permissions during the time we are putting files within
+ 		 * them.  This is then fixed after the transfer is done. */
+ #ifdef HAVE_CHMOD
+-		if (!am_root && S_ISDIR(file->mode) && !(file->mode & S_IWUSR)
++		if (am_root <= 0 && S_ISDIR(file->mode)
++		    && (file->mode & S_IRWXU) != S_IRWXU
+ 		 && dir_tweaking) {
+-			mode_t mode = file->mode | S_IWUSR; /* user write */
++			mode_t mode = file->mode | S_IRWXU; /* user rwx */
+ 			char *fname = local_name ? local_name : fbuf;
+ 			if (do_chmod(fname, mode) < 0) {
+ 				rsyserr(FERROR, errno,
+--- old/loadparm.c
++++ new/loadparm.c
+@@ -150,6 +150,7 @@ typedef struct
+ 	int syslog_facility;
+ 	int timeout;
+ 
++	BOOL fake_super;
+ 	BOOL ignore_errors;
+ 	BOOL ignore_nonreadable;
+ 	BOOL list;
+@@ -197,6 +198,7 @@ static service sDefault =
+  /* syslog_facility; */		LOG_DAEMON,
+  /* timeout; */			0,
+ 
++ /* fake_super; */		False,
+  /* ignore_errors; */		False,
+  /* ignore_nonreadable; */	False,
+  /* list; */			True,
+@@ -298,6 +300,7 @@ static struct parm_struct parm_table[] =
+  {"dont compress",     P_STRING, P_LOCAL, &sDefault.dont_compress,     NULL,0},
+  {"exclude from",      P_STRING, P_LOCAL, &sDefault.exclude_from,      NULL,0},
+  {"exclude",           P_STRING, P_LOCAL, &sDefault.exclude,           NULL,0},
++ {"fake super",        P_BOOL,   P_LOCAL, &sDefault.fake_super,        NULL,0},
+  {"filter",            P_STRING, P_LOCAL, &sDefault.filter,            NULL,0},
+  {"gid",               P_STRING, P_LOCAL, &sDefault.gid,               NULL,0},
+  {"hosts allow",       P_STRING, P_LOCAL, &sDefault.hosts_allow,       NULL,0},
+@@ -412,6 +415,7 @@ FN_LOCAL_INTEGER(lp_max_connections, max
+ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+ FN_LOCAL_INTEGER(lp_timeout, timeout)
+ 
++FN_LOCAL_BOOL(lp_fake_super, fake_super)
+ FN_LOCAL_BOOL(lp_ignore_errors, ignore_errors)
+ FN_LOCAL_BOOL(lp_ignore_nonreadable, ignore_nonreadable)
+ FN_LOCAL_BOOL(lp_list, list)
+@@ -816,7 +820,7 @@ BOOL lp_load(char *pszFname, int globals
+ 
+ 	if (pszFname)
+ 	    pstrcpy(n2,pszFname);
+-	else if (am_server && !am_root)
++	else if (am_server && am_root <= 0)
+ 	    pstrcpy(n2,RSYNCD_USERCONF);
+ 	else
+ 	    pstrcpy(n2,RSYNCD_SYSCONF);
+--- old/options.c
++++ new/options.c
+@@ -73,7 +73,7 @@ int protocol_version = PROTOCOL_VERSION;
+ int sparse_files = 0;
+ int do_compression = 0;
+ int def_compress_level = Z_DEFAULT_COMPRESSION;
+-int am_root = 0;
++int am_root = 0; /* 0 = normal, 1 = super, 2 = --super, -1 = --fake-super */
+ int am_server = 0;
+ int am_sender = 0;
+ int am_generator = 0;
+@@ -330,6 +330,7 @@ void usage(enum logcode F)
+   rprintf(F," -t, --times                 preserve times\n");
+   rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
+   rprintf(F,"     --super                 receiver attempts super-user activities\n");
++  rprintf(F,"     --fake-super            fake root by storing/reading ownership/etc in EAs\n");
+   rprintf(F," -S, --sparse                handle sparse files efficiently\n");
+   rprintf(F," -n, --dry-run               show what would have been transferred\n");
+   rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
+@@ -454,6 +455,7 @@ static struct poptOption long_options[] 
+   {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
+   {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
+   {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
++  {"fake-super",       0,  POPT_ARG_VAL,    &am_root, -1, 0, 0 },
+   {"owner",           'o', POPT_ARG_VAL,    &preserve_uid, 1, 0, 0 },
+   {"no-owner",         0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
+   {"no-o",             0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
+--- old/rsync.c
++++ new/rsync.c
+@@ -197,6 +197,12 @@ int set_file_attrs(char *fname, struct f
+ 					(long)sxp->st.st_gid, (long)file->gid);
+ 			}
+ 		}
++		if (am_root < 0) {
++			if (change_uid)
++				sxp->st.st_uid = file->uid;
++			if (change_gid)
++				sxp->st.st_gid = file->gid;
++		} else
+ 		if (do_lchown(fname,
+ 		    change_uid ? file->uid : sxp->st.st_uid,
+ 		    change_gid ? file->gid : sxp->st.st_gid) != 0) {
+@@ -206,7 +212,7 @@ int set_file_attrs(char *fname, struct f
+ 			    change_uid ? "chown" : "chgrp",
+ 			    full_fname(fname));
+ 			goto cleanup;
+-		}
++		} else
+ 		/* a lchown had been done - we have to re-stat if the
+ 		 * destination had the setuid or setgid bits set due
+ 		 * to the side effect of the chown call */
+@@ -237,7 +243,16 @@ int set_file_attrs(char *fname, struct f
+ 
+ #ifdef HAVE_CHMOD
+ 	if ((sxp->st.st_mode & CHMOD_BITS) != (new_mode & CHMOD_BITS)) {
+-		int ret = do_chmod(fname, new_mode);
++		int ret;
++		if (am_root < 0) {
++			mode_t mode = 0666 & ~orig_umask;
++			if ((sxp->st.st_mode & CHMOD_BITS) != mode)
++				ret = do_chmod(fname, mode);
++			else
++				ret = 0;
++			sxp->st.st_mode = new_mode;
++		} else
++			ret = do_chmod(fname, new_mode);
+ 		if (ret < 0) {
+ 			rsyserr(FERROR, errno,
+ 				"failed to set permissions on %s",
+@@ -249,6 +264,22 @@ int set_file_attrs(char *fname, struct f
+ 	}
+ #endif
+ 
++	if (am_root < 0) {
++		int write_it = updated;
++		if (IS_DEVICE(file->mode) || IS_SPECIAL(file->mode)) {
++			if (file->u.rdev != sxp->st.st_rdev) {
++				sxp->st.st_rdev = file->u.rdev;
++				write_it = 1;
++			}
++		} else
++			sxp->st.st_rdev = 0;
++		if (write_it && set_stat_xattr(fname, &sxp->st) < 0) {
++			rsyserr(FERROR, errno,
++				"write of stat xattr failed for %s",
++				full_fname(fname));
++		}
++	}
++
+ 	if (verbose > 1 && flags & ATTRS_REPORT) {
+ 		if (updated)
+ 			rprintf(FCLIENT, "%s\n", fname);
+--- old/rsync.h
++++ new/rsync.h
+@@ -35,6 +35,8 @@
+ 
+ #define BACKUP_SUFFIX "~"
+ 
++#define FAKE_XATTR "user.fake%stat"
++
+ /* a non-zero CHAR_OFFSET makes the rolling sum stronger, but is
+    incompatible with older versions :-( */
+ #define CHAR_OFFSET 0
+--- old/syscall.c
++++ new/syscall.c
+@@ -22,12 +22,14 @@
+  */
+ 
+ #include "rsync.h"
++#include "lib/sysxattr.h"
+ 
+ #if !defined MKNOD_CREATES_SOCKETS && defined HAVE_SYS_UN_H
+ #include <sys/un.h>
+ #endif
+ 
+ extern int dry_run;
++extern int am_root;
+ extern int read_only;
+ extern int list_only;
+ extern int preserve_perms;
+@@ -79,6 +81,15 @@ int do_mknod(char *pathname, mode_t mode
+ {
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
++
++	/* For --fake-super, we create a normal file with mode 0600. */
++	if (am_root < 0) {
++		int fd = open(pathname, O_WRONLY|O_CREAT|O_TRUNC, S_IWUSR|S_IRUSR);
++		if (fd < 0 || close(fd) < 0)
++			return -1;
++		return 0;
++	}
++
+ #if !defined MKNOD_CREATES_FIFOS && defined HAVE_MKFIFO
+ 	if (S_ISFIFO(mode))
+ 		return mkfifo(pathname, mode);
+@@ -133,6 +144,7 @@ int do_open(const char *pathname, int fl
+ }
+ 
+ #ifdef HAVE_CHMOD
++
+ int do_chmod(const char *path, mode_t mode)
+ {
+ 	int code;
+@@ -215,23 +227,69 @@ int do_mkstemp(char *template, mode_t pe
+ #endif
+ }
+ 
++int get_stat_xattr(const char *fname, STRUCT_STAT *st)
++{
++	int mode, rdev, uid, gid, len;
++	char buf[256];
++
++	len = sys_lgetxattr(fname, FAKE_XATTR, buf, sizeof buf - 1);
++	if (len < 0 || len >= (int)sizeof buf) {
++		if (errno == ENOTSUP || errno == ENOATTR)
++			return 0;
++		return -1;
++	}
++	buf[len] = '\0';
++
++	if (sscanf(buf, "%o %d %d:%d", &mode, &rdev, &uid, &gid) != 4) {
++		errno = EINVAL;
++		return -1;
++	}
++
++	st->st_mode = mode;
++	st->st_rdev = rdev;
++	st->st_uid = uid;
++	st->st_gid = gid;
++
++	return 0;
++}
++
++int set_stat_xattr(const char *fname, STRUCT_STAT *st)
++{
++	char buf[256];
++	int len;
++	if (dry_run) return 0;
++	RETURN_ERROR_IF_RO_OR_LO;
++	len = snprintf(buf, sizeof buf, "%o %d %d:%d",
++		       (int)st->st_mode, (int)st->st_rdev,
++		       (int)st->st_uid, (int)st->st_gid);
++	return sys_lsetxattr(fname, FAKE_XATTR, buf, len, 0);
++}
++
+ int do_stat(const char *fname, STRUCT_STAT *st)
+ {
++	int ret;
+ #ifdef USE_STAT64_FUNCS
+-	return stat64(fname, st);
++	ret = stat64(fname, st);
+ #else
+-	return stat(fname, st);
++	ret = stat(fname, st);
+ #endif
++	if (am_root < 0 && ret == 0)
++		get_stat_xattr(fname, st);
++	return ret;
+ }
+ 
+ int do_lstat(const char *fname, STRUCT_STAT *st)
+ {
+ #ifdef SUPPORT_LINKS
++	int ret;
+ # ifdef USE_STAT64_FUNCS
+-	return lstat64(fname, st);
++	ret = lstat64(fname, st);
+ # else
+-	return lstat(fname, st);
++	ret = lstat(fname, st);
+ # endif
++	if (am_root < 0 && ret == 0)
++		get_stat_xattr(fname, st);
++	return ret;
+ #else
+ 	return do_stat(fname, st);
+ #endif
+--- old/t_unsafe.c
++++ new/t_unsafe.c
+@@ -24,7 +24,11 @@
+ 
+ #include "rsync.h"
+ 
+-int dry_run, read_only, list_only, verbose;
++int dry_run = 0;
++int am_root = 0;
++int read_only = 0;
++int list_only = 0;
++int verbose = 0;
+ int preserve_perms = 0;
+ 
+ int
+--- old/tls.c
++++ new/tls.c
+@@ -39,6 +39,7 @@
+ 
+ /* These are to make syscall.o shut up. */
+ int dry_run = 0;
++int am_root = 0; /* TODO: add option to set this to -1. */
+ int read_only = 1;
+ int list_only = 0;
+ int preserve_perms = 0;
+--- old/trimslash.c
++++ new/trimslash.c
+@@ -23,6 +23,7 @@
+ 
+ /* These are to make syscall.o shut up. */
+ int dry_run = 0;
++int am_root = 0;
+ int read_only = 1;
+ int list_only = 0;
+ int preserve_perms = 0;
+--- old/xattr.c
++++ new/xattr.c
+@@ -26,6 +26,7 @@
+ #ifdef SUPPORT_XATTRS
+ 
+ extern int dry_run;
++extern int am_root;
+ extern unsigned int file_struct_len;
+ 
+ #define RSYNC_XAL_INITIAL 5
+@@ -130,9 +131,15 @@ static int rsync_xal_get(const char *fna
+ 	if (name_size == 0)
+ 		return 0;
+ 	for (left = name_size, name = namebuf; left > 0 ; left -= len, name += len) {
+-		rsync_xa *rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
++		rsync_xa *rxas;
+ 
+ 		len = strlen(name) + 1;
++		if (am_root < 0 && len == sizeof FAKE_XATTR
++		 && name[9] == '%' && strcmp(name, FAKE_XATTR) == 0)
++			continue;
++
++		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
++
+ 		datum_size = sys_lgetxattr(fname, name, NULL, 0);
+ 		if (datum_size < 0) {
+ 			if (errno == ENOTSUP)
+@@ -285,10 +292,19 @@ void receive_xattr(struct file_struct *f
+ 				out_of_memory("receive_xattr");
+ 			read_buf(f, ptr, name_len);
+ 			read_buf(f, ptr + name_len, datum_len);
++
++			if (am_root < 0 && name_len == sizeof FAKE_XATTR
++			 && ptr[9] == '%' && strcmp(ptr, FAKE_XATTR) == 0) {
++				free(ptr);
++				temp_xattr.count--;
++				continue;
++			}
++
+ 			rxa->name_len = name_len;
+ 			rxa->datum_len = datum_len;
+ 			rxa->name = ptr;
+ 			rxa->datum = ptr + name_len;
++
+ #ifdef HAVE_OSX_XATTRS
+ 			if (strncmp(rxa->name, unique_prefix, upre_len) == 0) {
+ 				rxa->name_len -= upre_len;
