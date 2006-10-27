@@ -222,7 +222,15 @@ After applying this patch, run these commands for a successful build:
  			discard_receive_data(f_in, file->length);
 --- old/rsync.c
 +++ new/rsync.c
-@@ -197,7 +197,9 @@ int set_file_attrs(char *fname, struct f
+@@ -49,7 +49,6 @@ extern int preserve_gid;
+ extern int inplace;
+ extern int keep_dirlinks;
+ extern int make_backups;
+-extern mode_t orig_umask;
+ extern struct stats stats;
+ extern struct chmod_mode_struct *daemon_chmod_modes;
+ 
+@@ -197,7 +196,9 @@ int set_file_attrs(char *fname, struct f
  					(long)sxp->st.st_gid, (long)file->gid);
  			}
  		}
@@ -233,7 +241,7 @@ After applying this patch, run these commands for a successful build:
  		    change_uid ? file->uid : sxp->st.st_uid,
  		    change_gid ? file->gid : sxp->st.st_gid) != 0) {
  			/* shouldn't have attempted to change uid or gid
-@@ -206,7 +208,7 @@ int set_file_attrs(char *fname, struct f
+@@ -206,7 +207,7 @@ int set_file_attrs(char *fname, struct f
  			    change_uid ? "chown" : "chgrp",
  			    full_fname(fname));
  			goto cleanup;
@@ -242,16 +250,12 @@ After applying this patch, run these commands for a successful build:
  		/* a lchown had been done - we have to re-stat if the
  		 * destination had the setuid or setgid bits set due
  		 * to the side effect of the chown call */
-@@ -224,6 +226,28 @@ int set_file_attrs(char *fname, struct f
+@@ -224,6 +225,24 @@ int set_file_attrs(char *fname, struct f
  	if (preserve_xattrs && set_xattr(fname, file, sxp) == 0)
  		updated = 1;
  #endif
 +
 +	if (am_root < 0 && !S_ISLNK(file->mode)) {
-+		mode_t mode = sxp->st.st_mode & ~CHMOD_BITS;
-+		mode |= (S_ISDIR(mode) ? 0777 : 0666) & (~orig_umask | S_IRWXU);
-+		if (sxp->st.st_mode != mode)
-+			do_chmod(fname, mode);
 +		switch (set_stat_xattr(fname, file)) {
 +		case 0:
 +			break;
@@ -271,7 +275,7 @@ After applying this patch, run these commands for a successful build:
  #ifdef SUPPORT_ACLS
  	/* It's OK to call set_acl() now, even for a dir, as the generator
  	 * will enable owner-writability using chmod, if necessary.
-@@ -237,7 +261,7 @@ int set_file_attrs(char *fname, struct f
+@@ -237,7 +256,7 @@ int set_file_attrs(char *fname, struct f
  
  #ifdef HAVE_CHMOD
  	if ((sxp->st.st_mode & CHMOD_BITS) != (new_mode & CHMOD_BITS)) {
@@ -396,7 +400,7 @@ After applying this patch, run these commands for a successful build:
  #ifdef HAVE_OSX_XATTRS
  			if (strncmp(rxa->name, unique_prefix, upre_len) == 0) {
  				rxa->name_len -= upre_len;
-@@ -365,4 +384,100 @@ int set_xattr(const char *fname, const s
+@@ -365,4 +384,103 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
  }
  
@@ -434,6 +438,7 @@ After applying this patch, run these commands for a successful build:
 +{
 +	STRUCT_STAT fst, xst;
 +	dev_t rdev;
++	mode_t mode;
 +
 +	if (dry_run)
 +		return 0;
@@ -446,13 +451,15 @@ After applying this patch, run these commands for a successful build:
 +	else
 +		rdev = 0;
 +
-+	/* This is the mode that the file will be. */
-+	fst.st_mode &= ~CHMOD_BITS;
-+	fst.st_mode |= (S_ISDIR(file->mode) ? 0777 : 0666) & ~orig_umask;
++	/* Force the real file's mode to our liking. */
++	mode = (fst.st_mode & ~CHMOD_BITS)
++	     | ((S_ISDIR(fst.st_mode) ? 0777 : 0666) & (~orig_umask | S_IRWXU));
++	if (fst.st_mode != mode)
++		do_chmod(fname, mode);
 +	if (!IS_DEVICE(fst.st_mode) && !IS_SPECIAL(fst.st_mode))
 +		fst.st_rdev = 0; /* just in case */
 +
-+	if (fst.st_mode == file->mode && fst.st_rdev == rdev
++	if (mode == file->mode && fst.st_rdev == rdev
 +	 && fst.st_uid == file->uid && fst.st_gid == file->gid) {
 +		/* xst.st_mode will be 0 if there's no current stat xattr */
 +		if (xst.st_mode && sys_lremovexattr(fname, FAKE_XATTR) < 0)
