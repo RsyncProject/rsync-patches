@@ -30,7 +30,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1092 @@
+@@ -0,0 +1,1099 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -60,6 +60,8 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +extern int am_root;
 +extern int dry_run;
++extern int read_only;
++extern int list_only;
 +extern int orig_umask;
 +extern int preserve_acls;
 +extern unsigned int file_struct_len;
@@ -942,6 +944,11 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	SMB_ACL_TYPE_T type;
 +	char *ndx_ptr;
 +
++	if (!dry_run && (read_only || list_only)) {
++		errno = EROFS;
++		return -1;
++	}
++
 +	if (S_ISLNK(file->mode))
 +		return 1;
 +
@@ -1233,7 +1240,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  AC_SUBST(CC_SHOBJ_FLAG)
  AC_SUBST(BUILD_POPT)
  
-+AC_CHECK_HEADERS(sys/acl.h)
++AC_CHECK_HEADERS(sys/acl.h acl/libacl.h)
 +AC_CHECK_FUNCS(_acl __acl _facl __facl)
 +#################################################
 +# check for ACL support
@@ -5488,9 +5495,12 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +}
 --- old/lib/sysacls.h
 +++ new/lib/sysacls.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,36 @@
 +#if defined SUPPORT_ACLS && defined HAVE_SYS_ACL_H
 +#include <sys/acl.h>
++#endif
++#ifdef HAVE_ACL_LIBACL_H
++#include <acl/libacl.h>
 +#endif
 +#include "smb_acls.h"
 +
