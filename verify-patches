@@ -33,7 +33,7 @@ EOT
 
 $ENV{'LC_COLLATE'} = 'C';
 $| = 1;
-my $CONF_OPTS = '-C';
+my $CONF_OPTS = '--cache-file=../config.cache';
 
 my($has_dependencies, @new, @rejects);
 
@@ -49,6 +49,7 @@ close IN;
 
 mkdir('tmp', 0777) unless -d 'tmp';
 chdir('tmp') or die "Unable to chdir to 'tmp'";
+symlink('..', 'patches') unless -d 'patches';
 
 mkdir('workdir') unless -d 'workdir';
 open(OUT, '>exclude') or die $!;
@@ -60,7 +61,7 @@ unless ($no_cvs) {
     system qq|cvs -qd "$root" co -P -d cvsdir rsync|;
 }
 
-@ARGV = glob('../*.diff') unless @ARGV;
+@ARGV = glob('patches/*.diff') unless @ARGV;
 
 DIFF:
 foreach my $diff (@ARGV) {
@@ -69,14 +70,14 @@ foreach my $diff (@ARGV) {
     $diff =~ s#^(patches|\.\.)/##;
 
     my $conf_opts;
-    open(IN, "../$diff") or die $!;
+    open(IN, "patches/$diff") or die $!;
     while (<IN>) {
 	last if /^--- /;
 	if (/^Depends-On-Patch: (\S+.diff)$/) {
 	    my $dep = $1;
 	    $has_dependencies = 1;
 	    print "\nApplying dependency patch $dep...\n";
-	    if (system("patch -d cvsdir -p1 -b -Vt <../$dep") != 0) {
+	    if (system("patch -d cvsdir -p1 -b -Vt <patches/$dep") != 0) {
 		print "Unable to cleanly apply dependency patch -- skipping $diff\n";
 		system "rm -f cvsdir/*.rej cvsdir/*/*.rej";
 		&restore_cvsdir;
@@ -158,7 +159,7 @@ foreach my $diff (@ARGV) {
 	    }
 	    if ($cmd eq 'E') {
 		chdir('workdir') or die $!;
-		system "vim -d ../../$diff ../new.patch";
+		system "vim -d ../patches/$diff ../new.patch";
 		chdir('..') or die $!;
 		$default = 'U,A,D';
 		next;
@@ -177,7 +178,7 @@ foreach my $diff (@ARGV) {
 		exit;
 	    }
 	    if ($cmd eq 'U') {
-		system "cp -p new.patch ../$diff";
+		system "cp -p new.patch patches/$diff";
 		print "\nUpdated $diff from new.patch\n";
 		$default = 'A';
 		next;
@@ -200,7 +201,7 @@ sub apply_patch
     print "\nApplying patch $diff...\n";
     undef @rejects;
     my($saw_offset, $saw_fuzz);
-    open(IN, "patch -d workdir -p1 --no-backup-if-mismatch <../$diff |") or die $!;
+    open(IN, "patch -d workdir -p1 --no-backup-if-mismatch <patches/$diff |") or die $!;
     while (<IN>) {
 	print $_;
 	chomp;
@@ -240,7 +241,7 @@ sub generate_new_patch
     foreach (@new) {
 	system "touch -r workdir/$_ cvsdir/$_";
     }
-    open(IN, "../$diff") or die $!;
+    open(IN, "patches/$diff") or die $!;
     open(OUT, '>new.patch') or die $!;
     while (<IN>) {
 	last if /^--- /;
@@ -260,7 +261,7 @@ sub generate_new_patch
 	unlink("cvsdir/$_");
     }
     print "\nDiffing... ";
-    if (system("diff ../$diff new.patch >/dev/null") == 0) {
+    if (system("diff patches/$diff new.patch >/dev/null") == 0) {
 	print "new patch is identical to old.\n";
 	return 'N';
     }
