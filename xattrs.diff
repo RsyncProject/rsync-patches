@@ -38,15 +38,15 @@ TODO:
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -29,6 +29,7 @@ extern int am_root;
- extern int dry_run;
+@@ -31,6 +31,7 @@ extern int read_only;
+ extern int list_only;
  extern int orig_umask;
  extern int preserve_acls;
 +extern int preserve_xattrs;
  extern unsigned int file_struct_len;
  
  /* === ACL structures === */
-@@ -740,6 +741,10 @@ void receive_acl(struct file_struct *fil
+@@ -742,6 +743,10 @@ void receive_acl(struct file_struct *fil
  	type = SMB_ACL_TYPE_ACCESS;
  	racl_list = &access_acl_list;
  	ndx_ptr = (char*)file + file_struct_len;
@@ -57,7 +57,7 @@ TODO:
  	do {
  		char tag = read_byte(f);
  		int ndx;
-@@ -799,6 +804,10 @@ void cache_acl(struct file_struct *file,
+@@ -801,6 +806,10 @@ void cache_acl(struct file_struct *file,
  	racl = sxp->acc_acl;
  	racl_list = &access_acl_list;
  	ndx_ptr = (char*)file + file_struct_len;
@@ -68,7 +68,7 @@ TODO:
  	do {
  		if (!racl)
  			ndx = -1;
-@@ -914,6 +923,10 @@ int set_acl(const char *fname, const str
+@@ -921,6 +930,10 @@ int set_acl(const char *fname, const str
  
  	type = SMB_ACL_TYPE_ACCESS;
  	ndx_ptr = (char*)file + file_struct_len;
@@ -359,16 +359,14 @@ TODO:
 +#endif /* No xattrs */
 --- old/lib/sysxattr.h
 +++ new/lib/sysxattr.h
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,24 @@
 +#ifdef SUPPORT_XATTRS
++
 +#if defined HAVE_ATTR_XATTR_H
 +#include <attr/xattr.h>
 +#elif defined HAVE_SYS_XATTR_H
 +#include <sys/xattr.h>
 +#endif
-+#endif
-+
-+#if defined HAVE_LINUX_XATTRS || defined HAVE_OSX_XATTRS
 +
 +/* Linux 2.4 does not define this as a distinct errno value: */
 +#ifndef ENOATTR
@@ -383,7 +381,7 @@ TODO:
 +
 +#else
 +
-+/* No xattrs */
++/* No xattrs available */
 +
 +#endif
 --- old/options.c
@@ -562,7 +560,7 @@ TODO:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,368 @@
+@@ -0,0 +1,375 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -591,6 +589,8 @@ TODO:
 +#ifdef SUPPORT_XATTRS
 +
 +extern int dry_run;
++extern int read_only;
++extern int list_only;
 +extern unsigned int file_struct_len;
 +
 +#define RSYNC_XAL_INITIAL 5
@@ -925,6 +925,11 @@ TODO:
 +
 +	if (dry_run)
 +		return 1; /* FIXME: --dry-run needs to compute this value */
++
++	if (read_only || list_only) {
++		errno = EROFS;
++		return -1;
++	}
 +
 +	ndx = IVAL(ndx_ptr, 0);
 +	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
