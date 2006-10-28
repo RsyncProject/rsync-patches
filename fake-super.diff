@@ -47,6 +47,12 @@ or, if you want ACL support too:
     ./configure --enable-acl-support --enable-xattr-support
     make
 
+TODO:
+
+ - We may want to normalize the mode somehow, so that the value in the
+   xattr field is more portable.  E.g. separate the type from the mode
+   value and reconstruct it.
+
 --- old/backup.c
 +++ new/backup.c
 @@ -129,7 +129,7 @@ static int make_bak_dir(char *fullpath)
@@ -114,7 +120,34 @@ or, if you want ACL support too:
  #endif
  }
  
-@@ -793,7 +793,7 @@ struct file_struct *make_file(char *fnam
+@@ -234,26 +234,6 @@ static int is_excluded(char *fname, int 
+ 	return 0;
+ }
+ 
+-static int to_wire_mode(mode_t mode)
+-{
+-#ifdef SUPPORT_LINKS
+-#if _S_IFLNK != 0120000
+-	if (S_ISLNK(mode))
+-		return (mode & ~(_S_IFMT)) | 0120000;
+-#endif
+-#endif
+-	return mode;
+-}
+-
+-static mode_t from_wire_mode(int mode)
+-{
+-#if _S_IFLNK != 0120000
+-	if ((mode & (_S_IFMT)) == 0120000)
+-		return (mode & ~(_S_IFMT)) | _S_IFLNK;
+-#endif
+-	return mode;
+-}
+-
+ static void send_directory(int f, struct file_list *flist,
+ 			   char *fbuf, int len);
+ 
+@@ -793,7 +773,7 @@ struct file_struct *make_file(char *fnam
  		if (save_errno == ENOENT) {
  #ifdef SUPPORT_LINKS
  			/* Avoid "vanished" error if symlink points nowhere. */
@@ -123,7 +156,7 @@ or, if you want ACL support too:
  			    && S_ISLNK(st.st_mode)) {
  				io_error |= IOERR_GENERAL;
  				rprintf(FERROR, "symlink has no referent: %s\n",
-@@ -963,7 +963,7 @@ struct file_struct *make_file(char *fnam
+@@ -963,7 +943,7 @@ struct file_struct *make_file(char *fnam
  		int save_mode = file->mode;
  		file->mode = S_IFDIR; /* Find a directory with our name. */
  		if (flist_find(the_file_list, file) >= 0
@@ -263,32 +296,16 @@ or, if you want ACL support too:
  		/* a lchown had been done - we have to re-stat if the
  		 * destination had the setuid or setgid bits set due
  		 * to the side effect of the chown call */
-@@ -224,6 +225,24 @@ int set_file_attrs(char *fname, struct f
+@@ -223,6 +224,8 @@ int set_file_attrs(char *fname, struct f
+ #ifdef SUPPORT_XATTRS
  	if (preserve_xattrs && set_xattr(fname, file, sxp) == 0)
  		updated = 1;
++	if (am_root < 0)
++		set_stat_xattr(fname, file);
  #endif
-+
-+	if (am_root < 0 && !S_ISLNK(file->mode)) {
-+		switch (set_stat_xattr(fname, file)) {
-+		case 0:
-+			break;
-+		case -1:
-+			rsyserr(FERROR, errno,
-+				"write of stat xattr failed for %s",
-+				full_fname(fname));
-+			break;
-+		case -2:
-+			rsyserr(FERROR, errno,
-+				"delete of stat xattr failed for %s",
-+				full_fname(fname));
-+			break;
-+		}
-+	}
-+
  #ifdef SUPPORT_ACLS
  	/* It's OK to call set_acl() now, even for a dir, as the generator
- 	 * will enable owner-writability using chmod, if necessary.
-@@ -237,7 +256,7 @@ int set_file_attrs(char *fname, struct f
+@@ -237,7 +240,7 @@ int set_file_attrs(char *fname, struct f
  
  #ifdef HAVE_CHMOD
  	if ((sxp->st.st_mode & CHMOD_BITS) != (new_mode & CHMOD_BITS)) {
@@ -297,6 +314,45 @@ or, if you want ACL support too:
  		if (ret < 0) {
  			rsyserr(FERROR, errno,
  				"failed to set permissions on %s",
+--- old/rsync.h
++++ new/rsync.h
+@@ -708,6 +708,12 @@ typedef struct {
+ 
+ #include "proto.h"
+ 
++#ifndef SUPPORT_XATTRS
++#define x_stat(fn,fst,xst) do_stat(fn,fst)
++#define x_lstat(fn,fst,xst) do_lstat(fn,fst)
++#define x_fstat(fd,fst,xst) do_fstat(fd,fst)
++#endif
++
+ /* We have replacement versions of these if they're missing. */
+ #ifndef HAVE_ASPRINTF
+ int asprintf(char **ptr, const char *format, ...);
+@@ -925,3 +931,23 @@ int inet_pton(int af, const char *src, v
+ #ifdef MAINTAINER_MODE
+ const char *get_panic_action(void);
+ #endif
++
++static inline int to_wire_mode(mode_t mode)
++{
++#ifdef SUPPORT_LINKS
++#if _S_IFLNK != 0120000
++	if (S_ISLNK(mode))
++		return (mode & ~(_S_IFMT)) | 0120000;
++#endif
++#endif
++	return mode;
++}
++
++static inline mode_t from_wire_mode(int mode)
++{
++#if _S_IFLNK != 0120000
++	if ((mode & (_S_IFMT)) == 0120000)
++		return (mode & ~(_S_IFMT)) | _S_IFLNK;
++#endif
++	return mode;
++}
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -333,6 +333,7 @@ to the detailed description below for a 
@@ -416,10 +472,10 @@ or, if you want ACL support too:
  int preserve_perms = 0;
 --- old/xattr.c
 +++ new/xattr.c
-@@ -26,11 +26,15 @@
- #ifdef SUPPORT_XATTRS
- 
+@@ -28,11 +28,15 @@
  extern int dry_run;
+ extern int read_only;
+ extern int list_only;
 +extern int am_root;
 +extern mode_t orig_umask;
  extern unsigned int file_struct_len;
@@ -432,7 +488,7 @@ or, if you want ACL support too:
  typedef struct {
  	char *name;
  	char *datum;
-@@ -130,9 +134,15 @@ static int rsync_xal_get(const char *fna
+@@ -132,9 +136,15 @@ static int rsync_xal_get(const char *fna
  	if (name_size == 0)
  		return 0;
  	for (left = name_size, name = namebuf; left > 0 ; left -= len, name += len) {
@@ -449,7 +505,7 @@ or, if you want ACL support too:
  		datum_size = sys_lgetxattr(fname, name, NULL, 0);
  		if (datum_size < 0) {
  			if (errno == ENOTSUP)
-@@ -285,10 +295,19 @@ void receive_xattr(struct file_struct *f
+@@ -287,10 +297,19 @@ void receive_xattr(struct file_struct *f
  				out_of_memory("receive_xattr");
  			read_buf(f, ptr, name_len);
  			read_buf(f, ptr + name_len, datum_len);
@@ -469,36 +525,58 @@ or, if you want ACL support too:
  #ifdef HAVE_OSX_XATTRS
  			if (strncmp(rxa->name, UNIQUE_PREFIX, UPRE_LEN) == 0) {
  				rxa->name_len -= UPRE_LEN;
-@@ -365,4 +384,103 @@ int set_xattr(const char *fname, const s
+@@ -372,4 +391,146 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
  }
  
-+int get_stat_xattr(const char *fname, int fd, STRUCT_STAT *st)
++int get_stat_xattr(const char *fname, int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
 +{
 +	int mode, rdev_major, rdev_minor, uid, gid, len;
 +	char buf[256];
 +
-+	if (fname)
-+		len = sys_lgetxattr(fname, FAKE_XATTR, buf, sizeof buf - 1);
++	if (am_root >= 0)
++		return -1;
++
++	if (xst)
++		*xst = *fst;
 +	else
++		xst = fst;
++	if (fname) {
++		fd = -1;
++		len = sys_lgetxattr(fname, FAKE_XATTR, buf, sizeof buf - 1);
++	} else {
++		fname = "fd";
 +		len = sys_fgetxattr(fd, FAKE_XATTR, buf, sizeof buf - 1);
-+	if (len < 0 || len >= (int)sizeof buf) {
++	}
++	if (len >= (int)sizeof buf) {
++		len = -1;
++		errno = ERANGE;
++	}
++	if (len < 0) {
 +		if (errno == ENOTSUP || errno == ENOATTR)
 +			return -1;
++		if (errno == EPERM && S_ISLNK(fst->st_mode)) {
++			xst->st_uid = 0;
++			xst->st_gid = 0;
++			return 0;
++		}
++		rsyserr(FERROR, errno, "failed to read xattr %s for %s",
++			FAKE_XATTR, full_fname(fname));
 +		return -1;
 +	}
 +	buf[len] = '\0';
 +
 +	if (sscanf(buf, "%o %d,%d %d:%d",
 +		   &mode, &rdev_major, &rdev_minor, &uid, &gid) != 5) {
-+		errno = EINVAL;
-+		return -1;
++		rprintf(FERROR, "Corrupt %s xattr attached to %s: \"%s\"\n",
++			FAKE_XATTR, full_fname(fname), buf);
++		exit_cleanup(RERR_FILEIO);
 +	}
 +
-+	st->st_mode = mode;
-+	st->st_rdev = MAKEDEV(rdev_major, rdev_minor);
-+	st->st_uid = uid;
-+	st->st_gid = gid;
++	xst->st_mode = from_wire_mode(mode);
++	xst->st_rdev = MAKEDEV(rdev_major, rdev_minor);
++	xst->st_uid = uid;
++	xst->st_gid = gid;
 +
 +	return 0;
 +}
@@ -512,8 +590,17 @@ or, if you want ACL support too:
 +	if (dry_run)
 +		return 0;
 +
-+	if (x_stat(fname, &fst, &xst) < 0)
++	if (read_only || list_only) {
++		rsyserr(FERROR, EROFS, "failed to write xattr %s for %s",
++			FAKE_XATTR, full_fname(fname));
 +		return -1;
++	}
++
++	if (x_lstat(fname, &fst, &xst) < 0) {
++		rsyserr(FERROR, errno, "failed to re-stat %s",
++			full_fname(fname));
++		return -1;
++	}
 +
 +	if (IS_DEVICE(file->mode) || IS_SPECIAL(file->mode))
 +		rdev = file->u.rdev;
@@ -531,8 +618,12 @@ or, if you want ACL support too:
 +	if (mode == file->mode && fst.st_rdev == rdev
 +	 && fst.st_uid == file->uid && fst.st_gid == file->gid) {
 +		/* xst.st_mode will be 0 if there's no current stat xattr */
-+		if (xst.st_mode && sys_lremovexattr(fname, FAKE_XATTR) < 0)
-+			return -2;
++		if (xst.st_mode && sys_lremovexattr(fname, FAKE_XATTR) < 0) {
++			rsyserr(FERROR, errno,
++				"delete of stat xattr failed for %s",
++				full_fname(fname));
++			return -1;
++		}
 +		return 0;
 +	}
 +
@@ -540,18 +631,26 @@ or, if you want ACL support too:
 +	 || xst.st_uid != file->uid || xst.st_gid != file->gid) {
 +		char buf[256];
 +		int len = snprintf(buf, sizeof buf, "%o %u,%u %u:%u",
-+			(int)file->mode,
++			to_wire_mode(file->mode),
 +			(int)major(rdev), (int)minor(rdev),
 +			(int)file->uid, (int)file->gid);
-+		return sys_lsetxattr(fname, FAKE_XATTR, buf, len, 0);
++		if (sys_lsetxattr(fname, FAKE_XATTR, buf, len, 0) < 0) {
++			if (errno == EPERM && S_ISLNK(fst.st_mode))
++				return 0;
++			rsyserr(FERROR, errno,
++				"failed to write xattr %s for %s",
++				FAKE_XATTR, full_fname(fname));
++			return -1;
++		}
 +	}
++
 +	return 0;
 +}
 +
 +int x_stat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
 +{
 +	int ret = do_stat(fname, fst);
-+	if (get_stat_xattr(fname, -1, xst? xst : fst) != 0 && xst)
++	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
 +		xst->st_mode = 0;
 +	return ret;
 +}
@@ -559,7 +658,7 @@ or, if you want ACL support too:
 +int x_lstat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
 +{
 +	int ret = do_lstat(fname, fst);
-+	if (get_stat_xattr(fname, -1, xst? xst : fst) != 0 && xst)
++	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
 +		xst->st_mode = 0;
 +	return ret;
 +}
@@ -567,7 +666,7 @@ or, if you want ACL support too:
 +int x_fstat(int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
 +{
 +	int ret = do_fstat(fd, fst);
-+	if (get_stat_xattr(NULL, fd, xst? xst : fst) != 0 && xst)
++	if ((ret < 0 || get_stat_xattr(NULL, fd, fst, xst) < 0) && xst)
 +		xst->st_mode = 0;
 +	return ret;
 +}
