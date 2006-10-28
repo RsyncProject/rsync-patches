@@ -167,7 +167,7 @@ TODO:
 +      AC_DEFINE(HAVE_NO_XATTRS, 1, [True if you don't have extended attributes])
 +  esac ],
 +  AC_MSG_RESULT(no)
-+  AC_DEFINE(HAVE_NO_XATTRL, 1, [True if you don't have extended attributes])
++  AC_DEFINE(HAVE_NO_XATTRS, 1, [True if you don't have extended attributes])
 +)
 +
  AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
@@ -275,7 +275,7 @@ TODO:
  }
 --- old/lib/sysxattr.c
 +++ new/lib/sysxattr.c
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,87 @@
 +/*
 + * Extended attribute support for rsync.
 + *
@@ -299,6 +299,8 @@ TODO:
 +
 +#include "rsync.h"
 +#include "sysxattr.h"
++
++#ifdef SUPPORT_XATTRS
 +
 +#if defined HAVE_LINUX_XATTRS
 +
@@ -356,7 +358,11 @@ TODO:
 +
 +#else
 +
-+#endif /* No xattrs */
++#error You need to create xattr compatibility functions.
++
++#endif
++
++#endif /* SUPPORT_XATTRS */
 --- old/lib/sysxattr.h
 +++ new/lib/sysxattr.h
 @@ -0,0 +1,24 @@
@@ -413,19 +419,18 @@ TODO:
  #ifdef SUPPORT_LINKS
  	links = "";
  #endif
-@@ -234,9 +238,9 @@ static void print_rsync_version(enum log
- 	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
- 	rprintf(f, "<http://rsync.samba.org/>\n");
- 	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
--		"%shard links, %sACLs, %ssymlinks, batchfiles,\n",
-+		"%shard links, %sACLs, %sxattrs, %ssymlinks, batchfiles,\n",
- 		(int) (sizeof (OFF_T) * 8),
--		got_socketpair, hardlinks, acls, links);
-+		got_socketpair, hardlinks, acls, xattrs, links);
+@@ -236,8 +240,8 @@ static void print_rsync_version(enum log
+ 	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, %shard links, %ssymlinks,\n",
+ 		(int) (sizeof (OFF_T) * 8), got_socketpair, hardlinks, links);
+ 
+-	rprintf(f, "              batchfiles, %sinplace, %sIPv6, %sACLs,\n",
+-		have_inplace, ipv6, acls);
++	rprintf(f, "              batchfiles, %sinplace, %sIPv6, %sACLs, %sxattrs,\n",
++		have_inplace, ipv6, acls, xattrs);
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -290,7 +294,7 @@ void usage(enum logcode F)
+@@ -289,7 +293,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -434,7 +439,7 @@ TODO:
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
    rprintf(F," -R, --relative              use relative path names\n");
-@@ -315,6 +319,9 @@ void usage(enum logcode F)
+@@ -314,6 +318,9 @@ void usage(enum logcode F)
  #ifdef SUPPORT_ACLS
    rprintf(F," -A, --acls                  preserve ACLs (implies --perms)\n");
  #endif
@@ -444,7 +449,7 @@ TODO:
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
-@@ -437,6 +444,9 @@ static struct poptOption long_options[] 
+@@ -436,6 +443,9 @@ static struct poptOption long_options[] 
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
    {"no-A",             0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
@@ -454,7 +459,7 @@ TODO:
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1118,6 +1128,17 @@ int parse_arguments(int *argc, const cha
+@@ -1117,6 +1127,17 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -472,7 +477,7 @@ TODO:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1564,6 +1585,10 @@ void server_options(char **args,int *arg
+@@ -1563,6 +1584,10 @@ void server_options(char **args,int *arg
  	if (preserve_acls)
  		argstr[x++] = 'A';
  #endif
@@ -506,18 +511,18 @@ TODO:
  	 * will enable owner-writability using chmod, if necessary.
 --- old/rsync.h
 +++ new/rsync.h
-@@ -501,6 +501,10 @@ struct idev {
+@@ -500,6 +500,10 @@ struct idev {
  #define ACLS_NEED_MASK 1
  #endif
  
-+#if defined HAVE_LINUX_XATTRS || defined HAVE_OSX_XATTRS
++#ifndef HAVE_NO_XATTRS
 +#define SUPPORT_XATTRS 1
 +#endif
 +
  #define GID_NONE ((gid_t)-1)
  
  #define HL_CHECK_MASTER	0
-@@ -695,6 +699,9 @@ typedef struct {
+@@ -694,6 +698,9 @@ typedef struct {
      struct rsync_acl *acc_acl; /* access ACL */
      struct rsync_acl *def_acl; /* default ACL */
  #endif
