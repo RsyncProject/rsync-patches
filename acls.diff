@@ -2245,7 +2245,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			SIVAL(numbuf, 0, ndx);
 --- old/lib/sysacls.c
 +++ new/lib/sysacls.c
-@@ -0,0 +1,3247 @@
+@@ -0,0 +1,3251 @@
 +/* 
 +   Unix SMB/CIFS implementation.
 +   Samba system utilities for ACL support.
@@ -2268,6 +2268,8 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
 +#include "rsync.h"
 +#include "sysacls.h" /****** ADDED ******/
++
++#ifdef SUPPORT_ACLS
 +
 +/****** EXTRAS -- THESE ITEMS ARE NOT FROM THE SAMBA SOURCE ******/
 +#ifdef DEBUG
@@ -5493,10 +5495,14 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +#endif
 +	return 0;
 +}
++
++#endif /* SUPPORT_ACLS */
 --- old/lib/sysacls.h
 +++ new/lib/sysacls.h
-@@ -0,0 +1,36 @@
-+#if defined SUPPORT_ACLS && defined HAVE_SYS_ACL_H
+@@ -0,0 +1,40 @@
++#ifdef SUPPORT_ACLS
++
++#ifdef HAVE_SYS_ACL_H
 +#include <sys/acl.h>
 +#endif
 +#ifdef HAVE_ACL_LIBACL_H
@@ -5532,6 +5538,8 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +int sys_acl_free_text(char *text);
 +int sys_acl_free_acl(SMB_ACL_T the_acl);
 +int sys_acl_free_qualifier(void *qual, SMB_ACL_TAG_T tagtype);
++
++#endif /* SUPPORT_ACLS */
 --- old/log.c
 +++ new/log.c
 @@ -606,8 +606,10 @@ static void log_formatted(enum logcode c
@@ -5576,19 +5584,31 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #ifdef SUPPORT_LINKS
  	links = "";
  #endif
-@@ -228,9 +234,9 @@ static void print_rsync_version(enum log
+@@ -227,17 +233,16 @@ static void print_rsync_version(enum log
+ 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
  	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
  	rprintf(f, "<http://rsync.samba.org/>\n");
- 	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
+-	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
 -		"%shard links, %ssymlinks, batchfiles,\n",
-+		"%shard links, %sACLs, %ssymlinks, batchfiles,\n",
- 		(int) (sizeof (OFF_T) * 8),
+-		(int) (sizeof (OFF_T) * 8),
 -		got_socketpair, hardlinks, links);
-+		got_socketpair, hardlinks, acls, links);
++	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, %shard links, %ssymlinks,\n",
++		(int) (sizeof (OFF_T) * 8), got_socketpair, hardlinks, links);
++
++	rprintf(f, "              batchfiles, %sinplace, %sIPv6, %sACLs,\n",
++		have_inplace, ipv6, acls);
  
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
-@@ -284,7 +290,7 @@ void usage(enum logcode F)
+ 	 * macros. */
+-	rprintf(f, "              %sinplace, %sIPv6, "
+-		"%d-bit system inums, %d-bit internal inums\n",
+-		have_inplace, ipv6,
++	rprintf(f, "              %d-bit system inums, %d-bit internal inums\n",
+ 		(int) (sizeof dumstat->st_ino * 8),
+ 		(int) (sizeof (int64) * 8));
+ #ifdef MAINTAINER_MODE
+@@ -284,7 +289,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -5597,7 +5617,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
    rprintf(F," -R, --relative              use relative path names\n");
-@@ -306,6 +312,9 @@ void usage(enum logcode F)
+@@ -306,6 +311,9 @@ void usage(enum logcode F)
    rprintf(F," -p, --perms                 preserve permissions\n");
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
@@ -5607,7 +5627,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
-@@ -425,6 +434,9 @@ static struct poptOption long_options[] 
+@@ -425,6 +433,9 @@ static struct poptOption long_options[] 
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
@@ -5617,7 +5637,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1089,6 +1101,24 @@ int parse_arguments(int *argc, const cha
+@@ -1089,6 +1100,24 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
@@ -5642,7 +5662,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1530,6 +1560,10 @@ void server_options(char **args,int *arg
+@@ -1530,6 +1559,10 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
@@ -5875,12 +5895,11 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/rsync.h
 +++ new/rsync.h
-@@ -492,6 +492,15 @@ struct idev {
+@@ -492,6 +492,14 @@ struct idev {
  #define IN_LOOPBACKNET 127
  #endif
  
-+#if HAVE_POSIX_ACLS|HAVE_UNIXWARE_ACLS|HAVE_SOLARIS_ACLS|\
-+    HAVE_HPUX_ACLS|HAVE_IRIX_ACLS|HAVE_AIX_ACLS|HAVE_TRU64_ACLS
++#ifndef HAVE_NO_ACLS
 +#define SUPPORT_ACLS 1
 +#endif
 +
@@ -5891,7 +5910,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #define GID_NONE ((gid_t)-1)
  
  #define HL_CHECK_MASTER	0
-@@ -653,6 +662,17 @@ struct stats {
+@@ -653,6 +661,17 @@ struct stats {
  
  struct chmod_mode_struct;
  
@@ -5909,7 +5928,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #include "byteorder.h"
  #include "lib/mdfour.h"
  #include "lib/wildmatch.h"
-@@ -669,6 +689,16 @@ struct chmod_mode_struct;
+@@ -669,6 +688,16 @@ struct chmod_mode_struct;
  #define UNUSED(x) x __attribute__((__unused__))
  #define NORETURN __attribute__((__noreturn__))
  
