@@ -6,27 +6,34 @@ fake super-user mode that stores various file attributes in an extended-
 attribute value instead of as real file-system attributes.  The items
 affected are:
 
-  mode  the real mode of a file is always (666 & umask) while
-        the real mode of a directory is always (777 & umask).
+  mode  the real mode of the file always has the special-permission bits
+        cleared (u-s,g-s,o-t) and full owner access is always enabled
+        (u+rw for files and u+rwx for directories).  The former makes
+        the files safe if the user and/or group info was not really
+        preserved, and the latter ensures that our fake-super process
+        can always read & write & scan the files and directories.
 
-  rdev  devices and special files are created as zero-length
-        normal files.
+  rdev  devices and special files are created as zero-length normal
+        files (with all the attributes preserved in the xattr-stat).
 
-  uid   the real owner is always left unchanged.
+  uid   the real owner will be the executor of the receiving rsync.
 
-  gid   the real group is always left unchanged.
-
-A daemon can set "fake super = yes" in the rsync.conf file for any module
-that you'd like to run without root perms while pretending it has them (the
-client cannot affect this).
+  gid   the real group will be the default group of the executor.
 
 The --fake-super option only affects the side where the option is used.  To
 affect the remote side of a remote-shell connection, specify an rsync path:
 
   rsync -av --rsync-path='rsync --fake-super' /src/ host:/dest/
 
-For a local copy where you want to affect only one side or the other,
-you'll need to turn the copy into a remote copy to localhost.
+The --fake-super option affects both sides of a local copy, so if you want
+to affect only one side or the other, you'll need to turn the copy into a
+remote copy to/from localhost.  However, it's always safe to copy from some
+non-fake-super files into some fake-super files using a normal local copy
+since the non-fake source files will just have their normal attributes.
+
+A daemon can set "fake super = yes" in the rsync.conf file for any module
+that you'd like to be able to preserve all attributes without having it
+run as root (the client cannot affect this setting on the daemon).
 
 After applying this patch, run these commands for a successful build:
 
@@ -203,7 +210,7 @@ or, if you want ACL support too:
    rprintf(F," -t, --times                 preserve times\n");
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
-+  rprintf(F,"     --fake-super            fake root by storing/reading ownership/etc in EAs\n");
++  rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
@@ -290,6 +297,62 @@ or, if you want ACL support too:
  		if (ret < 0) {
  			rsyserr(FERROR, errno,
  				"failed to set permissions on %s",
+--- old/rsync.yo
++++ new/rsync.yo
+@@ -333,6 +333,7 @@ to the detailed description below for a 
+  -t, --times                 preserve times
+  -O, --omit-dir-times        omit directories when preserving times
+      --super                 receiver attempts super-user activities
++     --fake-super            store/recover privileged attrs using xattrs
+  -S, --sparse                handle sparse files efficiently
+  -n, --dry-run               show what would have been transferred
+  -W, --whole-file            copy files whole (without rsync algorithm)
+@@ -899,6 +900,31 @@ also for ensuring that you will get erro
+ being running as the super-user.  To turn off super-user activities, the
+ super-user can use bf(--no-super).
+ 
++dit(bf(--fake-super)) When this option is enabled, privileged attributes
++are stored and recovered via a special extended attribute that is attached
++to each file (as needed).  This includes the file's owner and group (if it
++is not the default), the file's device info (device & special files are
++created as empty text files), and any permission bits that we won't allow
++to be set on the real file (e.g. the real file gets u-s,g-s,o-t for safety)
++or that would limit the owner's access (since the real super user can
++always access a file or directory, the files we create can always be
++accessed by the creating user too).
++
++The bf(--fake-super) option only affects the side where the option is used.
++To affect the remote side of a remote-shell connection, specify an rsync
++path:
++
++quote(tt(  rsync -av --rsync-path="rsync --fake-super" /src/ host:/dest/))
++
++The bf(--fake-super) option affects both sides of a em(local) copy, so if
++you want to affect only one side or the other, you'll need to turn the copy
++into a remote copy to/from localhost.  However, it's always safe to copy
++from some non-fake-super files into some fake-super files using a normal
++local copy since the non-fake source files will just have their normal
++attributes.
++
++See also the "fake super" setting in the daemon's rsyncd.conf file.
++
+ dit(bf(-S, --sparse)) Try to handle sparse files efficiently so they take
+ up less space on the destination.  Conflicts with bf(--inplace) because it's
+ not possible to overwrite data in a sparse fashion.
+--- old/rsyncd.conf.yo
++++ new/rsyncd.conf.yo
+@@ -226,6 +226,11 @@ file transfers to and from that module s
+ was run as root. This complements the "uid" option. The default is gid -2,
+ which is normally the group "nobody".
+ 
++dit(bf(fake super)) Setting "fake super = yes" for a module causes the
++daemon side to behave as if the bf(--fake-user) command-line option had
++been specified.  This allows the full attributes of a file to be stored
++without having to have the daemon actually running as root.
++
+ dit(bf(filter)) The "filter" option allows you to specify a space-separated
+ list of filter rules that the daemon will not allow to be read or written.
+ This is only superficially equivalent to the client specifying these
 --- old/syscall.c
 +++ new/syscall.c
 @@ -28,6 +28,7 @@
@@ -457,9 +520,9 @@ or, if you want ACL support too:
 +	else
 +		rdev = 0;
 +
-+	/* Force the real file's mode to our liking. */
-+	mode = (fst.st_mode & ~CHMOD_BITS)
-+	     | ((S_ISDIR(fst.st_mode) ? 0777 : 0666) & (~orig_umask | S_IRWXU));
++	/* Dump the special permissions and enable full owner access. */
++	mode = (fst.st_mode & ~CHMOD_BITS) | (file->mode & ACCESSPERMS)
++	     | (S_ISDIR(fst.st_mode) ? 0700 : 0600);
 +	if (fst.st_mode != mode)
 +		do_chmod(fname, mode);
 +	if (!IS_DEVICE(fst.st_mode) && !IS_SPECIAL(fst.st_mode))
