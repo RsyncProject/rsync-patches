@@ -3,37 +3,8 @@ Depends-On-Patch: xattrs.diff
 
 This patch adds a new option:  --fake-super, which tells rsync to copy in a
 fake super-user mode that stores various file attributes in an extended-
-attribute value instead of as real file-system attributes.  The items
-affected are:
-
-  mode  the real mode of the file always has the special-permission bits
-        cleared (u-s,g-s,o-t) and full owner access is always enabled
-        (u+rw for files and u+rwx for directories).  The former makes
-        the files safe if the user and/or group info was not really
-        preserved, and the latter ensures that our fake-super process
-        can always read & write & scan the files and directories.
-
-  rdev  devices and special files are created as zero-length normal
-        files (with all the attributes preserved in the xattr-stat).
-
-  uid   the real owner will be the executor of the receiving rsync.
-
-  gid   the real group will be the default group of the executor.
-
-The --fake-super option only affects the side where the option is used.  To
-affect the remote side of a remote-shell connection, specify an rsync path:
-
-  rsync -av --rsync-path='rsync --fake-super' /src/ host:/dest/
-
-The --fake-super option affects both sides of a local copy, so if you want
-to affect only one side or the other, you'll need to turn the copy into a
-remote copy to/from localhost.  However, it's always safe to copy from some
-non-fake-super files into some fake-super files using a normal local copy
-since the non-fake source files will just have their normal attributes.
-
-A daemon can set "fake super = yes" in the rsync.conf file for any module
-that you'd like to be able to preserve all attributes without having it
-run as root (the client cannot affect this setting on the daemon).
+attribute value instead of as real file-system attributes.  See the changes
+to the manpages for details.
 
 After applying this patch, run these commands for a successful build:
 
@@ -246,17 +217,6 @@ or, if you want ACL support too:
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
---- old/receiver.c
-+++ new/receiver.c
-@@ -528,7 +528,7 @@ int recv_files(int f_in, struct file_lis
- 		if (fd1 == -1) {
- 			st.st_mode = 0;
- 			st.st_size = 0;
--		} else if (do_fstat(fd1,&st) != 0) {
-+		} else if (x_fstat(fd1, &st, NULL) != 0) {
- 			rsyserr(FERROR, errno, "fstat %s failed",
- 				full_fname(fnamecmp));
- 			discard_receive_data(f_in, file->length);
 --- old/rsync.c
 +++ new/rsync.c
 @@ -49,7 +49,6 @@ extern int preserve_gid;
