@@ -47,12 +47,6 @@ or, if you want ACL support too:
     ./configure --enable-acl-support --enable-xattr-support
     make
 
-TODO:
-
- - We may want to normalize the mode somehow, so that the value in the
-   xattr field is more portable.  E.g. separate the type from the mode
-   value and reconstruct it.
-
 --- old/backup.c
 +++ new/backup.c
 @@ -129,7 +129,7 @@ static int make_bak_dir(char *fullpath)
@@ -165,26 +159,6 @@ TODO:
  			file->modtime = st2.st_mtime;
  			file->length = st2.st_size;
  			file->mode = st2.st_mode;
---- old/generator.c
-+++ new/generator.c
-@@ -1510,13 +1510,14 @@ void generate_files(int f_out, struct fi
- 		recv_generator(fbuf, file, i, itemizing, maybe_ATTRS_REPORT,
- 			       code, f_out);
- 
--		/* We need to ensure that any dirs we create have writeable
-+		/* We need to ensure that any dirs we create have rwx
- 		 * permissions during the time we are putting files within
- 		 * them.  This is then fixed after the transfer is done. */
- #ifdef HAVE_CHMOD
--		if (!am_root && S_ISDIR(file->mode) && !(file->mode & S_IWUSR)
-+		if (am_root <= 0 && S_ISDIR(file->mode)
-+		    && (file->mode & S_IRWXU) != S_IRWXU
- 		 && dir_tweaking) {
--			mode_t mode = file->mode | S_IWUSR; /* user write */
-+			mode_t mode = file->mode | S_IRWXU; /* user rwx */
- 			char *fname = local_name ? local_name : fbuf;
- 			if (do_chmod(fname, mode) < 0) {
- 				rsyserr(FERROR, errno,
 --- old/loadparm.c
 +++ new/loadparm.c
 @@ -150,6 +150,7 @@ typedef struct
@@ -235,19 +209,21 @@ TODO:
  int do_compression = 0;
  int def_compress_level = Z_DEFAULT_COMPRESSION;
 -int am_root = 0;
-+int am_root = 0; /* 0 = normal, 1 = super, 2 = --super, -1 = --fake-super */
++int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
  int am_server = 0;
  int am_sender = 0;
  int am_generator = 0;
-@@ -330,6 +330,7 @@ void usage(enum logcode F)
+@@ -329,6 +329,9 @@ void usage(enum logcode F)
    rprintf(F," -t, --times                 preserve times\n");
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
++#ifdef SUPPORT_XATTRS
 +  rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
++#endif
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
-@@ -454,6 +455,7 @@ static struct poptOption long_options[] 
+@@ -453,6 +456,7 @@ static struct poptOption long_options[] 
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
@@ -255,6 +231,21 @@ TODO:
    {"owner",           'o', POPT_ARG_VAL,    &preserve_uid, 1, 0, 0 },
    {"no-owner",         0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
    {"no-o",             0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
+@@ -1178,6 +1182,14 @@ int parse_arguments(int *argc, const cha
+ 	}
+ #endif
+ 
++#ifndef SUPPORT_XATTRS
++	if (am_root < 0) {
++		snprintf(err_buf, sizeof err_buf,
++			 "--fake-super requires an rsync with extended attributes enabled\n");
++		return 0;
++	}
++#endif
++
+ 	if (write_batch && read_batch) {
+ 		snprintf(err_buf, sizeof err_buf,
+ 			"--write-batch and --read-batch can not be used together\n");
 --- old/receiver.c
 +++ new/receiver.c
 @@ -528,7 +528,7 @@ int recv_files(int f_in, struct file_lis
@@ -281,9 +272,9 @@ TODO:
  			}
  		}
 -		if (do_lchown(fname,
-+		if (am_root < 0)
++		if (am_root < 0) {
 +			;
-+		else if (do_lchown(fname,
++		} else if (do_lchown(fname,
  		    change_uid ? file->uid : sxp->st.st_uid,
  		    change_gid ? file->gid : sxp->st.st_gid) != 0) {
  			/* shouldn't have attempted to change uid or gid
@@ -316,7 +307,7 @@ TODO:
  				"failed to set permissions on %s",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -708,6 +708,12 @@ typedef struct {
+@@ -707,6 +707,12 @@ typedef struct {
  
  #include "proto.h"
  
@@ -329,7 +320,7 @@ TODO:
  /* We have replacement versions of these if they're missing. */
  #ifndef HAVE_ASPRINTF
  int asprintf(char **ptr, const char *format, ...);
-@@ -925,3 +931,23 @@ int inet_pton(int af, const char *src, v
+@@ -924,3 +930,23 @@ int inet_pton(int af, const char *src, v
  #ifdef MAINTAINER_MODE
  const char *get_panic_action(void);
  #endif
@@ -363,19 +354,38 @@ TODO:
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy files whole (without rsync algorithm)
-@@ -899,6 +900,31 @@ also for ensuring that you will get erro
+@@ -846,7 +847,7 @@ permission value can be applied to the f
+ dit(bf(-o, --owner)) This option causes rsync to set the owner of the
+ destination file to be the same as the source file, but only if the
+ receiving rsync is being run as the super-user (see also the bf(--super)
+-option to force rsync to attempt super-user activities).
++and bf(--fake-super) options).
+ Without this option, the owner is set to the invoking user on the
+ receiving side.
+ 
+@@ -869,7 +870,7 @@ default, but may fall back to using the 
+ dit(bf(--devices)) This option causes rsync to transfer character and
+ block device files to the remote system to recreate these devices.
+ This option has no effect if the receiving rsync is not run as the
+-super-user and bf(--super) is not specified.
++super-user (see also the bf(--super) and bf(--fake-super) options).
+ 
+ dit(bf(--specials)) This option causes rsync to transfer special files
+ such as named sockets and fifos.
+@@ -899,6 +900,33 @@ also for ensuring that you will get erro
  being running as the super-user.  To turn off super-user activities, the
  super-user can use bf(--no-super).
  
-+dit(bf(--fake-super)) When this option is enabled, privileged attributes
-+are stored and recovered via a special extended attribute that is attached
-+to each file (as needed).  This includes the file's owner and group (if it
-+is not the default), the file's device info (device & special files are
-+created as empty text files), and any permission bits that we won't allow
-+to be set on the real file (e.g. the real file gets u-s,g-s,o-t for safety)
-+or that would limit the owner's access (since the real super user can
-+always access a file or directory, the files we create can always be
-+accessed by the creating user too).
++dit(bf(--fake-super)) When this option is enabled, rsync simulates
++super-user activities by saving/restoring the privileged attributes via a
++special extended attribute that is attached to each file (as needed).  This
++includes the file's owner and group (if it is not the default), the file's
++device info (device & special files are created as empty text files), and
++any permission bits that we won't allow to be set on the real file (e.g.
++the real file gets u-s,g-s,o-t for safety) or that would limit the owner's
++access (since the real super-user can always access/change a file or
++directory, the files we create can always be accessed/changed by the
++creating user).
 +
 +The bf(--fake-super) option only affects the side where the option is used.
 +To affect the remote side of a remote-shell connection, specify an rsync
@@ -383,14 +393,15 @@ TODO:
 +
 +quote(tt(  rsync -av --rsync-path="rsync --fake-super" /src/ host:/dest/))
 +
-+The bf(--fake-super) option affects both sides of a em(local) copy, so if
-+you want to affect only one side or the other, you'll need to turn the copy
-+into a remote copy to/from localhost.  However, it's always safe to copy
-+from some non-fake-super files into some fake-super files using a normal
-+local copy since the non-fake source files will just have their normal
-+attributes.
++Since there is only one "side" in a local copy, this option affects both
++the sending and recieving of files.  You'll need to specify a copy using
++"localhost" if you need to avoid this.  Note, however, that it is always
++safe to copy from some non-fake-super files into some fake-super files
++using a local bf(--fake-super) command because the non-fake source files
++will just have their normal attributes.
 +
 +See also the "fake super" setting in the daemon's rsyncd.conf file.
++This option is overridden by both bf(--super) and bf(--no-super).
 +
  dit(bf(-S, --sparse)) Try to handle sparse files efficiently so they take
  up less space on the destination.  Conflicts with bf(--inplace) because it's
@@ -534,7 +545,7 @@ TODO:
 +	int mode, rdev_major, rdev_minor, uid, gid, len;
 +	char buf[256];
 +
-+	if (am_root >= 0)
++	if (am_root >= 0 || IS_DEVICE(fst->st_mode) || IS_SPECIAL(fst->st_mode))
 +		return -1;
 +
 +	if (xst)
@@ -631,7 +642,7 @@ TODO:
 +	 || xst.st_uid != file->uid || xst.st_gid != file->gid) {
 +		char buf[256];
 +		int len = snprintf(buf, sizeof buf, "%o %u,%u %u:%u",
-+			to_wire_mode(file->mode),
++			to_wire_mode(file->mode) & (_S_IFMT|CHMOD_BITS),
 +			(int)major(rdev), (int)minor(rdev),
 +			(int)file->uid, (int)file->gid);
 +		if (sys_lsetxattr(fname, FAKE_XATTR, buf, len, 0) < 0) {
