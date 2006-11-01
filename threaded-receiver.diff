@@ -18,6 +18,12 @@ NOTE: we still need to duplicate the partial_fname static in util.c!
 If you try this out, please send some email to wayned@samba.org or the rsync
 mailing list with your results, build changes, bug reports, etc.  Thanks!
 
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/threaded-receiver.diff
+    ./configure
+    make
+
 --- old/Makefile.in
 +++ new/Makefile.in
 @@ -7,7 +7,7 @@ exec_prefix=@exec_prefix@
@@ -131,7 +137,7 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  				continue;
  		}
  
-@@ -1205,7 +1209,7 @@ static void recv_generator(char *fname, 
+@@ -1208,7 +1212,7 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -140,7 +146,7 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  		return;
  
  	if (fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
-@@ -1268,7 +1272,7 @@ static void recv_generator(char *fname, 
+@@ -1271,7 +1275,7 @@ static void recv_generator(char *fname, 
  		goto notify_others;
  	}
  
@@ -149,7 +155,7 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  		if (!(backupptr = get_backup_name(fname))) {
  			close(fd);
  			return;
-@@ -1359,9 +1363,12 @@ void generate_files(int f_out, struct fi
+@@ -1362,9 +1366,12 @@ void generate_files(int f_out, struct fi
  	int save_ignore_existing = ignore_existing;
  	int save_ignore_non_existing = ignore_non_existing;
  	int save_do_progress = do_progress;
@@ -163,7 +169,7 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  	if (protocol_version >= 29) {
  		itemizing = 1;
  		maybe_ATTRS_REPORT = stdout_format_has_i ? 0 : ATTRS_REPORT;
-@@ -1389,7 +1396,7 @@ void generate_files(int f_out, struct fi
+@@ -1392,7 +1399,7 @@ void generate_files(int f_out, struct fi
  		do_delete_pass(flist);
  	do_progress = 0;
  
@@ -172,7 +178,7 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1398,12 +1405,6 @@ void generate_files(int f_out, struct fi
+@@ -1401,12 +1408,6 @@ void generate_files(int f_out, struct fi
  			: "enabled");
  	}
  
@@ -185,7 +191,7 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  	for (i = 0; i < flist->count; i++) {
  		struct file_struct *file = flist->files[i];
  
-@@ -1447,23 +1448,34 @@ void generate_files(int f_out, struct fi
+@@ -1450,23 +1451,34 @@ void generate_files(int f_out, struct fi
  		delete_in_dir(NULL, NULL, NULL, NULL);
  
  	phase++;
@@ -226,7 +232,7 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  		if (local_name)
  			strlcpy(fbuf, local_name, sizeof fbuf);
  		else
-@@ -1475,27 +1487,43 @@ void generate_files(int f_out, struct fi
+@@ -1478,27 +1490,43 @@ void generate_files(int f_out, struct fi
  	phase++;
  	ignore_non_existing = save_ignore_non_existing;
  	ignore_existing = save_ignore_existing;
@@ -854,6 +860,13 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  
 -	if (fd_pair(error_pipe) < 0) {
 -		rsyserr(FERROR, errno, "pipe failed in do_recv");
+-		exit_cleanup(RERR_IPC);
+-	}
+-
+-	io_flush(NORMAL_FLUSH);
+-
+-	if ((pid = do_fork()) == -1) {
+-		rsyserr(FERROR, errno, "fork failed in do_recv");
 +	args.f_in = f_in;
 +	args.flist = flist;
 +	args.local_name = local_name;
@@ -862,13 +875,6 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  		exit_cleanup(RERR_IPC);
  	}
  
--	io_flush(NORMAL_FLUSH);
--
--	if ((pid = do_fork()) == -1) {
--		rsyserr(FERROR, errno, "fork failed in do_recv");
--		exit_cleanup(RERR_IPC);
--	}
--
 -	if (pid == 0) {
 -		close(error_pipe[0]);
 -		if (f_in != f_out)
@@ -1030,7 +1036,7 @@ mailing list with your results, build changes, bug reports, etc.  Thanks!
  int keep_partial = 0;
  int safe_symlinks = 0;
  int copy_unsafe_links = 0;
-@@ -1302,6 +1302,7 @@ int parse_arguments(int *argc, const cha
+@@ -1306,6 +1306,7 @@ int parse_arguments(int *argc, const cha
  
  	if (do_progress && !verbose && !log_before_transfer && !am_server)
  		verbose = 1;

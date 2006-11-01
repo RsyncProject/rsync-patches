@@ -1,6 +1,15 @@
+This patch adds the --md5 option, which makes rsync use md5 checksums
+instead of md4.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/md5.diff
+    ./configure
+    make
+
 --- old/Makefile.in
 +++ new/Makefile.in
-@@ -26,7 +26,7 @@ VERSION=@VERSION@
+@@ -27,7 +27,7 @@ VERSION=@VERSION@
  .SUFFIXES: .c .o
  
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h lib/pool_alloc.h
@@ -11,15 +20,15 @@
  	zlib/trees.o zlib/zutil.o zlib/adler32.o zlib/compress.o zlib/crc32.o
 --- old/checksum.c
 +++ new/checksum.c
-@@ -18,6 +18,7 @@
- */
+@@ -21,6 +21,7 @@
+  */
  
  #include "rsync.h"
 +#include "lib/md5.h"
  
  int csum_length=2; /* initial value */
  
-@@ -25,6 +26,7 @@ int csum_length=2; /* initial value */
+@@ -28,6 +29,7 @@ int csum_length=2; /* initial value */
  
  extern int checksum_seed;
  extern int protocol_version;
@@ -27,7 +36,7 @@
  
  /*
    a simple 32 bit checksum that can be upadted from either end
-@@ -55,6 +57,7 @@ void get_checksum2(char *buf, int32 len,
+@@ -58,6 +60,7 @@ void get_checksum2(char *buf, int32 len,
  	static char *buf1;
  	static int32 len1;
  	struct mdfour m;
@@ -35,7 +44,7 @@
  
  	if (len > len1) {
  		if (buf1)
-@@ -65,7 +68,10 @@ void get_checksum2(char *buf, int32 len,
+@@ -68,7 +71,10 @@ void get_checksum2(char *buf, int32 len,
  			out_of_memory("get_checksum2");
  	}
  
@@ -47,7 +56,7 @@
  
  	memcpy(buf1,buf,len);
  	if (checksum_seed) {
-@@ -74,7 +80,10 @@ void get_checksum2(char *buf, int32 len,
+@@ -77,7 +83,10 @@ void get_checksum2(char *buf, int32 len,
  	}
  
  	for(i = 0; i + CSUM_CHUNK <= len; i += CSUM_CHUNK) {
@@ -59,7 +68,7 @@
  	}
  	/*
  	 * Prior to version 27 an incorrect MD4 checksum was computed
-@@ -83,10 +92,16 @@ void get_checksum2(char *buf, int32 len,
+@@ -86,10 +95,16 @@ void get_checksum2(char *buf, int32 len,
  	 * even when there are no more bytes.
  	 */
  	if (len - i > 0 || protocol_version >= 27) {
@@ -78,7 +87,7 @@
  }
  
  
-@@ -97,6 +112,7 @@ void file_checksum(char *fname,char *sum
+@@ -100,6 +115,7 @@ void file_checksum(char *fname,char *sum
  	int fd;
  	OFF_T len = size;
  	struct mdfour m;
@@ -86,7 +95,7 @@
  
  	memset(sum,0,MD4_SUM_LENGTH);
  
-@@ -106,21 +122,36 @@ void file_checksum(char *fname,char *sum
+@@ -109,21 +125,36 @@ void file_checksum(char *fname,char *sum
  
  	buf = map_file(fd, size, MAX_MAP_SIZE, CSUM_CHUNK);
  
@@ -129,7 +138,7 @@
  
  	close(fd);
  	unmap_file(buf);
-@@ -130,11 +161,15 @@ void file_checksum(char *fname,char *sum
+@@ -133,11 +164,15 @@ void file_checksum(char *fname,char *sum
  static int32 sumresidue;
  static char sumrbuf[CSUM_CHUNK];
  static struct mdfour md;
@@ -146,7 +155,7 @@
  	sumresidue = 0;
  	SIVAL(s, 0, seed);
  	sum_update(s, 4);
-@@ -159,13 +194,19 @@ void sum_update(char *p, int32 len)
+@@ -162,13 +197,19 @@ void sum_update(char *p, int32 len)
  	if (sumresidue) {
  		int32 i = CSUM_CHUNK - sumresidue;
  		memcpy(sumrbuf + sumresidue, p, i);
@@ -168,7 +177,7 @@
  		len -= CSUM_CHUNK;
  		p += CSUM_CHUNK;
  	}
-@@ -177,8 +218,15 @@ void sum_update(char *p, int32 len)
+@@ -180,8 +221,15 @@ void sum_update(char *p, int32 len)
  
  void sum_end(char *sum)
  {
@@ -561,7 +570,7 @@
  
  /** Network address family. **/
  #ifdef INET6
-@@ -369,6 +370,7 @@ void usage(enum logcode F)
+@@ -381,6 +382,7 @@ void usage(enum logcode F)
    rprintf(F,"     --only-write-batch=FILE like --write-batch but w/o updating destination\n");
    rprintf(F,"     --read-batch=FILE       read a batched update from FILE\n");
    rprintf(F,"     --protocol=NUM          force an older protocol version to be used\n");
@@ -569,7 +578,7 @@
  #ifdef INET6
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
-@@ -475,6 +477,7 @@ static struct poptOption long_options[] 
+@@ -494,6 +496,7 @@ static struct poptOption long_options[] 
    {"whole-file",      'W', POPT_ARG_VAL,    &whole_file, 1, 0, 0 },
    {"no-whole-file",    0,  POPT_ARG_VAL,    &whole_file, 0, 0, 0 },
    {"no-W",             0,  POPT_ARG_VAL,    &whole_file, 0, 0, 0 },
@@ -577,7 +586,7 @@
    {"checksum",        'c', POPT_ARG_NONE,   &always_checksum, 0, 0, 0 },
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
-@@ -1610,6 +1613,9 @@ void server_options(char **args,int *arg
+@@ -1642,6 +1645,9 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  

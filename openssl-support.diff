@@ -1,10 +1,4 @@
-After applying this patch, run these commands for a successful build:
-
-    ./prepare-source
-    ./configure
-    make
-
-Casey Marshall writes:
+Casey Marshall wrote:
 
 I've been hacking together a way to use rsync with OpenSSL, and have
 attached my current patch against a recent CVS tree. The details of
@@ -34,6 +28,12 @@ this implementation are:
 All warnings apply; I don't do C programming all that often, so I
 can't say if I've left any cleanup/compatibility errors in the code.
 
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/openssl-support.diff
+    ./prepare-source
+    ./configure
+    make
 
 --- old/Makefile.in
 +++ new/Makefile.in
@@ -75,7 +75,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  
 --- old/clientserver.c
 +++ new/clientserver.c
-@@ -29,6 +29,9 @@ extern int am_sender;
+@@ -30,6 +30,9 @@ extern int am_sender;
  extern int am_server;
  extern int am_daemon;
  extern int am_root;
@@ -85,13 +85,14 @@ can't say if I've left any cleanup/compatibility errors in the code.
  extern int rsync_port;
  extern int kluge_around_eof;
  extern int daemon_over_rsh;
-@@ -105,8 +108,18 @@ int start_socket_client(char *host, char
+@@ -106,8 +109,18 @@ int start_socket_client(char *host, char
  	set_socket_options(fd, sockopts);
  
  	ret = start_inband_exchange(user, path, fd, fd, argc);
 +	if (ret)
 +		return ret;
-+
+ 
+-	return ret ? ret : client_run(fd, fd, -1, argc, argv);
 +#ifdef HAVE_OPENSSL
 +	if (use_ssl) {
 +		int f_in = get_tls_rfd();
@@ -99,13 +100,12 @@ can't say if I've left any cleanup/compatibility errors in the code.
 +		return client_run(f_in, f_out, -1, argc, argv);
 +	}
 +#endif
- 
--	return ret ? ret : client_run(fd, fd, -1, argc, argv);
++
 +	return client_run(fd, fd, -1, argc, argv);
  }
  
  int start_inband_exchange(char *user, char *path, int f_in, int f_out,
-@@ -167,6 +180,33 @@ int start_inband_exchange(char *user, ch
+@@ -168,6 +181,33 @@ int start_inband_exchange(char *user, ch
  	if (verbose > 1)
  		print_child_argv(sargs);
  
@@ -139,7 +139,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	p = strchr(path,'/');
  	if (p) *p = 0;
  	io_printf(f_out, "%s\n", path);
-@@ -195,6 +235,10 @@ int start_inband_exchange(char *user, ch
+@@ -196,6 +236,10 @@ int start_inband_exchange(char *user, ch
  			 * server to terminate the listing of modules.
  			 * We don't want to go on and transfer
  			 * anything; just exit. */
@@ -150,7 +150,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			exit(0);
  		}
  
-@@ -202,6 +246,10 @@ int start_inband_exchange(char *user, ch
+@@ -203,6 +247,10 @@ int start_inband_exchange(char *user, ch
  			rprintf(FERROR, "%s\n", line);
  			/* This is always fatal; the server will now
  			 * close the socket. */
@@ -161,15 +161,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			return -1;
  		}
  
-@@ -718,6 +766,7 @@ static void send_listing(int fd)
- 		io_printf(fd,"@RSYNCD: EXIT\n");
- }
- 
-+
- /* this is called when a connection is established to a client
-    and we want to start talking. The setup of the system is done from
-    here */
-@@ -776,6 +825,9 @@ int start_daemon(int f_in, int f_out)
+@@ -780,6 +828,9 @@ int start_daemon(int f_in, int f_out)
  	if (protocol_version > remote_protocol)
  		protocol_version = remote_protocol;
  
@@ -179,7 +171,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	line[0] = 0;
  	if (!read_line(f_in, line, sizeof line - 1))
  		return -1;
-@@ -787,6 +839,20 @@ int start_daemon(int f_in, int f_out)
+@@ -791,6 +842,20 @@ int start_daemon(int f_in, int f_out)
  		return -1;
  	}
  
@@ -226,7 +218,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	*cygwin* ) AC_MSG_RESULT(yes)
 --- old/options.c
 +++ new/options.c
-@@ -172,6 +172,14 @@ int logfile_format_has_o_or_i = 0;
+@@ -173,6 +173,14 @@ int logfile_format_has_o_or_i = 0;
  int always_checksum = 0;
  int list_only = 0;
  
@@ -241,7 +233,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  #define MAX_BATCH_NAME_LEN 256	/* Must be less than MAXPATHLEN-13 */
  char *batch_name = NULL;
  
-@@ -200,6 +208,7 @@ static void print_rsync_version(enum log
+@@ -201,6 +209,7 @@ static void print_rsync_version(enum log
  	char const *hardlinks = "no ";
  	char const *links = "no ";
  	char const *ipv6 = "no ";
@@ -249,7 +241,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	STRUCT_STAT *dumstat;
  
  #ifdef HAVE_SOCKETPAIR
-@@ -222,6 +231,10 @@ static void print_rsync_version(enum log
+@@ -223,6 +232,10 @@ static void print_rsync_version(enum log
  	ipv6 = "";
  #endif
  
@@ -260,7 +252,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	rprintf(f, "%s  version %s  protocol version %d\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
  	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
-@@ -234,9 +247,9 @@ static void print_rsync_version(enum log
+@@ -235,9 +248,9 @@ static void print_rsync_version(enum log
  	/* Note that this field may not have type ino_t.  It depends
  	 * on the complicated interaction between largefile feature
  	 * macros. */
@@ -272,7 +264,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		(int) (sizeof dumstat->st_ino * 8),
  		(int) (sizeof (int64) * 8));
  #ifdef MAINTAINER_MODE
-@@ -383,6 +396,13 @@ void usage(enum logcode F)
+@@ -385,6 +398,13 @@ void usage(enum logcode F)
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
  #endif
@@ -286,7 +278,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    rprintf(F,"     --version               print version number\n");
    rprintf(F,"(-h) --help                  show this help (-h works with no other options)\n");
  
-@@ -396,7 +416,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -398,7 +418,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -295,7 +287,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -541,6 +561,13 @@ static struct poptOption long_options[] 
+@@ -545,6 +565,13 @@ static struct poptOption long_options[] 
    {"checksum-seed",    0,  POPT_ARG_INT,    &checksum_seed, 0, 0, 0 },
    {"server",           0,  POPT_ARG_NONE,   0, OPT_SERVER, 0, 0 },
    {"sender",           0,  POPT_ARG_NONE,   0, OPT_SENDER, 0, 0 },
@@ -309,7 +301,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    /* All the following options switch us into daemon-mode option-parsing. */
    {"config",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"daemon",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
-@@ -568,6 +595,13 @@ static void daemon_usage(enum logcode F)
+@@ -572,6 +599,13 @@ static void daemon_usage(enum logcode F)
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
  #endif
@@ -323,7 +315,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    rprintf(F,"     --help                  show this help screen\n");
  
    rprintf(F,"\n");
-@@ -594,6 +628,13 @@ static struct poptOption long_daemon_opt
+@@ -598,6 +632,13 @@ static struct poptOption long_daemon_opt
    {"protocol",         0,  POPT_ARG_INT,    &protocol_version, 0, 0, 0 },
    {"server",           0,  POPT_ARG_NONE,   &am_server, 0, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
@@ -337,7 +329,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
    {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
    {"no-verbose",       0,  POPT_ARG_VAL,    &verbose, 0, 0, 0 },
    {"no-v",             0,  POPT_ARG_VAL,    &verbose, 0, 0, 0 },
-@@ -851,6 +892,12 @@ int parse_arguments(int *argc, const cha
+@@ -855,6 +896,12 @@ int parse_arguments(int *argc, const cha
  					verbose++;
  					break;
  
@@ -350,7 +342,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  				default:
  					rprintf(FERROR,
  					    "rsync: %s: %s (in daemon mode)\n",
-@@ -874,6 +921,17 @@ int parse_arguments(int *argc, const cha
+@@ -878,6 +925,17 @@ int parse_arguments(int *argc, const cha
  				exit_cleanup(RERR_SYNTAX);
  			}
  
@@ -368,7 +360,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  			*argv = poptGetArgs(pc);
  			*argc = count_args(*argv);
  			am_starting_up = 0;
-@@ -1085,6 +1143,12 @@ int parse_arguments(int *argc, const cha
+@@ -1089,6 +1147,12 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
@@ -381,7 +373,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1361,6 +1425,17 @@ int parse_arguments(int *argc, const cha
+@@ -1365,6 +1429,17 @@ int parse_arguments(int *argc, const cha
  	if (delay_updates && !partial_dir)
  		partial_dir = tmp_partialdir;
  
@@ -399,7 +391,7 @@ can't say if I've left any cleanup/compatibility errors in the code.
  	if (inplace) {
  #ifdef HAVE_FTRUNCATE
  		if (partial_dir) {
-@@ -1778,10 +1853,27 @@ char *check_for_hostspec(char *s, char *
+@@ -1782,10 +1857,27 @@ char *check_for_hostspec(char *s, char *
  	char *p;
  	int not_host;
  	int hostlen;
