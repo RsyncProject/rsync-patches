@@ -418,7 +418,7 @@ above:
  
  /* These are to make syscall.o shut up. */
  int dry_run = 0;
-+int am_root = 0; /* TODO: add option to set this to -1. */
++int am_root = 0;
  int read_only = 1;
  int list_only = 0;
  int preserve_perms = 0;
@@ -434,54 +434,44 @@ above:
  int preserve_perms = 0;
 --- old/xattr.c
 +++ new/xattr.c
-@@ -28,11 +28,14 @@
- extern int dry_run;
- extern int read_only;
- extern int list_only;
-+extern int am_root;
- extern unsigned int file_struct_len;
+@@ -39,6 +39,12 @@ extern unsigned int file_struct_len;
+ #define ROOT_PREFIX "root."
+ #define RPRE_LEN (sizeof ROOT_PREFIX - 1)
  
- #define RSYNC_XAL_INITIAL 5
- #define RSYNC_XAL_LIST_INITIAL 100
- 
-+#define FAKE_XATTR "user.rsync%stat"
++#ifdef HAVE_LINUX_XATTRS
++#define FAKE_XATTR USER_PREFIX "rsync.%stat"
++#else
++#define FAKE_XATTR "rsync.%stat"
++#endif
 +
  typedef struct {
  	char *name;
  	char *datum;
-@@ -134,9 +137,15 @@ static int rsync_xal_get(const char *fna
- 	if (name_size == 0)
- 		return 0;
- 	for (left = name_size, name = namebuf; left > 0 ; left -= len, name += len) {
--		rsync_xa *rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
-+		rsync_xa *rxas;
+@@ -144,6 +150,10 @@ static int rsync_xal_get(const char *fna
+ 			continue;
+ #endif
  
- 		len = strlen(name) + 1;
 +		if (am_root < 0 && len == sizeof FAKE_XATTR
-+		 && name[10] == '%' && strcmp(name, FAKE_XATTR) == 0)
++		 && name[11] == '%' && strcmp(name, FAKE_XATTR) == 0)
 +			continue;
 +
-+		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
-+
+ 		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
+ 
  		datum_size = sys_lgetxattr(fname, name, NULL, 0);
- 		if (datum_size < 0) {
- 			if (errno == ENOTSUP)
-@@ -288,6 +297,14 @@ void receive_xattr(struct file_struct *f
- 				out_of_memory("receive_xattr");
- 			read_buf(f, ptr, name_len);
- 			read_buf(f, ptr + name_len, datum_len);
-+
+@@ -315,6 +325,12 @@ void receive_xattr(struct file_struct *f
+ 				memmove(ptr, ptr + UPRE_LEN, rxa->name_len);
+ 			}
+ #endif
 +			if (am_root < 0 && name_len == sizeof FAKE_XATTR
-+			 && ptr[10] == '%' && strcmp(ptr, FAKE_XATTR) == 0) {
++			 && ptr[11] == '%' && strcmp(ptr, FAKE_XATTR) == 0) {
 +				free(ptr);
 +				temp_xattr.count--;
 +				continue;
 +			}
-+
- 			rxa->name_len = name_len;
- 			rxa->datum_len = datum_len;
- 			rxa->name = ptr;
-@@ -373,4 +390,146 @@ int set_xattr(const char *fname, const s
+ 		}
+ 		ndx = rsync_xal_l.count; /* pre-incremented count */
+ 		rsync_xal_store(&temp_xattr); /* adds item to rsync_xal_l */
+@@ -390,4 +406,146 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
  }
  

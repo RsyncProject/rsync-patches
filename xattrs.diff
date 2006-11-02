@@ -629,7 +629,7 @@ TODO:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,376 @@
+@@ -0,0 +1,393 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -658,12 +658,18 @@ TODO:
 +#ifdef SUPPORT_XATTRS
 +
 +extern int dry_run;
++extern int am_root;
 +extern int read_only;
 +extern int list_only;
 +extern unsigned int file_struct_len;
 +
 +#define RSYNC_XAL_INITIAL 5
 +#define RSYNC_XAL_LIST_INITIAL 100
++
++#define USER_PREFIX "user."
++#define UPRE_LEN (sizeof USER_PREFIX - 1)
++#define ROOT_PREFIX "root."
++#define RPRE_LEN (sizeof ROOT_PREFIX - 1)
 +
 +typedef struct {
 +	char *name;
@@ -677,13 +683,6 @@ TODO:
 +
 +static item_list empty_xattr = EMPTY_ITEM_LIST;
 +static item_list rsync_xal_l = EMPTY_ITEM_LIST;
-+
-+#ifndef HAVE_LINUX_XATTRS
-+/* Linux extended attributes keep the namespace in the key.
-+ * Let's do the same for all other platforms. */
-+#define USER_PREFIX "user."
-+#define UPRE_LEN (sizeof USER_PREFIX - 1)
-+#endif
 +
 +/* ------------------------------------------------------------------------- */
 +
@@ -766,9 +765,19 @@ TODO:
 +	if (name_size == 0)
 +		return 0;
 +	for (left = name_size, name = namebuf; left > 0 ; left -= len, name += len) {
-+		rsync_xa *rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
++		rsync_xa *rxas;
 +
 +		len = strlen(name) + 1;
++
++#ifdef HAVE_LINUX_XATTRS
++		/* We only send user and root namespaces. */
++		if (strncmp(name, USER_PREFIX, UPRE_LEN) != 0
++		 && strncmp(name, ROOT_PREFIX, RPRE_LEN) != 0)
++			continue;
++#endif
++
++		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
++
 +		datum_size = sys_lgetxattr(fname, name, NULL, 0);
 +		if (datum_size < 0) {
 +			if (errno == ENOTSUP)
@@ -876,17 +885,19 @@ TODO:
 +		write_byte(f, 'X');
 +		write_int(f, count);
 +		for (rxa = sxp->xattr->items; count--; rxa++) {
-+#ifdef HAVE_LINUX_XATTRS
-+			/* Linux already puts the namespace in the key. */
-+			write_int(f, rxa->name_len);
-+			write_int(f, rxa->datum_len);
-+#else
-+			/* Other platforms need the namespace added in,
-+			 * so use the "user." namespace for all keys. */
-+			write_int(f, rxa->name_len + UPRE_LEN);
-+			write_int(f, rxa->datum_len);
-+			write_buf(f, USER_PREFIX, UPRE_LEN);
++#ifndef HAVE_LINUX_XATTRS
++			/* This OS only sends the user namespace, so we may have
++			 * stored a root namespace from Linux in user space. */
++			if (strncmp(ptr, ROOT_PREFIX, RPRE_LEN) != 0) {
++				write_int(f, rxa->name_len + UPRE_LEN);
++				write_int(f, rxa->datum_len);
++				write_buf(f, USER_PREFIX, UPRE_LEN);
++			} else
 +#endif
++			{
++				write_int(f, rxa->name_len);
++				write_int(f, rxa->datum_len);
++			}
 +			write_buf(f, rxa->name, rxa->name_len);
 +			write_buf(f, rxa->datum, rxa->datum_len);
 +		}
@@ -924,10 +935,16 @@ TODO:
 +			rxa->datum_len = datum_len;
 +			rxa->name = ptr;
 +			rxa->datum = ptr + name_len;
-+#ifndef HAVE_LINUX_XATTRS
-+			if (strncmp(rxa->name, USER_PREFIX, UPRE_LEN) == 0) {
++#ifdef HAVE_LINUX_XATTRS
++			if (!am_root && strncmp(ptr, ROOT_PREFIX, RPRE_LEN) == 0) {
++				temp_xattr.count--;
++				free(ptr);
++				continue;
++			}
++#else
++			if (strncmp(ptr, USER_PREFIX, UPRE_LEN) == 0) {
 +				rxa->name_len -= UPRE_LEN;
-+				memmove(rxa->name, rxa->name + UPRE_LEN, rxa->name_len);
++				memmove(ptr, ptr + UPRE_LEN, rxa->name_len);
 +			}
 +#endif
 +		}
