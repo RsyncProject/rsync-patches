@@ -629,7 +629,7 @@ TODO:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,393 @@
+@@ -0,0 +1,406 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -667,15 +667,20 @@ TODO:
 +#define RSYNC_XAL_LIST_INITIAL 100
 +
 +#define USER_PREFIX "user."
-+#define UPRE_LEN (sizeof USER_PREFIX - 1)
-+#define ROOT_PREFIX "root."
-+#define RPRE_LEN (sizeof ROOT_PREFIX - 1)
++#define UPRE_LEN ((int)sizeof USER_PREFIX - 1)
++#define SYSTEM_PREFIX "system."
++#define SPRE_LEN ((int)sizeof SYSTEM_PREFIX - 1)
++
++#ifdef HAVE_LINUX_XATTRS
++#define RPRE_LEN 0
++#else
++#define RSYNC_PREFIX "rsync."
++#define RPRE_LEN ((int)sizeof RSYNC_PREFIX - 1)
++#endif
 +
 +typedef struct {
-+	char *name;
-+	char *datum;
-+	size_t name_len;
-+	size_t datum_len;
++	char *datum, *name;
++	size_t datum_len, name_len;
 +} rsync_xa;
 +
 +static size_t namebuf_len = 0;
@@ -692,8 +697,8 @@ TODO:
 +	rsync_xa *rxas = xalp->items;
 +
 +	for (i = 0; i < xalp->count; i++) {
-+		free(rxas[i].name);
-+		/* free(rxas[i].value); */
++		free(rxas[i].datum);
++		/*free(rxas[i].name);*/
 +	}
 +	xalp->count = 0;
 +}
@@ -714,12 +719,8 @@ TODO:
 +
 +static int rsync_xal_get(const char *fname, item_list *xalp)
 +{
-+	ssize_t name_size;
-+	ssize_t datum_size;
-+	ssize_t left;
-+	char *name;
-+	size_t len;
-+	char *ptr;
++	ssize_t list_len, name_len, datum_len;
++	char *name, *ptr;
 +
 +	if (!namebuf) {
 +		namebuf_len = 1024;
@@ -729,27 +730,27 @@ TODO:
 +	}
 +
 +	/* The length returned includes all the '\0' terminators. */
-+	name_size = sys_llistxattr(fname, namebuf, namebuf_len);
-+	if (name_size > (ssize_t)namebuf_len) {
-+		name_size = -1;
++	list_len = sys_llistxattr(fname, namebuf, namebuf_len);
++	if (list_len > (ssize_t)namebuf_len) {
++		list_len = -1;
 +		errno = ERANGE;
 +	}
-+	if (name_size < 0) {
++	if (list_len < 0) {
 +		if (errno == ENOTSUP)
 +			return 0;
 +		if (errno == ERANGE) {
-+			name_size = sys_llistxattr(fname, NULL, 0);
-+			if (name_size < 0) {
++			list_len = sys_llistxattr(fname, NULL, 0);
++			if (list_len < 0) {
 +				rsyserr(FERROR, errno, "%s: rsync_xal_get: llistxattr",
 +					fname);
 +				return -1;
 +			}
-+			namebuf = realloc_array(namebuf, char, name_size + 1024);
++			namebuf = realloc_array(namebuf, char, list_len + 1024);
 +			if (!namebuf)
 +				out_of_memory("rsync_xal_get");
-+			namebuf_len = name_size + 1024;
-+			name_size = sys_llistxattr(fname, namebuf, namebuf_len);
-+			if (name_size < 0) {
++			namebuf_len = list_len + 1024;
++			list_len = sys_llistxattr(fname, namebuf, namebuf_len);
++			if (list_len < 0) {
 +				rsyserr(FERROR, errno,
 +				    "%s: rsync_xal_get: re-llistxattr failed",
 +				    fname);
@@ -762,24 +763,20 @@ TODO:
 +			return -1;
 +		}
 +	}
-+	if (name_size == 0)
-+		return 0;
-+	for (left = name_size, name = namebuf; left > 0 ; left -= len, name += len) {
++
++	for (name = namebuf; list_len > 0 ; list_len -= name_len, name += name_len) {
 +		rsync_xa *rxas;
 +
-+		len = strlen(name) + 1;
++		name_len = strlen(name) + 1;
 +
 +#ifdef HAVE_LINUX_XATTRS
-+		/* We only send user and root namespaces. */
-+		if (strncmp(name, USER_PREFIX, UPRE_LEN) != 0
-+		 && strncmp(name, ROOT_PREFIX, RPRE_LEN) != 0)
++		/* We don't send the system namespace. */
++		if (strncmp(name, SYSTEM_PREFIX, SPRE_LEN) == 0)
 +			continue;
 +#endif
 +
-+		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
-+
-+		datum_size = sys_lgetxattr(fname, name, NULL, 0);
-+		if (datum_size < 0) {
++		datum_len = sys_lgetxattr(fname, name, NULL, 0);
++		if (datum_len < 0) {
 +			if (errno == ENOTSUP)
 +				return -1;
 +			rsyserr(FERROR, errno,
@@ -787,18 +784,13 @@ TODO:
 +			    fname, name);
 +			return -1;
 +		}
-+		ptr = new_array(char, len + datum_size);
++		ptr = new_array(char, name_len + datum_len);
 +		if (!ptr)
 +			out_of_memory("rsync_xal_get");
-+		memcpy(ptr, name, len);
-+		rxas->name_len = len;
-+		rxas->name = ptr;
-+		rxas->datum_len = datum_size;
-+		rxas->datum = ptr + len;
-+		if (datum_size) {
-+			ssize_t size = sys_lgetxattr(fname, name, rxas->datum, datum_size);
-+			if (size != datum_size) {
-+				if (size < 0) {
++		if (datum_len) {
++			ssize_t len = sys_lgetxattr(fname, name, ptr, datum_len);
++			if (len != datum_len) {
++				if (len < 0) {
 +					rsyserr(FERROR, errno,
 +					    "rsync_xal_get: lgetxattr(%s,%s)"
 +					    " failed", fname, name);
@@ -807,11 +799,18 @@ TODO:
 +					    "rsync_xal_get: lgetxattr(%s,%s)"
 +					    " returned %ld instead of %ld\n",
 +					    fname, name,
-+					    (long)size, (long)datum_size);
++					    (long)len, (long)datum_len);
 +				}
++				free(ptr);
 +				return -1;
 +			}
 +		}
++		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
++		rxas->name = ptr + datum_len;
++		memcpy(rxas->name, name, name_len);
++		rxas->name_len = name_len;
++		rxas->datum_len = datum_len;
++		rxas->datum = ptr;
 +	}
 +	if (xalp->count > 1)
 +		qsort(xalp->items, xalp->count, sizeof (rsync_xa), rsync_xal_compare_names);
@@ -885,20 +884,24 @@ TODO:
 +		write_byte(f, 'X');
 +		write_int(f, count);
 +		for (rxa = sxp->xattr->items; count--; rxa++) {
-+#ifndef HAVE_LINUX_XATTRS
-+			/* This OS only sends the user namespace, so we may have
-+			 * stored a root namespace from Linux in user space. */
-+			if (strncmp(rxa->name, ROOT_PREFIX, RPRE_LEN) != 0) {
++#ifdef HAVE_LINUX_XATTRS
++			write_int(f, rxa->name_len);
++			write_int(f, rxa->datum_len);
++			write_buf(f, rxa->name, rxa->name_len);
++#else
++			/* We strip the rsync prefix from disguised namespaces
++			 * and put everything else in the user namespace. */
++			if (strncmp(rxa->name, RSYNC_PREFIX, RPRE_LEN) == 0) {
++				write_int(f, rxa->name_len - RPRE_LEN);
++				write_int(f, rxa->datum_len);
++				write_buf(f, rxa->name + RPRE_LEN, rxa->name_len - RPRE_LEN);
++			} else {
 +				write_int(f, rxa->name_len + UPRE_LEN);
 +				write_int(f, rxa->datum_len);
 +				write_buf(f, USER_PREFIX, UPRE_LEN);
-+			} else
-+#endif
-+			{
-+				write_int(f, rxa->name_len);
-+				write_int(f, rxa->datum_len);
++				write_buf(f, rxa->name, rxa->name_len);
 +			}
-+			write_buf(f, rxa->name, rxa->name_len);
++#endif
 +			write_buf(f, rxa->datum, rxa->datum_len);
 +		}
 +		rsync_xal_store(sxp->xattr); /* adds item to rsync_xal_l */
@@ -912,41 +915,51 @@ TODO:
 +void receive_xattr(struct file_struct *file, int f)
 +{
 +	static item_list temp_xattr = EMPTY_ITEM_LIST;
-+	int tag = read_byte(f);
 +	char *ndx_ptr = (char*)file + file_struct_len;
-+	int ndx;
++	int ndx, tag = read_byte(f);
 +
 +	if (tag == 'X') {
 +		int i, count = read_int(f);
 +		for (i = 0; i < count; i++) {
-+			char *ptr;
++			char *ptr, *name;
 +			rsync_xa *rxa;
 +			size_t name_len = read_int(f);
 +			size_t datum_len = read_int(f);
 +			if (name_len + datum_len < name_len)
 +				out_of_memory("receive_xattr"); /* overflow */
-+			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
-+			ptr = new_array(char, name_len + datum_len);
++#ifndef HAVE_LINUX_XATTRS
++			if (name_len + datum_len + RPRE_LEN < RPRE_LEN)
++				out_of_memory("receive_xattr"); /* overflow */
++#endif
++			ptr = new_array(char, name_len + datum_len + RPRE_LEN);
 +			if (!ptr)
 +				out_of_memory("receive_xattr");
-+			read_buf(f, ptr, name_len);
-+			read_buf(f, ptr + name_len, datum_len);
-+			rxa->name_len = name_len;
-+			rxa->datum_len = datum_len;
-+			rxa->name = ptr;
-+			rxa->datum = ptr + name_len;
++			name = ptr + datum_len + RPRE_LEN;
++			read_buf(f, name, name_len);
++			read_buf(f, ptr, datum_len);
 +#ifdef HAVE_LINUX_XATTRS
-+			if (!am_root && strncmp(ptr, ROOT_PREFIX, RPRE_LEN) == 0) {
-+				temp_xattr.count--;
++			/* Non-root can only save the user namespace. */
++			if (!am_root && strncmp(name, USER_PREFIX, UPRE_LEN) != 0) {
 +				free(ptr);
 +				continue;
 +			}
 +#else
-+			if (strncmp(ptr, USER_PREFIX, UPRE_LEN) == 0) {
-+				rxa->name_len -= UPRE_LEN;
-+				memmove(ptr, ptr + UPRE_LEN, rxa->name_len);
++			/* This OS only has a user namespace, so we either
++			 * strip the user prefix, or we put a non-user
++			 * namespace inside our rsync hierarchy. */
++			if (strncmp(name, USER_PREFIX, UPRE_LEN) == 0) {
++				name += UPRE_LEN;
++				name_len -= UPRE_LEN;
++			} else {
++				name -= RPRE_LEN;
++				memcpy(name, RSYNC_PREFIX, RPRE_LEN);
 +			}
 +#endif
++			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
++			rxa->name = name;
++			rxa->name_len = name_len;
++			rxa->datum = ptr;
++			rxa->datum_len = datum_len;
 +		}
 +		ndx = rsync_xal_l.count; /* pre-incremented count */
 +		rsync_xal_store(&temp_xattr); /* adds item to rsync_xal_l */
