@@ -434,44 +434,98 @@ above:
  int preserve_perms = 0;
 --- old/xattr.c
 +++ new/xattr.c
-@@ -39,6 +39,12 @@ extern unsigned int file_struct_len;
- #define ROOT_PREFIX "root."
- #define RPRE_LEN (sizeof ROOT_PREFIX - 1)
+@@ -39,13 +39,23 @@ extern unsigned int file_struct_len;
+ #define SYSTEM_PREFIX "system."
+ #define SPRE_LEN ((int)sizeof SYSTEM_PREFIX - 1)
  
-+#ifdef HAVE_LINUX_XATTRS
-+#define FAKE_XATTR USER_PREFIX "rsync.%stat"
-+#else
-+#define FAKE_XATTR "rsync.%stat"
-+#endif
++#define RSYNC_PREFIX "rsync."
++#define XSTAT_SUFFIX "%stat"
++
+ #ifdef HAVE_LINUX_XATTRS
+ #define RPRE_LEN 0
++#define FAKE_PREFIX USER_PREFIX RSYNC_PREFIX
++#define FPRE_LEN ((int)sizeof FAKE_PREFIX - 1)
++#define XSTAT_ATTR USER_PREFIX RSYNC_PREFIX XSTAT_SUFFIX
+ #else
+-#define RSYNC_PREFIX "rsync."
+ #define RPRE_LEN ((int)sizeof RSYNC_PREFIX - 1)
++#define FPRE_LEN 0
++#define XSTAT_ATTR RSYNC_PREFIX XSTAT_SUFFIX
+ #endif
+ 
++#define XSTAT_LEN ((int)sizeof XSTAT_ATTR - 1)
++#define CENT_POS (UPRE_LEN + (int)sizeof RSYNC_PREFIX - 1)
 +
  typedef struct {
- 	char *name;
- 	char *datum;
-@@ -144,6 +150,10 @@ static int rsync_xal_get(const char *fna
+ 	char *datum, *name;
+ 	size_t datum_len, name_len;
+@@ -143,6 +153,10 @@ static int rsync_xal_get(const char *fna
  			continue;
  #endif
  
-+		if (am_root < 0 && len == sizeof FAKE_XATTR
-+		 && name[11] == '%' && strcmp(name, FAKE_XATTR) == 0)
++		if (am_root < 0 && name_len == XSTAT_LEN
++		 && name[CENT_POS] == '%' && strcmp(name, XSTAT_ATTR) == 0)
 +			continue;
 +
+ 		datum_len = sys_lgetxattr(fname, name, NULL, 0);
+ 		if (datum_len < 0) {
+ 			if (errno == ENOTSUP)
+@@ -173,6 +187,13 @@ static int rsync_xal_get(const char *fna
+ 				return -1;
+ 			}
+ 		}
++#ifdef HAVE_LINUX_XATTRS
++		if (am_root < 0 && name_len > FPRE_LEN
++		 && strncmp(name, FAKE_PREFIX, FPRE_LEN) == 0) {
++			name += FPRE_LEN;
++			name_len -= FPRE_LEN;
++		}
++#endif
  		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
- 
- 		datum_size = sys_lgetxattr(fname, name, NULL, 0);
-@@ -315,6 +325,12 @@ void receive_xattr(struct file_struct *f
- 				memmove(ptr, ptr + UPRE_LEN, rxa->name_len);
+ 		rxas->name = ptr + datum_len;
+ 		memcpy(rxas->name, name, name_len);
+@@ -293,20 +314,23 @@ void receive_xattr(struct file_struct *f
+ 			rsync_xa *rxa;
+ 			size_t name_len = read_int(f);
+ 			size_t datum_len = read_int(f);
++			size_t extra_len = am_root < 0 ? FPRE_LEN + RPRE_LEN : RPRE_LEN;
+ 			if (name_len + datum_len < name_len)
+ 				out_of_memory("receive_xattr"); /* overflow */
+-#ifndef HAVE_LINUX_XATTRS
+-			if (name_len + datum_len + RPRE_LEN < RPRE_LEN)
++			if (name_len + datum_len + extra_len < extra_len)
+ 				out_of_memory("receive_xattr"); /* overflow */
+-#endif
+-			ptr = new_array(char, name_len + datum_len + RPRE_LEN);
++			ptr = new_array(char, name_len + datum_len + extra_len);
+ 			if (!ptr)
+ 				out_of_memory("receive_xattr");
+-			name = ptr + datum_len + RPRE_LEN;
++			name = ptr + datum_len + extra_len;
+ 			read_buf(f, name, name_len);
+ 			read_buf(f, ptr, datum_len);
+ #ifdef HAVE_LINUX_XATTRS
+ 			/* Non-root can only save the user namespace. */
++			if (am_root < 0 && strncmp(name, USER_PREFIX, UPRE_LEN) != 0) {
++				name -= FPRE_LEN;
++				memcpy(name, FAKE_PREFIX, FPRE_LEN);
++			} else
+ 			if (!am_root && strncmp(name, USER_PREFIX, UPRE_LEN) != 0) {
+ 				free(ptr);
+ 				continue;
+@@ -323,6 +347,11 @@ void receive_xattr(struct file_struct *f
+ 				memcpy(name, RSYNC_PREFIX, RPRE_LEN);
  			}
  #endif
-+			if (am_root < 0 && name_len == sizeof FAKE_XATTR
-+			 && ptr[11] == '%' && strcmp(ptr, FAKE_XATTR) == 0) {
++			if (am_root < 0 && name_len == XSTAT_LEN
++			 && name[CENT_POS] == '%' && strcmp(name, XSTAT_ATTR) == 0) {
 +				free(ptr);
-+				temp_xattr.count--;
 +				continue;
 +			}
- 		}
- 		ndx = rsync_xal_l.count; /* pre-incremented count */
- 		rsync_xal_store(&temp_xattr); /* adds item to rsync_xal_l */
-@@ -390,4 +406,146 @@ int set_xattr(const char *fname, const s
+ 			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
+ 			rxa->name = name;
+ 			rxa->name_len = name_len;
+@@ -403,4 +432,146 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
  }
  
@@ -489,10 +543,10 @@ above:
 +		xst = fst;
 +	if (fname) {
 +		fd = -1;
-+		len = sys_lgetxattr(fname, FAKE_XATTR, buf, sizeof buf - 1);
++		len = sys_lgetxattr(fname, XSTAT_ATTR, buf, sizeof buf - 1);
 +	} else {
 +		fname = "fd";
-+		len = sys_fgetxattr(fd, FAKE_XATTR, buf, sizeof buf - 1);
++		len = sys_fgetxattr(fd, XSTAT_ATTR, buf, sizeof buf - 1);
 +	}
 +	if (len >= (int)sizeof buf) {
 +		len = -1;
@@ -507,7 +561,7 @@ above:
 +			return 0;
 +		}
 +		rsyserr(FERROR, errno, "failed to read xattr %s for %s",
-+			FAKE_XATTR, full_fname(fname));
++			XSTAT_ATTR, full_fname(fname));
 +		return -1;
 +	}
 +	buf[len] = '\0';
@@ -515,7 +569,7 @@ above:
 +	if (sscanf(buf, "%o %d,%d %d:%d",
 +		   &mode, &rdev_major, &rdev_minor, &uid, &gid) != 5) {
 +		rprintf(FERROR, "Corrupt %s xattr attached to %s: \"%s\"\n",
-+			FAKE_XATTR, full_fname(fname), buf);
++			XSTAT_ATTR, full_fname(fname), buf);
 +		exit_cleanup(RERR_FILEIO);
 +	}
 +
@@ -538,7 +592,7 @@ above:
 +
 +	if (read_only || list_only) {
 +		rsyserr(FERROR, EROFS, "failed to write xattr %s for %s",
-+			FAKE_XATTR, full_fname(fname));
++			XSTAT_ATTR, full_fname(fname));
 +		return -1;
 +	}
 +
@@ -564,7 +618,7 @@ above:
 +	if (mode == file->mode && fst.st_rdev == rdev
 +	 && fst.st_uid == file->uid && fst.st_gid == file->gid) {
 +		/* xst.st_mode will be 0 if there's no current stat xattr */
-+		if (xst.st_mode && sys_lremovexattr(fname, FAKE_XATTR) < 0) {
++		if (xst.st_mode && sys_lremovexattr(fname, XSTAT_ATTR) < 0) {
 +			rsyserr(FERROR, errno,
 +				"delete of stat xattr failed for %s",
 +				full_fname(fname));
@@ -580,12 +634,12 @@ above:
 +			to_wire_mode(file->mode) & (_S_IFMT|CHMOD_BITS),
 +			(int)major(rdev), (int)minor(rdev),
 +			(int)file->uid, (int)file->gid);
-+		if (sys_lsetxattr(fname, FAKE_XATTR, buf, len) < 0) {
++		if (sys_lsetxattr(fname, XSTAT_ATTR, buf, len) < 0) {
 +			if (errno == EPERM && S_ISLNK(fst.st_mode))
 +				return 0;
 +			rsyserr(FERROR, errno,
 +				"failed to write xattr %s for %s",
-+				FAKE_XATTR, full_fname(fname));
++				XSTAT_ATTR, full_fname(fname));
 +			return -1;
 +		}
 +	}
