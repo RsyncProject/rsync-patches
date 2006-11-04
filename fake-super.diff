@@ -453,7 +453,7 @@ above:
  
  typedef struct {
  	char *datum, *name;
-@@ -146,6 +151,10 @@ static int rsync_xal_get(const char *fna
+@@ -148,6 +153,10 @@ static int rsync_xal_get(const char *fna
  			continue;
  #endif
  
@@ -464,7 +464,7 @@ above:
  		datum_len = sys_lgetxattr(fname, name, NULL, 0);
  		if (datum_len < 0) {
  			if (errno == ENOTSUP)
-@@ -176,6 +185,13 @@ static int rsync_xal_get(const char *fna
+@@ -177,6 +186,13 @@ static int rsync_xal_get(const char *fna
  				return -1;
  			}
  		}
@@ -478,7 +478,19 @@ above:
  		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
  		rxas->name = ptr + datum_len;
  		rxas->datum = ptr;
-@@ -297,10 +313,8 @@ void receive_xattr(struct file_struct *f
+@@ -263,7 +279,10 @@ void send_xattr(statx *sxp, int f)
+ #else
+ 			/* We strip the rsync prefix from disguised namespaces
+ 			 * and put everything else in the user namespace. */
+-			if (HAS_PREFIX(rxa->name, RSYNC_PREFIX)) {
++			if (HAS_PREFIX(rxa->name, RSYNC_PREFIX)
++			 && (am_root < 0 || rxa->name_len != XSTAT_LEN + 1
++			  || rxa->name[CENT_POS] != '%'
++			  || strcmp(rxa->name, XSTAT_ATTR) != 0)) {
+ 				write_int(f, rxa->name_len - RPRE_LEN);
+ 				write_int(f, rxa->datum_len);
+ 				write_buf(f, rxa->name + RPRE_LEN, rxa->name_len - RPRE_LEN);
+@@ -298,10 +317,8 @@ void receive_xattr(struct file_struct *f
  			size_t name_len = read_int(f);
  			size_t datum_len = read_int(f);
  			size_t extra_len = am_root < 0 ? RPRE_LEN : 0;
@@ -489,7 +501,7 @@ above:
  			if (name_len + datum_len + extra_len < name_len)
  				out_of_memory("receive_xattr"); /* overflow */
  			ptr = new_array(char, name_len + datum_len + extra_len);
-@@ -311,6 +325,10 @@ void receive_xattr(struct file_struct *f
+@@ -312,6 +329,10 @@ void receive_xattr(struct file_struct *f
  			read_buf(f, ptr, datum_len);
  #ifdef HAVE_LINUX_XATTRS
  			/* Non-root can only save the user namespace. */
@@ -500,7 +512,7 @@ above:
  			if (!am_root && !HAS_PREFIX(name, USER_PREFIX)) {
  				free(ptr);
  				continue;
-@@ -331,6 +349,11 @@ void receive_xattr(struct file_struct *f
+@@ -332,6 +353,11 @@ void receive_xattr(struct file_struct *f
  				continue;
  			}
  #endif
@@ -512,7 +524,7 @@ above:
  			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
  			rxa->name = name;
  			rxa->datum = ptr;
-@@ -410,4 +433,146 @@ int set_xattr(const char *fname, const s
+@@ -411,4 +437,146 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
  }
  
