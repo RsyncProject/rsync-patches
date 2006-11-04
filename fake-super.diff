@@ -434,33 +434,26 @@ above:
  int preserve_perms = 0;
 --- old/xattr.c
 +++ new/xattr.c
-@@ -39,13 +39,24 @@ extern unsigned int file_struct_len;
- #define SYSTEM_PREFIX "system."
+@@ -43,11 +43,16 @@ extern unsigned int file_struct_len;
  #define SPRE_LEN ((int)sizeof SYSTEM_PREFIX - 1)
  
-+#define RSYNC_PREFIX "rsync."
-+#define XSTAT_SUFFIX "%stat"
-+
  #ifdef HAVE_LINUX_XATTRS
- #define RPRE_LEN 0
-+#define FAKE_PREFIX USER_PREFIX RSYNC_PREFIX
-+#define FPRE_LEN ((int)sizeof FAKE_PREFIX - 1)
-+#define XSTAT_ATTR USER_PREFIX RSYNC_PREFIX XSTAT_SUFFIX
-+#define CENT_POS (UPRE_LEN + (int)sizeof RSYNC_PREFIX - 1)
+-#define RPRE_LEN 0
++#define RSYNC_PREFIX USER_PREFIX "rsync."
  #else
--#define RSYNC_PREFIX "rsync."
- #define RPRE_LEN ((int)sizeof RSYNC_PREFIX - 1)
-+#define FPRE_LEN 0
-+#define XSTAT_ATTR RSYNC_PREFIX XSTAT_SUFFIX
-+#define CENT_POS RPRE_LEN
+ #define RSYNC_PREFIX "rsync."
+-#define RPRE_LEN ((int)sizeof RSYNC_PREFIX - 1)
  #endif
- 
++#define RPRE_LEN ((int)sizeof RSYNC_PREFIX - 1)
++
++#define XSTAT_ATTR RSYNC_PREFIX "%stat"
 +#define XSTAT_LEN ((int)sizeof XSTAT_ATTR - 1)
 +
++#define CENT_POS RPRE_LEN
+ 
  typedef struct {
  	char *datum, *name;
- 	size_t datum_len, name_len;
-@@ -143,6 +154,10 @@ static int rsync_xal_get(const char *fna
+@@ -146,6 +151,10 @@ static int rsync_xal_get(const char *fna
  			continue;
  #endif
  
@@ -471,51 +464,44 @@ above:
  		datum_len = sys_lgetxattr(fname, name, NULL, 0);
  		if (datum_len < 0) {
  			if (errno == ENOTSUP)
-@@ -173,6 +188,13 @@ static int rsync_xal_get(const char *fna
+@@ -176,6 +185,13 @@ static int rsync_xal_get(const char *fna
  				return -1;
  			}
  		}
 +#ifdef HAVE_LINUX_XATTRS
-+		if (am_root < 0 && name_len > FPRE_LEN
-+		 && strncmp(name, FAKE_PREFIX, FPRE_LEN) == 0) {
-+			name += FPRE_LEN;
-+			name_len -= FPRE_LEN;
++		if (am_root < 0 && name_len > RPRE_LEN
++		 && HAS_PREFIX(name, RSYNC_PREFIX)) {
++			name += RPRE_LEN;
++			name_len -= RPRE_LEN;
 +		}
 +#endif
  		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
  		rxas->name = ptr + datum_len;
  		rxas->datum = ptr;
-@@ -293,20 +315,23 @@ void receive_xattr(struct file_struct *f
- 			rsync_xa *rxa;
+@@ -297,10 +313,8 @@ void receive_xattr(struct file_struct *f
  			size_t name_len = read_int(f);
  			size_t datum_len = read_int(f);
-+			size_t extra_len = am_root < 0 ? FPRE_LEN + RPRE_LEN : RPRE_LEN;
- 			if (name_len + datum_len < name_len)
- 				out_of_memory("receive_xattr"); /* overflow */
+ 			size_t extra_len = am_root < 0 ? RPRE_LEN : 0;
 -#ifndef HAVE_LINUX_XATTRS
--			if (name_len + datum_len + RPRE_LEN < RPRE_LEN)
-+			if (name_len + datum_len + extra_len < extra_len)
+ 			if (datum_len + extra_len < datum_len)
  				out_of_memory("receive_xattr"); /* overflow */
 -#endif
--			ptr = new_array(char, name_len + datum_len + RPRE_LEN);
-+			ptr = new_array(char, name_len + datum_len + extra_len);
- 			if (!ptr)
- 				out_of_memory("receive_xattr");
--			name = ptr + datum_len + RPRE_LEN;
-+			name = ptr + datum_len + extra_len;
- 			read_buf(f, name, name_len);
+ 			if (name_len + datum_len + extra_len < name_len)
+ 				out_of_memory("receive_xattr"); /* overflow */
+ 			ptr = new_array(char, name_len + datum_len + extra_len);
+@@ -311,6 +325,10 @@ void receive_xattr(struct file_struct *f
  			read_buf(f, ptr, datum_len);
  #ifdef HAVE_LINUX_XATTRS
  			/* Non-root can only save the user namespace. */
-+			if (am_root < 0 && strncmp(name, USER_PREFIX, UPRE_LEN) != 0) {
-+				name -= FPRE_LEN;
-+				memcpy(name, FAKE_PREFIX, FPRE_LEN);
++			if (am_root < 0 && !HAS_PREFIX(name, USER_PREFIX)) {
++				name -= RPRE_LEN;
++				memcpy(name, RSYNC_PREFIX, RPRE_LEN);
 +			} else
- 			if (!am_root && strncmp(name, USER_PREFIX, UPRE_LEN) != 0) {
+ 			if (!am_root && !HAS_PREFIX(name, USER_PREFIX)) {
  				free(ptr);
  				continue;
-@@ -324,6 +349,11 @@ void receive_xattr(struct file_struct *f
- 				memcpy(name, RSYNC_PREFIX, RPRE_LEN);
+@@ -331,6 +349,11 @@ void receive_xattr(struct file_struct *f
+ 				continue;
  			}
  #endif
 +			if (am_root < 0 && name_len == XSTAT_LEN + 1
@@ -526,7 +512,7 @@ above:
  			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
  			rxa->name = name;
  			rxa->datum = ptr;
-@@ -403,4 +433,146 @@ int set_xattr(const char *fname, const s
+@@ -410,4 +433,146 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
  }
  
