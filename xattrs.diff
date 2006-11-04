@@ -629,7 +629,7 @@ TODO:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,406 @@
+@@ -0,0 +1,413 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -665,6 +665,9 @@ TODO:
 +
 +#define RSYNC_XAL_INITIAL 5
 +#define RSYNC_XAL_LIST_INITIAL 100
++
++#define HAS_PREFIX(str, prfx) (*(str) == *(prfx) \
++			    && strncmp(str, prfx, sizeof (prfx) - 1) == 0)
 +
 +#define USER_PREFIX "user."
 +#define UPRE_LEN ((int)sizeof USER_PREFIX - 1)
@@ -771,7 +774,7 @@ TODO:
 +
 +#ifdef HAVE_LINUX_XATTRS
 +		/* We don't send the system namespace. */
-+		if (strncmp(name, SYSTEM_PREFIX, SPRE_LEN) == 0)
++		if (HAS_PREFIX(name, SYSTEM_PREFIX))
 +			continue;
 +#endif
 +
@@ -891,7 +894,7 @@ TODO:
 +#else
 +			/* We strip the rsync prefix from disguised namespaces
 +			 * and put everything else in the user namespace. */
-+			if (strncmp(rxa->name, RSYNC_PREFIX, RPRE_LEN) == 0) {
++			if (HAS_PREFIX(rxa->name, RSYNC_PREFIX)) {
 +				write_int(f, rxa->name_len - RPRE_LEN);
 +				write_int(f, rxa->datum_len);
 +				write_buf(f, rxa->name + RPRE_LEN, rxa->name_len - RPRE_LEN);
@@ -925,21 +928,22 @@ TODO:
 +			rsync_xa *rxa;
 +			size_t name_len = read_int(f);
 +			size_t datum_len = read_int(f);
-+			if (name_len + datum_len < name_len)
-+				out_of_memory("receive_xattr"); /* overflow */
++			size_t extra_len = am_root < 0 ? RPRE_LEN : 0;
 +#ifndef HAVE_LINUX_XATTRS
-+			if (name_len + datum_len + RPRE_LEN < RPRE_LEN)
++			if (datum_len + extra_len < datum_len)
 +				out_of_memory("receive_xattr"); /* overflow */
 +#endif
-+			ptr = new_array(char, name_len + datum_len + RPRE_LEN);
++			if (name_len + datum_len + extra_len < name_len)
++				out_of_memory("receive_xattr"); /* overflow */
++			ptr = new_array(char, name_len + datum_len + extra_len);
 +			if (!ptr)
 +				out_of_memory("receive_xattr");
-+			name = ptr + datum_len + RPRE_LEN;
++			name = ptr + datum_len + extra_len;
 +			read_buf(f, name, name_len);
 +			read_buf(f, ptr, datum_len);
 +#ifdef HAVE_LINUX_XATTRS
 +			/* Non-root can only save the user namespace. */
-+			if (!am_root && strncmp(name, USER_PREFIX, UPRE_LEN) != 0) {
++			if (!am_root && !HAS_PREFIX(name, USER_PREFIX)) {
 +				free(ptr);
 +				continue;
 +			}
@@ -947,13 +951,16 @@ TODO:
 +			/* This OS only has a user namespace, so we either
 +			 * strip the user prefix, or we put a non-user
 +			 * namespace inside our rsync hierarchy. */
-+			if (strncmp(name, USER_PREFIX, UPRE_LEN) == 0) {
++			if (HAS_PREFIX(name, USER_PREFIX)) {
 +				name += UPRE_LEN;
 +				name_len -= UPRE_LEN;
-+			} else {
++			} else if (am_root) {
 +				name -= RPRE_LEN;
 +				name_len += RPRE_LEN;
 +				memcpy(name, RSYNC_PREFIX, RPRE_LEN);
++			} else {
++				free(ptr);
++				continue;
 +			}
 +#endif
 +			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
