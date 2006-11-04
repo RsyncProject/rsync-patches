@@ -629,7 +629,7 @@ TODO:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,414 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -744,7 +744,8 @@ TODO:
 +		if (errno == ERANGE) {
 +			list_len = sys_llistxattr(fname, NULL, 0);
 +			if (list_len < 0) {
-+				rsyserr(FERROR, errno, "%s: rsync_xal_get: llistxattr",
++				rsyserr(FERROR, errno,
++					"rsync_xal_get: llistxattr(\"%s\",0) failed",
 +					fname);
 +				return -1;
 +			}
@@ -755,22 +756,23 @@ TODO:
 +			list_len = sys_llistxattr(fname, namebuf, namebuf_len);
 +			if (list_len < 0) {
 +				rsyserr(FERROR, errno,
-+				    "%s: rsync_xal_get: re-llistxattr failed",
-+				    fname);
++					"rsync_xal_get: llistxattr(\"%s\",%ld) failed",
++					fname, (long)namebuf_len);
 +				return -1;
 +			}
 +		} else {
 +			rsyserr(FERROR, errno,
-+			    "%s: rsync_xal_get: llistxattr failed:",
-+			    fname);
++				"rsync_xal_get: llistxattr(\"%s\",%ld) failed",
++				fname, (long)namebuf_len);
 +			return -1;
 +		}
 +	}
 +
-+	for (name = namebuf; list_len > 0; list_len -= name_len, name += name_len) {
++	for (name = namebuf; list_len > 0; name += name_len) {
 +		rsync_xa *rxas;
 +
 +		name_len = strlen(name) + 1;
++		list_len -= name_len;
 +
 +#ifdef HAVE_LINUX_XATTRS
 +		/* We don't send the system namespace. */
@@ -783,7 +785,7 @@ TODO:
 +			if (errno == ENOTSUP)
 +				return -1;
 +			rsyserr(FERROR, errno,
-+			    "%s: rsync_xal_get: lgetxattr %s failed",
++			    "rsync_xal_get: lgetxattr(\"%s\",\"%s\",0) failed",
 +			    fname, name);
 +			return -1;
 +		}
@@ -795,14 +797,13 @@ TODO:
 +			if (len != datum_len) {
 +				if (len < 0) {
 +					rsyserr(FERROR, errno,
-+					    "rsync_xal_get: lgetxattr(%s,%s)"
-+					    " failed", fname, name);
++					    "rsync_xal_get: lgetxattr(\"%s\",\"%s\",%ld)"
++					    " failed", fname, name, (long)datum_len);
 +				} else {
 +					rprintf(FERROR,
-+					    "rsync_xal_get: lgetxattr(%s,%s)"
-+					    " returned %ld instead of %ld\n",
-+					    fname, name,
-+					    (long)len, (long)datum_len);
++					    "rsync_xal_get: lgetxattr(\"%s\",\"%s\",%ld)"
++					    " returned %ld\n", fname, name,
++					    (long)datum_len, (long)len);
 +				}
 +				free(ptr);
 +				return -1;
@@ -974,14 +975,13 @@ TODO:
 +	} else if (tag == 'x') {
 +		ndx = read_int(f);
 +		if (ndx < 0 || (size_t)ndx >= rsync_xal_l.count) {
-+			rprintf(FERROR, "%s: receive_xattr: xa index %d out of range\n",
-+				f_name(file, NULL), ndx);
++			rprintf(FERROR, "receive_xattr: xa index %d out of"
++				" range for %s\n", ndx, f_name(file, NULL));
 +			exit_cleanup(RERR_STREAMIO);
 +		}
 +	} else {
-+		rprintf(FERROR,
-+		    "%s: receive_xattr: unknown extended attribute type tag: %c\n",
-+		    f_name(file, NULL), tag);
++		rprintf(FERROR, "receive_xattr: unknown extended attribute"
++			" type tag (%c) for %s\n", tag, f_name(file, NULL));
 +		exit_cleanup(RERR_STREAMIO);
 +	}
 +
@@ -1015,7 +1015,8 @@ TODO:
 +	for (i = 0; i < xalp->count; i++) {
 +		int status = sys_lsetxattr(fname, rxas[i].name, rxas[i].datum, rxas[i].datum_len);
 +		if (status < 0) {
-+			rsyserr(FERROR, errno, "%s: rsync_xal_set: lsetxattr %s failed",
++			rsyserr(FERROR, errno,
++				"rsync_xal_set: lsetxattr(\"%s\",\"%s\") failed",
 +				fname, rxas[i].name);
 +			ret = -1;
 +		}
