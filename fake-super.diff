@@ -439,8 +439,10 @@ above:
  
  #ifdef HAVE_LINUX_XATTRS
 -#define RPRE_LEN 0
++#define MIGHT_NEED_RPRE (am_root < 0)
 +#define RSYNC_PREFIX USER_PREFIX "rsync."
  #else
++#define MIGHT_NEED_RPRE am_root
  #define RSYNC_PREFIX "rsync."
 -#define RPRE_LEN ((int)sizeof RSYNC_PREFIX - 1)
  #endif
@@ -448,8 +450,6 @@ above:
 +
 +#define XSTAT_ATTR RSYNC_PREFIX "%stat"
 +#define XSTAT_LEN ((int)sizeof XSTAT_ATTR - 1)
-+
-+#define CENT_POS RPRE_LEN
  
  typedef struct {
  	char *datum, *name;
@@ -458,7 +458,7 @@ above:
  #endif
  
 +		if (am_root < 0 && name_len == XSTAT_LEN + 1
-+		 && name[CENT_POS] == '%' && strcmp(name, XSTAT_ATTR) == 0)
++		 && name[RPRE_LEN] == '%' && strcmp(name, XSTAT_ATTR) == 0)
 +			continue;
 +
  		datum_len = sys_lgetxattr(fname, name, NULL, 0);
@@ -478,41 +478,53 @@ above:
  		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
  		rxas->name = ptr + datum_len;
  		rxas->datum = ptr;
-@@ -299,10 +315,8 @@ void receive_xattr(struct file_struct *f
+@@ -298,13 +314,9 @@ void receive_xattr(struct file_struct *f
+ 			rsync_xa *rxa;
  			size_t name_len = read_int(f);
  			size_t datum_len = read_int(f);
- 			size_t extra_len = am_root < 0 ? RPRE_LEN : 0;
--#ifndef HAVE_LINUX_XATTRS
+-#ifdef HAVE_LINUX_XATTRS
+-			size_t extra_len = 0;
+-#else
+-			size_t extra_len = am_root ? RPRE_LEN : 0;
++			size_t extra_len = MIGHT_NEED_RPRE ? RPRE_LEN : 0;
  			if (datum_len + extra_len < datum_len)
  				out_of_memory("receive_xattr"); /* overflow */
 -#endif
  			if (name_len + datum_len + extra_len < name_len)
  				out_of_memory("receive_xattr"); /* overflow */
  			ptr = new_array(char, name_len + datum_len + extra_len);
-@@ -313,6 +327,10 @@ void receive_xattr(struct file_struct *f
+@@ -315,9 +327,14 @@ void receive_xattr(struct file_struct *f
  			read_buf(f, ptr, datum_len);
  #ifdef HAVE_LINUX_XATTRS
  			/* Non-root can only save the user namespace. */
-+			if (am_root < 0 && !HAS_PREFIX(name, USER_PREFIX)) {
+-			if (!am_root && !HAS_PREFIX(name, USER_PREFIX)) {
+-				free(ptr);
+-				continue;
++			if (am_root <= 0 && !HAS_PREFIX(name, USER_PREFIX)) {
++				if (!am_root) {
++					free(ptr);
++					continue;
++				}
 +				name -= RPRE_LEN;
++				name_len += RPRE_LEN;
 +				memcpy(name, RSYNC_PREFIX, RPRE_LEN);
-+			} else
- 			if (!am_root && !HAS_PREFIX(name, USER_PREFIX)) {
- 				free(ptr);
- 				continue;
-@@ -333,6 +351,11 @@ void receive_xattr(struct file_struct *f
+ 			}
+ #else
+ 			/* This OS only has a user namespace, so we either
+@@ -335,6 +352,12 @@ void receive_xattr(struct file_struct *f
  				continue;
  			}
  #endif
 +			if (am_root < 0 && name_len == XSTAT_LEN + 1
-+			 && name[CENT_POS] == '%' && strcmp(name, XSTAT_ATTR) == 0) {
++			 && name[RPRE_LEN] == '%'
++			 && strcmp(name, XSTAT_ATTR) == 0) {
 +				free(ptr);
 +				continue;
 +			}
  			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
  			rxa->name = name;
  			rxa->datum = ptr;
-@@ -412,4 +435,149 @@ int set_xattr(const char *fname, const s
+@@ -414,4 +437,149 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
  }
  
