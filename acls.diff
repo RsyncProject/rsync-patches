@@ -1399,7 +1399,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		file->mode = tweak_mode(file->mode, chmod_modes);
  
 +#ifdef SUPPORT_ACLS
-+	if (preserve_acls) {
++	if (preserve_acls && f >= 0) {
 +		sx.st.st_mode = file->mode;
 +		sx.acc_acl = sx.def_acl = NULL;
 +		if (get_acl(fname, &sx) < 0)
@@ -1415,12 +1415,12 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		flist->files[flist->count++] = file;
  		send_file_entry(file, f);
 +#ifdef SUPPORT_ACLS
-+		if (preserve_acls)
++		if (preserve_acls && f >= 0)
 +			send_acl(&sx, f);
 +#endif
 +	} else {
 +#ifdef SUPPORT_ACLS
-+		if (preserve_acls)
++		if (preserve_acls && f >= 0)
 +			free_acl(&sx);
 +#endif
  	}
@@ -6576,7 +6576,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  fi
 --- old/testsuite/itemize.test
 +++ new/testsuite/itemize.test
-@@ -33,15 +33,15 @@ rm -f "$fromdir/foo/sym.test"
+@@ -38,15 +38,15 @@ rm -f "$to2dir" "$to2dir.test"
  $RSYNC -iplr "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
@@ -6601,7 +6601,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 1 failed"
  
-@@ -53,10 +53,10 @@ chmod 601 "$fromdir/foo/config2"
+@@ -58,10 +58,10 @@ chmod 601 "$fromdir/foo/config2"
  $RSYNC -iplrH "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
@@ -6616,7 +6616,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 2 failed"
  
-@@ -73,11 +73,11 @@ chmod 777 "$todir/bar/baz/rsync"
+@@ -78,11 +78,11 @@ chmod 777 "$todir/bar/baz/rsync"
  $RSYNC -iplrtc "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
@@ -6633,7 +6633,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
  
-@@ -102,15 +102,15 @@ $RSYNC -ivvplrtH "$fromdir/" "$todir/" \
+@@ -107,15 +107,15 @@ $RSYNC -ivvplrtH "$fromdir/" "$todir/" \
      | tee "$outfile"
  filter_outfile
  cat <<EOT >"$chkfile"
@@ -6658,7 +6658,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 5 failed"
  
-@@ -129,8 +129,8 @@ touch "$todir/foo/config2"
+@@ -134,8 +134,8 @@ touch "$todir/foo/config2"
  $RSYNC -iplrtH "$fromdir/" "$todir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
@@ -6669,7 +6669,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 7 failed"
  
-@@ -138,15 +138,15 @@ $RSYNC -ivvplrtH --copy-dest=../to "$fro
+@@ -143,15 +143,15 @@ $RSYNC -ivvplrtH --copy-dest=../to "$fro
      | tee "$outfile"
  filter_outfile
  cat <<EOT >"$chkfile"
@@ -6694,7 +6694,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 8 failed"
  
-@@ -154,7 +154,7 @@ rm -rf "$to2dir"
+@@ -159,7 +159,7 @@ rm -rf "$to2dir"
  $RSYNC -iplrtH --copy-dest=../to "$fromdir/" "$to2dir/" \
      | tee "$outfile"
  cat <<EOT >"$chkfile"
@@ -6703,7 +6703,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 9 failed"
  
-@@ -181,15 +181,15 @@ $RSYNC -ivvplrtH --link-dest="$todir" "$
+@@ -186,15 +186,15 @@ $RSYNC -ivvplrtH --link-dest="$todir" "$
      | tee "$outfile"
  filter_outfile
  cat <<EOT >"$chkfile"
@@ -6728,7 +6728,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 11 failed"
  
-@@ -231,14 +231,14 @@ filter_outfile
+@@ -236,14 +236,14 @@ filter_outfile
  # TODO fix really-old problem when combining -H with --compare-dest:
  # missing output for foo/extra hard-link (and it might not be updated)!
  cat <<EOT >"$chkfile"
