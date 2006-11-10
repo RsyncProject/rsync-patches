@@ -214,7 +214,7 @@ To use this patch, run these commands for a successful build:
  extern struct file_list *the_file_list;
  extern struct filter_list_struct server_filter_list;
  
-@@ -182,7 +184,7 @@ static int delete_item(char *fname, int 
+@@ -185,7 +187,7 @@ static int delete_item(char *fname, int 
  	for (j = dirlist->count; j--; ) {
  		struct file_struct *fp = dirlist->files[j];
  
@@ -223,7 +223,7 @@ To use this patch, run these commands for a successful build:
  			continue;
  
  		strlcpy(p, fp->basename, remainder);
-@@ -260,7 +262,7 @@ static void delete_in_dir(struct file_li
+@@ -263,7 +265,7 @@ static void delete_in_dir(struct file_li
  	filt_array[cur_depth] = push_local_filters(fbuf, dlen);
  
  	if (one_file_system) {
@@ -232,7 +232,7 @@ To use this patch, run these commands for a successful build:
  			filesystem_dev = stp->st_dev;
  		else if (filesystem_dev != stp->st_dev)
  			return;
-@@ -272,7 +274,7 @@ static void delete_in_dir(struct file_li
+@@ -275,7 +277,7 @@ static void delete_in_dir(struct file_li
  	 * from the filesystem. */
  	for (i = dirlist->count; i--; ) {
  		struct file_struct *fp = dirlist->files[i];
@@ -241,7 +241,7 @@ To use this patch, run these commands for a successful build:
  			continue;
  		if (flist_find(flist, fp) < 0) {
  			f_name(fp, delbuf);
-@@ -298,11 +300,11 @@ static void do_delete_pass(struct file_l
+@@ -301,11 +303,11 @@ static void do_delete_pass(struct file_l
  	for (j = 0; j < flist->count; j++) {
  		struct file_struct *file = flist->files[j];
  
@@ -255,9 +255,9 @@ To use this patch, run these commands for a successful build:
  			rprintf(FINFO, "deleting in %s\n", fbuf);
  
  		if (link_stat(fbuf, &st, keep_dirlinks) < 0
-@@ -346,6 +348,9 @@ void itemize(struct file_struct *file, i
- 		     && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
- 		    || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
+@@ -350,6 +352,9 @@ void itemize(struct file_struct *file, i
+ 		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
+ 		 || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
 +		if (preserve_atimes && !S_ISDIR(file->mode) && !S_ISLNK(file->mode)
 +		 && cmp_time(file->atime, st->st_atime) != 0)
@@ -265,7 +265,7 @@ To use this patch, run these commands for a successful build:
  		if ((file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
  		if (preserve_uid && am_root && file->uid != st->st_uid)
-@@ -549,7 +554,7 @@ static int find_fuzzy(struct file_struct
+@@ -553,7 +558,7 @@ static int find_fuzzy(struct file_struct
  		uint32 dist;
  
  		if (!S_ISREG(fp->mode) || !fp->length
@@ -274,16 +274,16 @@ To use this patch, run these commands for a successful build:
  			continue;
  
  		name = fp->basename;
-@@ -658,6 +663,8 @@ static int try_dests_reg(struct file_str
- 					  itemizing && verbose > 1,
- 					  code) < 0)
+@@ -661,6 +666,8 @@ static int try_dests_reg(struct file_str
+ 			if (hard_link_one(file, ndx, fname, 0, stp,
+ 					  cmpbuf, 1, i, code) < 0)
  				goto try_a_copy;
 +			if (preserve_atimes)
 +				set_file_attrs(fname, file, stp, 0);
  			if (preserve_hard_links && file->link_u.links) {
  				if (dry_run)
  					file->link_u.links->link_dest_used = j + 1;
-@@ -930,7 +937,7 @@ static void recv_generator(char *fname, 
+@@ -1012,7 +1019,7 @@ static void recv_generator(char *fname, 
  				rsyserr(FERROR, errno,
  					"recv_generator: mkdir %s failed",
  					full_fname(fname));
@@ -292,16 +292,16 @@ To use this patch, run these commands for a successful build:
  				if (ndx+1 < the_file_list->count
  				 && the_file_list->files[ndx+1]->dir.depth > file->dir.depth) {
  					rprintf(FERROR,
-@@ -944,7 +951,7 @@ static void recv_generator(char *fname, 
- 		    && verbose && code != FNONE && f_out != -1)
- 			rprintf(code, "%s/\n", fname);
+@@ -1028,7 +1035,7 @@ static void recv_generator(char *fname, 
+ 		if (real_ret != 0 && one_file_system)
+ 			real_st.st_dev = filesystem_dev;
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
 -		    && (file->flags & FLAG_DEL_HERE))
 +		    && (FFLAGS(file) & FLAG_DEL_HERE))
- 			delete_in_dir(the_file_list, fname, file, &st);
+ 			delete_in_dir(the_file_list, fname, file, &real_st);
  		return;
  	}
-@@ -1252,7 +1259,7 @@ static void recv_generator(char *fname, 
+@@ -1324,7 +1331,7 @@ static void recv_generator(char *fname, 
  	if (fuzzy_dirlist) {
  		int j = flist_find(fuzzy_dirlist, file);
  		if (j >= 0) /* don't use changing file as future fuzzy basis */
@@ -310,7 +310,7 @@ To use this patch, run these commands for a successful build:
  	}
  
  	/* open the file */
-@@ -1517,7 +1524,7 @@ void generate_files(int f_out, struct fi
+@@ -1589,7 +1596,7 @@ void generate_files(int f_out, struct fi
  				continue;
  			if (!need_retouch_dir_times && file->mode & S_IWUSR)
  				continue;
@@ -504,7 +504,7 @@ To use this patch, run these commands for a successful build:
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -530,9 +532,12 @@ struct file_struct {
+@@ -531,9 +533,12 @@ struct file_struct {
  	uid_t uid;
  	gid_t gid;
  	mode_t mode;

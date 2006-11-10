@@ -148,8 +148,8 @@ TODO:
 +#define DEL_NO_DELETIONS	(1<<2)
  #define DEL_TERSE		(1<<3)
  
- 
-@@ -106,12 +110,120 @@ static int is_backup_file(char *fn)
+ enum nonregtype {
+@@ -109,12 +113,120 @@ static int is_backup_file(char *fn)
  	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
  }
  
@@ -270,7 +270,7 @@ TODO:
   */
  static int delete_item(char *fname, int mode, int flags)
  {
-@@ -122,6 +234,8 @@ static int delete_item(char *fname, int 
+@@ -125,6 +237,8 @@ static int delete_item(char *fname, int 
  	char *p;
  
  	if (!S_ISDIR(mode)) {
@@ -279,7 +279,7 @@ TODO:
  		if (max_delete && ++deletion_count > max_delete)
  			return 0;
  		if (make_backups && (backup_dir || !is_backup_file(fname)))
-@@ -144,6 +258,7 @@ static int delete_item(char *fname, int 
+@@ -147,6 +261,7 @@ static int delete_item(char *fname, int 
  
  	zap_dir = flags & DEL_FORCE_RECURSE || force_delete;
  	if ((max_delete && ++deletion_count > max_delete)
@@ -287,7 +287,7 @@ TODO:
  	    || (dry_run && zap_dir)) {
  		ok = 0;
  		errno = ENOTEMPTY;
-@@ -186,6 +301,8 @@ static int delete_item(char *fname, int 
+@@ -189,6 +304,8 @@ static int delete_item(char *fname, int 
  			continue;
  
  		strlcpy(p, fp->basename, remainder);
@@ -296,7 +296,7 @@ TODO:
  		delete_item(fname, fp->mode, flags & ~DEL_TERSE);
  	}
  	flist_free(dirlist);
-@@ -194,7 +311,8 @@ static int delete_item(char *fname, int 
+@@ -197,7 +314,8 @@ static int delete_item(char *fname, int 
  
  	pop_local_filters(save_filters);
  
@@ -306,7 +306,7 @@ TODO:
  		return 0;
  
  	if (do_rmdir(fname) == 0) {
-@@ -214,15 +332,19 @@ static int delete_item(char *fname, int 
+@@ -217,15 +335,19 @@ static int delete_item(char *fname, int 
   * all the --delete-WHEN options.  Note that the fbuf pointer must point to a
   * MAXPATHLEN buffer with the name of the directory in it (the functions we
   * call will append names onto the end, but the old dir value will be restored
@@ -329,7 +329,7 @@ TODO:
  	int dlen, i;
  
  	if (!flist) {
-@@ -236,6 +358,8 @@ static void delete_in_dir(struct file_li
+@@ -239,6 +361,8 @@ static void delete_in_dir(struct file_li
  	if (verbose > 2)
  		rprintf(FINFO, "delete_in_dir(%s)\n", fbuf);
  
@@ -338,7 +338,7 @@ TODO:
  	if (allowed_lull)
  		maybe_send_keepalive();
  
-@@ -243,12 +367,14 @@ static void delete_in_dir(struct file_li
+@@ -246,12 +370,14 @@ static void delete_in_dir(struct file_li
  		return; /* Impossible... */
  
  	if (io_error && !(lp_ignore_errors(module_id) || ignore_errors)) {
@@ -358,7 +358,7 @@ TODO:
  	}
  
  	while (cur_depth >= file->dir.depth && cur_depth >= min_depth)
-@@ -259,6 +385,9 @@ static void delete_in_dir(struct file_li
+@@ -262,6 +388,9 @@ static void delete_in_dir(struct file_li
  	dlen = strlen(fbuf);
  	filt_array[cur_depth] = push_local_filters(fbuf, dlen);
  
@@ -368,7 +368,7 @@ TODO:
  	if (one_file_system) {
  		if (file->flags & FLAG_TOP_DIR)
  			filesystem_dev = stp->st_dev;
-@@ -268,18 +397,30 @@ static void delete_in_dir(struct file_li
+@@ -271,18 +400,30 @@ static void delete_in_dir(struct file_li
  
  	dirlist = get_dirlist(fbuf, dlen, 0);
  
@@ -401,7 +401,7 @@ TODO:
  	flist_free(dirlist);
  }
  
-@@ -309,9 +450,9 @@ static void do_delete_pass(struct file_l
+@@ -312,9 +453,9 @@ static void do_delete_pass(struct file_l
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
@@ -413,30 +413,30 @@ TODO:
  
  	if (do_progress && !am_server)
  		rprintf(FINFO, "                    \r");
-@@ -771,6 +912,7 @@ static int try_dests_non(struct file_str
- 	return -1;
+@@ -843,6 +984,7 @@ static int try_dests_non(struct file_str
+ 	return j;
  }
  
 +static struct bitbag *delayed_bits = NULL;
  static int phase = 0;
  
  /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
-@@ -944,8 +1086,12 @@ static void recv_generator(char *fname, 
- 		    && verbose && code != FNONE && f_out != -1)
- 			rprintf(code, "%s/\n", fname);
+@@ -1028,8 +1170,12 @@ static void recv_generator(char *fname, 
+ 		if (real_ret != 0 && one_file_system)
+ 			real_st.st_dev = filesystem_dev;
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
 -		    && (file->flags & FLAG_DEL_HERE))
--			delete_in_dir(the_file_list, fname, file, &st);
+-			delete_in_dir(the_file_list, fname, file, &real_st);
 +		    && (file->flags & FLAG_DEL_HERE)) {
-+			if (detect_renamed && statret != 0)
++			if (detect_renamed && real_ret != 0)
 +				unexplored_dirs++;
-+			delete_in_dir(the_file_list, fname, file, &st,
++			delete_in_dir(the_file_list, fname, file, &real_st,
 +				      delete_during < 0 ? DEL_NO_DELETIONS : 0);
 +		}
  		return;
  	}
  
-@@ -1201,8 +1347,14 @@ static void recv_generator(char *fname, 
+@@ -1273,8 +1419,14 @@ static void recv_generator(char *fname, 
  		    && hard_link_check(file, ndx, fname, statret, &st,
  				       itemizing, code, HL_SKIP))
  			return;
@@ -452,7 +452,7 @@ TODO:
  		rsyserr(FERROR, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		return;
-@@ -1388,11 +1540,17 @@ void generate_files(int f_out, struct fi
+@@ -1460,11 +1612,17 @@ void generate_files(int f_out, struct fi
  			(long)getpid(), flist->count);
  	}
  
@@ -471,7 +471,7 @@ TODO:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1447,7 +1605,23 @@ void generate_files(int f_out, struct fi
+@@ -1519,7 +1677,23 @@ void generate_files(int f_out, struct fi
  	}
  	recv_generator(NULL, NULL, 0, 0, 0, code, -1);
  	if (delete_during)
