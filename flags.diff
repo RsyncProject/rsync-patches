@@ -29,7 +29,7 @@ To use this patch, run these commands for a successful build:
  extern int preserve_uid;
  extern int preserve_gid;
  extern int relative_paths;
-@@ -303,6 +304,9 @@ static void send_file_entry(struct file_
+@@ -305,6 +306,9 @@ static void send_file_entry(struct file_
  	unsigned short flags;
  	static time_t modtime;
  	static mode_t mode;
@@ -39,7 +39,7 @@ To use this patch, run these commands for a successful build:
  	static int64 dev;
  	static dev_t rdev;
  	static uint32 rdev_major;
-@@ -333,6 +337,12 @@ static void send_file_entry(struct file_
+@@ -335,6 +339,12 @@ static void send_file_entry(struct file_
  		flags |= XMIT_SAME_MODE;
  	else
  		mode = file->mode;
@@ -52,7 +52,7 @@ To use this patch, run these commands for a successful build:
  	if ((preserve_devices && IS_DEVICE(mode))
  	 || (preserve_specials && IS_SPECIAL(mode))) {
  		if (protocol_version < 28) {
-@@ -416,6 +426,10 @@ static void send_file_entry(struct file_
+@@ -418,6 +428,10 @@ static void send_file_entry(struct file_
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -63,7 +63,7 @@ To use this patch, run these commands for a successful build:
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -483,6 +497,9 @@ static struct file_struct *receive_file_
+@@ -485,6 +499,9 @@ static struct file_struct *receive_file_
  {
  	static time_t modtime;
  	static mode_t mode;
@@ -73,7 +73,7 @@ To use this patch, run these commands for a successful build:
  	static int64 dev;
  	static dev_t rdev;
  	static uint32 rdev_major;
-@@ -556,9 +573,12 @@ static struct file_struct *receive_file_
+@@ -558,9 +575,12 @@ static struct file_struct *receive_file_
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -87,7 +87,7 @@ To use this patch, run these commands for a successful build:
  
  	if (preserve_uid && !(flags & XMIT_SAME_UID))
  		uid = (uid_t)read_int(f);
-@@ -609,6 +629,9 @@ static struct file_struct *receive_file_
+@@ -611,6 +631,9 @@ static struct file_struct *receive_file_
  	file->modtime = modtime;
  	file->length = file_length;
  	file->mode = mode;
@@ -97,7 +97,7 @@ To use this patch, run these commands for a successful build:
  	file->uid = uid;
  	file->gid = gid;
  
-@@ -862,6 +885,9 @@ struct file_struct *make_file(char *fnam
+@@ -871,6 +894,9 @@ struct file_struct *make_file(char *fnam
  	file->modtime = st.st_mtime;
  	file->length = st.st_size;
  	file->mode = st.st_mode;
@@ -109,7 +109,7 @@ To use this patch, run these commands for a successful build:
  
 --- old/generator.c
 +++ new/generator.c
-@@ -95,6 +95,12 @@ extern struct filter_list_struct server_
+@@ -98,6 +98,12 @@ int non_perishable_cnt = 0;
  
  static int deletion_count = 0; /* used to implement --max-delete */
  
@@ -119,10 +119,10 @@ To use this patch, run these commands for a successful build:
 +#define FILEFLAGS(ff) 0
 +#endif
 +
- /* For calling delete_item() */
+ /* For calling delete_item() and delete_dir_contents(). */
  #define DEL_RECURSE		(1<<1) /* recurse */
- 
-@@ -109,7 +115,6 @@ enum delret {
+ #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
+@@ -113,7 +119,6 @@ enum delret {
  /* Forward declaration for delete_item(). */
  static enum delret delete_dir_contents(char *fname, int flags);
  
@@ -130,7 +130,7 @@ To use this patch, run these commands for a successful build:
  static int is_backup_file(char *fn)
  {
  	int k = strlen(fn) - backup_suffix_len;
-@@ -122,17 +127,20 @@ static int is_backup_file(char *fn)
+@@ -126,17 +131,20 @@ static int is_backup_file(char *fn)
   * Note that fname must point to a MAXPATHLEN buffer if the mode indicates it's
   * a directory! (The buffer is used for recursion, but returned unchanged.)
   */
@@ -151,19 +151,19 @@ To use this patch, run these commands for a successful build:
 +#ifdef SUPPORT_FLAGS
 +	make_mutable(fname, mode, fileflags);
 +#endif
- 	if (S_ISDIR(mode) && flags & DEL_RECURSE) {
- 		ret = delete_dir_contents(fname, flags);
- 		if (ret == DR_PINNED || ret == DR_NOT_EMPTY
-@@ -221,7 +229,7 @@ static enum delret delete_dir_contents(c
- 		}
- 
- 		strlcpy(p, fp->basename, remainder);
--		result = delete_item(fname, fp->mode, NULL, flags);
-+		result = delete_item(fname, fp->mode, FILEFLAGS(fp->fileflags), NULL, flags);
- 		if (result != DR_SUCCESS && ret == DR_SUCCESS)
- 			ret = result == DR_PINNED ? result : DR_NOT_EMPTY;
+ 	if (S_ISDIR(mode) && !(flags & DEL_DIR_IS_EMPTY)) {
+ 		ignore_perishable = 1;
+ 		/* If DEL_RECURSE is not set, this just reports emptiness. */
+@@ -248,7 +256,7 @@ static enum delret delete_dir_contents(c
+ 		if (S_ISDIR(fp->mode)
+ 		 && delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
+ 			ret = DR_NOT_EMPTY;
+-		if (delete_item(fname, fp->mode, NULL, flags) != DR_SUCCESS)
++		if (delete_item(fname, fp->mode, FILEFLAGS(fp->fileflags), NULL, flags) != DR_SUCCESS)
+ 			ret = DR_NOT_EMPTY;
  	}
-@@ -307,7 +315,7 @@ static void delete_in_dir(struct file_li
+ 
+@@ -338,7 +346,7 @@ static void delete_in_dir(struct file_li
  		}
  		if (flist_find(flist, fp) < 0) {
  			f_name(fp, delbuf);
@@ -172,7 +172,7 @@ To use this patch, run these commands for a successful build:
  		}
  	}
  
-@@ -1005,7 +1013,7 @@ static void recv_generator(char *fname, 
+@@ -1036,7 +1044,7 @@ static void recv_generator(char *fname, 
  		 * we need to delete it.  If it doesn't exist, then
  		 * (perhaps recursively) create it. */
  		if (statret == 0 && !S_ISDIR(st.st_mode)) {
@@ -181,7 +181,7 @@ To use this patch, run these commands for a successful build:
  				return;
  			statret = -1;
  		}
-@@ -1099,7 +1107,7 @@ static void recv_generator(char *fname, 
+@@ -1130,7 +1138,7 @@ static void recv_generator(char *fname, 
  			}
  			/* Not the right symlink (or not a symlink), so
  			 * delete it. */
@@ -190,7 +190,7 @@ To use this patch, run these commands for a successful build:
  				return;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &st,
-@@ -1170,7 +1178,7 @@ static void recv_generator(char *fname, 
+@@ -1201,7 +1209,7 @@ static void recv_generator(char *fname, 
  					goto return_with_success;
  				return;
  			}
@@ -199,7 +199,7 @@ To use this patch, run these commands for a successful build:
  				return;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &st,
-@@ -1256,7 +1264,7 @@ static void recv_generator(char *fname, 
+@@ -1287,7 +1295,7 @@ static void recv_generator(char *fname, 
  	fnamecmp_type = FNAMECMP_FNAME;
  
  	if (statret == 0 && !S_ISREG(st.st_mode)) {
