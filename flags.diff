@@ -109,9 +109,9 @@ To use this patch, run these commands for a successful build:
  
 --- old/generator.c
 +++ new/generator.c
-@@ -109,6 +109,12 @@ static int is_backup_file(char *fn)
- 	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
- }
+@@ -95,6 +95,12 @@ extern struct filter_list_struct server_
+ 
+ static int deletion_count = 0; /* used to implement --max-delete */
  
 +#ifdef SUPPORT_FLAGS
 +#define FILEFLAGS(ff) ff
@@ -119,99 +119,92 @@ To use this patch, run these commands for a successful build:
 +#define FILEFLAGS(ff) 0
 +#endif
 +
+ /* For calling delete_item() */
+ #define DEL_RECURSE		(1<<1) /* recurse */
  
- /* Delete a file or directory.  If DEL_FORCE_RECURSE is set in the flags, or if
-  * force_delete is set, this will delete recursively.
-@@ -116,7 +122,7 @@ static int is_backup_file(char *fn)
+@@ -109,7 +115,6 @@ enum delret {
+ /* Forward declaration for delete_item(). */
+ static enum delret delete_dir_contents(char *fname, int flags);
+ 
+-
+ static int is_backup_file(char *fn)
+ {
+ 	int k = strlen(fn) - backup_suffix_len;
+@@ -122,17 +127,20 @@ static int is_backup_file(char *fn)
   * Note that fname must point to a MAXPATHLEN buffer if the mode indicates it's
   * a directory! (The buffer is used for recursion, but returned unchanged.)
   */
--static int delete_item(char *fname, int mode, int flags)
-+static int delete_item(char *fname, int mode, uint32 fileflags, int flags)
+-static enum delret delete_item(char *fname, int mode, char *replace, int flags)
++static enum delret delete_item(char *fname, int mode, uint32 fileflags, char *replace, int flags)
  {
- 	struct file_list *dirlist;
- 	int j, dlen, zap_dir, ok;
-@@ -127,6 +133,9 @@ static int delete_item(char *fname, int 
- 	if (!S_ISDIR(mode)) {
- 		if (max_delete && ++deletion_count > max_delete)
- 			return 0;
+ 	enum delret ret;
+ 	char *what;
+ 	int ok;
+ 
+ 	if (verbose > 2) {
+-		rprintf(FINFO, "delete_item(%s) mode=%o flags=%d\n",
+-			fname, mode, flags);
++		rprintf(FINFO, "delete_item(%s) mode=%o fileflags=%o flags=%d\n",
++			fname, mode, fileflags, flags);
+ 	}
+ 
 +#ifdef SUPPORT_FLAGS
-+		make_mutable(fname, mode, fileflags);
++	make_mutable(fname, mode, fileflags);
 +#endif
- 		if (make_backups && (backup_dir || !is_backup_file(fname)))
- 			ok = make_backup(fname);
- 		else
-@@ -151,10 +160,17 @@ static int delete_item(char *fname, int 
- 		ok = 0;
- 		errno = ENOTEMPTY;
- 	} else if (make_backups && !backup_dir && !is_backup_file(fname)
--	    && !(flags & DEL_FORCE_RECURSE))
-+	    && !(flags & DEL_FORCE_RECURSE)) {
-+#ifdef SUPPORT_FLAGS
-+		make_mutable(fname, mode, fileflags);
-+#endif
- 		ok = make_backup(fname);
--	else
-+	} else {
-+#ifdef SUPPORT_FLAGS
-+		make_mutable(fname, mode, fileflags);
-+#endif
- 		ok = do_rmdir(fname) == 0;
-+	}
- 	if (ok) {
- 		if (!(flags & DEL_TERSE))
- 			log_delete(fname, mode);
-@@ -189,7 +205,7 @@ static int delete_item(char *fname, int 
- 			continue;
+ 	if (S_ISDIR(mode) && flags & DEL_RECURSE) {
+ 		ret = delete_dir_contents(fname, flags);
+ 		if (ret == DR_PINNED || ret == DR_NOT_EMPTY
+@@ -221,7 +229,7 @@ static enum delret delete_dir_contents(c
+ 		}
  
  		strlcpy(p, fp->basename, remainder);
--		delete_item(fname, fp->mode, flags & ~DEL_TERSE);
-+		delete_item(fname, fp->mode, FILEFLAGS(fp->fileflags), flags & ~DEL_TERSE);
+-		result = delete_item(fname, fp->mode, NULL, flags);
++		result = delete_item(fname, fp->mode, FILEFLAGS(fp->fileflags), NULL, flags);
+ 		if (result != DR_SUCCESS && ret == DR_SUCCESS)
+ 			ret = result == DR_PINNED ? result : DR_NOT_EMPTY;
  	}
- 	flist_free(dirlist);
- 
-@@ -279,7 +295,7 @@ static void delete_in_dir(struct file_li
- 			continue;
+@@ -307,7 +315,7 @@ static void delete_in_dir(struct file_li
+ 		}
  		if (flist_find(flist, fp) < 0) {
  			f_name(fp, delbuf);
--			delete_item(delbuf, fp->mode, DEL_FORCE_RECURSE);
-+			delete_item(delbuf, fp->mode, FILEFLAGS(fp->fileflags), DEL_FORCE_RECURSE);
+-			delete_item(delbuf, fp->mode, NULL, DEL_RECURSE);
++			delete_item(delbuf, fp->mode, FILEFLAGS(fp->fileflags), NULL, DEL_RECURSE);
  		}
  	}
  
-@@ -977,7 +993,7 @@ static void recv_generator(char *fname, 
+@@ -1005,7 +1013,7 @@ static void recv_generator(char *fname, 
  		 * we need to delete it.  If it doesn't exist, then
  		 * (perhaps recursively) create it. */
  		if (statret == 0 && !S_ISDIR(st.st_mode)) {
--			if (delete_item(fname, st.st_mode, del_opts) < 0)
-+			if (delete_item(fname, st.st_mode, FILEFLAGS(st.st_flags), del_opts) < 0)
+-			if (delete_item(fname, st.st_mode, "directory", del_opts) != 0)
++			if (delete_item(fname, st.st_mode, FILEFLAGS(st.st_flags), "directory", del_opts) != 0)
  				return;
  			statret = -1;
  		}
-@@ -1071,7 +1087,7 @@ static void recv_generator(char *fname, 
+@@ -1099,7 +1107,7 @@ static void recv_generator(char *fname, 
  			}
  			/* Not the right symlink (or not a symlink), so
  			 * delete it. */
--			if (delete_item(fname, st.st_mode, del_opts) < 0)
-+			if (delete_item(fname, st.st_mode, FILEFLAGS(st.st_flags), del_opts) < 0)
+-			if (delete_item(fname, st.st_mode, "symlink", del_opts) != 0)
++			if (delete_item(fname, st.st_mode, FILEFLAGS(st.st_flags), "symlink", del_opts) != 0)
  				return;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &st,
-@@ -1134,7 +1150,7 @@ static void recv_generator(char *fname, 
+@@ -1170,7 +1178,7 @@ static void recv_generator(char *fname, 
  					goto return_with_success;
  				return;
  			}
--			if (delete_item(fname, st.st_mode, del_opts) < 0)
-+			if (delete_item(fname, st.st_mode, FILEFLAGS(st.st_flags), del_opts) < 0)
+-			if (delete_item(fname, st.st_mode, t, del_opts) != 0)
++			if (delete_item(fname, st.st_mode, FILEFLAGS(st.st_flags), t, del_opts) != 0)
  				return;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &st,
-@@ -1220,7 +1236,7 @@ static void recv_generator(char *fname, 
+@@ -1256,7 +1264,7 @@ static void recv_generator(char *fname, 
  	fnamecmp_type = FNAMECMP_FNAME;
  
  	if (statret == 0 && !S_ISREG(st.st_mode)) {
--		if (delete_item(fname, st.st_mode, del_opts) != 0)
-+		if (delete_item(fname, st.st_mode, FILEFLAGS(st.st_flags), del_opts) != 0)
+-		if (delete_item(fname, st.st_mode, "regular file", del_opts) != 0)
++		if (delete_item(fname, st.st_mode, FILEFLAGS(st.st_flags), "regular file", del_opts) != 0)
  			return;
  		statret = -1;
  		stat_errno = ENOENT;

@@ -142,14 +142,14 @@ TODO:
  static int deletion_count = 0; /* used to implement --max-delete */
 +static int unexplored_dirs = 1;
  
--/* For calling delete_file() */
+-/* For calling delete_item() */
 +/* For calling delete_item() and delete_in_dir() */
- #define DEL_FORCE_RECURSE	(1<<1) /* recurse even w/o --force */
+ #define DEL_RECURSE		(1<<1) /* recurse */
 +#define DEL_NO_DELETIONS	(1<<2)
- #define DEL_TERSE		(1<<3)
  
  enum nonregtype {
-@@ -109,12 +113,120 @@ static int is_backup_file(char *fn)
+     TYPE_DIR, TYPE_SPECIAL, TYPE_DEVICE, TYPE_SYMLINK
+@@ -116,6 +120,113 @@ static int is_backup_file(char *fn)
  	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
  }
  
@@ -259,54 +259,37 @@ TODO:
 +	if (errno != EEXIST)
 +		handle_partial_dir(partialptr, PDIR_DELETE);
 +}
- 
- /* Delete a file or directory.  If DEL_FORCE_RECURSE is set in the flags, or if
-  * force_delete is set, this will delete recursively.
++
+ /* Delete a file or directory.  If DEL_RECURSE is set in the flags, this will
+  * delete recursively.
   *
-  * Note that fname must point to a MAXPATHLEN buffer if the mode indicates it's
-  * a directory! (The buffer is used for recursion, but returned unchanged.)
+@@ -185,6 +296,8 @@ static enum delret delete_item(char *fna
+ /* Prep directory is to be deleted, so delete all its contents.  Note
+  * that fname must point to a MAXPATHLEN buffer!  (The buffer is used
+  * for recursion, but returned unchanged.)
 + *
-+ * Also Note:  --detect-rename may use this routine with DEL_NO_DELETIONS set!
++ * Note: --detect-rename may use this routine with DEL_NO_DELETIONS set!
   */
- static int delete_item(char *fname, int mode, int flags)
+ static enum delret delete_dir_contents(char *fname, int flags)
  {
-@@ -125,6 +237,8 @@ static int delete_item(char *fname, int 
- 	char *p;
- 
- 	if (!S_ISDIR(mode)) {
-+		if (flags & DEL_NO_DELETIONS)
-+			return 0;
- 		if (max_delete && ++deletion_count > max_delete)
- 			return 0;
- 		if (make_backups && (backup_dir || !is_backup_file(fname)))
-@@ -147,6 +261,7 @@ static int delete_item(char *fname, int 
- 
- 	zap_dir = flags & DEL_FORCE_RECURSE || force_delete;
- 	if ((max_delete && ++deletion_count > max_delete)
-+	    || flags & DEL_NO_DELETIONS
- 	    || (dry_run && zap_dir)) {
- 		ok = 0;
- 		errno = ENOTEMPTY;
-@@ -189,6 +304,8 @@ static int delete_item(char *fname, int 
- 			continue;
+@@ -221,6 +334,16 @@ static enum delret delete_dir_contents(c
+ 		}
  
  		strlcpy(p, fp->basename, remainder);
-+		if (detect_renamed && S_ISREG(fp->mode))
-+			look_for_rename(fp, fname, dirlist->file_pool);
- 		delete_item(fname, fp->mode, flags & ~DEL_TERSE);
- 	}
- 	flist_free(dirlist);
-@@ -197,7 +314,8 @@ static int delete_item(char *fname, int 
- 
- 	pop_local_filters(save_filters);
- 
--	if (max_delete && ++deletion_count > max_delete)
-+	if (flags & DEL_NO_DELETIONS
-+	 || (max_delete && ++deletion_count > max_delete))
- 		return 0;
- 
- 	if (do_rmdir(fname) == 0) {
-@@ -217,15 +335,19 @@ static int delete_item(char *fname, int 
++		if (detect_renamed) {
++			if (S_ISDIR(fp->mode) && flags & DEL_NO_DELETIONS) {
++				delete_dir_contents(fname, flags);
++				continue;
++			}
++			if (S_ISREG(fp->mode))
++				look_for_rename(fp, fname, dirlist->file_pool);
++			if (flags & DEL_NO_DELETIONS)
++				continue;
++		}
+ 		result = delete_item(fname, fp->mode, NULL, flags);
+ 		if (result != DR_SUCCESS && ret == DR_SUCCESS)
+ 			ret = result == DR_PINNED ? result : DR_NOT_EMPTY;
+@@ -239,15 +362,19 @@ static enum delret delete_dir_contents(c
   * all the --delete-WHEN options.  Note that the fbuf pointer must point to a
   * MAXPATHLEN buffer with the name of the directory in it (the functions we
   * call will append names onto the end, but the old dir value will be restored
@@ -329,16 +312,16 @@ TODO:
  	int dlen, i;
  
  	if (!flist) {
-@@ -239,6 +361,8 @@ static void delete_in_dir(struct file_li
+@@ -261,6 +388,8 @@ static void delete_in_dir(struct file_li
  	if (verbose > 2)
  		rprintf(FINFO, "delete_in_dir(%s)\n", fbuf);
  
-+	flags |= DEL_FORCE_RECURSE;
++	flags |= DEL_RECURSE;
 +
  	if (allowed_lull)
  		maybe_send_keepalive();
  
-@@ -246,12 +370,14 @@ static void delete_in_dir(struct file_li
+@@ -268,12 +397,14 @@ static void delete_in_dir(struct file_li
  		return; /* Impossible... */
  
  	if (io_error && !(lp_ignore_errors(module_id) || ignore_errors)) {
@@ -358,7 +341,7 @@ TODO:
  	}
  
  	while (cur_depth >= file->dir.depth && cur_depth >= min_depth)
-@@ -262,6 +388,9 @@ static void delete_in_dir(struct file_li
+@@ -284,6 +415,9 @@ static void delete_in_dir(struct file_li
  	dlen = strlen(fbuf);
  	filt_array[cur_depth] = push_local_filters(fbuf, dlen);
  
@@ -368,7 +351,7 @@ TODO:
  	if (one_file_system) {
  		if (file->flags & FLAG_TOP_DIR)
  			filesystem_dev = stp->st_dev;
-@@ -271,18 +400,30 @@ static void delete_in_dir(struct file_li
+@@ -293,6 +427,11 @@ static void delete_in_dir(struct file_li
  
  	dirlist = get_dirlist(fbuf, dlen, 0);
  
@@ -380,18 +363,19 @@ TODO:
  	/* If an item in dirlist is not found in flist, delete it
  	 * from the filesystem. */
  	for (i = dirlist->count; i--; ) {
- 		struct file_struct *fp = dirlist->files[i];
- 		if (!fp->basename || fp->flags & FLAG_MOUNT_POINT)
+@@ -305,12 +444,19 @@ static void delete_in_dir(struct file_li
+ 					f_name(fp, NULL));
  			continue;
+ 		}
 +		if (detect_renamed && S_ISREG(fp->mode)) {
 +			strlcpy(p, fp->basename, remainder);
 +			look_for_rename(fp, fbuf, dirlist->file_pool);
 +		}
  		if (flist_find(flist, fp) < 0) {
  			f_name(fp, delbuf);
--			delete_item(delbuf, fp->mode, DEL_FORCE_RECURSE);
+-			delete_item(delbuf, fp->mode, NULL, DEL_RECURSE);
 -		}
-+			delete_item(delbuf, fp->mode, flags);
++			delete_item(delbuf, fp->mode, NULL, flags);
 +		} else if (detect_renamed && S_ISDIR(fp->mode))
 +			unexplored_dirs++;
  	}
@@ -401,7 +385,7 @@ TODO:
  	flist_free(dirlist);
  }
  
-@@ -312,9 +453,9 @@ static void do_delete_pass(struct file_l
+@@ -340,9 +486,9 @@ static void do_delete_pass(struct file_l
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
@@ -413,7 +397,7 @@ TODO:
  
  	if (do_progress && !am_server)
  		rprintf(FINFO, "                    \r");
-@@ -843,6 +984,7 @@ static int try_dests_non(struct file_str
+@@ -871,6 +1017,7 @@ static int try_dests_non(struct file_str
  	return j;
  }
  
@@ -421,7 +405,7 @@ TODO:
  static int phase = 0;
  
  /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
-@@ -1028,8 +1170,12 @@ static void recv_generator(char *fname, 
+@@ -1056,8 +1203,12 @@ static void recv_generator(char *fname, 
  		if (real_ret != 0 && one_file_system)
  			real_st.st_dev = filesystem_dev;
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
@@ -436,7 +420,7 @@ TODO:
  		return;
  	}
  
-@@ -1273,8 +1419,14 @@ static void recv_generator(char *fname, 
+@@ -1309,8 +1460,14 @@ static void recv_generator(char *fname, 
  		    && hard_link_check(file, ndx, fname, statret, &st,
  				       itemizing, code, HL_SKIP))
  			return;
@@ -452,7 +436,7 @@ TODO:
  		rsyserr(FERROR, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		return;
-@@ -1460,11 +1612,17 @@ void generate_files(int f_out, struct fi
+@@ -1496,11 +1653,17 @@ void generate_files(int f_out, struct fi
  			(long)getpid(), flist->count);
  	}
  
@@ -471,7 +455,7 @@ TODO:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1519,7 +1677,23 @@ void generate_files(int f_out, struct fi
+@@ -1555,7 +1718,23 @@ void generate_files(int f_out, struct fi
  	}
  	recv_generator(NULL, NULL, 0, 0, 0, code, -1);
  	if (delete_during)
@@ -558,7 +542,7 @@ TODO:
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
-@@ -1259,6 +1260,15 @@ Note that the use of the bf(--delete) op
+@@ -1264,6 +1265,15 @@ Note that the use of the bf(--delete) op
  fuzzy-match files, so either use bf(--delete-after) or specify some
  filename exclusions if you need to prevent this.
  

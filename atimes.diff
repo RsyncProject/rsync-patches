@@ -214,16 +214,16 @@ To use this patch, run these commands for a successful build:
  extern struct file_list *the_file_list;
  extern struct filter_list_struct server_filter_list;
  
-@@ -185,7 +187,7 @@ static int delete_item(char *fname, int 
+@@ -210,7 +212,7 @@ static enum delret delete_dir_contents(c
  	for (j = dirlist->count; j--; ) {
  		struct file_struct *fp = dirlist->files[j];
  
--		if (fp->flags & FLAG_MOUNT_POINT)
-+		if (FFLAGS(fp) & FLAG_MOUNT_POINT)
- 			continue;
- 
- 		strlcpy(p, fp->basename, remainder);
-@@ -263,7 +265,7 @@ static void delete_in_dir(struct file_li
+-		if (fp->flags & FLAG_MOUNT_POINT) {
++		if (FFLAGS(fp) & FLAG_MOUNT_POINT) {
+ 			if (verbose > 1) {
+ 				rprintf(FINFO,
+ 				    "mount point, %s, pins parent directory\n",
+@@ -285,7 +287,7 @@ static void delete_in_dir(struct file_li
  	filt_array[cur_depth] = push_local_filters(fbuf, dlen);
  
  	if (one_file_system) {
@@ -232,16 +232,16 @@ To use this patch, run these commands for a successful build:
  			filesystem_dev = stp->st_dev;
  		else if (filesystem_dev != stp->st_dev)
  			return;
-@@ -275,7 +277,7 @@ static void delete_in_dir(struct file_li
- 	 * from the filesystem. */
- 	for (i = dirlist->count; i--; ) {
+@@ -299,7 +301,7 @@ static void delete_in_dir(struct file_li
  		struct file_struct *fp = dirlist->files[i];
--		if (!fp->basename || fp->flags & FLAG_MOUNT_POINT)
-+		if (!fp->basename || FFLAGS(fp) & FLAG_MOUNT_POINT)
+ 		if (!fp->basename)
  			continue;
- 		if (flist_find(flist, fp) < 0) {
- 			f_name(fp, delbuf);
-@@ -301,11 +303,11 @@ static void do_delete_pass(struct file_l
+-		if (fp->flags & FLAG_MOUNT_POINT) {
++		if (FLAGS(fp) & FLAG_MOUNT_POINT) {
+ 			if (verbose > 1)
+ 				rprintf(FINFO, "mount point %s not deleted\n",
+ 					f_name(fp, NULL));
+@@ -329,11 +331,11 @@ static void do_delete_pass(struct file_l
  	for (j = 0; j < flist->count; j++) {
  		struct file_struct *file = flist->files[j];
  
@@ -255,7 +255,7 @@ To use this patch, run these commands for a successful build:
  			rprintf(FINFO, "deleting in %s\n", fbuf);
  
  		if (link_stat(fbuf, &st, keep_dirlinks) < 0
-@@ -350,6 +352,9 @@ void itemize(struct file_struct *file, i
+@@ -378,6 +380,9 @@ void itemize(struct file_struct *file, i
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
@@ -265,7 +265,7 @@ To use this patch, run these commands for a successful build:
  		if ((file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
  		if (preserve_uid && am_root && file->uid != st->st_uid)
-@@ -553,7 +558,7 @@ static int find_fuzzy(struct file_struct
+@@ -581,7 +586,7 @@ static int find_fuzzy(struct file_struct
  		uint32 dist;
  
  		if (!S_ISREG(fp->mode) || !fp->length
@@ -274,7 +274,7 @@ To use this patch, run these commands for a successful build:
  			continue;
  
  		name = fp->basename;
-@@ -661,6 +666,8 @@ static int try_dests_reg(struct file_str
+@@ -689,6 +694,8 @@ static int try_dests_reg(struct file_str
  			if (hard_link_one(file, ndx, fname, 0, stp,
  					  cmpbuf, 1, i, code) < 0)
  				goto try_a_copy;
@@ -283,7 +283,7 @@ To use this patch, run these commands for a successful build:
  			if (preserve_hard_links && file->link_u.links) {
  				if (dry_run)
  					file->link_u.links->link_dest_used = j + 1;
-@@ -1012,7 +1019,7 @@ static void recv_generator(char *fname, 
+@@ -1040,7 +1047,7 @@ static void recv_generator(char *fname, 
  				rsyserr(FERROR, errno,
  					"recv_generator: mkdir %s failed",
  					full_fname(fname));
@@ -292,7 +292,7 @@ To use this patch, run these commands for a successful build:
  				if (ndx+1 < the_file_list->count
  				 && the_file_list->files[ndx+1]->dir.depth > file->dir.depth) {
  					rprintf(FERROR,
-@@ -1028,7 +1035,7 @@ static void recv_generator(char *fname, 
+@@ -1056,7 +1063,7 @@ static void recv_generator(char *fname, 
  		if (real_ret != 0 && one_file_system)
  			real_st.st_dev = filesystem_dev;
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
@@ -301,7 +301,7 @@ To use this patch, run these commands for a successful build:
  			delete_in_dir(the_file_list, fname, file, &real_st);
  		return;
  	}
-@@ -1324,7 +1331,7 @@ static void recv_generator(char *fname, 
+@@ -1360,7 +1367,7 @@ static void recv_generator(char *fname, 
  	if (fuzzy_dirlist) {
  		int j = flist_find(fuzzy_dirlist, file);
  		if (j >= 0) /* don't use changing file as future fuzzy basis */
@@ -310,7 +310,7 @@ To use this patch, run these commands for a successful build:
  	}
  
  	/* open the file */
-@@ -1589,7 +1596,7 @@ void generate_files(int f_out, struct fi
+@@ -1625,7 +1632,7 @@ void generate_files(int f_out, struct fi
  				continue;
  			if (!need_retouch_dir_times && file->mode & S_IWUSR)
  				continue;
@@ -545,7 +545,7 @@ To use this patch, run these commands for a successful build:
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1390,7 +1397,7 @@ with older versions of rsync, but that a
+@@ -1395,7 +1402,7 @@ with older versions of rsync, but that a
  verbose messages).
  
  The "%i" escape has a cryptic output that is 9 letters long.  The general
@@ -554,7 +554,7 @@ To use this patch, run these commands for a successful build:
  type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -1430,7 +1437,7 @@ quote(itemization(
+@@ -1435,7 +1442,7 @@ quote(itemization(
    by the file transfer.
    it() A bf(t) means the modification time is different and is being updated
    to the sender's value (requires bf(--times)).  An alternate value of bf(T)
@@ -563,7 +563,7 @@ To use this patch, run these commands for a successful build:
    anytime a symlink is transferred, or when a file or device is transferred
    without bf(--times).
    it() A bf(p) means the permissions are different and are being updated to
-@@ -1439,7 +1446,10 @@ quote(itemization(
+@@ -1444,7 +1451,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).

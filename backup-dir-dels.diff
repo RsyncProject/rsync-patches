@@ -122,8 +122,8 @@ To use this patch, run these commands for a successful build:
  extern struct file_list *the_file_list;
  extern struct filter_list_struct server_filter_list;
  
-@@ -100,10 +103,14 @@ static int deletion_count = 0; /* used t
- #define DEL_TERSE		(1<<3)
+@@ -110,10 +113,14 @@ enum delret {
+ static enum delret delete_dir_contents(char *fname, int flags);
  
  
 +/* Function now compares both backup_suffix and backup_suffix_dels. */
@@ -137,30 +137,19 @@ To use this patch, run these commands for a successful build:
 +	return k > 0 && strcmp(fn+k, backup_suffix_dels) == 0;
  }
  
- 
-@@ -124,8 +131,8 @@ static int delete_item(char *fname, int 
- 	if (!S_ISDIR(mode)) {
- 		if (max_delete && ++deletion_count > max_delete)
- 			return 0;
--		if (make_backups && (backup_dir || !is_backup_file(fname)))
--			ok = make_backup(fname);
-+		if (make_backups && (backup_dir_dels || !is_backup_file(fname)))
-+			ok = safe_delete(fname);
- 		else
- 			ok = robust_unlink(fname) == 0;
- 		if (ok) {
-@@ -147,9 +154,9 @@ static int delete_item(char *fname, int 
- 	    || (dry_run && zap_dir)) {
- 		ok = 0;
- 		errno = ENOTEMPTY;
--	} else if (make_backups && !backup_dir && !is_backup_file(fname)
-+	} else if (make_backups && !backup_dir_dels && !is_backup_file(fname)
- 	    && !(flags & DEL_FORCE_RECURSE))
+ /* Delete a file or directory.  If DEL_RECURSE is set in the flags, this will
+@@ -147,9 +154,9 @@ static enum delret delete_item(char *fna
+ 	if (S_ISDIR(mode)) {
+ 		what = "rmdir";
+ 		ok = do_rmdir(fname) == 0;
+-	} else if (make_backups && (backup_dir || !is_backup_file(fname))) {
++	} else if (make_backups && (backup_dir_dels || !is_backup_file(fname))) {
+ 		what = "make_backup";
 -		ok = make_backup(fname);
 +		ok = safe_delete(fname);
- 	else
- 		ok = do_rmdir(fname) == 0;
- 	if (ok) {
+ 	} else {
+ 		what = "unlink";
+ 		ok = robust_unlink(fname) == 0;
 --- old/options.c
 +++ new/options.c
 @@ -138,10 +138,14 @@ int no_detach
