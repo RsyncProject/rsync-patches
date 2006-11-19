@@ -137,7 +137,7 @@ To use this patch, run these commands for a successful build:
  				continue;
  		}
  
-@@ -1347,7 +1351,7 @@ static void recv_generator(char *fname, 
+@@ -1348,7 +1352,7 @@ static void recv_generator(char *fname, 
  		return;
  	}
  
@@ -146,7 +146,7 @@ To use this patch, run these commands for a successful build:
  		return;
  
  	if (fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
-@@ -1410,7 +1414,7 @@ static void recv_generator(char *fname, 
+@@ -1411,7 +1415,7 @@ static void recv_generator(char *fname, 
  		goto notify_others;
  	}
  
@@ -155,7 +155,7 @@ To use this patch, run these commands for a successful build:
  		if (!(backupptr = get_backup_name(fname))) {
  			close(fd);
  			return;
-@@ -1501,9 +1505,12 @@ void generate_files(int f_out, struct fi
+@@ -1502,9 +1506,12 @@ void generate_files(int f_out, struct fi
  	int save_ignore_existing = ignore_existing;
  	int save_ignore_non_existing = ignore_non_existing;
  	int save_do_progress = do_progress;
@@ -169,7 +169,7 @@ To use this patch, run these commands for a successful build:
  	if (protocol_version >= 29) {
  		itemizing = 1;
  		maybe_ATTRS_REPORT = stdout_format_has_i ? 0 : ATTRS_REPORT;
-@@ -1531,7 +1538,7 @@ void generate_files(int f_out, struct fi
+@@ -1532,7 +1539,7 @@ void generate_files(int f_out, struct fi
  		do_delete_pass(flist);
  	do_progress = 0;
  
@@ -178,7 +178,7 @@ To use this patch, run these commands for a successful build:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1540,12 +1547,6 @@ void generate_files(int f_out, struct fi
+@@ -1541,12 +1548,6 @@ void generate_files(int f_out, struct fi
  			: "enabled");
  	}
  
@@ -191,7 +191,7 @@ To use this patch, run these commands for a successful build:
  	for (i = 0; i < flist->count; i++) {
  		struct file_struct *file = flist->files[i];
  
-@@ -1589,23 +1590,34 @@ void generate_files(int f_out, struct fi
+@@ -1590,23 +1591,34 @@ void generate_files(int f_out, struct fi
  		delete_in_dir(NULL, NULL, NULL, NULL);
  
  	phase++;
@@ -232,7 +232,7 @@ To use this patch, run these commands for a successful build:
  		if (local_name)
  			strlcpy(fbuf, local_name, sizeof fbuf);
  		else
-@@ -1617,27 +1629,43 @@ void generate_files(int f_out, struct fi
+@@ -1618,27 +1630,43 @@ void generate_files(int f_out, struct fi
  	phase++;
  	ignore_non_existing = save_ignore_non_existing;
  	ignore_existing = save_ignore_existing;
@@ -420,8 +420,8 @@ To use this patch, run these commands for a successful build:
 -}
 -
  /* Add a message to the pending MSG_* list. */
--static void msg_list_add(struct msg_list *lst, int code, char *buf, int len)
-+static void msg_list_add(int code, char *buf, int len)
+-static void msg_list_add(struct msg_list *lst, int code, const char *buf, int len)
++static void msg_list_add(int code, const char *buf, int len)
  {
  	struct msg_list_item *m;
 -	int sz = len + 4 + sizeof m[0] - 1;
@@ -584,7 +584,7 @@ To use this patch, run these commands for a successful build:
 +	no_flush--;
  }
  
- int send_msg(enum msgcode code, char *buf, int len)
+ int send_msg(enum msgcode code, const char *buf, int len)
  {
 -	if (msg_fd_out < 0) {
 +	if (!am_receiver()) {
@@ -668,7 +668,7 @@ To use this patch, run these commands for a successful build:
  		if ((size_t)write(batch_fd, buffer, total) != total)
  			exit_cleanup(RERR_FILEIO);
  	}
-@@ -1115,7 +1067,6 @@ static void writefd_unbuffered(int fd,ch
+@@ -1115,7 +1067,6 @@ static void writefd_unbuffered(int fd, c
  			 * to grab any messages they sent before they died. */
  			while (fd == sock_f_out && io_multiplexing_in) {
  				set_io_timeout(30);
@@ -676,7 +676,7 @@ To use this patch, run these commands for a successful build:
  				readfd_unbuffered(sock_f_in, io_filesfrom_buf,
  						  sizeof io_filesfrom_buf);
  			}
-@@ -1126,7 +1077,7 @@ static void writefd_unbuffered(int fd,ch
+@@ -1126,7 +1077,7 @@ static void writefd_unbuffered(int fd, c
  		defer_forwarding_messages = 1;
  
  		if (fd == sock_f_out) {
@@ -685,7 +685,7 @@ To use this patch, run these commands for a successful build:
  				last_io_out = time(NULL);
  			sleep_for_bwlimit(cnt);
  		}
-@@ -1136,23 +1087,6 @@ static void writefd_unbuffered(int fd,ch
+@@ -1136,23 +1087,6 @@ static void writefd_unbuffered(int fd, c
  	no_flush--;
  }
  
@@ -731,7 +731,7 @@ To use this patch, run these commands for a successful build:
  		return;
 @@ -1199,11 +1134,6 @@ void io_flush(int flush_it_all)
  
- static void writefd(int fd,char *buf,size_t len)
+ static void writefd(int fd, const char *buf, size_t len)
  {
 -	if (fd == msg_fd_out) {
 -		rprintf(FERROR, "Internal error: wrong write used in receiver.\n");
@@ -769,7 +769,7 @@ To use this patch, run these commands for a successful build:
  	{ RERR_SIGNAL     , "received SIGINT, SIGTERM, or SIGHUP" },
  	{ RERR_WAITCHILD  , "waitpid() failed" },
  	{ RERR_MALLOC     , "error allocating core memory buffers" },
-@@ -241,8 +239,8 @@ void rwrite(enum logcode code, char *buf
+@@ -241,8 +239,8 @@ void rwrite(enum logcode code, const cha
  	if (len < 0)
  		exit_cleanup(RERR_MESSAGEIO);
  
@@ -1046,7 +1046,7 @@ To use this patch, run these commands for a successful build:
  		do_xfers = 0;
 --- old/pipe.c
 +++ new/pipe.c
-@@ -59,7 +59,7 @@ pid_t piped_child(char **command, int *f
+@@ -58,7 +58,7 @@ pid_t piped_child(char **command, int *f
  		exit_cleanup(RERR_IPC);
  	}
  
@@ -1055,7 +1055,7 @@ To use this patch, run these commands for a successful build:
  	if (pid == -1) {
  		rsyserr(FERROR, errno, "fork");
  		exit_cleanup(RERR_IPC);
-@@ -123,7 +123,7 @@ pid_t local_child(int argc, char **argv,
+@@ -122,7 +122,7 @@ pid_t local_child(int argc, char **argv,
  		exit_cleanup(RERR_IPC);
  	}
  
@@ -1224,7 +1224,7 @@ To use this patch, run these commands for a successful build:
  
 --- old/util.c
 +++ new/util.c
-@@ -415,49 +415,6 @@ int robust_rename(char *from, char *to, 
+@@ -417,49 +417,6 @@ int robust_rename(const char *from, cons
  	return -1;
  }
  
@@ -1272,5 +1272,5 @@ To use this patch, run these commands for a successful build:
 -}
 -
  /** Turn a user name into a uid */
- int name_to_uid(char *name, uid_t *uid)
+ int name_to_uid(const char *name, uid_t *uid)
  {
