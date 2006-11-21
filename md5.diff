@@ -87,15 +87,15 @@ To use this patch, run these commands for a successful build:
  }
  
  
-@@ -100,6 +115,7 @@ void file_checksum(char *fname,char *sum
- 	int fd;
- 	OFF_T len = size;
+@@ -99,6 +114,7 @@ void file_checksum(char *fname,char *sum
+ 	OFF_T i, len = size;
  	struct mdfour m;
+ 	int32 remainder;
 +	md5_context ctx;
+ 	int fd;
  
  	memset(sum,0,MD4_SUM_LENGTH);
- 
-@@ -109,21 +125,36 @@ void file_checksum(char *fname,char *sum
+@@ -109,11 +125,19 @@ void file_checksum(char *fname,char *sum
  
  	buf = map_file(fd, size, MAX_MAP_SIZE, CSUM_CHUNK);
  
@@ -118,16 +118,17 @@ To use this patch, run these commands for a successful build:
  	}
  
  	/* Prior to version 27 an incorrect MD4 checksum was computed
- 	 * by failing to call mdfour_tail() for block sizes that
+@@ -121,10 +145,17 @@ void file_checksum(char *fname,char *sum
  	 * are multiples of 64.  This is fixed by calling mdfour_update()
  	 * even when there are no more bytes. */
--	if (len - i > 0 || protocol_version >= 27)
--		mdfour_update(&m, (uchar *)map_ptr(buf, i, len-i), len-i);
-+	if (len - i > 0 || protocol_version >= 27) {
+ 	remainder = (int32)(len - i);
+-	if (remainder > 0 || protocol_version >= 27)
+-		mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
++	if (remainder > 0 || protocol_version >= 27) {
 +		if (use_md5)
-+			md5_update(&ctx, (uchar *)map_ptr(buf, i, len-i), len-i);
++			md5_update(&ctx, (uchar *)map_ptr(buf, i, remainder), remainder);
 +		else
-+			mdfour_update(&m, (uchar *)map_ptr(buf, i, len-i), len-i);
++			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
 +	}
  
 -	mdfour_result(&m, (uchar *)sum);
@@ -138,7 +139,7 @@ To use this patch, run these commands for a successful build:
  
  	close(fd);
  	unmap_file(buf);
-@@ -133,11 +164,15 @@ void file_checksum(char *fname,char *sum
+@@ -134,11 +165,15 @@ void file_checksum(char *fname,char *sum
  static int32 sumresidue;
  static char sumrbuf[CSUM_CHUNK];
  static struct mdfour md;
@@ -155,7 +156,7 @@ To use this patch, run these commands for a successful build:
  	sumresidue = 0;
  	SIVAL(s, 0, seed);
  	sum_update(s, 4);
-@@ -162,13 +197,19 @@ void sum_update(char *p, int32 len)
+@@ -163,13 +198,19 @@ void sum_update(const char *p, int32 len
  	if (sumresidue) {
  		int32 i = CSUM_CHUNK - sumresidue;
  		memcpy(sumrbuf + sumresidue, p, i);
@@ -177,7 +178,7 @@ To use this patch, run these commands for a successful build:
  		len -= CSUM_CHUNK;
  		p += CSUM_CHUNK;
  	}
-@@ -180,8 +221,15 @@ void sum_update(char *p, int32 len)
+@@ -181,8 +222,15 @@ void sum_update(const char *p, int32 len
  
  void sum_end(char *sum)
  {
@@ -586,7 +587,7 @@ To use this patch, run these commands for a successful build:
    {"checksum",        'c', POPT_ARG_NONE,   &always_checksum, 0, 0, 0 },
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
-@@ -1642,6 +1645,9 @@ void server_options(char **args,int *arg
+@@ -1643,6 +1646,9 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  

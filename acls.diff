@@ -1150,7 +1150,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	char *rel = fullpath + backup_dir_len;
  	char *end = rel + strlen(rel);
  	char *p = end;
-@@ -126,13 +128,24 @@ static int make_bak_dir(char *fullpath)
+@@ -126,15 +128,24 @@ static int make_bak_dir(char *fullpath)
  		if (p >= rel) {
  			/* Try to transfer the directory settings of the
  			 * actual dir that the files are coming from. */
@@ -1161,6 +1161,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  					full_fname(rel));
  			} else {
 -				do_lchown(fullpath, st.st_uid, st.st_gid);
+-#ifdef HAVE_CHMOD
 -				do_chmod(fullpath, st.st_mode);
 +#ifdef SUPPORT_ACLS
 +				sx.acc_acl = sx.def_acl = NULL;
@@ -1172,13 +1173,13 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +					get_acl(rel, &sx);
 +					cache_acl(file, &sx);
 +				}
-+#endif
+ #endif
 +				set_file_attrs(fullpath, file, NULL, 0);
 +				free(file);
  			}
  		}
  		*p = '/';
-@@ -170,15 +183,18 @@ static int robust_move(char *src, char *
+@@ -172,15 +183,18 @@ static int robust_move(char *src, char *
   * We will move the file to be deleted into a parallel directory tree. */
  static int keep_backup(char *fname)
  {
@@ -1199,7 +1200,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  	if (!(file = make_file(fname, NULL, NULL, 0, NO_FILTERS)))
  		return 1; /* the file could have disappeared */
-@@ -186,6 +202,13 @@ static int keep_backup(char *fname)
+@@ -188,6 +202,13 @@ static int keep_backup(char *fname)
  	if (!(buf = get_backup_name(fname)))
  		return 0;
  
@@ -1213,7 +1214,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	/* Check to see if this is a device file, or link */
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
  	 || (preserve_specials && IS_SPECIAL(file->mode))) {
-@@ -254,7 +277,7 @@ static int keep_backup(char *fname)
+@@ -256,7 +277,7 @@ static int keep_backup(char *fname)
  		if (robust_move(fname, buf) != 0) {
  			rsyserr(FERROR, errno, "keep_backup failed: %s -> \"%s\"",
  				full_fname(fname), buf);
@@ -1224,7 +1225,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			robust_unlink(fname); /* Just in case... */
 --- old/configure.in
 +++ new/configure.in
-@@ -515,6 +515,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
+@@ -537,6 +537,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
      AC_CHECK_LIB(resolv, strcasecmp)
  fi
  
@@ -1236,7 +1237,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  dnl At the moment we don't test for a broken memcmp(), because all we
  dnl need to do is test for equality, not comparison, and it seems that
  dnl every platform has a memcmp that can do at least that.
-@@ -779,6 +784,78 @@ AC_SUBST(OBJ_RESTORE)
+@@ -801,6 +806,78 @@ AC_SUBST(OBJ_RESTORE)
  AC_SUBST(CC_SHOBJ_FLAG)
  AC_SUBST(BUILD_POPT)
  
@@ -5617,7 +5618,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +#endif /* SUPPORT_ACLS */
 --- old/log.c
 +++ new/log.c
-@@ -611,8 +611,10 @@ static void log_formatted(enum logcode c
+@@ -614,8 +614,10 @@ static void log_formatted(enum logcode c
  			c[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
  			c[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
  			c[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
@@ -5737,7 +5738,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1530,6 +1559,10 @@ void server_options(char **args,int *arg
+@@ -1531,6 +1560,10 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
