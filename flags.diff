@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
 
 --- old/configure.in
 +++ new/configure.in
-@@ -527,7 +527,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strd
+@@ -549,7 +549,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strd
      memmove lchown vsnprintf snprintf vasprintf asprintf setsid glob strpbrk \
      strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
@@ -109,9 +109,9 @@ To use this patch, run these commands for a successful build:
  
 --- old/generator.c
 +++ new/generator.c
-@@ -98,6 +98,12 @@ int non_perishable_cnt = 0;
- 
+@@ -99,6 +99,12 @@ int non_perishable_cnt = 0;
  static int deletion_count = 0; /* used to implement --max-delete */
+ static FILE *delete_delay_fp = NULL;
  
 +#ifdef SUPPORT_FLAGS
 +#define FILEFLAGS(ff) ff
@@ -122,7 +122,7 @@ To use this patch, run these commands for a successful build:
  /* For calling delete_item() and delete_dir_contents(). */
  #define DEL_RECURSE		(1<<1) /* recurse */
  #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
-@@ -113,7 +119,6 @@ enum delret {
+@@ -114,7 +120,6 @@ enum delret {
  /* Forward declaration for delete_item(). */
  static enum delret delete_dir_contents(char *fname, int flags);
  
@@ -130,12 +130,12 @@ To use this patch, run these commands for a successful build:
  static int is_backup_file(char *fn)
  {
  	int k = strlen(fn) - backup_suffix_len;
-@@ -126,17 +131,20 @@ static int is_backup_file(char *fn)
-  * Note that fname must point to a MAXPATHLEN buffer if the mode indicates it's
+@@ -127,17 +132,20 @@ static int is_backup_file(char *fn)
+  * Note that fbuf must point to a MAXPATHLEN buffer if the mode indicates it's
   * a directory! (The buffer is used for recursion, but returned unchanged.)
   */
--static enum delret delete_item(char *fname, int mode, char *replace, int flags)
-+static enum delret delete_item(char *fname, int mode, uint32 fileflags, char *replace, int flags)
+-static enum delret delete_item(char *fbuf, int mode, char *replace, int flags)
++static enum delret delete_item(char *fbuf, int mode, uint32 fileflags, char *replace, int flags)
  {
  	enum delret ret;
  	char *what;
@@ -143,18 +143,18 @@ To use this patch, run these commands for a successful build:
  
  	if (verbose > 2) {
 -		rprintf(FINFO, "delete_item(%s) mode=%o flags=%d\n",
--			fname, mode, flags);
+-			fbuf, mode, flags);
 +		rprintf(FINFO, "delete_item(%s) mode=%o fileflags=%o flags=%d\n",
-+			fname, mode, fileflags, flags);
++			fbuf, mode, fileflags, flags);
  	}
  
 +#ifdef SUPPORT_FLAGS
-+	make_mutable(fname, mode, fileflags);
++	make_mutable(fbuf, mode, fileflags);
 +#endif
  	if (S_ISDIR(mode) && !(flags & DEL_DIR_IS_EMPTY)) {
  		ignore_perishable = 1;
  		/* If DEL_RECURSE is not set, this just reports emptiness. */
-@@ -248,7 +256,7 @@ static enum delret delete_dir_contents(c
+@@ -249,7 +257,7 @@ static enum delret delete_dir_contents(c
  		if (S_ISDIR(fp->mode)
  		 && delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
@@ -163,16 +163,20 @@ To use this patch, run these commands for a successful build:
  			ret = DR_NOT_EMPTY;
  	}
  
-@@ -338,7 +346,7 @@ static void delete_in_dir(struct file_li
+@@ -401,10 +409,10 @@ static void delete_in_dir(struct file_li
  		}
  		if (flist_find(flist, fp) < 0) {
  			f_name(fp, delbuf);
--			delete_item(delbuf, fp->mode, NULL, DEL_RECURSE);
-+			delete_item(delbuf, fp->mode, FILEFLAGS(fp->fileflags), NULL, DEL_RECURSE);
+-			if (delete_delay_fp)
++			if (delete_delay_fp) /* XXX need to output fileflags value here too */
+ 				fprintf(delete_delay_fp, "%o %s%c", fp->mode, delbuf, '\0');
+ 			else
+-				delete_item(delbuf, fp->mode, NULL, DEL_RECURSE);
++				delete_item(delbuf, fp->mode, FILEFLAGS(fp->fileflags), NULL, DEL_RECURSE);
  		}
  	}
  
-@@ -1036,7 +1044,7 @@ static void recv_generator(char *fname, 
+@@ -1103,7 +1111,7 @@ static void recv_generator(char *fname, 
  		 * we need to delete it.  If it doesn't exist, then
  		 * (perhaps recursively) create it. */
  		if (statret == 0 && !S_ISDIR(st.st_mode)) {
@@ -181,7 +185,7 @@ To use this patch, run these commands for a successful build:
  				return;
  			statret = -1;
  		}
-@@ -1130,7 +1138,7 @@ static void recv_generator(char *fname, 
+@@ -1197,7 +1205,7 @@ static void recv_generator(char *fname, 
  			}
  			/* Not the right symlink (or not a symlink), so
  			 * delete it. */
@@ -190,7 +194,7 @@ To use this patch, run these commands for a successful build:
  				return;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &st,
-@@ -1201,7 +1209,7 @@ static void recv_generator(char *fname, 
+@@ -1268,7 +1276,7 @@ static void recv_generator(char *fname, 
  					goto return_with_success;
  				return;
  			}
@@ -199,7 +203,7 @@ To use this patch, run these commands for a successful build:
  				return;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &st,
-@@ -1287,7 +1295,7 @@ static void recv_generator(char *fname, 
+@@ -1354,7 +1362,7 @@ static void recv_generator(char *fname, 
  	fnamecmp_type = FNAMECMP_FNAME;
  
  	if (statret == 0 && !S_ISREG(st.st_mode)) {
@@ -257,7 +261,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
-@@ -424,6 +431,8 @@ static struct poptOption long_options[] 
+@@ -425,6 +432,8 @@ static struct poptOption long_options[] 
    {"perms",           'p', POPT_ARG_VAL,    &preserve_perms, 1, 0, 0 },
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
@@ -266,7 +270,7 @@ To use this patch, run these commands for a successful build:
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1128,6 +1137,15 @@ int parse_arguments(int *argc, const cha
+@@ -1130,6 +1139,15 @@ int parse_arguments(int *argc, const cha
  	}
  #endif
  
@@ -282,7 +286,7 @@ To use this patch, run these commands for a successful build:
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -1581,6 +1599,9 @@ void server_options(char **args,int *arg
+@@ -1584,6 +1602,9 @@ void server_options(char **args,int *arg
  	if (xfer_dirs && !recurse && delete_mode && am_sender)
  		args[ac++] = "--no-r";
  
@@ -426,7 +430,7 @@ To use this patch, run these commands for a successful build:
   -E, --executability         preserve executability
       --chmod=CHMOD           affect file and/or directory permissions
   -o, --owner                 preserve owner (super-user only)
-@@ -509,7 +510,9 @@ specified, in which case bf(-r) is not i
+@@ -510,7 +511,9 @@ specified, in which case bf(-r) is not i
  
  Note that bf(-a) bf(does not preserve hardlinks), because
  finding multiply-linked files is expensive.  You must separately
@@ -437,7 +441,7 @@ To use this patch, run these commands for a successful build:
  
  dit(--no-OPTION) You may turn off one or more implied options by prefixing
  the option name with "no-".  Not all options may be prefixed with a "no-":
-@@ -804,6 +807,13 @@ quote(itemization(
+@@ -805,6 +808,13 @@ quote(itemization(
  
  If bf(--perms) is enabled, this option is ignored.
  
@@ -453,7 +457,7 @@ To use this patch, run these commands for a successful build:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/syscall.c
 +++ new/syscall.c
-@@ -152,6 +152,15 @@ int do_chmod(const char *path, mode_t mo
+@@ -153,6 +153,15 @@ int do_chmod(const char *path, mode_t mo
  }
  #endif
  
