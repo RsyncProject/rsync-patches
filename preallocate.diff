@@ -1,0 +1,249 @@
+This patch adds the --preallocate option that asks rsync to preallocate the
+copied files.  This slows down the copy, but should reduce fragmentation on
+systems that need that.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/preallocate.diff
+    ./prepare-source
+    ./configure
+    make
+
+
+TODO:  update docs
+
+--- old/configure.in
++++ new/configure.in
+@@ -550,7 +550,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strd
+     strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid \
+     setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
+     strerror putenv iconv_open locale_charset nl_langinfo \
+-    sigaction sigprocmask)
++    sigaction sigprocmask posix_fallocate)
+ 
+ AC_CHECK_FUNCS(getpgrp tcgetpgrp)
+ if test $ac_cv_func_getpgrp = yes; then
+--- old/options.c
++++ new/options.c
+@@ -69,6 +69,7 @@ int remove_source_files = 0;
+ int one_file_system = 0;
+ int protocol_version = PROTOCOL_VERSION;
+ int sparse_files = 0;
++int preallocate_files = 0;
+ int do_compression = 0;
+ int def_compress_level = Z_DEFAULT_COMPRESSION;
+ int am_root = 0;
+@@ -201,6 +202,7 @@ static void print_rsync_version(enum log
+ 	char const *hardlinks = "no ";
+ 	char const *links = "no ";
+ 	char const *ipv6 = "no ";
++	char const *preallocation = "no ";
+ 	STRUCT_STAT *dumstat;
+ 
+ #ifdef HAVE_SOCKETPAIR
+@@ -223,6 +225,10 @@ static void print_rsync_version(enum log
+ 	ipv6 = "";
+ #endif
+ 
++#ifdef SUPPORT_PREALLOCATION
++	preallocation = "";
++#endif
++
+ 	rprintf(f, "%s  version %s  protocol version %d\n",
+ 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
+ 	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
+@@ -233,8 +239,8 @@ static void print_rsync_version(enum log
+ 		(int)(sizeof (int64) * 8));
+ 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
+ 		got_socketpair, hardlinks, links, ipv6, have_inplace);
+-	rprintf(f, "    %sappend\n",
+-		have_inplace);
++	rprintf(f, "    %sappend, %spreallocation\n",
++		have_inplace, preallocation);
+ 
+ #ifdef MAINTAINER_MODE
+ 	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
+@@ -311,6 +317,9 @@ void usage(enum logcode F)
+   rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
+   rprintf(F,"     --super                 receiver attempts super-user activities\n");
+   rprintf(F," -S, --sparse                handle sparse files efficiently\n");
++#ifdef SUPPORT_PREALLOCATION
++  rprintf(F,"     --preallocate           posix_fallocate dest files before writing them\n");
++#endif
+   rprintf(F," -n, --dry-run               show what would have been transferred\n");
+   rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
+   rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
+@@ -468,6 +477,7 @@ static struct poptOption long_options[] 
+   {"max-size",         0,  POPT_ARG_STRING, &max_size_arg, OPT_MAX_SIZE, 0, 0 },
+   {"min-size",         0,  POPT_ARG_STRING, &min_size_arg, OPT_MIN_SIZE, 0, 0 },
+   {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
++  {"preallocate",      0,  POPT_ARG_NONE,   &preallocate_files, 0, 0, 0},
+   {"inplace",          0,  POPT_ARG_NONE,   &inplace, 0, 0, 0 },
+   {"append",           0,  POPT_ARG_VAL,    &append_mode, 1, 0, 0 },
+   {"del",              0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
+@@ -1126,6 +1136,15 @@ int parse_arguments(int *argc, const cha
+ 	}
+ #endif
+ 
++#ifndef SUPPORT_PREALLOCATION
++	if (preallocate_files && !am_sender) {
++		snprintf(err_buf, sizeof err_buf,
++			 "preallocation is not supported on this %s\n",
++			 am_server ? "server" : "client");
++		return 0;
++	}
++#endif
++
+ 	if (write_batch && read_batch) {
+ 		snprintf(err_buf, sizeof err_buf,
+ 			"--write-batch and --read-batch can not be used together\n");
+@@ -1764,6 +1783,9 @@ void server_options(char **args,int *arg
+ 	else if (remove_source_files)
+ 		args[ac++] = "--remove-sent-files";
+ 
++	if (preallocate_files && am_sender)
++		args[ac++] = "--preallocate";
++
+ 	*argc = ac;
+ 	return;
+ 
+--- old/receiver.c
++++ new/receiver.c
+@@ -43,6 +43,7 @@ extern int cleanup_got_literal;
+ extern int remove_source_files;
+ extern int append_mode;
+ extern int sparse_files;
++extern int preallocate_files;
+ extern int keep_partial;
+ extern int checksum_seed;
+ extern int inplace;
+@@ -137,6 +138,19 @@ static int receive_data(int f_in, char *
+ 	int32 i;
+ 	char *map = NULL;
+ 
++#ifdef SUPPORT_PREALLOCATION
++	int preallocated_len = 0;
++
++	if (preallocate_files && fd != -1 && total_size > 0) {
++		/* Preallocate enough space for file's eventual length if
++		 * possible; seems to reduce fragmentation on Windows. */
++		if (posix_fallocate(fd, 0, total_size) == 0)
++			preallocated_len = total_size;
++		else
++			rsyserr(FINFO, errno, "preallocate %s", full_fname(fname));
++	}
++#endif
++
+ 	read_sum_head(f_in, &sum);
+ 
+ 	if (fd_r >= 0 && size_r > 0) {
+@@ -244,8 +258,18 @@ static int receive_data(int f_in, char *
+ 		goto report_write_error;
+ 
+ #ifdef HAVE_FTRUNCATE
+-	if (inplace && fd != -1)
+-		ftruncate(fd, offset);
++	/* inplace: New data could be shorter than old data.
++	 * preallocate_files: total_size could have been an overestimate.
++	 *     Cut off any extra preallocated zeros from dest file. */
++	if ((inplace
++#ifdef SUPPORT_PREALLOCATION
++			|| preallocated_len > offset
++#endif
++		) && fd != -1)
++		if (ftruncate(fd, offset) < 0)
++			/* If we fail to truncate, the dest file may be wrong, so we
++			 * must trigger the "partial transfer" error. */
++			rsyserr(FERROR, errno, "ftruncate %s", full_fname(fname));
+ #endif
+ 
+ 	if (do_progress)
+--- old/rsync.h
++++ new/rsync.h
+@@ -493,6 +493,10 @@ struct idev {
+ #define IN_LOOPBACKNET 127
+ #endif
+ 
++#if defined HAVE_FTRUNCATE && defined HAVE_POSIX_FALLOCATE
++#define SUPPORT_PREALLOCATION 1
++#endif
++
+ #define GID_NONE ((gid_t)-1)
+ 
+ #define HL_CHECK_MASTER	0
+--- old/t_stub.c
++++ new/t_stub.c
+@@ -23,6 +23,7 @@
+ #include "rsync.h"
+ 
+ int modify_window = 0;
++int preallocate_files = 0;
+ int module_id = -1;
+ int relative_paths = 0;
+ int human_readable = 0;
+--- old/util.c
++++ new/util.c
+@@ -25,6 +25,7 @@
+ 
+ extern int verbose;
+ extern int dry_run;
++extern int preallocate_files;
+ extern int module_id;
+ extern int modify_window;
+ extern int relative_paths;
+@@ -270,6 +271,10 @@ int copy_file(const char *source, const 
+ 	int ofd;
+ 	char buf[1024 * 8];
+ 	int len;   /* Number of bytes read into `buf'. */
++#ifdef SUPPORT_PREALLOCATION
++	int preallocated_len = 0;
++	int offset = 0;
++#endif
+ 
+ 	ifd = do_open(source, O_RDONLY, 0);
+ 	if (ifd == -1) {
+@@ -289,7 +294,27 @@ int copy_file(const char *source, const 
+ 		return -1;
+ 	}
+ 
++#ifdef SUPPORT_PREALLOCATION
++	if (preallocate_files) {
++		/* Preallocate enough space for file's eventual length if
++		 * possible; seems to reduce fragmentation on Windows. */
++		STRUCT_STAT srcst;
++		if (do_fstat(ifd, &srcst) == 0) {
++			if (srcst.st_size > 0) {
++				if (posix_fallocate(ofd, 0, srcst.st_size) == 0)
++					preallocated_len = srcst.st_size;
++				else
++					rsyserr(FINFO, errno, "posix_fallocate %s", full_fname(dest));
++			}
++		} else
++			rsyserr(FINFO, errno, "fstat %s", full_fname(source));
++	}
++#endif
++
+ 	while ((len = safe_read(ifd, buf, sizeof buf)) > 0) {
++#ifdef SUPPORT_PREALLOCATION
++		offset += len;
++#endif
+ 		if (full_write(ofd, buf, len) < 0) {
+ 			rsyserr(FERROR, errno, "write %s", full_fname(dest));
+ 			close(ifd);
+@@ -310,6 +335,16 @@ int copy_file(const char *source, const 
+ 			full_fname(source));
+ 	}
+ 
++#ifdef SUPPORT_PREALLOCATION
++	/* Source file might have shrunk since we fstatted it.
++	 * Cut off any extra preallocated zeros from dest file. */
++	if (preallocated_len > offset)
++		if (ftruncate(ofd, offset) < 0)
++			/* If we fail to truncate, the dest file may be wrong, so we
++			 * must trigger the "partial transfer" error. */
++			rsyserr(FERROR, errno, "ftruncate %s", full_fname(dest));
++#endif
++
+ 	if (close(ofd) < 0) {
+ 		rsyserr(FERROR, errno, "close failed on %s",
+ 			full_fname(dest));

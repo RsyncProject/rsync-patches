@@ -27,7 +27,7 @@ TODO: fix --delete-delay to work with --flags option.
  extern int preserve_hard_links;
  extern int preserve_devices;
  extern int preserve_specials;
-+extern int preserve_flags;
++extern int preserve_fileflags;
  extern int preserve_uid;
  extern int preserve_gid;
  extern int relative_paths;
@@ -54,18 +54,18 @@ TODO: fix --delete-delay to work with --flags option.
  	if ((preserve_devices && IS_DEVICE(mode))
  	 || (preserve_specials && IS_SPECIAL(mode))) {
  		if (protocol_version < 28) {
-@@ -418,6 +428,10 @@ static void send_file_entry(struct file_
+@@ -417,6 +427,10 @@ static void send_file_entry(struct file_
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
 +#ifdef SUPPORT_FLAGS
-+ 	if (preserve_flags && !(flags & XMIT_SAME_FLAGS))
++ 	if (preserve_fileflags && !(flags & XMIT_SAME_FLAGS))
 +		write_int(f, (int)fileflags);
 +#endif
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -485,6 +499,9 @@ static struct file_struct *receive_file_
+@@ -484,6 +498,9 @@ static struct file_struct *receive_file_
  {
  	static time_t modtime;
  	static mode_t mode;
@@ -75,7 +75,7 @@ TODO: fix --delete-delay to work with --flags option.
  	static int64 dev;
  	static dev_t rdev;
  	static uint32 rdev_major;
-@@ -558,9 +575,12 @@ static struct file_struct *receive_file_
+@@ -557,9 +574,12 @@ static struct file_struct *receive_file_
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -83,13 +83,13 @@ TODO: fix --delete-delay to work with --flags option.
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
 +#ifdef SUPPORT_FLAGS
-+ 	if (preserve_flags && !(flags & XMIT_SAME_FLAGS))
++ 	if (preserve_fileflags && !(flags & XMIT_SAME_FLAGS))
 +		fileflags = (uint32)read_int(f);
 +#endif
  
  	if (preserve_uid && !(flags & XMIT_SAME_UID))
  		uid = (uid_t)read_int(f);
-@@ -611,6 +631,9 @@ static struct file_struct *receive_file_
+@@ -610,6 +630,9 @@ static struct file_struct *receive_file_
  	file->modtime = modtime;
  	file->length = file_length;
  	file->mode = mode;
@@ -99,7 +99,7 @@ TODO: fix --delete-delay to work with --flags option.
  	file->uid = uid;
  	file->gid = gid;
  
-@@ -871,6 +894,9 @@ struct file_struct *make_file(char *fnam
+@@ -870,6 +893,9 @@ struct file_struct *make_file(const char
  	file->modtime = st.st_mtime;
  	file->length = st.st_size;
  	file->mode = st.st_mode;
@@ -220,7 +220,7 @@ TODO: fix --delete-delay to work with --flags option.
  int preserve_links = 0;
  int preserve_hard_links = 0;
  int preserve_perms = 0;
-+int preserve_flags = 0;
++int preserve_fileflags = 0;
  int preserve_executability = 0;
  int preserve_devices = 0;
  int preserve_specials = 0;
@@ -228,7 +228,7 @@ TODO: fix --delete-delay to work with --flags option.
  	char const *hardlinks = "no ";
  	char const *links = "no ";
  	char const *ipv6 = "no ";
-+ 	char const *flags = "no ";
++ 	char const *fileflags = "no ";
  	STRUCT_STAT *dumstat;
  
  #ifdef HAVE_SOCKETPAIR
@@ -237,47 +237,46 @@ TODO: fix --delete-delay to work with --flags option.
  #endif
  
 +#ifdef SUPPORT_FLAGS
-+	flags = "";
++	fileflags = "";
 +#endif
 +
  	rprintf(f, "%s  version %s  protocol version %d\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
  	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
-@@ -235,9 +241,9 @@ static void print_rsync_version(enum log
- 	/* Note that this field may not have type ino_t.  It depends
- 	 * on the complicated interaction between largefile feature
- 	 * macros. */
--	rprintf(f, "              %sinplace, %sIPv6, "
-+	rprintf(f, "              %sinplace, %sIPv6, %sfile flags, "
- 		"%d-bit system inums, %d-bit internal inums\n",
--		have_inplace, ipv6,
-+		have_inplace, ipv6, flags,
- 		(int) (sizeof dumstat->st_ino * 8),
- 		(int) (sizeof (int64) * 8));
+@@ -233,8 +239,8 @@ static void print_rsync_version(enum log
+ 		(int)(sizeof (int64) * 8));
+ 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
+ 		got_socketpair, hardlinks, links, ipv6, have_inplace);
+-	rprintf(f, "    %sappend\n",
+-		have_inplace);
++	rprintf(f, "    %sappend, %sfile-flags\n",
++		have_inplace, fileflags);
+ 
  #ifdef MAINTAINER_MODE
-@@ -304,6 +310,7 @@ void usage(enum logcode F)
+ 	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
+@@ -300,6 +306,7 @@ void usage(enum logcode F)
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -H, --hard-links            preserve hard links\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
-+  rprintf(F,"     --flags                 preserve file flags\n");
++  rprintf(F,"     --fileflags             preserve file-flags\n");
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
-@@ -425,6 +432,8 @@ static struct poptOption long_options[] 
+@@ -421,6 +428,8 @@ static struct poptOption long_options[] 
    {"perms",           'p', POPT_ARG_VAL,    &preserve_perms, 1, 0, 0 },
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
-+  {"flags",            0,  POPT_ARG_VAL,    &preserve_flags, 1, 0, 0 },
-+  {"no-flags",         0,  POPT_ARG_VAL,    &preserve_flags, 0, 0, 0 },
++  {"fileflags",        0,  POPT_ARG_VAL,    &preserve_fileflags, 1, 0, 0 },
++  {"no-fileflags",     0,  POPT_ARG_VAL,    &preserve_fileflags, 0, 0, 0 },
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1130,6 +1139,15 @@ int parse_arguments(int *argc, const cha
+@@ -1126,6 +1135,15 @@ int parse_arguments(int *argc, const cha
  	}
  #endif
  
 +#ifndef SUPPORT_FLAGS
-+	if (preserve_flags) {
++	if (preserve_fileflags) {
 +		snprintf(err_buf, sizeof err_buf,
 +			 "file flags are not supported on this %s\n",
 +			 am_server ? "server" : "client");
@@ -288,11 +287,11 @@ TODO: fix --delete-delay to work with --flags option.
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -1584,6 +1602,9 @@ void server_options(char **args,int *arg
+@@ -1580,6 +1598,9 @@ void server_options(char **args,int *arg
  	if (xfer_dirs && !recurse && delete_mode && am_sender)
  		args[ac++] = "--no-r";
  
-+	if (preserve_flags)
++	if (preserve_fileflags)
 +		args[ac++] = "--flags";
 +
  	if (do_compression && def_compress_level != Z_DEFAULT_COMPRESSION) {
@@ -309,7 +308,7 @@ TODO: fix --delete-delay to work with --flags option.
  extern int verbose;
  extern int dry_run;
  extern int preserve_perms;
-+extern int preserve_flags;
++extern int preserve_fileflags;
  extern int preserve_executability;
  extern int preserve_times;
  extern int omit_dir_times;
@@ -334,7 +333,7 @@ TODO: fix --delete-delay to work with --flags option.
 +/* Remove immutable flags from an object, so it can be altered/removed. */
 +void make_mutable(char *fname, mode_t mode, uint32 fileflags)
 +{
-+	if (!preserve_flags && S_ISLNK(mode))
++	if (!preserve_fileflags && S_ISLNK(mode))
 +		return;
 +
 +	if (fileflags & NOCHANGE_FLAGS)
@@ -344,7 +343,7 @@ TODO: fix --delete-delay to work with --flags option.
 +/* Undo a prior make_mutable() call. */
 +void undo_make_mutable(char *fname, mode_t mode, uint32 fileflags)
 +{
-+	if (!preserve_flags && S_ISLNK(mode))
++	if (!preserve_fileflags && S_ISLNK(mode))
 +		return;
 +
 +	if (fileflags & NOCHANGE_FLAGS)
@@ -360,7 +359,7 @@ TODO: fix --delete-delay to work with --flags option.
  #endif
  
 +#ifdef SUPPORT_FLAGS
-+	if (preserve_flags && !S_ISLNK(st->st_mode)
++	if (preserve_fileflags && !S_ISLNK(st->st_mode)
 +	 && st->st_flags != file->fileflags) {
 +		if (!set_fileflags(fname, file->fileflags))
 +			return 0;

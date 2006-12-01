@@ -1179,9 +1179,9 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			}
  		}
  		*p = '/';
-@@ -172,15 +183,18 @@ static int robust_move(char *src, char *
+@@ -172,15 +183,18 @@ static int robust_move(const char *src, 
   * We will move the file to be deleted into a parallel directory tree. */
- static int keep_backup(char *fname)
+ static int keep_backup(const char *fname)
  {
 -	STRUCT_STAT st;
 +	statx sx;
@@ -1200,7 +1200,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  	if (!(file = make_file(fname, NULL, NULL, 0, NO_FILTERS)))
  		return 1; /* the file could have disappeared */
-@@ -188,6 +202,13 @@ static int keep_backup(char *fname)
+@@ -188,6 +202,13 @@ static int keep_backup(const char *fname
  	if (!(buf = get_backup_name(fname)))
  		return 0;
  
@@ -1214,7 +1214,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	/* Check to see if this is a device file, or link */
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
  	 || (preserve_specials && IS_SPECIAL(file->mode))) {
-@@ -256,7 +277,7 @@ static int keep_backup(char *fname)
+@@ -256,7 +277,7 @@ static int keep_backup(const char *fname
  		if (robust_move(fname, buf) != 0) {
  			rsyserr(FERROR, errno, "keep_backup failed: %s -> \"%s\"",
  				full_fname(fname), buf);
@@ -5660,31 +5660,18 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #ifdef SUPPORT_LINKS
  	links = "";
  #endif
-@@ -227,17 +233,16 @@ static void print_rsync_version(enum log
- 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
- 	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
- 	rprintf(f, "<http://rsync.samba.org/>\n");
--	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, "
--		"%shard links, %ssymlinks, batchfiles,\n",
--		(int) (sizeof (OFF_T) * 8),
--		got_socketpair, hardlinks, links);
-+	rprintf(f, "Capabilities: %d-bit files, %ssocketpairs, %shard links, %ssymlinks,\n",
-+		(int) (sizeof (OFF_T) * 8), got_socketpair, hardlinks, links);
-+
-+	rprintf(f, "              batchfiles, %sinplace, %sIPv6, %sACLs,\n",
-+		have_inplace, ipv6, acls);
+@@ -233,8 +239,8 @@ static void print_rsync_version(enum log
+ 		(int)(sizeof (int64) * 8));
+ 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
+ 		got_socketpair, hardlinks, links, ipv6, have_inplace);
+-	rprintf(f, "    %sappend\n",
+-		have_inplace);
++	rprintf(f, "    %sappend, %sACLs\n",
++		have_inplace, acls);
  
- 	/* Note that this field may not have type ino_t.  It depends
- 	 * on the complicated interaction between largefile feature
- 	 * macros. */
--	rprintf(f, "              %sinplace, %sIPv6, "
--		"%d-bit system inums, %d-bit internal inums\n",
--		have_inplace, ipv6,
-+	rprintf(f, "              %d-bit system inums, %d-bit internal inums\n",
- 		(int) (sizeof dumstat->st_ino * 8),
- 		(int) (sizeof (int64) * 8));
  #ifdef MAINTAINER_MODE
-@@ -284,7 +289,7 @@ void usage(enum logcode F)
+ 	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
+@@ -280,7 +286,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -5693,7 +5680,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
    rprintf(F," -R, --relative              use relative path names\n");
-@@ -306,6 +311,9 @@ void usage(enum logcode F)
+@@ -302,6 +308,9 @@ void usage(enum logcode F)
    rprintf(F," -p, --perms                 preserve permissions\n");
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
@@ -5703,7 +5690,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
-@@ -426,6 +434,9 @@ static struct poptOption long_options[] 
+@@ -422,6 +431,9 @@ static struct poptOption long_options[] 
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
@@ -5713,7 +5700,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1091,6 +1102,24 @@ int parse_arguments(int *argc, const cha
+@@ -1087,6 +1099,24 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
@@ -5738,7 +5725,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1533,6 +1562,10 @@ void server_options(char **args,int *arg
+@@ -1529,6 +1559,10 @@ void server_options(char **args,int *arg
  
  	if (preserve_hard_links)
  		argstr[x++] = 'H';
@@ -6823,7 +6810,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		for (i = 0; i < flist->count; i++)
 --- old/util.c
 +++ new/util.c
-@@ -1468,3 +1468,31 @@ int bitbag_next_bit(struct bitbag *bb, i
+@@ -1467,3 +1467,31 @@ int bitbag_next_bit(struct bitbag *bb, i
  
  	return -1;
  }
