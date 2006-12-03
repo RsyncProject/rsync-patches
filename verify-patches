@@ -40,6 +40,8 @@ my($has_dependencies, @new, @rejects);
 END {
     &restore_cvsdir;
     system "rsync -a --del cvsdir/ workdir/" if -d 'cvsdir';
+    my $pid = readlink('lock') || 0;
+    unlink('lock') if $pid == $$;
 };
 
 my $root;
@@ -51,6 +53,8 @@ mkdir('tmp', 0777) unless -d 'tmp';
 chdir('tmp') or die "Unable to chdir to 'tmp'";
 symlink('..', 'patches') unless -d 'patches';
 
+symlink($$, 'lock') or die "Unable to create lock file: $!\n";
+
 mkdir('workdir') unless -d 'workdir';
 open(OUT, '>exclude') or die $!;
 print OUT join("\n", 'CVS', @generated_files), "\n";
@@ -59,6 +63,15 @@ close OUT;
 unless ($no_cvs) {
     print "Using CVS to update the tmp/cvsdir copy of the source.\n";
     system qq|cvs -qd "$root" co -P -d cvsdir rsync|;
+    @_ = qw( configure configure.in config.h.in configure.in
+	     rsync.1 rsync.yo rsyncd.conf.5 rsyncd.conf.yo );
+    while (@_) {
+	my $gen = 'cvsdir/' . shift(@_);
+	my $src = 'cvsdir/' . shift(@_);
+	if ((-M $gen) > (-M $src)) {
+	    system "touch $gen";
+	}
+    }
 }
 
 @ARGV = glob('patches/*.diff') unless @ARGV;
