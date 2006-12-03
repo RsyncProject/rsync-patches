@@ -17,22 +17,22 @@ To use this patch, run these commands for a successful build:
  extern int delete_mode;
  extern int delete_before;
  extern int delete_during;
-@@ -348,10 +349,11 @@ void itemize(struct file_struct *file, i
+@@ -479,10 +480,11 @@ void itemize(struct file_struct *file, i
  			iflags |= ITEM_REPORT_TIME;
  		if ((file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
--		if (preserve_uid && am_root && file->uid != st->st_uid)
-+		if (preserve_uid && am_root && file->uid != st->st_uid
+-		if (preserve_uid && am_root && F_UID(file) != st->st_uid)
++		if (preserve_uid && am_root && F_UID(file) != st->st_uid
 +		 && !(omit_dir_changes && S_ISDIR(st->st_mode)))
  			iflags |= ITEM_REPORT_OWNER;
--		if (preserve_gid && file->gid != GID_NONE
--		    && st->st_gid != file->gid)
-+		if (preserve_gid && file->gid != GID_NONE && st->st_gid != file->gid
+-		if (preserve_gid && F_GID(file) != GID_NONE
+-		    && st->st_gid != F_GID(file))
++		if (preserve_gid && F_GID(file) != GID_NONE && st->st_gid != F_GID(file)
 +		 && !(omit_dir_changes && S_ISDIR(st->st_mode)))
  			iflags |= ITEM_REPORT_GROUP;
  	} else
  		iflags |= ITEM_IS_NEW;
-@@ -892,7 +894,7 @@ static void recv_generator(char *fname, 
+@@ -1088,7 +1090,7 @@ static void recv_generator(char *fname, 
  
  	/* If we're not preserving permissions, change the file-list's
  	 * mode based on the local permissions and some heuristics. */
@@ -51,7 +51,7 @@ To use this patch, run these commands for a successful build:
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -313,6 +314,7 @@ void usage(enum logcode F)
+@@ -309,6 +310,7 @@ void usage(enum logcode F)
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve times\n");
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
@@ -59,7 +59,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
-@@ -429,6 +431,7 @@ static struct poptOption long_options[] 
+@@ -426,6 +428,7 @@ static struct poptOption long_options[] 
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
@@ -67,7 +67,7 @@ To use this patch, run these commands for a successful build:
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
-@@ -1287,6 +1290,9 @@ int parse_arguments(int *argc, const cha
+@@ -1286,6 +1289,9 @@ int parse_arguments(int *argc, const cha
  			"P *%s", backup_suffix);
  		parse_rule(&filter_list, backup_dir_buf, 0, 0);
  	}
@@ -77,7 +77,7 @@ To use this patch, run these commands for a successful build:
  	if (make_backups && !backup_dir)
  		omit_dir_times = 1;
  
-@@ -1515,6 +1521,8 @@ void server_options(char **args,int *arg
+@@ -1519,6 +1525,8 @@ void server_options(char **args,int *arg
  			argstr[x++] = 'm';
  		if (omit_dir_times == 2)
  			argstr[x++] = 'O';
@@ -95,7 +95,7 @@ To use this patch, run these commands for a successful build:
 +extern int omit_dir_changes;
  extern int basis_dir_cnt;
  extern int make_backups;
- extern int cleanup_got_literal;
+ extern int flist_extra_ndx;
 @@ -551,7 +552,7 @@ int recv_files(int f_in, struct file_lis
  
  		/* If we're not preserving permissions, change the file-list's
@@ -115,16 +115,16 @@ To use this patch, run these commands for a successful build:
  extern int am_root;
  extern int am_server;
  extern int am_sender;
-@@ -162,9 +163,11 @@ int set_file_attrs(char *fname, struct f
+@@ -215,9 +216,11 @@ int set_file_attrs(char *fname, struct f
  			updated = 1;
  	}
  
--	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
-+	change_uid = am_root && preserve_uid && st->st_uid != file->uid
+-	change_uid = am_root && preserve_uid && st->st_uid != F_UID(file);
++	change_uid = am_root && preserve_uid && st->st_uid != F_UID(file)
 +		&& !(omit_dir_changes && S_ISDIR(st->st_mode));
- 	change_gid = preserve_gid && file->gid != GID_NONE
--		&& st->st_gid != file->gid;
-+		&& st->st_gid != file->gid
+ 	change_gid = preserve_gid && F_GID(file) != GID_NONE
+-		&& st->st_gid != F_GID(file);
++		&& st->st_gid != F_GID(file)
 +		&& !(omit_dir_changes && S_ISDIR(st->st_mode));
  #if !defined HAVE_LCHOWN && !defined CHOWN_MODIFIES_SYMLINK
  	if (S_ISLNK(st->st_mode))

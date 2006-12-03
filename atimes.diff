@@ -15,16 +15,16 @@ To use this patch, run these commands for a successful build:
 +extern int preserve_atimes;
  extern int relative_paths;
  extern int implied_dirs;
- extern int ignore_perishable;
-@@ -127,6 +128,7 @@ void show_flist_stats(void)
+ extern int flist_extra_ndx;
+@@ -135,6 +136,7 @@ void show_flist_stats(void)
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
-+	time_t atime = preserve_atimes ? IVAL(ATIME_PTR(f), 0) : 0;
++	time_t atime = preserve_atimes ? F_ATIME(f) : 0;
  
  	if (!f->basename) {
  		/* this can happen if duplicate names were removed */
-@@ -137,16 +139,18 @@ static void list_file_entry(struct file_
+@@ -145,16 +147,18 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -33,7 +33,7 @@ To use this patch, run these commands for a successful build:
  			permbuf,
  			(double)f->length, timestring(f->modtime),
 +			preserve_atimes ? timestring(atime) : "",
- 			f_name(f, NULL), f->u.link);
+ 			f_name(f, NULL), F_SYMLINK(f));
  	} else
  #endif
  	{
@@ -45,7 +45,7 @@ To use this patch, run these commands for a successful build:
  			f_name(f, NULL));
  	}
  }
-@@ -304,6 +308,7 @@ static void send_file_entry(struct file_
+@@ -312,6 +316,7 @@ static void send_file_entry(struct file_
  {
  	unsigned short flags;
  	static time_t modtime;
@@ -53,7 +53,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -319,7 +324,7 @@ static void send_file_entry(struct file_
+@@ -327,7 +332,7 @@ static void send_file_entry(struct file_
  
  	if (!file) {
  		write_byte(f, 0);
@@ -62,12 +62,12 @@ To use this patch, run these commands for a successful build:
  		dev = 0, rdev = MAKEDEV(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -365,6 +370,13 @@ static void send_file_entry(struct file_
+@@ -377,6 +382,13 @@ static void send_file_entry(struct file_
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
 +	if (preserve_atimes && !S_ISDIR(mode)) {
-+		time_t file_atime = IVAL(ATIME_PTR(file), 0);
++		time_t file_atime = F_ATIME(file);
 +		if (file_atime == atime)
 +			flags |= XMIT_SAME_ATIME;
 +		else
@@ -75,8 +75,8 @@ To use this patch, run these commands for a successful build:
 +	}
  
  #ifdef SUPPORT_HARD_LINKS
- 	if (file->link_u.idev) {
-@@ -418,6 +430,8 @@ static void send_file_entry(struct file_
+ 	if (tmp_idev.dev != 0) {
+@@ -429,6 +441,8 @@ static void send_file_entry(struct file_
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -85,21 +85,16 @@ To use this patch, run these commands for a successful build:
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -484,6 +498,7 @@ static struct file_struct *receive_file_
- 					      unsigned short flags, int f)
+@@ -495,7 +509,7 @@ static void send_file_entry(struct file_
+ static struct file_struct *recv_file_entry(struct file_list *flist,
+ 					   unsigned short flags, int f)
  {
- 	static time_t modtime;
-+	static time_t atime;
+-	static time_t modtime;
++	static time_t modtime, atime;
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -497,12 +512,13 @@ static struct file_struct *receive_file_
- 	char thisname[MAXPATHLEN];
- 	unsigned int l1 = 0, l2 = 0;
- 	int alloc_len, basename_len, dirname_len, linkname_len, sum_len;
-+	int atime_len;
- 	OFF_T file_length;
- 	char *basename, *dirname, *bp;
+@@ -515,7 +529,7 @@ static struct file_struct *recv_file_ent
  	struct file_struct *file;
  
  	if (!flist) {
@@ -108,7 +103,7 @@ To use this patch, run these commands for a successful build:
  		dev = 0, rdev = MAKEDEV(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -558,6 +574,8 @@ static struct file_struct *receive_file_
+@@ -571,6 +585,8 @@ static struct file_struct *recv_file_ent
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -117,82 +112,24 @@ To use this patch, run these commands for a successful build:
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -600,19 +618,23 @@ static struct file_struct *receive_file_
- 
- 	sum_len = always_checksum && S_ISREG(mode) ? MD4_SUM_LENGTH : 0;
- 
-+	atime_len = preserve_atimes ? 4 : 0;
-+
- 	alloc_len = file_struct_len + dirname_len + basename_len
--		  + linkname_len + sum_len;
-+		  + atime_len + linkname_len + sum_len;
- 	bp = pool_alloc(flist->file_pool, alloc_len, "receive_file_entry");
- 
- 	file = (struct file_struct *)bp;
- 	memset(bp, 0, file_struct_len);
--	bp += file_struct_len;
-+	bp += file_struct_len + atime_len;
- 
- 	file->modtime = modtime;
- 	file->length = file_length;
- 	file->mode = mode;
- 	file->uid = uid;
- 	file->gid = gid;
+@@ -643,6 +659,8 @@ static struct file_struct *recv_file_ent
+ 		F_UID(file) = uid;
+ 	if (preserve_gid)
+ 		F_GID(file) = gid;
 +	if (preserve_atimes)
-+		SIVAL(ATIME_PTR(file), 0, atime);
++		F_ATIME(file) = atime;
  
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
-@@ -731,6 +753,7 @@ struct file_struct *make_file(char *fnam
- 	char thisname[MAXPATHLEN];
- 	char linkname[MAXPATHLEN];
- 	int alloc_len, basename_len, dirname_len, linkname_len, sum_len;
-+	int atime_len;
- 	char *basename, *dirname, *bp;
- 
- 	if (!flist || !flist->count)	/* Ignore lastdir when invalid. */
-@@ -854,8 +877,10 @@ struct file_struct *make_file(char *fnam
- 	sum_len = always_checksum && am_sender && S_ISREG(st.st_mode)
- 	        ? MD4_SUM_LENGTH : 0;
- 
-+	atime_len = preserve_atimes ? 4 : 0;
-+
- 	alloc_len = file_struct_len + dirname_len + basename_len
--		  + linkname_len + sum_len;
-+		  + atime_len + linkname_len + sum_len;
- 	if (flist)
- 		bp = pool_alloc(flist->file_pool, alloc_len, "make_file");
- 	else {
-@@ -865,7 +890,7 @@ struct file_struct *make_file(char *fnam
- 
- 	file = (struct file_struct *)bp;
- 	memset(bp, 0, file_struct_len);
--	bp += file_struct_len;
-+	bp += file_struct_len + atime_len;
- 
- 	file->flags = flags;
- 	file->modtime = st.st_mtime;
-@@ -873,6 +898,8 @@ struct file_struct *make_file(char *fnam
- 	file->mode = st.st_mode;
- 	file->uid = st.st_uid;
- 	file->gid = st.st_gid;
+@@ -906,6 +924,8 @@ struct file_struct *make_file(const char
+ 		F_UID(file) = st.st_uid;
+ 	if (preserve_gid)
+ 		F_GID(file) = st.st_gid;
 +	if (preserve_atimes)
-+		SIVAL(ATIME_PTR(file), 0, st.st_atime);
++		F_ATIME(file) = st.st_atime;
  
- #ifdef SUPPORT_HARD_LINKS
- 	if (flist && flist->hlink_pool) {
-@@ -1594,8 +1621,9 @@ static void clean_flist(struct file_list
- 			}
- 			/* Make sure we don't lose track of a user-specified
- 			 * top directory. */
--			flist->files[keep]->flags |= flist->files[drop]->flags
--						   & (FLAG_TOP_DIR|FLAG_DEL_HERE);
-+			flist->files[keep]->flags
-+			    |= flist->files[drop]->flags
-+			     & (FLAG_TOP_DIR|FLAG_DEL_HERE);
- 
- 			clear_file(flist->files[drop], flist);
- 
+ 	if (dirname_len) {
+ 		file->dirname = lastdir = bp;
 --- old/generator.c
 +++ new/generator.c
 @@ -43,6 +43,7 @@ extern int preserve_perms;
@@ -203,33 +140,25 @@ To use this patch, run these commands for a successful build:
  extern int omit_dir_times;
  extern int delete_mode;
  extern int delete_before;
-@@ -90,6 +91,7 @@ extern dev_t filesystem_dev;
- extern char *backup_dir;
- extern char *backup_suffix;
- extern int backup_suffix_len;
-+extern unsigned int file_struct_len;
- extern struct file_list *the_file_list;
- extern struct filter_list_struct server_filter_list;
- 
-@@ -409,6 +411,9 @@ void itemize(struct file_struct *file, i
+@@ -477,6 +478,9 @@ void itemize(struct file_struct *file, i
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
 +		if (preserve_atimes && !S_ISDIR(file->mode) && !S_ISLNK(file->mode)
-+		 && cmp_time(IVAL(ATIME_PTR(file), 0), st->st_atime) != 0)
++		 && cmp_time(F_ATIME(file), st->st_atime) != 0)
 +			iflags |= ITEM_REPORT_ATIME;
  		if ((file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
- 		if (preserve_uid && am_root && file->uid != st->st_uid)
-@@ -720,6 +725,8 @@ static int try_dests_reg(struct file_str
+ 		if (preserve_uid && am_root && F_UID(file) != st->st_uid)
+@@ -787,6 +791,8 @@ static int try_dests_reg(struct file_str
  			if (hard_link_one(file, ndx, fname, 0, stp,
  					  cmpbuf, 1, i, code) < 0)
  				goto try_a_copy;
 +			if (preserve_atimes)
 +				set_file_attrs(fname, file, stp, 0);
- 			if (preserve_hard_links && file->link_u.links) {
- 				if (dry_run)
- 					file->link_u.links->link_dest_used = j + 1;
+ 			if (preserve_hard_links && IS_HLINKED(file))
+ 				hard_link_cluster(file, ndx, itemizing, code, j);
+ 		} else
 --- old/log.c
 +++ new/log.c
 @@ -37,6 +37,7 @@ extern int msg_fd_out;
@@ -237,10 +166,10 @@ To use this patch, run these commands for a successful build:
  extern int protocol_version;
  extern int preserve_times;
 +extern int preserve_atimes;
- extern int stdout_format_has_i;
- extern int stdout_format_has_o_or_i;
- extern int logfile_format_has_i;
-@@ -611,7 +612,8 @@ static void log_formatted(enum logcode c
+ extern int preserve_uid;
+ extern int preserve_gid;
+ extern int flist_extra_ndx;
+@@ -618,7 +619,8 @@ static void log_formatted(enum logcode c
  			c[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
  			c[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
  			c[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
@@ -260,7 +189,7 @@ To use this patch, run these commands for a successful build:
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -311,8 +312,9 @@ void usage(enum logcode F)
+@@ -307,8 +308,9 @@ void usage(enum logcode F)
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
@@ -272,17 +201,26 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
-@@ -428,6 +430,9 @@ static struct poptOption long_options[] 
+@@ -425,6 +427,9 @@ static struct poptOption long_options[] 
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
 +  {"atimes",          'U', POPT_ARG_VAL,    &preserve_atimes, 1, 0, 0 },
 +  {"no-atimes",        0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
-+  {"no-k",             0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
++  {"no-U",             0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
-@@ -1538,6 +1543,8 @@ void server_options(char **args,int *arg
+@@ -1223,6 +1228,8 @@ int parse_arguments(int *argc, const cha
+ 		preserve_uid = flist_extra_ndx++;
+ 	if (preserve_gid)
+ 		preserve_gid = flist_extra_ndx++;
++	if (preserve_atimes)
++		preserve_atimes = flist_extra_ndx++;
+ 
+ 	*argv = poptGetArgs(pc);
+ 	*argc = count_args(*argv);
+@@ -1542,6 +1549,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -301,15 +239,7 @@ To use this patch, run these commands for a successful build:
  extern int preserve_times;
  extern int omit_dir_times;
  extern int am_root;
-@@ -49,6 +50,7 @@ extern int keep_dirlinks;
- extern int make_backups;
- extern mode_t orig_umask;
- extern struct stats stats;
-+extern unsigned int file_struct_len;
- extern struct chmod_mode_struct *daemon_chmod_modes;
- 
- #if defined HAVE_ICONV_OPEN && defined HAVE_ICONV_H
-@@ -129,6 +131,7 @@ int set_file_attrs(char *fname, struct f
+@@ -182,6 +183,7 @@ int set_file_attrs(char *fname, struct f
  	int updated = 0;
  	STRUCT_STAT st2;
  	int change_uid, change_gid;
@@ -317,7 +247,7 @@ To use this patch, run these commands for a successful build:
  	mode_t new_mode = file->mode;
  
  	if (!st) {
-@@ -148,18 +151,36 @@ int set_file_attrs(char *fname, struct f
+@@ -201,18 +203,36 @@ int set_file_attrs(char *fname, struct f
  		}
  	}
  
@@ -335,7 +265,7 @@ To use this patch, run these commands for a successful build:
 +	} else
 +		mtime = st->st_mtime;
 +	if (!(flags & ATTRS_SKIP_ATIME)) {
-+		time_t file_atime = IVAL(ATIME_PTR(file), 0);
++		time_t file_atime = F_ATIME(file);
 +		if (cmp_time(st->st_atime, file_atime) != 0) {
 +			atime = file_atime;
 +			updated = 1;
@@ -356,7 +286,7 @@ To use this patch, run these commands for a successful build:
 +			updated = 0;
  	}
  
- 	change_uid = am_root && preserve_uid && st->st_uid != file->uid;
+ 	change_uid = am_root && preserve_uid && st->st_uid != F_UID(file);
 --- old/rsync.h
 +++ new/rsync.h
 @@ -54,6 +54,7 @@
@@ -375,15 +305,22 @@ To use this patch, run these commands for a successful build:
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -534,6 +536,8 @@ struct file_struct {
- 	uchar flags;	/* this item MUST remain last */
+@@ -532,6 +534,7 @@ union flist_extras {
+ 	struct idev *idev;	/* The hard-link info during matching */
+ 	struct hlist *hlist;	/* The hard-link info after matching */
+ 	int32 num;		/* A general-purpose number */
++	time_t time;		/* A time value */
  };
  
-+#define ATIME_PTR(f) (((uchar*)(f))+file_struct_len)
-+
- /*
-  * Start the flist array at FLIST_START entries and grow it
-  * by doubling until FLIST_LINEAR then grow by FLIST_LINEAR
+ #define FLIST_EXTRA(f,j) ((union flist_extras *)(f))[-(j)]
+@@ -540,6 +543,7 @@ union flist_extras {
+ /* When enabled, all entries have these: */
+ #define F_UID(f) FLIST_EXTRA(f, preserve_uid).uid
+ #define F_GID(f) FLIST_EXTRA(f, preserve_gid).gid
++#define F_ATIME(f) FLIST_EXTRA(f, preserve_atimes).time
+ 
+ /* These are per-entry optional and mutally exclusive: */
+ #define F_IDEV(f) FLIST_EXTRA(f, flist_extra_ndx).idev
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -328,8 +328,9 @@ to the detailed description below for a 
@@ -398,7 +335,7 @@ To use this patch, run these commands for a successful build:
       --super                 receiver attempts super-user activities
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
-@@ -869,6 +870,12 @@ it is preserving modification times (see
+@@ -870,6 +871,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -411,7 +348,7 @@ To use this patch, run these commands for a successful build:
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1396,7 +1403,7 @@ with older versions of rsync, but that a
+@@ -1403,7 +1410,7 @@ with older versions of rsync, but that a
  verbose messages).
  
  The "%i" escape has a cryptic output that is 9 letters long.  The general
@@ -420,7 +357,7 @@ To use this patch, run these commands for a successful build:
  type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -1436,7 +1443,7 @@ quote(itemization(
+@@ -1443,7 +1450,7 @@ quote(itemization(
    by the file transfer.
    it() A bf(t) means the modification time is different and is being updated
    to the sender's value (requires bf(--times)).  An alternate value of bf(T)
@@ -429,7 +366,7 @@ To use this patch, run these commands for a successful build:
    anytime a symlink is transferred, or when a file or device is transferred
    without bf(--times).
    it() A bf(p) means the permissions are different and are being updated to
-@@ -1445,7 +1452,10 @@ quote(itemization(
+@@ -1452,7 +1459,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).

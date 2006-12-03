@@ -44,60 +44,17 @@ TODO:
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
---- old/acls.c
-+++ new/acls.c
-@@ -30,6 +30,7 @@ extern int read_only;
- extern int list_only;
- extern int orig_umask;
- extern int preserve_acls;
-+extern int preserve_xattrs;
- extern unsigned int file_struct_len;
- 
- /* === ACL structures === */
-@@ -741,6 +742,10 @@ void receive_acl(struct file_struct *fil
- 	type = SMB_ACL_TYPE_ACCESS;
- 	racl_list = &access_acl_list;
- 	ndx_ptr = (char*)file + file_struct_len;
-+#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs)
-+		ndx_ptr += 4;
-+#endif
- 	do {
- 		char tag = read_byte(f);
- 		int ndx;
-@@ -800,6 +805,10 @@ void cache_acl(struct file_struct *file,
- 	racl = sxp->acc_acl;
- 	racl_list = &access_acl_list;
- 	ndx_ptr = (char*)file + file_struct_len;
-+#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs)
-+		ndx_ptr += 4;
-+#endif
- 	do {
- 		if (!racl)
- 			ndx = -1;
-@@ -920,6 +929,10 @@ int set_acl(const char *fname, const str
- 
- 	type = SMB_ACL_TYPE_ACCESS;
- 	ndx_ptr = (char*)file + file_struct_len;
-+#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs)
-+		ndx_ptr += 4;
-+#endif
- 	do {
- 		acl_duo *duo_item;
- 		BOOL eq;
 --- old/backup.c
 +++ new/backup.c
-@@ -30,6 +30,7 @@ extern char *backup_dir;
- 
+@@ -24,6 +24,7 @@
+ extern int verbose;
  extern int am_root;
  extern int preserve_acls;
 +extern int preserve_xattrs;
  extern int preserve_devices;
  extern int preserve_specials;
  extern int preserve_links;
-@@ -136,6 +137,9 @@ static int make_bak_dir(char *fullpath)
+@@ -137,6 +138,9 @@ static int make_bak_dir(char *fullpath)
  #ifdef SUPPORT_ACLS
  				sx.acc_acl = sx.def_acl = NULL;
  #endif
@@ -107,7 +64,7 @@ TODO:
  				if (!(file = make_file(rel, NULL, NULL, 0, NO_FILTERS)))
  					continue;
  #ifdef SUPPORT_ACLS
-@@ -144,6 +148,12 @@ static int make_bak_dir(char *fullpath)
+@@ -145,6 +149,12 @@ static int make_bak_dir(char *fullpath)
  					cache_acl(file, &sx);
  				}
  #endif
@@ -120,7 +77,7 @@ TODO:
  				set_file_attrs(fullpath, file, NULL, 0);
  				free(file);
  			}
-@@ -195,6 +205,9 @@ static int keep_backup(const char *fname
+@@ -196,6 +206,9 @@ static int keep_backup(const char *fname
  #ifdef SUPPORT_ACLS
  	sx.acc_acl = sx.def_acl = NULL;
  #endif
@@ -130,7 +87,7 @@ TODO:
  
  	if (!(file = make_file(fname, NULL, NULL, 0, NO_FILTERS)))
  		return 1; /* the file could have disappeared */
-@@ -208,6 +221,12 @@ static int keep_backup(const char *fname
+@@ -211,6 +224,12 @@ static int keep_backup(const char *fname
  		cache_acl(file, &sx);
  	}
  #endif
@@ -196,43 +153,7 @@ TODO:
  extern int preserve_links;
  extern int preserve_hard_links;
  extern int preserve_devices;
-@@ -499,7 +500,7 @@ static struct file_struct *receive_file_
- 	char thisname[MAXPATHLEN];
- 	unsigned int l1 = 0, l2 = 0;
- 	int alloc_len, basename_len, dirname_len, linkname_len, sum_len;
--#ifdef SUPPORT_ACLS
-+#if defined SUPPORT_ACLS || defined SUPPORT_XATTRS
- 	int xtra_len;
- #endif
- 	OFF_T file_length;
-@@ -611,10 +612,16 @@ static struct file_struct *receive_file_
- 		xtra_len = (S_ISDIR(mode) ? 2 : 1) * 4;
- 	else
- 		xtra_len = 0;
-+#elif defined SUPPORT_XATTRS
-+	xtra_len = 0;
-+#endif
-+#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs)
-+		xtra_len += 4;
- #endif
- 
- 	alloc_len = file_struct_len + dirname_len + basename_len
--#ifdef SUPPORT_ACLS
-+#if defined SUPPORT_ACLS || defined SUPPORT_XATTRS
- 		  + xtra_len
- #endif
- 		  + linkname_len + sum_len;
-@@ -623,7 +630,7 @@ static struct file_struct *receive_file_
- 	file = (struct file_struct *)bp;
- 	memset(bp, 0, file_struct_len);
- 	bp += file_struct_len;
--#ifdef SUPPORT_ACLS
-+#if defined SUPPORT_ACLS || defined SUPPORT_XATTRS
- 	bp += xtra_len;
- #endif
- 
-@@ -724,6 +731,10 @@ static struct file_struct *receive_file_
+@@ -738,6 +739,10 @@ static struct file_struct *recv_file_ent
  	if (preserve_acls)
  		receive_acl(file, f);
  #endif
@@ -243,7 +164,7 @@ TODO:
  
  	return file;
  }
-@@ -982,7 +993,7 @@ static struct file_struct *send_file_nam
+@@ -991,7 +996,7 @@ static struct file_struct *send_file_nam
  					  unsigned short flags)
  {
  	struct file_struct *file;
@@ -252,7 +173,7 @@ TODO:
  	statx sx;
  #endif
  
-@@ -1002,6 +1013,13 @@ static struct file_struct *send_file_nam
+@@ -1011,6 +1016,13 @@ static struct file_struct *send_file_nam
  			return NULL;
  	}
  #endif
@@ -266,26 +187,17 @@ TODO:
  
  	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
-@@ -1014,11 +1032,19 @@ static struct file_struct *send_file_nam
- 		if (preserve_acls && f >= 0)
- 			send_acl(&sx, f);
+@@ -1021,6 +1033,10 @@ static struct file_struct *send_file_nam
+ 	if (preserve_acls && f >= 0)
+ 		send_acl(&sx, f);
  #endif
 +#ifdef SUPPORT_XATTRS
-+		if (preserve_xattrs && f >= 0)
-+			send_xattr(&sx, f);
++	if (preserve_xattrs && f >= 0)
++		send_xattr(&sx, f);
 +#endif
- 	} else {
- #ifdef SUPPORT_ACLS
- 		if (preserve_acls && f >= 0)
- 			free_acl(&sx);
- #endif
-+#ifdef SUPPORT_XATTRS
-+		if (preserve_xattrs && f >= 0)
-+			free_xattr(&sx);
-+#endif
- 	}
  	return file;
  }
+ 
 --- old/lib/sysxattr.c
 +++ new/lib/sysxattr.c
 @@ -0,0 +1,135 @@
@@ -540,7 +452,16 @@ TODO:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1563,6 +1584,10 @@ void server_options(char **args,int *arg
+@@ -1255,6 +1276,8 @@ int parse_arguments(int *argc, const cha
+ 		preserve_gid = flist_extra_ndx++;
+ 	if (preserve_acls)
+ 		preserve_acls = flist_extra_ndx++;
++	if (preserve_xattrs)
++		preserve_xattrs = flist_extra_ndx++;
+ 
+ 	*argv = poptGetArgs(pc);
+ 	*argc = count_args(*argv);
+@@ -1570,6 +1593,10 @@ void server_options(char **args,int *arg
  	if (preserve_acls)
  		argstr[x++] = 'A';
  #endif
@@ -561,7 +482,7 @@ TODO:
  extern int preserve_perms;
  extern int preserve_executability;
  extern int preserve_times;
-@@ -218,6 +219,10 @@ int set_file_attrs(char *fname, struct f
+@@ -271,6 +272,10 @@ int set_file_attrs(char *fname, struct f
  	if (daemon_chmod_modes && !S_ISLNK(new_mode))
  		new_mode = tweak_mode(new_mode, daemon_chmod_modes);
  
@@ -574,7 +495,7 @@ TODO:
  	 * will enable owner-writability using chmod, if necessary.
 --- old/rsync.h
 +++ new/rsync.h
-@@ -501,6 +501,10 @@ struct idev {
+@@ -503,6 +503,10 @@ struct idev {
  #define ACLS_NEED_MASK 1
  #endif
  
@@ -585,7 +506,15 @@ TODO:
  #define GID_NONE ((gid_t)-1)
  
  #define HL_CHECK_MASTER	0
-@@ -699,6 +703,9 @@ typedef struct {
+@@ -549,6 +553,7 @@ union flist_extras {
+ #define F_UID(f) FLIST_EXTRA(f, preserve_uid).uid
+ #define F_GID(f) FLIST_EXTRA(f, preserve_gid).gid
+ #define F_ACL(f) FLIST_EXTRA(f, preserve_acls).num
++#define F_XATTR(f) FLIST_EXTRA(f, preserve_xattrs).num
+ 
+ /* These are per-entry optional and mutally exclusive: */
+ #define F_IDEV(f) FLIST_EXTRA(f, flist_extra_ndx).idev
+@@ -712,6 +717,9 @@ typedef struct {
      struct rsync_acl *acc_acl; /* access ACL */
      struct rsync_acl *def_acl; /* default ACL */
  #endif
@@ -628,7 +557,7 @@ TODO:
  transfer.  The resulting value is treated as though it was the permissions
 --- old/xattr.c
 +++ new/xattr.c
-@@ -0,0 +1,417 @@
+@@ -0,0 +1,415 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -660,6 +589,7 @@ TODO:
 +extern int am_root;
 +extern int read_only;
 +extern int list_only;
++extern int preserve_xattrs;
 +extern unsigned int file_struct_len;
 +
 +#define RSYNC_XAL_INITIAL 5
@@ -919,7 +849,6 @@ TODO:
 +void receive_xattr(struct file_struct *file, int f)
 +{
 +	static item_list temp_xattr = EMPTY_ITEM_LIST;
-+	char *ndx_ptr = (char*)file + file_struct_len;
 +	int ndx, tag = read_byte(f);
 +
 +	if (tag == 'X') {
@@ -987,14 +916,13 @@ TODO:
 +		exit_cleanup(RERR_STREAMIO);
 +	}
 +
-+	SIVAL(ndx_ptr, 0, ndx);
++	F_XATTR(file) = ndx;
 +}
 +
 +/* Turn the xattr data in statx into cached xattr data, setting the index
 + * values in the file struct. */
 +void cache_xattr(struct file_struct *file, statx *sxp)
 +{
-+	char *ndx_ptr = (char*)file + file_struct_len;
 +	int ndx;
 +
 +	if (!sxp->xattr)
@@ -1005,7 +933,7 @@ TODO:
 +		rsync_xal_store(sxp->xattr); /* adds item to rsync_xal_l */
 +	free_xattr(sxp);
 +
-+	SIVAL(ndx_ptr, 0, ndx);
++	F_XATTR(file) = ndx;
 +}
 +
 +static int rsync_xal_set(const char *fname, item_list *xalp)
@@ -1030,7 +958,6 @@ TODO:
 +int set_xattr(const char *fname, const struct file_struct *file, UNUSED(statx *sxp))
 +{
 +	int ndx;
-+	char *ndx_ptr = (char*)file + file_struct_len;
 +	item_list *lst = rsync_xal_l.items;
 +
 +	if (dry_run)
@@ -1041,7 +968,7 @@ TODO:
 +		return -1;
 +	}
 +
-+	ndx = IVAL(ndx_ptr, 0);
++	ndx = F_XATTR(file);
 +	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
 +}
 +

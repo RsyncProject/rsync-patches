@@ -34,7 +34,7 @@ TODO:
 
 --- old/flist.c
 +++ new/flist.c
-@@ -53,6 +53,7 @@ extern int non_perishable_cnt;
+@@ -54,6 +54,7 @@ extern int non_perishable_cnt;
  extern int prune_empty_dirs;
  extern int copy_links;
  extern int copy_unsafe_links;
@@ -42,16 +42,16 @@ TODO:
  extern int protocol_version;
  extern int sanitize_paths;
  extern struct stats stats;
-@@ -70,6 +71,8 @@ int checksum_len;
- dev_t filesystem_dev; /* used to implement -x */
- unsigned int file_struct_len;
+@@ -78,6 +79,8 @@ static dev_t tmp_rdev;
+ static struct idev tmp_idev;
+ static char tmp_sum[MD4_SUM_LENGTH];
  
 +struct file_list the_fattr_list;
 +
  static char empty_sum[MD4_SUM_LENGTH];
  static int flist_count_offset;
  
-@@ -252,6 +255,44 @@ static mode_t from_wire_mode(int mode)
+@@ -260,6 +263,44 @@ static mode_t from_wire_mode(int mode)
  	return mode;
  }
  
@@ -74,7 +74,7 @@ TODO:
 +		return f1->length < f2->length ? -1 : 1;
 +
 +	if (always_checksum) {
-+		diff = u_memcmp(f1->u.sum, f2->u.sum, checksum_len);
++		diff = u_memcmp(F_SUM(f1), F_SUM(f2), checksum_len);
 +		if (diff)
 +			return diff;
 +	} else if (f1->modtime != f2->modtime)
@@ -96,7 +96,7 @@ TODO:
  static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len);
  
-@@ -1388,6 +1429,25 @@ struct file_list *recv_file_list(int f)
+@@ -1395,6 +1436,25 @@ struct file_list *recv_file_list(int f)
  
  	clean_flist(flist, relative_paths, 1);
  
@@ -105,7 +105,7 @@ TODO:
 +		the_fattr_list.count = j;
 +		the_fattr_list.files = new_array(struct file_struct *, j);
 +		if (!the_fattr_list.files)
-+			goto oom;
++			out_of_memory("recv_file_list");
 +		memcpy(the_fattr_list.files, flist->files,
 +		       j * sizeof (struct file_struct *));
 +		qsort(the_fattr_list.files, j,
@@ -124,7 +124,7 @@ TODO:
  
 --- old/generator.c
 +++ new/generator.c
-@@ -76,6 +76,7 @@ extern char *basis_dir[];
+@@ -77,6 +77,7 @@ extern char *basis_dir[];
  extern int compare_dest;
  extern int copy_dest;
  extern int link_dest;
@@ -132,7 +132,7 @@ TODO:
  extern int whole_file;
  extern int list_only;
  extern int new_root_dir;
-@@ -91,15 +92,18 @@ extern char *backup_dir;
+@@ -93,15 +94,18 @@ extern char *backup_dir;
  extern char *backup_suffix;
  extern int backup_suffix_len;
  extern struct file_list *the_file_list;
@@ -152,7 +152,7 @@ TODO:
  #define DEL_RECURSE		(1<<1) /* recurse */
  #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
  
-@@ -121,11 +125,120 @@ static int is_backup_file(char *fn)
+@@ -123,11 +127,121 @@ static int is_backup_file(char *fn)
  	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
  }
  
@@ -178,15 +178,16 @@ TODO:
 +			continue;
 +		}
 +		if (always_checksum) {
-+			if (!f->u.sum) {
++			if (!F_SUM(f)) {
 +				if (fmid->modtime == f->modtime
 +				 && f_name_cmp(fmid, f) == 0)
 +					return -1; /* assume we can't help */
-+				f->u.sum = pool_alloc(pool, MD4_SUM_LENGTH,
++				/* XXX update this to new checksum var idiom! */
++				F_SUM(f) = pool_alloc(pool, MD4_SUM_LENGTH,
 +						      "fattr_find");
-+				file_checksum(fname, f->u.sum, f->length);
++				file_checksum(fname, F_SUM(f), f->length);
 +			}
-+			diff = u_memcmp(fmid->u.sum, f->u.sum, checksum_len);
++			diff = u_memcmp(F_SUM(fmid), F_SUM(f), checksum_len);
 +			if (diff) {
 +				if (diff < 0)
 +					low = mid + 1;
@@ -273,7 +274,7 @@ TODO:
   */
  static enum delret delete_item(char *fbuf, int mode, char *replace, int flags)
  {
-@@ -147,6 +260,8 @@ static enum delret delete_item(char *fbu
+@@ -149,6 +263,8 @@ static enum delret delete_item(char *fbu
  			goto check_ret;
  		/* OK: try to delete the directory. */
  	}
@@ -282,7 +283,7 @@ TODO:
  
  	if (!replace && max_delete >= 0 && ++deletion_count > max_delete)
  		return DR_AT_LIMIT;
-@@ -193,6 +308,8 @@ static enum delret delete_item(char *fbu
+@@ -195,6 +311,8 @@ static enum delret delete_item(char *fbu
   * its contents, otherwise just checks for content.  Returns DR_SUCCESS or
   * DR_NOT_EMPTY.  Note that fname must point to a MAXPATHLEN buffer!  (The
   * buffer is used for recursion, but returned unchanged.)
@@ -291,7 +292,7 @@ TODO:
   */
  static enum delret delete_dir_contents(char *fname, int flags)
  {
-@@ -249,6 +366,8 @@ static enum delret delete_dir_contents(c
+@@ -251,6 +369,8 @@ static enum delret delete_dir_contents(c
  		if (S_ISDIR(fp->mode)
  		 && delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
@@ -300,7 +301,7 @@ TODO:
  		if (delete_item(fname, fp->mode, NULL, flags) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
  	}
-@@ -333,15 +452,19 @@ static void delayed_deletions(char *delb
+@@ -335,15 +455,19 @@ static void delayed_deletions(char *delb
   * all the --delete-WHEN options.  Note that the fbuf pointer must point to a
   * MAXPATHLEN buffer with the name of the directory in it (the functions we
   * call will append names onto the end, but the old dir value will be restored
@@ -323,7 +324,7 @@ TODO:
  	int dlen, i;
  
  	if (!flist) {
-@@ -355,6 +478,8 @@ static void delete_in_dir(struct file_li
+@@ -357,6 +481,8 @@ static void delete_in_dir(struct file_li
  	if (verbose > 2)
  		rprintf(FINFO, "delete_in_dir(%s)\n", fbuf);
  
@@ -332,7 +333,7 @@ TODO:
  	if (allowed_lull)
  		maybe_send_keepalive();
  
-@@ -362,12 +487,14 @@ static void delete_in_dir(struct file_li
+@@ -364,12 +490,14 @@ static void delete_in_dir(struct file_li
  		return; /* Impossible... */
  
  	if (io_error && !(lp_ignore_errors(module_id) || ignore_errors)) {
@@ -352,7 +353,7 @@ TODO:
  	}
  
  	while (cur_depth >= file->dir.depth && cur_depth >= min_depth)
-@@ -378,6 +505,9 @@ static void delete_in_dir(struct file_li
+@@ -380,6 +508,9 @@ static void delete_in_dir(struct file_li
  	dlen = strlen(fbuf);
  	filt_array[cur_depth] = push_local_filters(fbuf, dlen);
  
@@ -362,7 +363,7 @@ TODO:
  	if (one_file_system) {
  		if (file->flags & FLAG_TOP_DIR)
  			filesystem_dev = stp->st_dev;
-@@ -387,6 +517,11 @@ static void delete_in_dir(struct file_li
+@@ -389,6 +520,11 @@ static void delete_in_dir(struct file_li
  
  	dirlist = get_dirlist(fbuf, dlen, 0);
  
@@ -374,7 +375,7 @@ TODO:
  	/* If an item in dirlist is not found in flist, delete it
  	 * from the filesystem. */
  	for (i = dirlist->count; i--; ) {
-@@ -399,15 +534,22 @@ static void delete_in_dir(struct file_li
+@@ -401,15 +537,22 @@ static void delete_in_dir(struct file_li
  					f_name(fp, NULL));
  			continue;
  		}
@@ -400,7 +401,7 @@ TODO:
  	flist_free(dirlist);
  }
  
-@@ -437,9 +579,9 @@ static void do_delete_pass(struct file_l
+@@ -439,9 +582,9 @@ static void do_delete_pass(struct file_l
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
@@ -412,7 +413,7 @@ TODO:
  
  	if (do_progress && !am_server)
  		rprintf(FINFO, "                    \r");
-@@ -968,6 +1110,7 @@ static int try_dests_non(struct file_str
+@@ -966,6 +1109,7 @@ static int try_dests_non(struct file_str
  	return j;
  }
  
@@ -420,13 +421,13 @@ TODO:
  static int phase = 0;
  
  /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
-@@ -1154,8 +1297,12 @@ static void recv_generator(char *fname, 
+@@ -1152,8 +1296,12 @@ static void recv_generator(char *fname, 
  		if (real_ret != 0 && one_file_system)
  			real_st.st_dev = filesystem_dev;
  		if (delete_during && f_out != -1 && !phase && dry_run < 2
--		    && (file->flags & FLAG_DEL_HERE))
+-		    && (file->flags & FLAG_XFER_DIR))
 -			delete_in_dir(the_file_list, fname, file, &real_st);
-+		    && (file->flags & FLAG_DEL_HERE)) {
++		    && (file->flags & FLAG_XFER_DIR)) {
 +			if (detect_renamed && real_ret != 0)
 +				unexplored_dirs++;
 +			delete_in_dir(the_file_list, fname, file, &real_st,
@@ -435,7 +436,7 @@ TODO:
  		return;
  	}
  
-@@ -1407,8 +1554,14 @@ static void recv_generator(char *fname, 
+@@ -1406,8 +1554,14 @@ static void recv_generator(char *fname, 
  		    && hard_link_check(file, ndx, fname, statret, &st,
  				       itemizing, code, HL_SKIP))
  			return;
@@ -451,7 +452,7 @@ TODO:
  		rsyserr(FERROR, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		return;
-@@ -1594,13 +1747,19 @@ void generate_files(int f_out, struct fi
+@@ -1593,13 +1747,19 @@ void generate_files(int f_out, struct fi
  			(long)getpid(), flist->count);
  	}
  
@@ -472,7 +473,7 @@ TODO:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1655,7 +1814,23 @@ void generate_files(int f_out, struct fi
+@@ -1654,7 +1814,23 @@ void generate_files(int f_out, struct fi
  	}
  	recv_generator(NULL, NULL, 0, 0, 0, code, -1);
  	if (delete_during)
@@ -507,7 +508,7 @@ TODO:
  int numeric_ids = 0;
  int allow_8bit_chars = 0;
  int force_delete = 0;
-@@ -347,6 +348,7 @@ void usage(enum logcode F)
+@@ -343,6 +344,7 @@ void usage(enum logcode F)
    rprintf(F,"     --modify-window=NUM     compare mod-times with reduced accuracy\n");
    rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F," -y, --fuzzy                 find similar file for basis if no dest file\n");
@@ -515,7 +516,7 @@ TODO:
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
-@@ -501,6 +503,7 @@ static struct poptOption long_options[] 
+@@ -497,6 +499,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -523,7 +524,7 @@ TODO:
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
-@@ -1360,7 +1363,7 @@ int parse_arguments(int *argc, const cha
+@@ -1361,7 +1364,7 @@ int parse_arguments(int *argc, const cha
  		inplace = 1;
  	}
  
@@ -532,7 +533,7 @@ TODO:
  		partial_dir = tmp_partialdir;
  
  	if (inplace) {
-@@ -1369,6 +1372,7 @@ int parse_arguments(int *argc, const cha
+@@ -1370,6 +1373,7 @@ int parse_arguments(int *argc, const cha
  			snprintf(err_buf, sizeof err_buf,
  				 "--%s cannot be used with --%s\n",
  				 append_mode ? "append" : "inplace",
@@ -540,7 +541,7 @@ TODO:
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -1679,6 +1683,8 @@ void server_options(char **args,int *arg
+@@ -1680,6 +1684,8 @@ void server_options(char **args,int *arg
  			args[ac++] = "--super";
  		if (size_only)
  			args[ac++] = "--size-only";
