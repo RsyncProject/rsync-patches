@@ -69,7 +69,7 @@ See the newly-created file "instructions" for more info.
  				am_sender ? "on" : "to",
 --- old/configure.in
 +++ new/configure.in
-@@ -610,6 +610,12 @@ if test x"$with_included_popt" != x"yes"
+@@ -632,6 +632,12 @@ if test x"$with_included_popt" != x"yes"
      AC_CHECK_LIB(popt, poptGetContext, , [with_included_popt=yes])
  fi
  
@@ -661,7 +661,7 @@ See the newly-created file "instructions" for more info.
 +		if (*strFileNamePtr == '/')
 +			strFileNamePtr++;
 +
-+		snprintf(strFileSize, sizeof strFileSize, "%.0f", (double)file->length);
++		snprintf(strFileSize, sizeof strFileSize, "%.0f", (double)F_LENGTH(file));
 +		if (am_sender) {
 +			intBytesTransferred = stats.total_written - initial_stats->total_written;
 +		} else {
@@ -1051,7 +1051,7 @@ See the newly-created file "instructions" for more info.
  FN_LOCAL_BOOL(lp_list, list)
 --- old/log.c
 +++ new/log.c
-@@ -93,7 +93,7 @@ struct {
+@@ -95,7 +95,7 @@ struct {
  /*
   * Map from rsync error code to name, or return NULL.
   */
@@ -1062,7 +1062,7 @@ See the newly-created file "instructions" for more info.
  	for (i = 0; rerr_names[i].name; i++) {
 --- old/receiver.c
 +++ new/receiver.c
-@@ -110,6 +110,10 @@ static int get_tmpname(char *fnametmp, c
+@@ -110,6 +110,10 @@ int get_tmpname(char *fnametmp, char *fn
  
  	if (maxname < 1) {
  		rprintf(FERROR, "temporary filename too long: %s\n", fname);
@@ -1118,8 +1118,8 @@ See the newly-created file "instructions" for more info.
 +#endif
  			} else {
  				if (remove_source_files
- 				    || (preserve_hard_links
-@@ -422,6 +444,9 @@ int recv_files(int f_in, struct file_lis
+ 				 || (preserve_hard_links && F_IS_HLINKED(file)))
+@@ -419,6 +441,9 @@ int recv_files(int f_in, struct file_lis
  		if (server_filter_list.head
  		    && check_filter(&server_filter_list, fname, 0) < 0) {
  			rprintf(FERROR, "attempt to hack rsync failed.\n");
@@ -1129,7 +1129,7 @@ See the newly-created file "instructions" for more info.
  			exit_cleanup(RERR_PROTOCOL);
  		}
  
-@@ -478,6 +503,11 @@ int recv_files(int f_in, struct file_lis
+@@ -475,6 +500,11 @@ int recv_files(int f_in, struct file_lis
  					rprintf(FERROR,
  						"invalid basis_dir index: %d.\n",
  						fnamecmp_type);
@@ -1141,37 +1141,37 @@ See the newly-created file "instructions" for more info.
  					exit_cleanup(RERR_PROTOCOL);
  				}
  				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
-@@ -526,6 +556,9 @@ int recv_files(int f_in, struct file_lis
+@@ -523,6 +553,9 @@ int recv_files(int f_in, struct file_lis
  		} else if (do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR, errno, "fstat %s failed",
  				full_fname(fnamecmp));
 +#ifdef HAVE_LIBODBC
 +			db_log_error(FERROR, 19,"fstat %s failed",full_fname(fnamecmp));
 +#endif
- 			discard_receive_data(f_in, file->length);
+ 			discard_receive_data(f_in, F_LENGTH(file));
  			close(fd1);
  			continue;
-@@ -539,6 +572,9 @@ int recv_files(int f_in, struct file_lis
+@@ -536,6 +569,9 @@ int recv_files(int f_in, struct file_lis
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
 +#ifdef HAVE_LIBODBC
 +			db_log_error(FERROR,20,"recv_files: %s is a directory",full_fname(fnamecmp));
 +#endif
- 			discard_receive_data(f_in, file->length);
+ 			discard_receive_data(f_in, F_LENGTH(file));
  			close(fd1);
  			continue;
-@@ -562,6 +598,9 @@ int recv_files(int f_in, struct file_lis
+@@ -559,6 +595,9 @@ int recv_files(int f_in, struct file_lis
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "open %s failed",
  					full_fname(fname));
 +#ifdef HAVE_LIBODBC
 +				db_log_error(FERROR,22, "open %s failed", full_fname(fname));
 +#endif
- 				discard_receive_data(f_in, file->length);
+ 				discard_receive_data(f_in, F_LENGTH(file));
  				if (fd1 != -1)
  					close(fd1);
-@@ -595,6 +634,10 @@ int recv_files(int f_in, struct file_lis
+@@ -592,6 +631,10 @@ int recv_files(int f_in, struct file_lis
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "mkstemp %s failed",
  					full_fname(fnametmp));
@@ -1179,11 +1179,11 @@ See the newly-created file "instructions" for more info.
 +				db_log_error(FERROR, 22, "mkstemp %s failed",
 +					full_fname(fnametmp));
 +#endif
- 				discard_receive_data(f_in, file->length);
+ 				discard_receive_data(f_in, F_LENGTH(file));
  				if (fd1 != -1)
  					close(fd1);
-@@ -615,12 +658,19 @@ int recv_files(int f_in, struct file_lis
- 				       fname, fd2, file->length);
+@@ -612,12 +655,19 @@ int recv_files(int f_in, struct file_lis
+ 				       fname, fd2, F_LENGTH(file));
  
  		log_item(log_code, file, &initial_stats, iflags, NULL);
 +#ifdef HAVE_LIBODBC
@@ -1202,7 +1202,7 @@ See the newly-created file "instructions" for more info.
  			exit_cleanup(RERR_FILEIO);
  		}
  
-@@ -679,6 +729,12 @@ int recv_files(int f_in, struct file_lis
+@@ -674,6 +724,12 @@ int recv_files(int f_in, struct file_lis
  				rprintf(msgtype,
  					"%s: %s failed verification -- update %s%s.\n",
  					errstr, fname, keptstr, redostr);
@@ -1213,11 +1213,11 @@ See the newly-created file "instructions" for more info.
 +					keptstr, redostr);
 +#endif
  			}
- 			if (!phase) {
- 				SIVAL(numbuf, 0, i);
+ 			if (!phase)
+ 				send_msg_int(MSG_REDO, i);
 --- old/sender.c
 +++ new/sender.c
-@@ -355,6 +355,9 @@ void send_files(struct file_list *flist,
+@@ -305,6 +305,9 @@ void send_files(struct file_list *flist,
  			end_progress(st.st_size);
  
  		log_item(log_code, file, &initial_stats, iflags, NULL);

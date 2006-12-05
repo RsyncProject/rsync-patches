@@ -15,23 +15,22 @@ To use this patch, run these commands for a successful build:
 +extern int preserve_atimes;
  extern int relative_paths;
  extern int implied_dirs;
- extern int flist_extra_ndx;
-@@ -135,6 +136,7 @@ void show_flist_stats(void)
+ extern int flist_extra_cnt;
+@@ -134,6 +135,7 @@ void show_flist_stats(void)
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
 +	time_t atime = preserve_atimes ? F_ATIME(f) : 0;
+ 	double len;
  
- 	if (!f->basename) {
- 		/* this can happen if duplicate names were removed */
-@@ -145,16 +147,18 @@ static void list_file_entry(struct file_
+ 	if (!F_IS_ACTIVE(f)) {
+@@ -146,14 +148,16 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
 -		rprintf(FINFO, "%s %11.0f %s %s -> %s\n",
 +		rprintf(FINFO, "%s %11.0f %s %s %s -> %s\n",
- 			permbuf,
- 			(double)f->length, timestring(f->modtime),
+ 			permbuf, len, timestring(f->modtime),
 +			preserve_atimes ? timestring(atime) : "",
  			f_name(f, NULL), F_SYMLINK(f));
  	} else
@@ -39,13 +38,12 @@ To use this patch, run these commands for a successful build:
  	{
 -		rprintf(FINFO, "%s %11.0f %s %s\n",
 +		rprintf(FINFO, "%s %11.0f %s %s %s\n",
- 			permbuf,
- 			(double)f->length, timestring(f->modtime),
+ 			permbuf, len, timestring(f->modtime),
 +			preserve_atimes ? timestring(atime) : "",
  			f_name(f, NULL));
  	}
  }
-@@ -312,6 +316,7 @@ static void send_file_entry(struct file_
+@@ -311,6 +315,7 @@ static void send_file_entry(struct file_
  {
  	unsigned short flags;
  	static time_t modtime;
@@ -53,7 +51,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -327,7 +332,7 @@ static void send_file_entry(struct file_
+@@ -326,7 +331,7 @@ static void send_file_entry(struct file_
  
  	if (!file) {
  		write_byte(f, 0);
@@ -62,7 +60,7 @@ To use this patch, run these commands for a successful build:
  		dev = 0, rdev = MAKEDEV(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -377,6 +382,13 @@ static void send_file_entry(struct file_
+@@ -376,6 +381,13 @@ static void send_file_entry(struct file_
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -76,7 +74,7 @@ To use this patch, run these commands for a successful build:
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_idev.dev != 0) {
-@@ -429,6 +441,8 @@ static void send_file_entry(struct file_
+@@ -428,6 +440,8 @@ static void send_file_entry(struct file_
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -85,7 +83,7 @@ To use this patch, run these commands for a successful build:
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -495,7 +509,7 @@ static void send_file_entry(struct file_
+@@ -494,7 +508,7 @@ static void send_file_entry(struct file_
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   unsigned short flags, int f)
  {
@@ -94,7 +92,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -515,7 +529,7 @@ static struct file_struct *recv_file_ent
+@@ -514,7 +528,7 @@ static struct file_struct *recv_file_ent
  	struct file_struct *file;
  
  	if (!flist) {
@@ -103,7 +101,7 @@ To use this patch, run these commands for a successful build:
  		dev = 0, rdev = MAKEDEV(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -571,6 +585,8 @@ static struct file_struct *recv_file_ent
+@@ -570,6 +584,8 @@ static struct file_struct *recv_file_ent
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -112,7 +110,7 @@ To use this patch, run these commands for a successful build:
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -643,6 +659,8 @@ static struct file_struct *recv_file_ent
+@@ -654,6 +670,8 @@ static struct file_struct *recv_file_ent
  		F_UID(file) = uid;
  	if (preserve_gid)
  		F_GID(file) = gid;
@@ -121,7 +119,7 @@ To use this patch, run these commands for a successful build:
  
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
-@@ -906,6 +924,8 @@ struct file_struct *make_file(const char
+@@ -930,6 +948,8 @@ struct file_struct *make_file(const char
  		F_UID(file) = st.st_uid;
  	if (preserve_gid)
  		F_GID(file) = st.st_gid;
@@ -140,7 +138,7 @@ To use this patch, run these commands for a successful build:
  extern int omit_dir_times;
  extern int delete_mode;
  extern int delete_before;
-@@ -477,6 +478,9 @@ void itemize(struct file_struct *file, i
+@@ -475,6 +476,9 @@ void itemize(struct file_struct *file, i
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
@@ -150,13 +148,13 @@ To use this patch, run these commands for a successful build:
  		if ((file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
  		if (preserve_uid && am_root && F_UID(file) != st->st_uid)
-@@ -787,6 +791,8 @@ static int try_dests_reg(struct file_str
+@@ -785,6 +789,8 @@ static int try_dests_reg(struct file_str
  			if (hard_link_one(file, ndx, fname, 0, stp,
  					  cmpbuf, 1, i, code) < 0)
  				goto try_a_copy;
 +			if (preserve_atimes)
 +				set_file_attrs(fname, file, stp, 0);
- 			if (preserve_hard_links && IS_HLINKED(file))
+ 			if (preserve_hard_links && F_IS_HLINKED(file))
  				hard_link_cluster(file, ndx, itemizing, code, j);
  		} else
 --- old/log.c
@@ -168,8 +166,8 @@ To use this patch, run these commands for a successful build:
 +extern int preserve_atimes;
  extern int preserve_uid;
  extern int preserve_gid;
- extern int flist_extra_ndx;
-@@ -618,7 +619,8 @@ static void log_formatted(enum logcode c
+ extern int stdout_format_has_i;
+@@ -625,7 +626,8 @@ static void log_formatted(enum logcode c
  			c[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
  			c[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
  			c[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
@@ -212,11 +210,11 @@ To use this patch, run these commands for a successful build:
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
 @@ -1223,6 +1228,8 @@ int parse_arguments(int *argc, const cha
- 		preserve_uid = flist_extra_ndx++;
+ 		preserve_uid = ++flist_extra_cnt;
  	if (preserve_gid)
- 		preserve_gid = flist_extra_ndx++;
+ 		preserve_gid = ++flist_extra_cnt;
 +	if (preserve_atimes)
-+		preserve_atimes = flist_extra_ndx++;
++		preserve_atimes = ++flist_extra_cnt;
  
  	*argv = poptGetArgs(pc);
  	*argc = count_args(*argv);
@@ -297,7 +295,7 @@ To use this patch, run these commands for a successful build:
  
  /* These flags are used in the live flist data. */
  
-@@ -120,6 +121,7 @@
+@@ -121,6 +122,7 @@
  
  #define ATTRS_REPORT		(1<<0)
  #define ATTRS_SKIP_MTIME	(1<<1)
@@ -305,22 +303,22 @@ To use this patch, run these commands for a successful build:
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -532,6 +534,7 @@ union flist_extras {
- 	struct idev *idev;	/* The hard-link info during matching */
- 	struct hlist *hlist;	/* The hard-link info after matching */
- 	int32 num;		/* A general-purpose number */
-+	time_t time;		/* A time value */
- };
- 
- #define FLIST_EXTRA(f,j) ((union flist_extras *)(f))[-(j)]
-@@ -540,6 +543,7 @@ union flist_extras {
- /* When enabled, all entries have these: */
- #define F_UID(f) FLIST_EXTRA(f, preserve_uid).uid
- #define F_GID(f) FLIST_EXTRA(f, preserve_gid).gid
-+#define F_ATIME(f) FLIST_EXTRA(f, preserve_atimes).time
+@@ -511,6 +513,7 @@ struct file_struct {
+ 	union flist_extras {
+ 		uid_t uid;           /* The user ID number */
+ 		uid_t gid;           /* The group ID number or GID_NONE */
++		time_t utime;        /* A unix-time value */
+ 		struct idev *idev;   /* The hard-link info during matching */
+ 		struct hlist *hlist; /* The hard-link info after matching */
+ 		uint32 unum;         /* An unsigned number */
+@@ -551,6 +554,7 @@ extern int preserve_gid;
+ /* When the associated option is on, all entries will have these present: */
+ #define F_UID(f) REQ_EXTRA(f, preserve_uid)->uid
+ #define F_GID(f) REQ_EXTRA(f, preserve_gid)->gid
++#define F_ATIME(f) REQ_EXTRA(f, preserve_atimes)->utime
  
  /* These are per-entry optional and mutally exclusive: */
- #define F_IDEV(f) FLIST_EXTRA(f, flist_extra_ndx).idev
+ #define F_IDEV(f)  OPT_EXTRA(f, LEN64_BUMP(f))->idev
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -328,8 +328,9 @@ to the detailed description below for a 
