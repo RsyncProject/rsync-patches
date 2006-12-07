@@ -272,7 +272,7 @@ To use this patch, run these commands for a successful build:
 +	char *linkname;
 +	long last_fnbr;
 +
-+	if (file->length == 0)
++	if (F_LENGTH(file) == 0)
 +		return robust_rename(fnametmp, fname, NULL, 0644);
 +
 +	if (do_stat(hashname, &st) == -1) {
@@ -452,12 +452,13 @@ To use this patch, run these commands for a successful build:
  			args[ac++] = "--files-from";
 --- old/receiver.c
 +++ new/receiver.c
-@@ -124,12 +124,13 @@ int get_tmpname(char *fnametmp, char *fn
+@@ -124,12 +124,14 @@ int get_tmpname(char *fnametmp, char *fn
  
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
 -			char *fname, int fd, OFF_T total_size)
-+			char *fname, int fd, OFF_T total_size, char *md4)
++			const char *fname, int fd, OFF_T total_size,
++			const char *md4)
  {
  	static char file_sum1[MD4_SUM_LENGTH];
  	static char file_sum2[MD4_SUM_LENGTH];
@@ -467,7 +468,7 @@ To use this patch, run these commands for a successful build:
  	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -149,6 +150,9 @@ static int receive_data(int f_in, char *
+@@ -149,6 +151,9 @@ static int receive_data(int f_in, char *
  	} else
  		mapbuf = NULL;
  
@@ -477,7 +478,7 @@ To use this patch, run these commands for a successful build:
  	sum_init(checksum_seed);
  
  	if (append_mode) {
-@@ -191,6 +195,8 @@ static int receive_data(int f_in, char *
+@@ -191,6 +196,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -486,7 +487,7 @@ To use this patch, run these commands for a successful build:
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -217,6 +223,8 @@ static int receive_data(int f_in, char *
+@@ -217,6 +224,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -495,7 +496,7 @@ To use this patch, run these commands for a successful build:
  		}
  
  		if (updating_basis) {
-@@ -259,6 +267,8 @@ static int receive_data(int f_in, char *
+@@ -259,6 +268,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_end(file_sum1);
@@ -504,7 +505,7 @@ To use this patch, run these commands for a successful build:
  
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -274,7 +284,7 @@ static int receive_data(int f_in, char *
+@@ -274,7 +285,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -513,6 +514,15 @@ To use this patch, run these commands for a successful build:
  }
  
  static void handle_delayed_updates(struct file_list *flist, char *local_name)
+@@ -609,7 +620,7 @@ int recv_files(int f_in, struct file_lis
+ 
+ 		/* recv file data */
+ 		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
+-				       fname, fd2, F_LENGTH(file));
++				       fname, fd2, F_LENGTH(file), F_SUM(file));
+ 
+ 		log_item(log_code, file, &initial_stats, iflags, NULL);
+ 
 --- old/rsync.c
 +++ new/rsync.c
 @@ -49,6 +49,7 @@ extern int inplace;
