@@ -23,9 +23,28 @@ To use this patch, run these commands for a successful build:
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
+--- old/flist.c
++++ new/flist.c
+@@ -57,6 +57,7 @@ extern int copy_unsafe_links;
+ extern int protocol_version;
+ extern int sanitize_paths;
+ extern struct stats stats;
++extern char *link_by_hash_dir;
+ extern struct file_list *the_file_list;
+ 
+ extern char curr_dir[MAXPATHLEN];
+@@ -621,7 +622,7 @@ static struct file_struct *recv_file_ent
+ 	}
+ #endif
+ 
+-	if (always_checksum && S_ISREG(mode))
++	if ((always_checksum || link_by_hash_dir) && S_ISREG(mode))
+ 		extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
+ 
+ 	if (file_length > 0xFFFFFFFFu && S_ISREG(mode))
 --- old/hashlink.c
 +++ new/hashlink.c
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,336 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
 +
@@ -50,16 +69,14 @@ To use this patch, run these commands for a successful build:
 +
 +extern char *link_by_hash_dir;
 +
-+#if HAVE_LINK
++#ifdef HAVE_LINK
 +
-+char* make_hash_name(struct file_struct *file)
++char *make_hash_name(struct file_struct *file)
 +{
 +	char hash[33], *dst;
-+	unsigned char *src;
-+	unsigned char c;
++	uchar c, *src = (uchar*)F_SUM(file);
 +	int i;
 +
-+	src = (unsigned char*)file->u.sum;
 +	for (dst = hash, i = 0; i < 4; i++, src++) {
 +		c = *src >> 4;
 +		*(dst++) = (c >= 10) ? (c - 10 + 'a') : (c + '0');
@@ -363,7 +380,6 @@ To use this patch, run these commands for a successful build:
 +	free(hashname);
 +	return rc;
 +}
-+
 +#endif
 --- old/options.c
 +++ new/options.c
@@ -375,7 +391,7 @@ To use this patch, run these commands for a successful build:
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *logfile_name = NULL;
-@@ -349,6 +350,7 @@ void usage(enum logcode F)
+@@ -346,6 +347,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -383,7 +399,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
-@@ -398,7 +400,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -395,7 +397,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -392,7 +408,7 @@ To use this patch, run these commands for a successful build:
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -499,6 +501,7 @@ static struct poptOption long_options[] 
+@@ -497,6 +499,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -400,12 +416,12 @@ To use this patch, run these commands for a successful build:
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
-@@ -1089,6 +1092,21 @@ int parse_arguments(int *argc, const cha
+@@ -1087,6 +1090,21 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
 +                case OPT_LINK_BY_HASH:
-+#if HAVE_LINK
++#ifdef HAVE_LINK
 +			arg = poptGetOptArg(pc);
 +			if (sanitize_paths)
 +				arg = sanitize_path(NULL, arg, NULL, 0, NULL);
@@ -422,7 +438,7 @@ To use this patch, run these commands for a successful build:
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1739,6 +1757,11 @@ void server_options(char **args,int *arg
+@@ -1745,6 +1763,11 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -436,15 +452,7 @@ To use this patch, run these commands for a successful build:
  			args[ac++] = "--files-from";
 --- old/receiver.c
 +++ new/receiver.c
-@@ -50,6 +50,7 @@ extern int delay_updates;
- extern struct stats stats;
- extern char *stdout_format;
- extern char *tmpdir;
-+extern char *link_by_hash_dir;
- extern char *partial_dir;
- extern char *basis_dir[];
- extern struct file_list *the_file_list;
-@@ -124,12 +125,13 @@ static int get_tmpname(char *fnametmp, c
+@@ -124,12 +124,13 @@ int get_tmpname(char *fnametmp, char *fn
  
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -459,7 +467,7 @@ To use this patch, run these commands for a successful build:
  	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -149,6 +151,9 @@ static int receive_data(int f_in, char *
+@@ -149,6 +150,9 @@ static int receive_data(int f_in, char *
  	} else
  		mapbuf = NULL;
  
@@ -469,7 +477,7 @@ To use this patch, run these commands for a successful build:
  	sum_init(checksum_seed);
  
  	if (append_mode) {
-@@ -191,6 +196,8 @@ static int receive_data(int f_in, char *
+@@ -191,6 +195,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -478,7 +486,7 @@ To use this patch, run these commands for a successful build:
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -217,6 +224,8 @@ static int receive_data(int f_in, char *
+@@ -217,6 +223,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -487,7 +495,7 @@ To use this patch, run these commands for a successful build:
  		}
  
  		if (updating_basis) {
-@@ -259,6 +268,8 @@ static int receive_data(int f_in, char *
+@@ -259,6 +267,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_end(file_sum1);
@@ -496,7 +504,7 @@ To use this patch, run these commands for a successful build:
  
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -274,7 +285,7 @@ static int receive_data(int f_in, char *
+@@ -274,7 +284,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -505,37 +513,23 @@ To use this patch, run these commands for a successful build:
  }
  
  static void handle_delayed_updates(struct file_list *flist, char *local_name)
-@@ -611,8 +622,12 @@ int recv_files(int f_in, struct file_lis
- 			rprintf(FINFO, "%s\n", fname);
- 
- 		/* recv file data */
-+#if HAVE_LINK
-+		if (link_by_hash_dir)
-+			file->u.sum = new_array(char, MD4_SUM_LENGTH);
-+#endif
- 		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
--				       fname, fd2, file->length);
-+				       fname, fd2, file->length, file->u.sum);
- 
- 		log_item(log_code, file, &initial_stats, iflags, NULL);
- 
 --- old/rsync.c
 +++ new/rsync.c
-@@ -48,6 +48,7 @@ extern int inplace;
+@@ -49,6 +49,7 @@ extern int inplace;
  extern int keep_dirlinks;
  extern int make_backups;
  extern mode_t orig_umask;
 +extern char *link_by_hash_dir;
  extern struct stats stats;
+ extern struct file_list *the_file_list;
  extern struct chmod_mode_struct *daemon_chmod_modes;
- 
-@@ -271,8 +272,15 @@ void finish_transfer(char *fname, char *
+@@ -324,8 +325,15 @@ void finish_transfer(char *fname, char *
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
 -	ret = robust_rename(fnametmp, fname, partialptr,
 -			    file->mode & INITACCESSPERMS);
-+#if HAVE_LINK
++#ifdef HAVE_LINK
 +	if (link_by_hash_dir)
 +		ret = link_by_hash(fnametmp, fname, file);
 +	else
@@ -549,7 +543,7 @@ To use this patch, run these commands for a successful build:
  			ret == -2 ? "copy" : "rename",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -651,6 +651,14 @@ struct stats {
+@@ -692,6 +692,14 @@ struct stats {
  	int current_file_index;
  };
  
@@ -566,7 +560,7 @@ To use this patch, run these commands for a successful build:
  #include "byteorder.h"
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -366,6 +366,7 @@ to the detailed description below for a 
+@@ -367,6 +367,7 @@ to the detailed description below for a 
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
