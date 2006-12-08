@@ -119,7 +119,7 @@ To use this patch, run these commands for a successful build:
  
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
-@@ -930,6 +948,8 @@ struct file_struct *make_file(const char
+@@ -931,6 +949,8 @@ struct file_struct *make_file(const char
  		F_UID(file) = st.st_uid;
  	if (preserve_gid)
  		F_GID(file) = st.st_gid;
@@ -138,17 +138,17 @@ To use this patch, run these commands for a successful build:
  extern int omit_dir_times;
  extern int delete_mode;
  extern int delete_before;
-@@ -475,6 +476,9 @@ void itemize(struct file_struct *file, i
+@@ -547,6 +548,9 @@ void itemize(struct file_struct *file, i
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
 +		if (preserve_atimes && !S_ISDIR(file->mode) && !S_ISLNK(file->mode)
 +		 && cmp_time(F_ATIME(file), st->st_atime) != 0)
 +			iflags |= ITEM_REPORT_ATIME;
- 		if ((file->mode & CHMOD_BITS) != (st->st_mode & CHMOD_BITS))
+ 		if ((unsigned)(st->st_mode & CHMOD_BITS) != (file->mode & CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
  		if (preserve_uid && am_root && F_UID(file) != st->st_uid)
-@@ -785,6 +789,8 @@ static int try_dests_reg(struct file_str
+@@ -859,6 +863,8 @@ static int try_dests_reg(struct file_str
  			if (hard_link_one(file, ndx, fname, 0, stp,
  					  cmpbuf, 1, i, code) < 0)
  				goto try_a_copy;
@@ -310,15 +310,15 @@ To use this patch, run these commands for a successful build:
 +		time_t utime;        /* A unix-time value */
  		struct idev *idev;   /* The hard-link info during matching */
  		struct hlist *hlist; /* The hard-link info after matching */
- 		uint32 unum;         /* An unsigned number */
-@@ -551,6 +554,7 @@ extern int preserve_gid;
+ 		int32 num;           /* A signed number */
+@@ -553,6 +556,7 @@ extern int preserve_gid;
  /* When the associated option is on, all entries will have these present: */
  #define F_UID(f) REQ_EXTRA(f, preserve_uid)->uid
  #define F_GID(f) REQ_EXTRA(f, preserve_gid)->gid
 +#define F_ATIME(f) REQ_EXTRA(f, preserve_atimes)->utime
  
- /* These are per-entry optional and mutally exclusive: */
- #define F_IDEV(f)  OPT_EXTRA(f, LEN64_BUMP(f))->idev
+ /* These items are per-entry optional and mutally exclusive: */
+ #define F_HL_IDEV(f) OPT_EXTRA(f, LEN64_BUMP(f))->idev
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -328,8 +328,9 @@ to the detailed description below for a 
