@@ -24,7 +24,7 @@ To use this patch, run these commands for a successful build:
  extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
-@@ -730,6 +731,15 @@ static struct file_struct *recv_file_ent
+@@ -734,6 +735,15 @@ static struct file_struct *recv_file_ent
  			bp = tmp_sum;
  		}
  		read_buf(f, bp, checksum_len);
@@ -50,7 +50,7 @@ To use this patch, run these commands for a successful build:
  extern int checksum_len;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -505,7 +506,8 @@ void itemize(struct file_struct *file, i
+@@ -578,7 +579,8 @@ void itemize(struct file_struct *file, i
  
  
  /* Perform our quick-check heuristic for determining if a file is unchanged. */
@@ -60,7 +60,7 @@ To use this patch, run these commands for a successful build:
  {
  	if (st->st_size != F_LENGTH(file))
  		return 0;
-@@ -514,6 +516,8 @@ int unchanged_file(char *fn, struct file
+@@ -587,6 +589,8 @@ int unchanged_file(char *fn, struct file
  	   of the file time to determine whether to sync */
  	if (always_checksum && S_ISREG(st->st_mode)) {
  		char sum[MD4_SUM_LENGTH];
@@ -69,7 +69,7 @@ To use this patch, run these commands for a successful build:
  		file_checksum(fn, sum, st->st_size);
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
-@@ -750,7 +754,7 @@ static int try_dests_reg(struct file_str
+@@ -826,7 +830,7 @@ static int try_dests_reg(struct file_str
  			match_level = 1;
  			/* FALL THROUGH */
  		case 1:
@@ -78,7 +78,7 @@ To use this patch, run these commands for a successful build:
  				continue;
  			best_match = j;
  			match_level = 2;
-@@ -1418,7 +1422,7 @@ static void recv_generator(char *fname, 
+@@ -1512,7 +1516,7 @@ static void recv_generator(char *fname, 
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
  		;
@@ -89,15 +89,15 @@ To use this patch, run these commands for a successful build:
  			handle_partial_dir(partialptr, PDIR_DELETE);
 --- old/hlink.c
 +++ new/hlink.c
-@@ -234,7 +234,7 @@ int hard_link_check(struct file_struct *
- 						}
- 						break;
- 					}
--					if (!unchanged_file(cmpbuf, file, &st3))
-+					if (!unchanged_file(cmpbuf, 0, file, &st3))
- 						continue;
- 					statret = 1;
- 					st = &st3;
+@@ -233,7 +233,7 @@ int hard_link_check(struct file_struct *
+ 				}
+ 				break;
+ 			}
+-			if (!unchanged_file(cmpbuf, file, &alt_st))
++			if (!unchanged_file(cmpbuf, 0, file, &alt_st))
+ 				continue;
+ 			statret = 1;
+ 			*stp = alt_st;
 --- old/main.c
 +++ new/main.c
 @@ -47,6 +47,7 @@ extern int copy_dirlinks;
@@ -118,7 +118,7 @@ To use this patch, run these commands for a successful build:
  int local_server = 0;
  int new_root_dir = 0;
  mode_t orig_umask = 0;
-@@ -785,6 +789,7 @@ static void do_server_recv(int f_in, int
+@@ -788,6 +792,7 @@ static void do_server_recv(int f_in, int
  	struct file_list *flist;
  	char *local_name = NULL;
  	char *dir = NULL;
@@ -126,9 +126,9 @@ To use this patch, run these commands for a successful build:
  	int save_verbose = verbose;
  
  	if (filesfrom_fd >= 0) {
-@@ -828,6 +833,10 @@ static void do_server_recv(int f_in, int
- 		filesfrom_fd = -1;
- 	}
+@@ -836,6 +841,10 @@ static void do_server_recv(int f_in, int
+ 		init_hard_links();
+ #endif
  
 +	strlcpy(olddir, curr_dir, sizeof olddir);
 +	if (always_checksum && !local_server && argc > 0)
@@ -137,7 +137,7 @@ To use this patch, run these commands for a successful build:
  	flist = recv_file_list(f_in);
  	verbose = save_verbose;
  	if (!flist) {
-@@ -836,6 +845,9 @@ static void do_server_recv(int f_in, int
+@@ -844,6 +853,9 @@ static void do_server_recv(int f_in, int
  	}
  	the_file_list = flist;
  
@@ -147,7 +147,7 @@ To use this patch, run these commands for a successful build:
  	if (argc > 0)
  		local_name = get_local_name(flist,argv[0]);
  
-@@ -917,6 +929,7 @@ int client_run(int f_in, int f_out, pid_
+@@ -923,6 +935,7 @@ int client_run(int f_in, int f_out, pid_
  {
  	struct file_list *flist = NULL;
  	int exit_code = 0, exit_code2 = 0;
@@ -155,9 +155,9 @@ To use this patch, run these commands for a successful build:
  	char *local_name = NULL;
  
  	cleanup_child_pid = pid;
-@@ -991,11 +1004,18 @@ int client_run(int f_in, int f_out, pid_
- 		filesfrom_fd = -1;
- 	}
+@@ -1002,11 +1015,18 @@ int client_run(int f_in, int f_out, pid_
+ 		init_hard_links();
+ #endif
  
 +	strlcpy(olddir, curr_dir, sizeof olddir);
 +	if (always_checksum && !local_server)
@@ -176,11 +176,11 @@ To use this patch, run these commands for a successful build:
  
 --- old/rsync.h
 +++ new/rsync.h
-@@ -66,6 +66,7 @@
- #define FLAG_HLINK_FIRST (1<<6)	/* receiver/generator */
+@@ -67,6 +67,7 @@
  #define FLAG_HLINK_LAST (1<<7)	/* receiver/generator */
- #define FLAG_LENGTH64 (1<<8)	/* sender/receiver/generator */
-+#define FLAG_SUM_DIFFERS (1<<9)	/* receiver/generator */
+ #define FLAG_HLINK_DONE (1<<8)	/* receiver/generator */
+ #define FLAG_LENGTH64 (1<<9)	/* sender/receiver/generator */
++#define FLAG_SUM_DIFFERS (1<<10)/* receiver/generator */
  
- /* update this if you make incompatible changes */
- #define PROTOCOL_VERSION 30
+ #define BITS_SET(val,bits) (((val) & (bits)) == (bits))
+ #define BITS_SETnUNSET(val,onbits,offbits) (((val) & ((onbits)|(offbits))) == (onbits))
