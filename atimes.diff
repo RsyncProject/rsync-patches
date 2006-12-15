@@ -51,16 +51,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -329,7 +334,7 @@ static void send_file_entry(struct file_
- 
- 	if (!file) {
- 		write_byte(f, 0);
--		modtime = 0, mode = 0;
-+		modtime = 0, atime = 0, mode = 0;
- 		dev = 0, rdev = MAKEDEV(0, 0);
- 		rdev_major = 0;
- 		uid = 0, gid = 0;
-@@ -379,6 +384,13 @@ static void send_file_entry(struct file_
+@@ -367,6 +372,13 @@ static void send_file_entry(struct file_
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -74,7 +65,7 @@ To use this patch, run these commands for a successful build:
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_idev.dev != 0) {
-@@ -431,6 +443,8 @@ static void send_file_entry(struct file_
+@@ -434,6 +446,8 @@ static void send_file_entry(struct file_
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -83,7 +74,7 @@ To use this patch, run these commands for a successful build:
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -497,7 +511,7 @@ static void send_file_entry(struct file_
+@@ -501,7 +515,7 @@ static void send_file_entry(struct file_
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   unsigned short flags, int f)
  {
@@ -92,7 +83,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -517,7 +531,7 @@ static struct file_struct *recv_file_ent
+@@ -522,7 +536,7 @@ static struct file_struct *recv_file_ent
  	struct file_struct *file;
  
  	if (!flist) {
@@ -101,7 +92,7 @@ To use this patch, run these commands for a successful build:
  		dev = 0, rdev = MAKEDEV(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -573,6 +587,8 @@ static struct file_struct *recv_file_ent
+@@ -610,6 +624,8 @@ static struct file_struct *recv_file_ent
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -110,7 +101,7 @@ To use this patch, run these commands for a successful build:
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -657,6 +673,8 @@ static struct file_struct *recv_file_ent
+@@ -695,6 +711,8 @@ static struct file_struct *recv_file_ent
  		F_UID(file) = uid;
  	if (preserve_gid)
  		F_GID(file) = gid;
@@ -119,7 +110,7 @@ To use this patch, run these commands for a successful build:
  
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
-@@ -934,6 +952,8 @@ struct file_struct *make_file(const char
+@@ -985,6 +1003,8 @@ struct file_struct *make_file(const char
  		F_UID(file) = st.st_uid;
  	if (preserve_gid)
  		F_GID(file) = st.st_gid;
@@ -287,15 +278,15 @@ To use this patch, run these commands for a successful build:
  	change_uid = am_root && preserve_uid && st->st_uid != F_UID(file);
 --- old/rsync.h
 +++ new/rsync.h
-@@ -54,6 +54,7 @@
- #define XMIT_HAS_IDEV_DATA (1<<9)
- #define XMIT_SAME_DEV (1<<10)
+@@ -55,6 +55,7 @@
+ #define XMIT_SAME_DEV_pre30 (1<<10)	/* protocols < 30 */
+ #define XMIT_HLINK_FIRST (1<<10)	/* protocols >= 30 */
  #define XMIT_RDEV_MINOR_IS_SMALL (1<<11)
 +#define XMIT_SAME_ATIME (1<<12)
  
  /* These flags are used in the live flist data. */
  
-@@ -127,6 +128,7 @@
+@@ -128,6 +129,7 @@
  
  #define ATTRS_REPORT		(1<<0)
  #define ATTRS_SKIP_MTIME	(1<<1)
@@ -303,7 +294,7 @@ To use this patch, run these commands for a successful build:
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -508,6 +510,7 @@ struct file_struct {
+@@ -514,6 +516,7 @@ struct file_struct {
  	union flist_extras {
  		uid_t uid;           /* The user ID number */
  		uid_t gid;           /* The group ID number or GID_NONE */
@@ -311,7 +302,7 @@ To use this patch, run these commands for a successful build:
  		struct idev *idev;   /* The hard-link info during matching */
  		int32 num;           /* A signed number */
  		uint32 unum;         /* An unsigned number */
-@@ -553,6 +556,7 @@ extern int preserve_gid;
+@@ -559,6 +562,7 @@ extern int preserve_gid;
  /* When the associated option is on, all entries will have these present: */
  #define F_UID(f) REQ_EXTRA(f, preserve_uid)->uid
  #define F_GID(f) REQ_EXTRA(f, preserve_gid)->gid

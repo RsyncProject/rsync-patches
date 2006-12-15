@@ -1333,7 +1333,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
  		rprintf(FINFO, "%s %11.0f %s %s -> %s\n",
-@@ -624,6 +627,12 @@ static struct file_struct *recv_file_ent
+@@ -662,6 +665,12 @@ static struct file_struct *recv_file_ent
  	}
  #endif
  
@@ -1346,8 +1346,8 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	if (always_checksum && S_ISREG(mode))
  		extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
  
-@@ -736,6 +745,11 @@ static struct file_struct *recv_file_ent
- 		read_buf(f, bp, checksum_len);
+@@ -787,6 +796,11 @@ static struct file_struct *recv_file_ent
+ 			read_buf(f, bp, checksum_len);
  	}
  
 +#ifdef SUPPORT_ACLS
@@ -1358,7 +1358,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	return file;
  }
  
-@@ -996,6 +1010,9 @@ static struct file_struct *send_file_nam
+@@ -1047,6 +1061,9 @@ static struct file_struct *send_file_nam
  					  unsigned short flags)
  {
  	struct file_struct *file;
@@ -1368,7 +1368,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  	file = make_file(fname, flist, stp, flags,
  			 f == -2 ? SERVER_FILTERS : ALL_FILTERS);
-@@ -1005,11 +1022,24 @@ static struct file_struct *send_file_nam
+@@ -1056,12 +1073,26 @@ static struct file_struct *send_file_nam
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
  
@@ -1385,11 +1385,14 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  	flist_expand(flist);
  	flist->files[flist->count++] = file;
- 	send_file_entry(file, f);
+-	if (f >= 0)
++	if (f >= 0) {
+ 		send_file_entry(file, f, flist->count - 1);
 +#ifdef SUPPORT_ACLS
-+	if (preserve_acls && f >= 0)
-+		send_acl(&sx, f);
++		if (preserve_acls)
++			send_acl(&sx, f);
 +#endif
++	}
  	return file;
  }
  
@@ -2144,9 +2147,9 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern int link_dest;
 +extern int preserve_acls;
  extern int make_backups;
+ extern int protocol_version;
  extern int remove_source_files;
- extern int stdout_format_has_i;
-@@ -119,15 +120,19 @@ void match_hard_links(void)
+@@ -334,15 +335,19 @@ void match_hard_links(void)
  }
  
  static int maybe_hard_link(struct file_struct *file, int ndx,
@@ -2170,7 +2173,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  					ITEM_LOCAL_CHANGE | ITEM_XNAME_FOLLOWS,
  					0, "");
  			}
-@@ -148,7 +153,11 @@ static int maybe_hard_link(struct file_s
+@@ -363,7 +368,11 @@ static int maybe_hard_link(struct file_s
  
  	if (hard_link_one(file, fname, oldname, 0)) {
  		if (itemizing) {
@@ -2183,7 +2186,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				ITEM_LOCAL_CHANGE | ITEM_XNAME_FOLLOWS, 0,
  				realname);
  		}
-@@ -162,7 +171,7 @@ static int maybe_hard_link(struct file_s
+@@ -377,7 +386,7 @@ static int maybe_hard_link(struct file_s
  /* Only called if FLAG_HLINKED is set and FLAG_HLINK_FIRST is not.  Returns:
   * 0 = process the file, 1 = skip the file, -1 = error occurred. */
  int hard_link_check(struct file_struct *file, int ndx, const char *fname,
@@ -2192,7 +2195,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		    enum logcode code)
  {
  	STRUCT_STAT prev_st;
-@@ -213,18 +222,20 @@ int hard_link_check(struct file_struct *
+@@ -428,18 +437,20 @@ int hard_link_check(struct file_struct *
  	if (statret < 0 && basis_dir[0] != NULL) {
  		/* If we match an alt-dest item, we don't output this as a change. */
  		char cmpbuf[MAXPATHLEN];
@@ -2218,7 +2221,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				if (verbose < 2 || !stdout_format_has_i) {
  					itemizing = 0;
  					code = FNONE;
-@@ -233,16 +244,36 @@ int hard_link_check(struct file_struct *
+@@ -448,16 +459,36 @@ int hard_link_check(struct file_struct *
  				}
  				break;
  			}
@@ -2259,7 +2262,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			    realname, itemizing, code) < 0)
  		return -1;
  
-@@ -277,7 +308,8 @@ void finish_hard_link(struct file_struct
+@@ -492,7 +523,8 @@ void finish_hard_link(struct file_struct
  		      STRUCT_STAT *stp, int itemizing, enum logcode code,
  		      int alt_dest)
  {
@@ -2269,7 +2272,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	char alt_name[MAXPATHLEN], *prev_name;
  	const char *our_name;
  	int prev_statret, ndx, prev_ndx = F_HL_PREV(file);
-@@ -301,14 +333,24 @@ void finish_hard_link(struct file_struct
+@@ -516,14 +548,24 @@ void finish_hard_link(struct file_struct
  	} else
  		our_name = fname;
  
@@ -5953,7 +5956,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/rsync.h
 +++ new/rsync.h
-@@ -502,6 +502,14 @@ struct idev {
+@@ -508,6 +508,14 @@ struct idev_node {
  #define IN_LOOPBACKNET 127
  #endif
  
@@ -5968,7 +5971,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #define GID_NONE ((gid_t)-1)
  
  struct file_struct {
-@@ -553,10 +561,12 @@ extern int preserve_gid;
+@@ -559,11 +567,13 @@ extern int preserve_gid;
  /* When the associated option is on, all entries will have these present: */
  #define F_UID(f) REQ_EXTRA(f, preserve_uid)->uid
  #define F_GID(f) REQ_EXTRA(f, preserve_gid)->gid
@@ -5976,12 +5979,13 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  /* These items are per-entry optional and mutally exclusive: */
  #define F_HL_IDEV(f) OPT_EXTRA(f, LEN64_BUMP(f))->idev
+ #define F_HL_GNUM(f) OPT_EXTRA(f, LEN64_BUMP(f))->num
  #define F_HL_PREV(f) OPT_EXTRA(f, LEN64_BUMP(f))->num
 +#define F_DEF_ACL(f) OPT_EXTRA(f, LEN64_BUMP(f))->unum
  
  /* This optional item might follow an F_HL_*() item.
   * (Note: a device doesn't need to check LEN64_BUMP(f).) */
-@@ -692,6 +702,17 @@ struct stats {
+@@ -699,6 +709,17 @@ struct stats {
  
  struct chmod_mode_struct;
  
@@ -5999,7 +6003,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #include "byteorder.h"
  #include "lib/mdfour.h"
  #include "lib/wildmatch.h"
-@@ -710,6 +731,16 @@ struct chmod_mode_struct;
+@@ -717,6 +738,16 @@ struct chmod_mode_struct;
  #define NORETURN __attribute__((__noreturn__))
  #endif
  
