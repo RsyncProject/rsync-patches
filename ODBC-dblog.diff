@@ -14,10 +14,10 @@ See the newly-created file "instructions" for more info.
 @@ -32,7 +32,7 @@ LIBOBJ=lib/wildmatch.o lib/compat.o lib/
  ZLIBOBJ=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  	zlib/trees.o zlib/zutil.o zlib/adler32.o zlib/compress.o zlib/crc32.o
- OBJS1=rsync.o generator.o receiver.o cleanup.o sender.o exclude.o util.o \
--	main.o checksum.o match.o syscall.o log.o backup.o
-+	main.o checksum.o match.o syscall.o log.o backup.o @EXTRA_OBJECT@
- OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
+ OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
+-	util.o main.o checksum.o match.o syscall.o log.o backup.o
++	util.o main.o checksum.o match.o syscall.o log.o backup.o @EXTRA_OBJECT@
+ OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o \
  	fileio.o batch.o clientname.o chmod.o
  OBJS3=progress.o pipe.o
 --- old/cleanup.c
@@ -47,7 +47,7 @@ See the newly-created file "instructions" for more info.
  #include "case_N.h"
 --- old/clientserver.c
 +++ new/clientserver.c
-@@ -394,6 +394,9 @@ static int rsync_module(int f_in, int f_
+@@ -396,6 +396,9 @@ static int rsync_module(int f_in, int f_
  		   XFLG_ABS_IF_SLASH | XFLG_OLD_PREFIXES);
  
  	log_init(1);
@@ -57,7 +57,7 @@ See the newly-created file "instructions" for more info.
  
  #ifdef HAVE_PUTENV
  	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i)) {
-@@ -633,6 +636,9 @@ static int rsync_module(int f_in, int f_
+@@ -635,6 +638,9 @@ static int rsync_module(int f_in, int f_
  			rprintf(FLOG, "rsync %s %s from %s@%s (%s)\n",
  				am_sender ? "on" : "to",
  				request, auth_user, host, addr);
@@ -1119,7 +1119,7 @@ See the newly-created file "instructions" for more info.
  			} else {
  				if (remove_source_files
  				 || (preserve_hard_links && F_IS_HLINKED(file)))
-@@ -419,6 +441,9 @@ int recv_files(int f_in, struct file_lis
+@@ -414,6 +436,9 @@ int recv_files(int f_in, struct file_lis
  		if (server_filter_list.head
  		    && check_filter(&server_filter_list, fname, 0) < 0) {
  			rprintf(FERROR, "attempt to hack rsync failed.\n");
@@ -1129,7 +1129,7 @@ See the newly-created file "instructions" for more info.
  			exit_cleanup(RERR_PROTOCOL);
  		}
  
-@@ -475,6 +500,11 @@ int recv_files(int f_in, struct file_lis
+@@ -470,6 +495,11 @@ int recv_files(int f_in, struct file_lis
  					rprintf(FERROR,
  						"invalid basis_dir index: %d.\n",
  						fnamecmp_type);
@@ -1141,7 +1141,7 @@ See the newly-created file "instructions" for more info.
  					exit_cleanup(RERR_PROTOCOL);
  				}
  				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
-@@ -523,6 +553,9 @@ int recv_files(int f_in, struct file_lis
+@@ -518,6 +548,9 @@ int recv_files(int f_in, struct file_lis
  		} else if (do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR, errno, "fstat %s failed",
  				full_fname(fnamecmp));
@@ -1151,7 +1151,7 @@ See the newly-created file "instructions" for more info.
  			discard_receive_data(f_in, F_LENGTH(file));
  			close(fd1);
  			continue;
-@@ -536,6 +569,9 @@ int recv_files(int f_in, struct file_lis
+@@ -531,6 +564,9 @@ int recv_files(int f_in, struct file_lis
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -1161,7 +1161,7 @@ See the newly-created file "instructions" for more info.
  			discard_receive_data(f_in, F_LENGTH(file));
  			close(fd1);
  			continue;
-@@ -559,6 +595,9 @@ int recv_files(int f_in, struct file_lis
+@@ -554,6 +590,9 @@ int recv_files(int f_in, struct file_lis
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "open %s failed",
  					full_fname(fname));
@@ -1171,7 +1171,7 @@ See the newly-created file "instructions" for more info.
  				discard_receive_data(f_in, F_LENGTH(file));
  				if (fd1 != -1)
  					close(fd1);
-@@ -592,6 +631,10 @@ int recv_files(int f_in, struct file_lis
+@@ -587,6 +626,10 @@ int recv_files(int f_in, struct file_lis
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "mkstemp %s failed",
  					full_fname(fnametmp));
@@ -1182,7 +1182,7 @@ See the newly-created file "instructions" for more info.
  				discard_receive_data(f_in, F_LENGTH(file));
  				if (fd1 != -1)
  					close(fd1);
-@@ -612,12 +655,19 @@ int recv_files(int f_in, struct file_lis
+@@ -607,12 +650,19 @@ int recv_files(int f_in, struct file_lis
  				       fname, fd2, F_LENGTH(file));
  
  		log_item(log_code, file, &initial_stats, iflags, NULL);
@@ -1202,7 +1202,7 @@ See the newly-created file "instructions" for more info.
  			exit_cleanup(RERR_FILEIO);
  		}
  
-@@ -674,6 +724,12 @@ int recv_files(int f_in, struct file_lis
+@@ -669,6 +719,12 @@ int recv_files(int f_in, struct file_lis
  				rprintf(msgtype,
  					"%s: %s failed verification -- update %s%s.\n",
  					errstr, fname, keptstr, redostr);
@@ -1214,7 +1214,7 @@ See the newly-created file "instructions" for more info.
 +#endif
  			}
  			if (!phase)
- 				send_msg_int(MSG_REDO, i);
+ 				send_msg_int(MSG_REDO, ndx);
 --- old/sender.c
 +++ new/sender.c
 @@ -305,6 +305,9 @@ void send_files(struct file_list *flist,

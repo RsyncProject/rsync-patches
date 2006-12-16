@@ -21,9 +21,9 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	lib/permstring.o lib/pool_alloc.o lib/sysacls.o @LIBOBJS@
  ZLIBOBJ=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  	zlib/trees.o zlib/zutil.o zlib/adler32.o zlib/compress.o zlib/crc32.o
- OBJS1=rsync.o generator.o receiver.o cleanup.o sender.o exclude.o util.o \
- 	main.o checksum.o match.o syscall.o log.o backup.o
- OBJS2=options.o flist.o io.o compat.o hlink.o token.o uidlist.o socket.o \
+ OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
+ 	util.o main.o checksum.o match.o syscall.o log.o backup.o
+ OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o \
 -	fileio.o batch.o clientname.o chmod.o
 +	fileio.o batch.o clientname.o chmod.o acls.o
  OBJS3=progress.o pipe.o
@@ -1316,7 +1316,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/flist.c
 +++ new/flist.c
-@@ -40,6 +40,7 @@ extern int filesfrom_fd;
+@@ -41,6 +41,7 @@ extern int filesfrom_fd;
  extern int one_file_system;
  extern int copy_dirlinks;
  extern int keep_dirlinks;
@@ -1324,7 +1324,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern int preserve_links;
  extern int preserve_hard_links;
  extern int preserve_devices;
-@@ -147,6 +148,8 @@ static void list_file_entry(struct file_
+@@ -148,6 +149,8 @@ static void list_file_entry(struct file_
  	permstring(permbuf, f->mode);
  	len = F_LENGTH(f);
  
@@ -1333,7 +1333,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
  		rprintf(FINFO, "%s %11.0f %s %s -> %s\n",
-@@ -662,6 +665,12 @@ static struct file_struct *recv_file_ent
+@@ -663,6 +666,12 @@ static struct file_struct *recv_file_ent
  	}
  #endif
  
@@ -1346,7 +1346,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	if (always_checksum && S_ISREG(mode))
  		extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
  
-@@ -787,6 +796,11 @@ static struct file_struct *recv_file_ent
+@@ -793,6 +802,11 @@ static struct file_struct *recv_file_ent
  			read_buf(f, bp, checksum_len);
  	}
  
@@ -1358,7 +1358,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	return file;
  }
  
-@@ -1047,6 +1061,9 @@ static struct file_struct *send_file_nam
+@@ -1062,6 +1076,9 @@ static struct file_struct *send_file_nam
  					  unsigned short flags)
  {
  	struct file_struct *file;
@@ -1368,7 +1368,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  	file = make_file(fname, flist, stp, flags,
  			 f == -2 ? SERVER_FILTERS : ALL_FILTERS);
-@@ -1056,12 +1073,26 @@ static struct file_struct *send_file_nam
+@@ -1071,12 +1088,26 @@ static struct file_struct *send_file_nam
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
  
@@ -5970,8 +5970,8 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +
  #define GID_NONE ((gid_t)-1)
  
- struct file_struct {
-@@ -558,11 +566,13 @@ extern int preserve_gid;
+ union file_extras {
+@@ -559,11 +567,13 @@ extern int preserve_gid;
  /* When the associated option is on, all entries will have these present: */
  #define F_UID(f) REQ_EXTRA(f, preserve_uid)->uid
  #define F_GID(f) REQ_EXTRA(f, preserve_gid)->gid
@@ -5985,7 +5985,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  /* This optional item might follow an F_HL_*() item.
   * (Note: a device doesn't need to check LEN64_BUMP(f).) */
-@@ -698,6 +708,17 @@ struct stats {
+@@ -699,6 +709,17 @@ struct stats {
  
  struct chmod_mode_struct;
  
@@ -6003,7 +6003,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #include "byteorder.h"
  #include "lib/mdfour.h"
  #include "lib/wildmatch.h"
-@@ -716,6 +737,16 @@ struct chmod_mode_struct;
+@@ -717,6 +738,16 @@ struct chmod_mode_struct;
  #define NORETURN __attribute__((__noreturn__))
  #endif
  
@@ -6074,7 +6074,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +works if the remote rsync also supports it.  bf(--acls) implies bf(--perms).
 +
 +The ACL-sending protocol used by this version was first introduced in
-+the patch that was shipped with 2.6.8.  Sending files to an older version
++the patch that was shipped with 2.6.8.  Sending ACLs to an older version
 +of the ACL patch is not supported.
 +
  dit(bf(--chmod)) This option tells rsync to apply one or more
