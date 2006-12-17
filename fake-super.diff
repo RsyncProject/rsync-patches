@@ -111,7 +111,7 @@ above:
  static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len);
  
-@@ -814,7 +794,7 @@ struct file_struct *make_file(const char
+@@ -877,7 +857,7 @@ struct file_struct *make_file(const char
  		if (save_errno == ENOENT) {
  #ifdef SUPPORT_LINKS
  			/* Avoid "vanished" error if symlink points nowhere. */
@@ -120,7 +120,7 @@ above:
  			    && S_ISLNK(st.st_mode)) {
  				io_error |= IOERR_GENERAL;
  				rprintf(FERROR, "symlink has no referent: %s\n",
-@@ -982,7 +962,7 @@ struct file_struct *make_file(const char
+@@ -1050,7 +1030,7 @@ struct file_struct *make_file(const char
  		int save_mode = file->mode;
  		file->mode = S_IFDIR; /* Find a directory with our name. */
  		if (flist_find(the_file_list, file) >= 0
@@ -183,7 +183,7 @@ above:
  int am_server = 0;
  int am_sender = 0;
  int am_generator = 0;
-@@ -326,6 +326,9 @@ void usage(enum logcode F)
+@@ -325,6 +325,9 @@ void usage(enum logcode F)
    rprintf(F," -t, --times                 preserve times\n");
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
@@ -193,7 +193,7 @@ above:
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
-@@ -451,6 +454,7 @@ static struct poptOption long_options[] 
+@@ -450,6 +453,7 @@ static struct poptOption long_options[] 
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
@@ -201,7 +201,7 @@ above:
    {"owner",           'o', POPT_ARG_VAL,    &preserve_uid, 1, 0, 0 },
    {"no-owner",         0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
    {"no-o",             0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
-@@ -1177,6 +1181,14 @@ int parse_arguments(int *argc, const cha
+@@ -1176,6 +1180,14 @@ int parse_arguments(int *argc, const cha
  	}
  #endif
  
@@ -258,7 +258,7 @@ above:
  				"failed to set permissions on %s",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -751,6 +751,12 @@ typedef struct {
+@@ -783,6 +783,12 @@ typedef struct {
  
  #include "proto.h"
  
@@ -271,7 +271,7 @@ above:
  /* We have replacement versions of these if they're missing. */
  #ifndef HAVE_ASPRINTF
  int asprintf(char **ptr, const char *format, ...);
-@@ -969,6 +975,26 @@ int inet_pton(int af, const char *src, v
+@@ -1001,6 +1007,26 @@ int inet_pton(int af, const char *src, v
  const char *get_panic_action(void);
  #endif
  
@@ -308,7 +308,7 @@ above:
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy files whole (without rsync algorithm)
-@@ -847,7 +848,7 @@ permission value can be applied to the f
+@@ -846,7 +847,7 @@ permission value can be applied to the f
  dit(bf(-o, --owner)) This option causes rsync to set the owner of the
  destination file to be the same as the source file, but only if the
  receiving rsync is being run as the super-user (see also the bf(--super)
@@ -317,7 +317,7 @@ above:
  Without this option, the owner is set to the invoking user on the
  receiving side.
  
-@@ -870,7 +871,7 @@ default, but may fall back to using the 
+@@ -869,7 +870,7 @@ default, but may fall back to using the 
  dit(bf(--devices)) This option causes rsync to transfer character and
  block device files to the remote system to recreate these devices.
  This option has no effect if the receiving rsync is not run as the
@@ -326,7 +326,7 @@ above:
  
  dit(bf(--specials)) This option causes rsync to transfer special files
  such as named sockets and fifos.
-@@ -900,6 +901,33 @@ also for ensuring that you will get erro
+@@ -899,6 +900,33 @@ also for ensuring that you will get erro
  being running as the super-user.  To turn off super-user activities, the
  super-user can use bf(--no-super).
  
@@ -437,17 +437,7 @@ above:
  int preserve_perms = 0;
 --- old/xattr.c
 +++ new/xattr.c
-@@ -30,6 +30,9 @@ extern int am_root;
- extern int read_only;
- extern int list_only;
- extern int preserve_xattrs;
-+extern int preserve_uid;
-+extern int preserve_gid;
-+extern int flist_extra_ndx;
- extern unsigned int file_struct_len;
- 
- #define RSYNC_XAL_INITIAL 5
-@@ -44,11 +47,16 @@ extern unsigned int file_struct_len;
+@@ -42,11 +42,16 @@ extern int list_only;
  #define SPRE_LEN ((int)sizeof SYSTEM_PREFIX - 1)
  
  #ifdef HAVE_LINUX_XATTRS
@@ -466,7 +456,7 @@ above:
  
  typedef struct {
  	char *datum, *name;
-@@ -149,6 +157,10 @@ static int rsync_xal_get(const char *fna
+@@ -147,6 +152,10 @@ static int rsync_xal_get(const char *fna
  			continue;
  #endif
  
@@ -477,7 +467,7 @@ above:
  		datum_len = sys_lgetxattr(fname, name, NULL, 0);
  		if (datum_len < 0) {
  			if (errno == ENOTSUP)
-@@ -178,6 +190,13 @@ static int rsync_xal_get(const char *fna
+@@ -176,6 +185,13 @@ static int rsync_xal_get(const char *fna
  				return -1;
  			}
  		}
@@ -491,7 +481,7 @@ above:
  		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
  		rxas->name = ptr + datum_len;
  		rxas->datum = ptr;
-@@ -298,13 +317,9 @@ void receive_xattr(struct file_struct *f
+@@ -296,13 +312,9 @@ void receive_xattr(struct file_struct *f
  			rsync_xa *rxa;
  			size_t name_len = read_int(f);
  			size_t datum_len = read_int(f);
@@ -506,7 +496,7 @@ above:
  			if (name_len + datum_len + extra_len < name_len)
  				out_of_memory("receive_xattr"); /* overflow */
  			ptr = new_array(char, name_len + datum_len + extra_len);
-@@ -315,9 +330,14 @@ void receive_xattr(struct file_struct *f
+@@ -313,9 +325,14 @@ void receive_xattr(struct file_struct *f
  			read_buf(f, ptr, datum_len);
  #ifdef HAVE_LINUX_XATTRS
  			/* Non-root can only save the user namespace. */
@@ -524,7 +514,7 @@ above:
  			}
  #else
  			/* This OS only has a user namespace, so we either
-@@ -335,6 +355,12 @@ void receive_xattr(struct file_struct *f
+@@ -333,6 +350,12 @@ void receive_xattr(struct file_struct *f
  				continue;
  			}
  #endif
@@ -537,7 +527,7 @@ above:
  			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
  			rxa->name = name;
  			rxa->datum = ptr;
-@@ -412,4 +438,149 @@ int set_xattr(const char *fname, const s
+@@ -410,4 +433,150 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
  }
  
@@ -617,9 +607,10 @@ above:
 +	fst.st_mode &= (_S_IFMT | CHMOD_BITS);
 +	fmode = file->mode & (_S_IFMT | CHMOD_BITS);
 +
-+	if (IS_DEVICE(fmode) || IS_SPECIAL(fmode))
-+		rdev = MAKEDEV(F_DMAJOR(file), F_DMINOR(file));
-+	else
++	if (IS_DEVICE(fmode) || IS_SPECIAL(fmode)) {
++		uint32 *devp = F_RDEV_P(file);
++		rdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
++	} else
 +		rdev = 0;
 +
 +	/* Dump the special permissions and enable full owner access. */
