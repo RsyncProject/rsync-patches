@@ -6,6 +6,17 @@ To use this patch, run these commands for a successful build:
     make
 
 
+--- old/compat.c
++++ new/compat.c
+@@ -48,6 +48,8 @@ void setup_protocol(int f_out,int f_in)
+ 		preserve_uid = ++flist_extra_cnt;
+ 	if (preserve_gid)
+ 		preserve_gid = ++flist_extra_cnt;
++	if (preserve_atimes)
++		preserve_atimes = ++flist_extra_cnt;
+ 
+ 	if (remote_protocol == 0) {
+ 		if (!read_batch)
 --- old/flist.c
 +++ new/flist.c
 @@ -47,6 +47,7 @@ extern int preserve_devices;
@@ -16,7 +27,7 @@ To use this patch, run these commands for a successful build:
  extern int relative_paths;
  extern int implied_dirs;
  extern int flist_extra_cnt;
-@@ -138,6 +139,7 @@ void show_flist_stats(void)
+@@ -137,6 +138,7 @@ void show_flist_stats(void)
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -24,7 +35,7 @@ To use this patch, run these commands for a successful build:
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -150,14 +152,16 @@ static void list_file_entry(struct file_
+@@ -149,14 +151,16 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -43,7 +54,7 @@ To use this patch, run these commands for a successful build:
  			f_name(f, NULL));
  	}
  }
-@@ -315,6 +319,7 @@ static void send_file_entry(struct file_
+@@ -314,6 +318,7 @@ static void send_file_entry(struct file_
  {
  	unsigned short flags;
  	static time_t modtime;
@@ -51,7 +62,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -368,6 +373,13 @@ static void send_file_entry(struct file_
+@@ -367,6 +372,13 @@ static void send_file_entry(struct file_
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -64,8 +75,8 @@ To use this patch, run these commands for a successful build:
 +	}
  
  #ifdef SUPPORT_HARD_LINKS
- 	if (tmp_idev.dev != 0) {
-@@ -435,6 +447,8 @@ static void send_file_entry(struct file_
+ 	if (tmp_dev != 0) {
+@@ -434,6 +446,8 @@ static void send_file_entry(struct file_
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -74,7 +85,7 @@ To use this patch, run these commands for a successful build:
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (!numeric_ids)
  			add_uid(uid);
-@@ -502,7 +516,7 @@ static void send_file_entry(struct file_
+@@ -501,7 +515,7 @@ static void send_file_entry(struct file_
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   unsigned short flags, int f)
  {
@@ -83,7 +94,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -523,7 +537,7 @@ static struct file_struct *recv_file_ent
+@@ -522,7 +536,7 @@ static struct file_struct *recv_file_ent
  	struct file_struct *file;
  
  	if (!flist) {
@@ -92,7 +103,7 @@ To use this patch, run these commands for a successful build:
  		dev = 0, rdev = MAKEDEV(0, 0);
  		rdev_major = 0;
  		uid = 0, gid = 0;
-@@ -611,6 +625,8 @@ static struct file_struct *recv_file_ent
+@@ -610,6 +624,8 @@ static struct file_struct *recv_file_ent
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -101,7 +112,7 @@ To use this patch, run these commands for a successful build:
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -701,6 +717,8 @@ static struct file_struct *recv_file_ent
+@@ -700,6 +716,8 @@ static struct file_struct *recv_file_ent
  		F_UID(file) = uid;
  	if (preserve_gid)
  		F_GID(file) = gid;
@@ -110,7 +121,7 @@ To use this patch, run these commands for a successful build:
  
  	if (dirname_len) {
  		file->dirname = lastdir = bp;
-@@ -996,6 +1014,8 @@ struct file_struct *make_file(const char
+@@ -1002,6 +1020,8 @@ struct file_struct *make_file(const char
  		F_UID(file) = st.st_uid;
  	if (preserve_gid)
  		F_GID(file) = st.st_gid;
@@ -178,7 +189,7 @@ To use this patch, run these commands for a successful build:
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -307,8 +308,9 @@ void usage(enum logcode F)
+@@ -306,8 +307,9 @@ void usage(enum logcode F)
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
@@ -190,7 +201,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
-@@ -425,6 +427,9 @@ static struct poptOption long_options[] 
+@@ -424,6 +426,9 @@ static struct poptOption long_options[] 
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
@@ -200,16 +211,7 @@ To use this patch, run these commands for a successful build:
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
-@@ -1223,6 +1228,8 @@ int parse_arguments(int *argc, const cha
- 		preserve_uid = ++flist_extra_cnt;
- 	if (preserve_gid)
- 		preserve_gid = ++flist_extra_cnt;
-+	if (preserve_atimes)
-+		preserve_atimes = ++flist_extra_cnt;
- 
- 	*argv = poptGetArgs(pc);
- 	*argc = count_args(*argv);
-@@ -1542,6 +1549,8 @@ void server_options(char **args,int *arg
+@@ -1536,6 +1541,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -294,22 +296,22 @@ To use this patch, run these commands for a successful build:
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -513,6 +515,7 @@ struct idev_node {
- union file_extras {
- 	uid_t uid;		/* The user ID number */
- 	uid_t gid;		/* The group ID number or GID_NONE */
-+	time_t utime;		/* A unix-time value */
- 	struct idev *idev;	/* The hard-link info during matching */
- 	int32 num;		/* A signed number */
- 	uint32 unum;		/* An unsigned number */
-@@ -559,6 +562,7 @@ extern int preserve_gid;
+@@ -522,6 +524,7 @@ struct file_struct {
+ extern int flist_extra_cnt;
+ extern int preserve_uid;
+ extern int preserve_gid;
++extern int preserve_atimes;
+ 
+ #define FILE_STRUCT_LEN (offsetof(struct file_struct, basename))
+ #define EXTRA_LEN (sizeof (union file_extras))
+@@ -554,6 +557,7 @@ extern int preserve_gid;
  /* When the associated option is on, all entries will have these present: */
- #define F_UID(f) REQ_EXTRA(f, preserve_uid)->uid
- #define F_GID(f) REQ_EXTRA(f, preserve_gid)->gid
-+#define F_ATIME(f) REQ_EXTRA(f, preserve_atimes)->utime
+ #define F_UID(f) REQ_EXTRA(f, preserve_uid)->unum
+ #define F_GID(f) REQ_EXTRA(f, preserve_gid)->unum
++#define F_ATIME(f) REQ_EXTRA(f, preserve_atimes)->unum
  
  /* These items are per-entry optional and mutally exclusive: */
- #define F_HL_IDEV(f) OPT_EXTRA(f, LEN64_BUMP(f))->idev
+ #define F_HL_GNUM(f) OPT_EXTRA(f, LEN64_BUMP(f))->num
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -328,8 +328,9 @@ to the detailed description below for a 
