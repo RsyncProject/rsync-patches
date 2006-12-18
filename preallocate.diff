@@ -9,12 +9,9 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-
-TODO:  update docs
-
 --- old/configure.in
 +++ new/configure.in
-@@ -550,7 +550,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strd
+@@ -555,7 +555,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strd
      strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
      strerror putenv iconv_open locale_charset nl_langinfo \
@@ -33,7 +30,7 @@ TODO:  update docs
  int do_compression = 0;
  int def_compress_level = Z_DEFAULT_COMPRESSION;
  int am_root = 0;
-@@ -201,6 +202,7 @@ static void print_rsync_version(enum log
+@@ -200,6 +201,7 @@ static void print_rsync_version(enum log
  	char const *hardlinks = "no ";
  	char const *links = "no ";
  	char const *ipv6 = "no ";
@@ -41,7 +38,7 @@ TODO:  update docs
  	STRUCT_STAT *dumstat;
  
  #ifdef HAVE_SOCKETPAIR
-@@ -223,6 +225,10 @@ static void print_rsync_version(enum log
+@@ -222,6 +224,10 @@ static void print_rsync_version(enum log
  	ipv6 = "";
  #endif
  
@@ -52,7 +49,7 @@ TODO:  update docs
  	rprintf(f, "%s  version %s  protocol version %d\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
  	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
-@@ -233,8 +239,8 @@ static void print_rsync_version(enum log
+@@ -232,8 +238,8 @@ static void print_rsync_version(enum log
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -63,7 +60,7 @@ TODO:  update docs
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -311,6 +317,9 @@ void usage(enum logcode F)
+@@ -310,6 +316,9 @@ void usage(enum logcode F)
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
@@ -73,7 +70,7 @@ TODO:  update docs
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
    rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
-@@ -468,6 +477,7 @@ static struct poptOption long_options[] 
+@@ -467,6 +476,7 @@ static struct poptOption long_options[] 
    {"max-size",         0,  POPT_ARG_STRING, &max_size_arg, OPT_MAX_SIZE, 0, 0 },
    {"min-size",         0,  POPT_ARG_STRING, &min_size_arg, OPT_MIN_SIZE, 0, 0 },
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
@@ -81,7 +78,7 @@ TODO:  update docs
    {"inplace",          0,  POPT_ARG_NONE,   &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_VAL,    &append_mode, 1, 0, 0 },
    {"del",              0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
-@@ -1126,6 +1136,15 @@ int parse_arguments(int *argc, const cha
+@@ -1125,6 +1135,15 @@ int parse_arguments(int *argc, const cha
  	}
  #endif
  
@@ -97,7 +94,7 @@ TODO:  update docs
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -1764,6 +1783,9 @@ void server_options(char **args,int *arg
+@@ -1763,6 +1782,9 @@ void server_options(char **args,int *arg
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -160,7 +157,7 @@ TODO:  update docs
  	if (do_progress)
 --- old/rsync.h
 +++ new/rsync.h
-@@ -493,6 +493,10 @@ struct idev {
+@@ -532,6 +532,10 @@ struct idev_node {
  #define IN_LOOPBACKNET 127
  #endif
  
@@ -170,7 +167,37 @@ TODO:  update docs
 +
  #define GID_NONE ((gid_t)-1)
  
- #define HL_CHECK_MASTER	0
+ union file_extras {
+--- old/rsync.yo
++++ new/rsync.yo
+@@ -332,6 +332,7 @@ to the detailed description below for a 
+  -O, --omit-dir-times        omit directories when preserving times
+      --super                 receiver attempts super-user activities
+  -S, --sparse                handle sparse files efficiently
++     --preallocate           posix_fallocate dest files before writing
+  -n, --dry-run               show what would have been transferred
+  -W, --whole-file            copy files whole (without rsync algorithm)
+  -x, --one-file-system       don't cross filesystem boundaries
+@@ -888,6 +889,19 @@ NOTE: Don't use this option when the des
+ filesystem. It doesn't seem to handle seeks over null regions
+ correctly and ends up corrupting the files.
+ 
++dit(bf(--preallocate)) This tells the receiver to allocate each destination
++file to its eventual size using bf(posix_fallocate)(3) before writing data
++to the file.  If the receiver is remote, this nonstandard option only works
++if the receiver also has the preallocation patch.  Furthermore, this option
++only works if the receiver found the bf(posix_fallocate)(3) call at
++configure time.
++
++Without this option on MS Windows, very large destination files tend to be
++broken into thousands of fragments; advising Windows ahead of time of the
++eventual file size using this option usually reduces the number of
++fragments to one.  However, on Linux, this option appears to just waste
++disk I/O.
++
+ dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
+ instead it will just report the actions it would have taken.
+ 
 --- old/t_stub.c
 +++ new/t_stub.c
 @@ -23,6 +23,7 @@
