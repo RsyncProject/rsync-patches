@@ -1220,18 +1220,18 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			robust_unlink(fname); /* Just in case... */
 --- old/compat.c
 +++ new/compat.c
-@@ -48,6 +48,8 @@ void setup_protocol(int f_out,int f_in)
- 		preserve_uid = ++flist_extra_cnt;
+@@ -50,6 +50,8 @@ void setup_protocol(int f_out,int f_in)
+ 		preserve_uid = ++file_extra_cnt;
  	if (preserve_gid)
- 		preserve_gid = ++flist_extra_cnt;
+ 		preserve_gid = ++file_extra_cnt;
 +	if (preserve_acls && !am_sender)
-+		preserve_acls = ++flist_extra_cnt;
++		preserve_acls = ++file_extra_cnt;
  
  	if (remote_protocol == 0) {
  		if (!read_batch)
 --- old/configure.in
 +++ new/configure.in
-@@ -537,6 +537,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
+@@ -542,6 +542,11 @@ if test x"$ac_cv_func_strcasecmp" = x"no
      AC_CHECK_LIB(resolv, strcasecmp)
  fi
  
@@ -1243,7 +1243,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  dnl At the moment we don't test for a broken memcmp(), because all we
  dnl need to do is test for equality, not comparison, and it seems that
  dnl every platform has a memcmp that can do at least that.
-@@ -801,6 +806,78 @@ AC_SUBST(OBJ_RESTORE)
+@@ -806,6 +811,78 @@ AC_SUBST(OBJ_RESTORE)
  AC_SUBST(CC_SHOBJ_FLAG)
  AC_SUBST(BUILD_POPT)
  
@@ -1367,7 +1367,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  }
  
 @@ -1068,6 +1082,9 @@ static struct file_struct *send_file_nam
- 					  unsigned short flags)
+ 					  int flags)
  {
  	struct file_struct *file;
 +#ifdef SUPPORT_ACLS
@@ -2157,7 +2157,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern int make_backups;
  extern int protocol_version;
  extern int remove_source_files;
-@@ -269,15 +270,19 @@ void match_hard_links(void)
+@@ -268,15 +269,19 @@ void match_hard_links(void)
  }
  
  static int maybe_hard_link(struct file_struct *file, int ndx,
@@ -2181,7 +2181,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  					ITEM_LOCAL_CHANGE | ITEM_XNAME_FOLLOWS,
  					0, "");
  			}
-@@ -298,7 +303,11 @@ static int maybe_hard_link(struct file_s
+@@ -297,7 +302,11 @@ static int maybe_hard_link(struct file_s
  
  	if (hard_link_one(file, fname, oldname, 0)) {
  		if (itemizing) {
@@ -2194,7 +2194,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				ITEM_LOCAL_CHANGE | ITEM_XNAME_FOLLOWS, 0,
  				realname);
  		}
-@@ -312,7 +321,7 @@ static int maybe_hard_link(struct file_s
+@@ -311,7 +320,7 @@ static int maybe_hard_link(struct file_s
  /* Only called if FLAG_HLINKED is set and FLAG_HLINK_FIRST is not.  Returns:
   * 0 = process the file, 1 = skip the file, -1 = error occurred. */
  int hard_link_check(struct file_struct *file, int ndx, const char *fname,
@@ -2203,7 +2203,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		    enum logcode code)
  {
  	STRUCT_STAT prev_st;
-@@ -363,18 +372,20 @@ int hard_link_check(struct file_struct *
+@@ -362,18 +371,20 @@ int hard_link_check(struct file_struct *
  	if (statret < 0 && basis_dir[0] != NULL) {
  		/* If we match an alt-dest item, we don't output this as a change. */
  		char cmpbuf[MAXPATHLEN];
@@ -2229,7 +2229,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				if (verbose < 2 || !stdout_format_has_i) {
  					itemizing = 0;
  					code = FNONE;
-@@ -383,16 +394,36 @@ int hard_link_check(struct file_struct *
+@@ -382,16 +393,36 @@ int hard_link_check(struct file_struct *
  				}
  				break;
  			}
@@ -2270,7 +2270,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			    realname, itemizing, code) < 0)
  		return -1;
  
-@@ -427,7 +458,8 @@ void finish_hard_link(struct file_struct
+@@ -426,7 +457,8 @@ void finish_hard_link(struct file_struct
  		      STRUCT_STAT *stp, int itemizing, enum logcode code,
  		      int alt_dest)
  {
@@ -2280,7 +2280,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	char alt_name[MAXPATHLEN], *prev_name;
  	const char *our_name;
  	int prev_statret, ndx, prev_ndx = F_HL_PREV(file);
-@@ -451,14 +483,24 @@ void finish_hard_link(struct file_struct
+@@ -450,14 +482,24 @@ void finish_hard_link(struct file_struct
  	} else
  		our_name = fname;
  
@@ -5955,7 +5955,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/rsync.h
 +++ new/rsync.h
-@@ -503,6 +503,14 @@ struct idev_node {
+@@ -532,6 +532,14 @@ struct idev_node {
  #define IN_LOOPBACKNET 127
  #endif
  
@@ -5970,15 +5970,15 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #define GID_NONE ((gid_t)-1)
  
  union file_extras {
-@@ -522,6 +530,7 @@ struct file_struct {
- extern int flist_extra_cnt;
+@@ -551,6 +559,7 @@ struct file_struct {
+ extern int file_extra_cnt;
  extern int preserve_uid;
  extern int preserve_gid;
 +extern int preserve_acls;
  
  #define FILE_STRUCT_LEN (offsetof(struct file_struct, basename))
  #define EXTRA_LEN (sizeof (union file_extras))
-@@ -554,10 +563,12 @@ extern int preserve_gid;
+@@ -583,10 +592,12 @@ extern int preserve_gid;
  /* When the associated option is on, all entries will have these present: */
  #define F_UID(f) REQ_EXTRA(f, preserve_uid)->unum
  #define F_GID(f) REQ_EXTRA(f, preserve_gid)->unum
@@ -5991,7 +5991,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  /* This optional item might follow an F_HL_*() item.
   * (Note: a device doesn't need to check LEN64_BUMP(f).) */
-@@ -693,6 +704,17 @@ struct stats {
+@@ -722,6 +733,17 @@ struct stats {
  
  struct chmod_mode_struct;
  
@@ -6009,7 +6009,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #include "byteorder.h"
  #include "lib/mdfour.h"
  #include "lib/wildmatch.h"
-@@ -711,6 +733,16 @@ struct chmod_mode_struct;
+@@ -740,6 +762,16 @@ struct chmod_mode_struct;
  #define NORETURN __attribute__((__noreturn__))
  #endif
  
