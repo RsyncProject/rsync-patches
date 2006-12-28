@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
 
 --- old/compat.c
 +++ new/compat.c
-@@ -50,6 +50,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -56,6 +56,8 @@ void setup_protocol(int f_out,int f_in)
  		preserve_uid = ++file_extra_cnt;
  	if (preserve_gid)
  		preserve_gid = ++file_extra_cnt;
@@ -19,7 +19,7 @@ To use this patch, run these commands for a successful build:
  		if (!read_batch)
 --- old/flist.c
 +++ new/flist.c
-@@ -47,6 +47,7 @@ extern int preserve_devices;
+@@ -48,6 +48,7 @@ extern int preserve_devices;
  extern int preserve_specials;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -27,7 +27,7 @@ To use this patch, run these commands for a successful build:
  extern int relative_paths;
  extern int implied_dirs;
  extern int file_extra_cnt;
-@@ -137,6 +138,7 @@ void show_flist_stats(void)
+@@ -143,6 +144,7 @@ void show_flist_stats(void)
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -35,7 +35,7 @@ To use this patch, run these commands for a successful build:
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -149,14 +151,16 @@ static void list_file_entry(struct file_
+@@ -155,14 +157,16 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -54,15 +54,15 @@ To use this patch, run these commands for a successful build:
  			f_name(f, NULL));
  	}
  }
-@@ -313,6 +317,7 @@ void flist_expand(struct file_list *flis
- static void send_file_entry(struct file_struct *file, int f, int ndx)
+@@ -346,6 +350,7 @@ int push_flist_dir(const char *dir, int 
+ static void send_file_entry(int f, struct file_struct *file, int ndx)
  {
  	static time_t modtime;
 +	static time_t atime;
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -367,6 +372,13 @@ static void send_file_entry(struct file_
+@@ -413,6 +418,13 @@ static void send_file_entry(int f, struc
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -76,16 +76,16 @@ To use this patch, run these commands for a successful build:
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != 0) {
-@@ -434,6 +446,8 @@ static void send_file_entry(struct file_
+@@ -480,6 +492,8 @@ static void send_file_entry(int f, struc
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
 +	if (preserve_atimes && !S_ISDIR(mode) && !(flags & XMIT_SAME_ATIME))
 +		write_int(f, atime);
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
- 		if (!numeric_ids)
- 			add_uid(uid);
-@@ -501,7 +515,7 @@ static void send_file_entry(struct file_
+ 		write_int(f, uid);
+ 		if (flags & XMIT_USER_NAME_FOLLOWS) {
+@@ -553,7 +567,7 @@ static void send_file_entry(int f, struc
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   int flags, int f)
  {
@@ -94,16 +94,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -522,7 +536,7 @@ static struct file_struct *recv_file_ent
- 	struct file_struct *file;
- 
- 	if (!flist) {
--		modtime = 0, mode = 0;
-+		modtime = 0, atime = 0, mode = 0;
- 		dev = 0, rdev = MAKEDEV(0, 0);
- 		rdev_major = 0;
- 		uid = 0, gid = 0;
-@@ -610,6 +624,8 @@ static struct file_struct *recv_file_ent
+@@ -650,6 +664,8 @@ static struct file_struct *recv_file_ent
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -112,27 +103,27 @@ To use this patch, run these commands for a successful build:
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -700,6 +716,8 @@ static struct file_struct *recv_file_ent
- 		F_UID(file) = uid;
+@@ -758,6 +774,8 @@ static struct file_struct *recv_file_ent
+ 		F_OWNER(file) = uid;
  	if (preserve_gid)
- 		F_GID(file) = gid;
+ 		F_GROUP(file) = gid;
 +	if (preserve_atimes)
 +		F_ATIME(file) = atime;
  
- 	if (dirname_len) {
- 		file->dirname = lastdir = bp;
-@@ -1002,6 +1020,8 @@ struct file_struct *make_file(const char
- 		F_UID(file) = st.st_uid;
+ 	if (basename != thisname) {
+ 		file->dirname = lastdir;
+@@ -1055,6 +1073,8 @@ struct file_struct *make_file(const char
+ 		F_OWNER(file) = st.st_uid;
  	if (preserve_gid)
- 		F_GID(file) = st.st_gid;
+ 		F_GROUP(file) = st.st_gid;
 +	if (preserve_atimes)
 +		F_ATIME(file) = st.st_atime;
  
- 	if (dirname_len) {
- 		file->dirname = lastdir = bp;
+ 	if (basename != thisname)
+ 		file->dirname = lastdir;
 --- old/generator.c
 +++ new/generator.c
-@@ -43,6 +43,7 @@ extern int preserve_perms;
+@@ -44,6 +44,7 @@ extern int preserve_perms;
  extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_times;
@@ -140,7 +131,7 @@ To use this patch, run these commands for a successful build:
  extern int omit_dir_times;
  extern int delete_mode;
  extern int delete_before;
-@@ -547,6 +548,9 @@ void itemize(struct file_struct *file, i
+@@ -539,6 +540,9 @@ void itemize(struct file_struct *file, i
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, st->st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
@@ -150,7 +141,7 @@ To use this patch, run these commands for a successful build:
  		if (!BITS_EQUAL(st->st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
  		if (preserve_uid && am_root && F_UID(file) != st->st_uid)
-@@ -858,6 +862,8 @@ static int try_dests_reg(struct file_str
+@@ -849,6 +853,8 @@ static int try_dests_reg(struct file_str
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
@@ -189,7 +180,7 @@ To use this patch, run these commands for a successful build:
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -306,8 +307,9 @@ void usage(enum logcode F)
+@@ -307,8 +308,9 @@ void usage(enum logcode F)
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
@@ -201,7 +192,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
-@@ -424,6 +426,9 @@ static struct poptOption long_options[] 
+@@ -425,6 +427,9 @@ static struct poptOption long_options[] 
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
@@ -211,7 +202,7 @@ To use this patch, run these commands for a successful build:
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
-@@ -1536,6 +1541,8 @@ void server_options(char **args,int *arg
+@@ -1552,6 +1557,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -230,7 +221,7 @@ To use this patch, run these commands for a successful build:
  extern int preserve_times;
  extern int omit_dir_times;
  extern int am_root;
-@@ -182,6 +183,7 @@ int set_file_attrs(char *fname, struct f
+@@ -232,6 +233,7 @@ int set_file_attrs(char *fname, struct f
  	int updated = 0;
  	STRUCT_STAT st2;
  	int change_uid, change_gid;
@@ -238,7 +229,7 @@ To use this patch, run these commands for a successful build:
  	mode_t new_mode = file->mode;
  
  	if (!st) {
-@@ -201,18 +203,36 @@ int set_file_attrs(char *fname, struct f
+@@ -251,18 +253,36 @@ int set_file_attrs(char *fname, struct f
  		}
  	}
  
@@ -280,15 +271,15 @@ To use this patch, run these commands for a successful build:
  	change_uid = am_root && preserve_uid && st->st_uid != F_UID(file);
 --- old/rsync.h
 +++ new/rsync.h
-@@ -55,6 +55,7 @@
- #define XMIT_SAME_DEV_pre30 (1<<10)	/* protocols < 30 */
- #define XMIT_HLINK_FIRST (1<<10)	/* protocols >= 30 */
+@@ -57,6 +57,7 @@
  #define XMIT_RDEV_MINOR_IS_SMALL (1<<11)
-+#define XMIT_SAME_ATIME (1<<12)
+ #define XMIT_USER_NAME_FOLLOWS (1<<12)	/* protocols >= 30 */
+ #define XMIT_GROUP_NAME_FOLLOWS (1<<13) /* protocols >= 30 */
++#define XMIT_SAME_ATIME (1<<14)		/* protocols >= 30 */
  
  /* These flags are used in the live flist data. */
  
-@@ -128,6 +129,7 @@
+@@ -135,6 +136,7 @@
  
  #define ATTRS_REPORT		(1<<0)
  #define ATTRS_SKIP_MTIME	(1<<1)
@@ -296,7 +287,7 @@ To use this patch, run these commands for a successful build:
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -551,6 +553,7 @@ struct file_struct {
+@@ -565,6 +567,7 @@ struct file_struct {
  extern int file_extra_cnt;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -304,10 +295,10 @@ To use this patch, run these commands for a successful build:
  
  #define FILE_STRUCT_LEN (offsetof(struct file_struct, basename))
  #define EXTRA_LEN (sizeof (union file_extras))
-@@ -583,6 +586,7 @@ extern int preserve_gid;
+@@ -597,6 +600,7 @@ extern int preserve_gid;
  /* When the associated option is on, all entries will have these present: */
- #define F_UID(f) REQ_EXTRA(f, preserve_uid)->unum
- #define F_GID(f) REQ_EXTRA(f, preserve_gid)->unum
+ #define F_OWNER(f) REQ_EXTRA(f, preserve_uid)->unum
+ #define F_GROUP(f) REQ_EXTRA(f, preserve_gid)->unum
 +#define F_ATIME(f) REQ_EXTRA(f, preserve_atimes)->unum
  
  /* These items are per-entry optional and mutally exclusive: */
@@ -371,13 +362,13 @@ To use this patch, run these commands for a successful build:
  One other output is possible:  when deleting files, the "%i" will output
 --- old/sender.c
 +++ new/sender.c
-@@ -41,6 +41,7 @@ extern int do_progress;
+@@ -42,6 +42,7 @@ extern int do_progress;
  extern int inplace;
  extern int batch_fd;
  extern int write_batch;
 +extern unsigned int file_struct_len;
  extern struct stats stats;
- extern struct file_list *the_file_list;
+ extern struct file_list *cur_flist, *first_flist;
  extern char *stdout_format;
 --- old/testsuite/atimes.test
 +++ new/testsuite/atimes.test

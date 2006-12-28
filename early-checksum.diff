@@ -16,15 +16,15 @@ To use this patch, run these commands for a successful build:
 
 --- old/flist.c
 +++ new/flist.c
-@@ -31,6 +31,7 @@ extern int am_daemon;
- extern int am_sender;
+@@ -33,6 +33,7 @@ extern int am_sender;
+ extern int incremental;
  extern int do_progress;
  extern int always_checksum;
 +extern int pre_checksum;
  extern int module_id;
  extern int ignore_errors;
  extern int numeric_ids;
-@@ -785,6 +786,15 @@ static struct file_struct *recv_file_ent
+@@ -847,6 +848,15 @@ static struct file_struct *recv_file_ent
  			memcpy(bp, F_SUM(first), checksum_len);
  		} else
  			read_buf(f, bp, checksum_len);
@@ -42,15 +42,15 @@ To use this patch, run these commands for a successful build:
  	return file;
 --- old/generator.c
 +++ new/generator.c
-@@ -70,6 +70,7 @@ extern int ignore_timeout;
- extern int protocol_version;
+@@ -73,6 +73,7 @@ extern int protocol_version;
+ extern int file_total;
  extern int fuzzy_basis;
  extern int always_checksum;
 +extern int pre_checksum;
  extern int checksum_len;
  extern char *partial_dir;
  extern char *basis_dir[];
-@@ -577,7 +578,8 @@ void itemize(struct file_struct *file, i
+@@ -569,7 +570,8 @@ void itemize(struct file_struct *file, i
  
  
  /* Perform our quick-check heuristic for determining if a file is unchanged. */
@@ -60,16 +60,16 @@ To use this patch, run these commands for a successful build:
  {
  	if (st->st_size != F_LENGTH(file))
  		return 0;
-@@ -586,6 +588,8 @@ int unchanged_file(char *fn, struct file
+@@ -578,6 +580,8 @@ int unchanged_file(char *fn, struct file
  	   of the file time to determine whether to sync */
- 	if (always_checksum && S_ISREG(st->st_mode)) {
+ 	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MD4_SUM_LENGTH];
 +		if (pre_checksum && fnamecmp_type == FNAMECMP_FNAME)
 +			return !(file->flags & FLAG_SUM_DIFFERS);
  		file_checksum(fn, sum, st->st_size);
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
-@@ -825,7 +829,7 @@ static int try_dests_reg(struct file_str
+@@ -816,7 +820,7 @@ static int try_dests_reg(struct file_str
  			match_level = 1;
  			/* FALL THROUGH */
  		case 1:
@@ -78,7 +78,7 @@ To use this patch, run these commands for a successful build:
  				continue;
  			best_match = j;
  			match_level = 2;
-@@ -1511,7 +1515,7 @@ static void recv_generator(char *fname, 
+@@ -1508,7 +1512,7 @@ static void recv_generator(char *fname, 
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
  		;
@@ -89,7 +89,7 @@ To use this patch, run these commands for a successful build:
  			handle_partial_dir(partialptr, PDIR_DELETE);
 --- old/hlink.c
 +++ new/hlink.c
-@@ -448,7 +448,7 @@ int hard_link_check(struct file_struct *
+@@ -382,7 +382,7 @@ int hard_link_check(struct file_struct *
  				}
  				break;
  			}
@@ -100,15 +100,15 @@ To use this patch, run these commands for a successful build:
  			*stp = alt_st;
 --- old/main.c
 +++ new/main.c
-@@ -47,6 +47,7 @@ extern int copy_dirlinks;
+@@ -46,6 +46,7 @@ extern int module_id;
+ extern int copy_links;
+ extern int copy_dirlinks;
  extern int keep_dirlinks;
++extern int always_checksum;
  extern int preserve_hard_links;
  extern int protocol_version;
-+extern int always_checksum;
- extern int recurse;
- extern int relative_paths;
- extern int sanitize_paths;
-@@ -71,6 +72,9 @@ extern char *batch_name;
+ extern int file_total;
+@@ -73,6 +74,9 @@ extern char *password_file;
  extern char curr_dir[MAXPATHLEN];
  extern struct filter_list_struct server_filter_list;
  
@@ -118,7 +118,7 @@ To use this patch, run these commands for a successful build:
  int local_server = 0;
  int new_root_dir = 0;
  mode_t orig_umask = 0;
-@@ -788,6 +792,7 @@ static void do_server_recv(int f_in, int
+@@ -792,6 +796,7 @@ static void do_server_recv(int f_in, int
  	struct file_list *flist;
  	char *local_name = NULL;
  	char *dir = NULL;
@@ -126,7 +126,7 @@ To use this patch, run these commands for a successful build:
  	int save_verbose = verbose;
  
  	if (filesfrom_fd >= 0) {
-@@ -831,6 +836,10 @@ static void do_server_recv(int f_in, int
+@@ -838,6 +843,10 @@ static void do_server_recv(int f_in, int
  		filesfrom_fd = -1;
  	}
  
@@ -135,11 +135,11 @@ To use this patch, run these commands for a successful build:
 +		pre_checksum = push_dir(argv[0], 0);
 +
  	flist = recv_file_list(f_in);
- 	verbose = save_verbose;
  	if (!flist) {
-@@ -839,6 +848,9 @@ static void do_server_recv(int f_in, int
- 	}
- 	the_file_list = flist;
+ 		rprintf(FERROR,"server_recv: recv_file_list error\n");
+@@ -847,6 +856,9 @@ static void do_server_recv(int f_in, int
+ 		recv_additional_file_list(f_in);
+ 	verbose = save_verbose;
  
 +	if (pre_checksum)
 +		pop_dir(olddir);
@@ -147,7 +147,7 @@ To use this patch, run these commands for a successful build:
  	if (argc > 0)
  		local_name = get_local_name(flist,argv[0]);
  
-@@ -918,6 +930,7 @@ int client_run(int f_in, int f_out, pid_
+@@ -926,6 +938,7 @@ int client_run(int f_in, int f_out, pid_
  {
  	struct file_list *flist = NULL;
  	int exit_code = 0, exit_code2 = 0;
@@ -155,7 +155,7 @@ To use this patch, run these commands for a successful build:
  	char *local_name = NULL;
  
  	cleanup_child_pid = pid;
-@@ -992,11 +1005,18 @@ int client_run(int f_in, int f_out, pid_
+@@ -1006,12 +1019,19 @@ int client_run(int f_in, int f_out, pid_
  		filesfrom_fd = -1;
  	}
  
@@ -166,7 +166,8 @@ To use this patch, run these commands for a successful build:
  	if (write_batch && !am_server)
  		start_write_batch(f_in);
  	flist = recv_file_list(f_in);
- 	the_file_list = flist;
+ 	if (incremental && file_total == 1)
+ 		recv_additional_file_list(f_in);
  
 +	if (pre_checksum)
 +		pop_dir(olddir);
@@ -176,11 +177,11 @@ To use this patch, run these commands for a successful build:
  
 --- old/rsync.h
 +++ new/rsync.h
-@@ -68,6 +68,7 @@
+@@ -71,6 +71,7 @@
  #define FLAG_HLINK_LAST (1<<7)	/* receiver/generator */
  #define FLAG_HLINK_DONE (1<<8)	/* receiver/generator */
  #define FLAG_LENGTH64 (1<<9)	/* sender/receiver/generator */
 +#define FLAG_SUM_DIFFERS (1<<10)/* receiver/generator */
  
- #define BITS_SET(val,bits) (((val) & (bits)) == (bits))
- #define BITS_SETnUNSET(val,onbits,offbits) (((val) & ((onbits)|(offbits))) == (onbits))
+ /* These flags are passed to functions but not stored. */
+ 

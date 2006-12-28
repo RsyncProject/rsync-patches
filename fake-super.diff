@@ -53,7 +53,13 @@ above:
  
 --- old/flist.c
 +++ new/flist.c
-@@ -193,7 +193,7 @@ static int readlink_stat(const char *pat
+@@ -194,12 +194,12 @@ static int readlink_stat(const char *pat
+ 				rprintf(FINFO,"copying unsafe symlink \"%s\" -> \"%s\"\n",
+ 					path, linkbuf);
+ 			}
+-			return do_stat(path, stp);
++			return x_stat(path, stp, NULL);
+ 		}
  	}
  	return 0;
  #else
@@ -62,7 +68,7 @@ above:
  #endif
  }
  
-@@ -201,17 +201,17 @@ int link_stat(const char *path, STRUCT_S
+@@ -207,17 +207,17 @@ int link_stat(const char *path, STRUCT_S
  {
  #ifdef SUPPORT_LINKS
  	if (copy_links)
@@ -84,7 +90,7 @@ above:
  #endif
  }
  
-@@ -246,26 +246,6 @@ static int is_excluded(char *fname, int 
+@@ -252,26 +252,6 @@ static int is_excluded(char *fname, int 
  	return 0;
  }
  
@@ -108,10 +114,10 @@ above:
 -	return mode;
 -}
 -
- static void send_directory(int f, struct file_list *flist,
- 			   char *fbuf, int len);
+ static void send_directory(int f, struct file_list *flist, int ndx,
+ 			   char *fbuf, int len, int flags);
  
-@@ -877,7 +857,7 @@ struct file_struct *make_file(const char
+@@ -925,7 +905,7 @@ struct file_struct *make_file(const char
  		if (save_errno == ENOENT) {
  #ifdef SUPPORT_LINKS
  			/* Avoid "vanished" error if symlink points nowhere. */
@@ -120,10 +126,10 @@ above:
  			    && S_ISLNK(st.st_mode)) {
  				io_error |= IOERR_GENERAL;
  				rprintf(FERROR, "symlink has no referent: %s\n",
-@@ -1050,7 +1030,7 @@ struct file_struct *make_file(const char
+@@ -1097,7 +1077,7 @@ struct file_struct *make_file(const char
  		int save_mode = file->mode;
  		file->mode = S_IFDIR; /* Find a directory with our name. */
- 		if (flist_find(the_file_list, file) >= 0
+ 		if (flist_find(dir_flist, file) >= 0
 -		    && do_stat(thisname, &st2) == 0 && S_ISDIR(st2.st_mode)) {
 +		    && x_stat(thisname, &st2, NULL) == 0 && S_ISDIR(st2.st_mode)) {
  			file->modtime = st2.st_mtime;
@@ -183,7 +189,7 @@ above:
  int am_server = 0;
  int am_sender = 0;
  int am_generator = 0;
-@@ -325,6 +325,9 @@ void usage(enum logcode F)
+@@ -326,6 +326,9 @@ void usage(enum logcode F)
    rprintf(F," -t, --times                 preserve times\n");
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
@@ -193,7 +199,7 @@ above:
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
-@@ -450,6 +453,7 @@ static struct poptOption long_options[] 
+@@ -451,6 +454,7 @@ static struct poptOption long_options[] 
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
@@ -201,7 +207,7 @@ above:
    {"owner",           'o', POPT_ARG_VAL,    &preserve_uid, 1, 0, 0 },
    {"no-owner",         0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
    {"no-o",             0,  POPT_ARG_VAL,    &preserve_uid, 0, 0, 0 },
-@@ -1176,6 +1180,14 @@ int parse_arguments(int *argc, const cha
+@@ -1183,6 +1187,14 @@ int parse_arguments(int *argc, const cha
  	}
  #endif
  
@@ -218,7 +224,7 @@ above:
  			"--write-batch and --read-batch can not be used together\n");
 --- old/rsync.c
 +++ new/rsync.c
-@@ -249,7 +249,9 @@ int set_file_attrs(char *fname, struct f
+@@ -299,7 +299,9 @@ int set_file_attrs(char *fname, struct f
  					(long)sxp->st.st_gid, (long)F_GID(file));
  			}
  		}
@@ -229,7 +235,7 @@ above:
  		    change_uid ? F_UID(file) : sxp->st.st_uid,
  		    change_gid ? F_GID(file) : sxp->st.st_gid) != 0) {
  			/* shouldn't have attempted to change uid or gid
-@@ -258,7 +260,7 @@ int set_file_attrs(char *fname, struct f
+@@ -308,7 +310,7 @@ int set_file_attrs(char *fname, struct f
  			    change_uid ? "chown" : "chgrp",
  			    full_fname(fname));
  			goto cleanup;
@@ -238,7 +244,7 @@ above:
  		/* a lchown had been done - we have to re-stat if the
  		 * destination had the setuid or setgid bits set due
  		 * to the side effect of the chown call */
-@@ -275,6 +277,8 @@ int set_file_attrs(char *fname, struct f
+@@ -325,6 +327,8 @@ int set_file_attrs(char *fname, struct f
  #ifdef SUPPORT_XATTRS
  	if (preserve_xattrs && set_xattr(fname, file, sxp) == 0)
  		updated = 1;
@@ -247,7 +253,7 @@ above:
  #endif
  #ifdef SUPPORT_ACLS
  	/* It's OK to call set_acl() now, even for a dir, as the generator
-@@ -289,7 +293,7 @@ int set_file_attrs(char *fname, struct f
+@@ -339,7 +343,7 @@ int set_file_attrs(char *fname, struct f
  
  #ifdef HAVE_CHMOD
  	if (!BITS_EQUAL(sxp->st.st_mode, new_mode, CHMOD_BITS)) {
@@ -258,7 +264,7 @@ above:
  				"failed to set permissions on %s",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -783,6 +783,12 @@ typedef struct {
+@@ -813,6 +813,12 @@ typedef struct {
  
  #include "proto.h"
  
@@ -271,7 +277,7 @@ above:
  /* We have replacement versions of these if they're missing. */
  #ifndef HAVE_ASPRINTF
  int asprintf(char **ptr, const char *format, ...);
-@@ -1001,6 +1007,26 @@ int inet_pton(int af, const char *src, v
+@@ -1031,6 +1037,26 @@ int inet_pton(int af, const char *src, v
  const char *get_panic_action(void);
  #endif
  
