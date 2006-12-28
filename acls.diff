@@ -31,7 +31,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
 --- old/acls.c
 +++ new/acls.c
-@@ -0,0 +1,1093 @@
+@@ -0,0 +1,1094 @@
 +/*
 + * Handle passing Access Control Lists between systems.
 + *
@@ -63,6 +63,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +extern int read_only;
 +extern int list_only;
 +extern int orig_umask;
++extern int protocol_version;
 +
 +/* === ACL structures === */
 +
@@ -644,7 +645,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +		}
 +
 +		/* Avoid sending values that can be inferred from other data. */
-+		if (type == SMB_ACL_TYPE_ACCESS)
++		if (type == SMB_ACL_TYPE_ACCESS && protocol_version >= 30)
 +			rsync_acl_strip_perms(racl);
 +		if ((ndx = find_matching_rsync_acl(type, racl_list, racl)) != -1) {
 +			write_byte(f, type == SMB_ACL_TYPE_ACCESS ? 'a' : 'd');
@@ -1220,7 +1221,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			robust_unlink(fname); /* Just in case... */
 --- old/compat.c
 +++ new/compat.c
-@@ -50,6 +50,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -56,6 +56,8 @@ void setup_protocol(int f_out,int f_in)
  		preserve_uid = ++file_extra_cnt;
  	if (preserve_gid)
  		preserve_gid = ++file_extra_cnt;
@@ -1324,7 +1325,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/flist.c
 +++ new/flist.c
-@@ -41,6 +41,7 @@ extern int filesfrom_fd;
+@@ -42,6 +42,7 @@ extern int filesfrom_fd;
  extern int one_file_system;
  extern int copy_dirlinks;
  extern int keep_dirlinks;
@@ -1332,7 +1333,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern int preserve_links;
  extern int preserve_hard_links;
  extern int preserve_devices;
-@@ -147,6 +148,8 @@ static void list_file_entry(struct file_
+@@ -153,6 +154,8 @@ static void list_file_entry(struct file_
  	permstring(permbuf, f->mode);
  	len = F_LENGTH(f);
  
@@ -1341,7 +1342,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
  		rprintf(FINFO, "%s %11.0f %s %s -> %s\n",
-@@ -662,6 +665,12 @@ static struct file_struct *recv_file_ent
+@@ -712,6 +715,12 @@ static struct file_struct *recv_file_ent
  	}
  #endif
  
@@ -1354,7 +1355,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	if (always_checksum && S_ISREG(mode))
  		extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
  
-@@ -799,6 +808,11 @@ static struct file_struct *recv_file_ent
+@@ -849,6 +858,11 @@ static struct file_struct *recv_file_ent
  			read_buf(f, bp, checksum_len);
  	}
  
@@ -1366,17 +1367,17 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	return file;
  }
  
-@@ -1068,6 +1082,9 @@ static struct file_struct *send_file_nam
- 					  int flags)
+@@ -1120,6 +1134,9 @@ static struct file_struct *send_file_nam
+ 					  int flags, int filter_flags)
  {
  	struct file_struct *file;
 +#ifdef SUPPORT_ACLS
 +	statx sx;
 +#endif
  
- 	file = make_file(fname, flist, stp, flags,
- 			 f == -2 ? SERVER_FILTERS : ALL_FILTERS);
-@@ -1077,12 +1094,26 @@ static struct file_struct *send_file_nam
+ 	file = make_file(fname, flist, stp, flags, filter_flags);
+ 	if (!file)
+@@ -1128,12 +1145,26 @@ static struct file_struct *send_file_nam
  	if (chmod_modes && !S_ISLNK(file->mode))
  		file->mode = tweak_mode(file->mode, chmod_modes);
  
@@ -1395,7 +1396,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	flist->files[flist->count++] = file;
 -	if (f >= 0)
 +	if (f >= 0) {
- 		send_file_entry(file, f, flist->count - 1);
+ 		send_file_entry(f, file, flist->count - 1);
 +#ifdef SUPPORT_ACLS
 +		if (preserve_acls)
 +			send_acl(&sx, f);
@@ -1406,7 +1407,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/generator.c
 +++ new/generator.c
-@@ -35,6 +35,7 @@ extern int do_progress;
+@@ -36,6 +36,7 @@ extern int do_progress;
  extern int relative_paths;
  extern int implied_dirs;
  extern int keep_dirlinks;
@@ -1414,7 +1415,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern int preserve_links;
  extern int preserve_devices;
  extern int preserve_specials;
-@@ -87,6 +88,7 @@ extern int force_delete;
+@@ -90,6 +91,7 @@ extern int force_delete;
  extern int one_file_system;
  extern struct stats stats;
  extern dev_t filesystem_dev;
@@ -1422,7 +1423,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern char *backup_dir;
  extern char *backup_suffix;
  extern int backup_suffix_len;
-@@ -518,21 +520,26 @@ static void do_delete_pass(struct file_l
+@@ -509,22 +511,27 @@ static void do_delete_pass(struct file_l
  		rprintf(FINFO, "                    \r");
  }
  
@@ -1449,12 +1450,13 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	return 1;
  }
  
--void itemize(struct file_struct *file, int ndx, int statret, STRUCT_STAT *st,
-+void itemize(struct file_struct *file, int ndx, int statret, statx *sxp,
- 	     int32 iflags, uchar fnamecmp_type, const char *xname)
+ void itemize(struct file_struct *file, int ndx, int statret,
+-	     STRUCT_STAT *st, int32 iflags, uchar fnamecmp_type,
++	     statx *sxp, int32 iflags, uchar fnamecmp_type,
+ 	     const char *xname)
  {
  	if (statret >= 0) { /* A from-dest-dir statret can == 1! */
-@@ -540,20 +547,24 @@ void itemize(struct file_struct *file, i
+@@ -532,20 +539,24 @@ void itemize(struct file_struct *file, i
  		    : S_ISDIR(file->mode) ? !omit_dir_times
  		    : !S_ISLNK(file->mode);
  
@@ -1484,7 +1486,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	} else
  		iflags |= ITEM_IS_NEW;
  
-@@ -808,7 +819,7 @@ void check_for_finished_hlinks(int itemi
+@@ -799,7 +810,7 @@ void check_for_finished_hlinks(int itemi
   * handling the file, -1 if no dest-linking occurred, or a non-negative
   * value if we found an alternate basis file. */
  static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
@@ -1493,7 +1495,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			 enum logcode code)
  {
  	int best_match = -1;
-@@ -817,7 +828,7 @@ static int try_dests_reg(struct file_str
+@@ -808,7 +819,7 @@ static int try_dests_reg(struct file_str
  
  	do {
  		pathjoin(cmpbuf, MAXPATHLEN, basis_dir[j], fname);
@@ -1502,7 +1504,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			continue;
  		switch (match_level) {
  		case 0:
-@@ -825,16 +836,20 @@ static int try_dests_reg(struct file_str
+@@ -816,16 +827,20 @@ static int try_dests_reg(struct file_str
  			match_level = 1;
  			/* FALL THROUGH */
  		case 1:
@@ -1520,13 +1522,13 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +#endif
 +			if (!unchanged_attrs(file, sxp))
  				continue;
- 			if (always_checksum && preserve_times
+ 			if (always_checksum > 0 && preserve_times
 -			 && cmp_time(stp->st_mtime, file->modtime))
 +			 && cmp_time(sxp->st.st_mtime, file->modtime))
  				continue;
  			best_match = j;
  			match_level = 3;
-@@ -849,7 +864,7 @@ static int try_dests_reg(struct file_str
+@@ -840,7 +855,7 @@ static int try_dests_reg(struct file_str
  	if (j != best_match) {
  		j = best_match;
  		pathjoin(cmpbuf, MAXPATHLEN, basis_dir[j], fname);
@@ -1535,7 +1537,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			return -1;
  	}
  
-@@ -859,16 +874,25 @@ static int try_dests_reg(struct file_str
+@@ -850,16 +865,25 @@ static int try_dests_reg(struct file_str
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
  			if (preserve_hard_links && F_IS_HLINKED(file))
@@ -1565,7 +1567,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		if (verbose > 1 && maybe_ATTRS_REPORT)
  			rprintf(FCLIENT, "%s is uptodate\n", fname);
  		return -2;
-@@ -885,8 +909,13 @@ static int try_dests_reg(struct file_str
+@@ -876,8 +900,13 @@ static int try_dests_reg(struct file_str
  			}
  			return -1;
  		}
@@ -1581,7 +1583,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		set_file_attrs(fname, file, NULL, 0);
  		if (maybe_ATTRS_REPORT
  		 && ((!itemizing && verbose && match_level == 2)
-@@ -897,7 +926,7 @@ static int try_dests_reg(struct file_str
+@@ -888,7 +917,7 @@ static int try_dests_reg(struct file_str
  		}
  #ifdef SUPPORT_HARD_LINKS
  		if (preserve_hard_links && F_IS_HLINKED(file))
@@ -1590,7 +1592,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #endif
  		return -2;
  	}
-@@ -909,7 +938,7 @@ static int try_dests_reg(struct file_str
+@@ -900,7 +929,7 @@ static int try_dests_reg(struct file_str
   * handling the file, or -1 if no dest-linking occurred, or a non-negative
   * value if we found an alternate basis file. */
  static int try_dests_non(struct file_struct *file, char *fname, int ndx,
@@ -1599,7 +1601,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			 enum logcode code)
  {
  	char lnk[MAXPATHLEN];
-@@ -942,24 +971,24 @@ static int try_dests_non(struct file_str
+@@ -933,24 +962,24 @@ static int try_dests_non(struct file_str
  
  	do {
  		pathjoin(cmpbuf, MAXPATHLEN, basis_dir[j], fname);
@@ -1629,7 +1631,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				continue;
  			break;
  #endif
-@@ -974,7 +1003,7 @@ static int try_dests_non(struct file_str
+@@ -965,7 +994,7 @@ static int try_dests_non(struct file_str
  		case TYPE_SPECIAL:
  		case TYPE_DEVICE:
  			devp = F_RDEV_P(file);
@@ -1638,7 +1640,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				continue;
  			break;
  #ifdef SUPPORT_LINKS
-@@ -991,7 +1020,11 @@ static int try_dests_non(struct file_str
+@@ -982,7 +1011,11 @@ static int try_dests_non(struct file_str
  			match_level = 2;
  			best_match = j;
  		}
@@ -1651,7 +1653,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			match_level = 3;
  			best_match = j;
  			break;
-@@ -1004,7 +1037,7 @@ static int try_dests_non(struct file_str
+@@ -995,7 +1028,7 @@ static int try_dests_non(struct file_str
  	if (j != best_match) {
  		j = best_match;
  		pathjoin(cmpbuf, MAXPATHLEN, basis_dir[j], fname);
@@ -1660,7 +1662,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			return -1;
  	}
  
-@@ -1035,7 +1068,15 @@ static int try_dests_non(struct file_str
+@@ -1026,7 +1059,15 @@ static int try_dests_non(struct file_str
  			    : ITEM_LOCAL_CHANGE
  			     + (match_level == 3 ? ITEM_XNAME_FOLLOWS : 0);
  			char *lp = match_level == 3 ? "" : NULL;
@@ -1677,15 +1679,15 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		}
  		if (verbose > 1 && maybe_ATTRS_REPORT) {
  			rprintf(FCLIENT, "%s%s is uptodate\n",
-@@ -1048,6 +1089,7 @@ static int try_dests_non(struct file_str
+@@ -1039,6 +1080,7 @@ static int try_dests_non(struct file_str
  }
  
  static int phase = 0;
 +static int dflt_perms;
  
- /* Acts on the_file_list->file's ndx'th item, whose name is fname.  If a dir,
+ /* Acts on cur_flist->file's ndx'th item, whose name is fname.  If a dir,
   * make sure it exists, and has the right permissions/timestamp info.  For
-@@ -1068,7 +1110,8 @@ static void recv_generator(char *fname, 
+@@ -1059,7 +1101,8 @@ static void recv_generator(char *fname, 
  	static int need_fuzzy_dirlist = 0;
  	struct file_struct *fuzzy_file = NULL;
  	int fd = -1, f_copy = -1;
@@ -1695,17 +1697,17 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	struct file_struct *back_file = NULL;
  	int statret, real_ret, stat_errno;
  	char *fnamecmp, *partialptr, *backupptr = NULL;
-@@ -1124,6 +1167,9 @@ static void recv_generator(char *fname, 
- 		} else if (!dry_run)
+@@ -1104,6 +1147,9 @@ static void recv_generator(char *fname, 
  			return;
+ 		}
  	}
 +#ifdef SUPPORT_ACLS
 +	sx.acc_acl = sx.def_acl = NULL;
 +#endif
  	if (dry_run > 1) {
- 		statret = -1;
- 		stat_errno = ENOENT;
-@@ -1131,7 +1177,7 @@ static void recv_generator(char *fname, 
+ 		if (fuzzy_dirlist) {
+ 			flist_free(fuzzy_dirlist);
+@@ -1116,7 +1162,7 @@ static void recv_generator(char *fname, 
  		const char *dn = file->dirname ? file->dirname : ".";
  		if (parent_dirname != dn && strcmp(parent_dirname, dn) != 0) {
  			if (relative_paths && !implied_dirs
@@ -1714,7 +1716,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			 && create_directory_path(fname) < 0) {
  				rsyserr(FERROR, errno,
  					"recv_generator: mkdir %s failed",
-@@ -1143,6 +1189,10 @@ static void recv_generator(char *fname, 
+@@ -1128,6 +1174,10 @@ static void recv_generator(char *fname, 
  			}
  			if (fuzzy_basis)
  				need_fuzzy_dirlist = 1;
@@ -1725,7 +1727,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		}
  		parent_dirname = dn;
  
-@@ -1152,7 +1202,7 @@ static void recv_generator(char *fname, 
+@@ -1137,7 +1187,7 @@ static void recv_generator(char *fname, 
  			need_fuzzy_dirlist = 0;
  		}
  
@@ -1734,7 +1736,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				    keep_dirlinks && S_ISDIR(file->mode));
  		stat_errno = errno;
  	}
-@@ -1170,8 +1220,9 @@ static void recv_generator(char *fname, 
+@@ -1163,8 +1213,9 @@ static void recv_generator(char *fname, 
  	 * mode based on the local permissions and some heuristics. */
  	if (!preserve_perms) {
  		int exists = statret == 0
@@ -1746,7 +1748,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	}
  
  	if (S_ISDIR(file->mode)) {
-@@ -1180,8 +1231,8 @@ static void recv_generator(char *fname, 
+@@ -1173,8 +1224,8 @@ static void recv_generator(char *fname, 
  		 * file of that name and it is *not* a directory, then
  		 * we need to delete it.  If it doesn't exist, then
  		 * (perhaps recursively) create it. */
@@ -1757,7 +1759,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				return;
  			statret = -1;
  		}
-@@ -1190,14 +1241,14 @@ static void recv_generator(char *fname, 
+@@ -1183,14 +1234,14 @@ static void recv_generator(char *fname, 
  			dry_run++;
  		}
  		real_ret = statret;
@@ -1774,7 +1776,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  					      itemizing, code);
  			if (j == -2) {
  				itemizing = 0;
-@@ -1206,7 +1257,11 @@ static void recv_generator(char *fname, 
+@@ -1199,7 +1250,11 @@ static void recv_generator(char *fname, 
  				statret = 1;
  		}
  		if (itemizing && f_out != -1) {
@@ -1787,8 +1789,12 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  				statret ? ITEM_LOCAL_CHANGE : 0, 0, NULL);
  		}
  		if (real_ret != 0 && do_mkdir(fname,file->mode) < 0 && errno != EEXIST) {
-@@ -1226,21 +1281,21 @@ static void recv_generator(char *fname, 
- 				return;
+@@ -1213,31 +1268,31 @@ static void recv_generator(char *fname, 
+ 				    "*** Skipping any contents from this failed directory ***\n");
+ 				missing_below = F_DEPTH(file);
+ 				file->flags |= FLAG_MISSING_DIR;
+-				return;
++				goto cleanup;
  			}
  		}
 -		if (set_file_attrs(fname, file, real_ret ? NULL : &real_st, 0)
@@ -1798,11 +1804,20 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		if (real_ret != 0 && one_file_system)
 -			real_st.st_dev = filesystem_dev;
 +			real_sx.st.st_dev = filesystem_dev;
- 		if (delete_during && f_out != -1 && !phase && dry_run < 2
+ 		if (incremental) {
+ 			if (one_file_system) {
+ 				uint32 *devp = F_DIRDEV_P(file);
+-				DEV_MAJOR(devp) = major(real_st.st_dev);
+-				DEV_MINOR(devp) = minor(real_st.st_dev);
++				DEV_MAJOR(devp) = major(real_sx.st.st_dev);
++				DEV_MINOR(devp) = minor(real_sx.st.st_dev);
+ 			}
+ 		}
+ 		else if (delete_during && f_out != -1 && !phase && dry_run < 2
  		    && (file->flags & FLAG_XFER_DIR))
--			delete_in_dir(the_file_list, fname, file, &real_st);
+-			delete_in_dir(cur_flist, fname, file, &real_st.st_dev);
 -		return;
-+			delete_in_dir(the_file_list, fname, file, &real_sx.st);
++			delete_in_dir(cur_flist, fname, file, &real_sx.st.st_dev);
 +		goto cleanup;
  	}
  
@@ -1815,7 +1830,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #endif
  
  	if (preserve_links && S_ISLNK(file->mode)) {
-@@ -1260,17 +1315,17 @@ static void recv_generator(char *fname, 
+@@ -1257,28 +1312,28 @@ static void recv_generator(char *fname, 
  			char lnk[MAXPATHLEN];
  			int len;
  
@@ -1837,20 +1852,40 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #endif
  				if (remove_source_files == 1)
  					goto return_with_success;
-@@ -1278,10 +1333,10 @@ static void recv_generator(char *fname, 
+-				return;
++				goto cleanup;
  			}
  			/* Not the right symlink (or not a symlink), so
  			 * delete it. */
 -			if (delete_item(fname, st.st_mode, "symlink", del_opts) != 0)
+-				return;
 +			if (delete_item(fname, sx.st.st_mode, "symlink", del_opts) != 0)
- 				return;
++				goto cleanup;
  		} else if (basis_dir[0] != NULL) {
 -			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &st,
 +			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
  					      itemizing, code);
  			if (j == -2) {
  #ifndef CAN_HARDLINK_SYMLINK
-@@ -1306,7 +1361,7 @@ static void recv_generator(char *fname, 
+@@ -1287,7 +1342,7 @@ static void recv_generator(char *fname, 
+ 				} else
+ #endif
+ 				if (!copy_dest)
+-					return;
++					goto cleanup;
+ 				itemizing = 0;
+ 				code = FNONE;
+ 			} else if (j >= 0)
+@@ -1295,7 +1350,7 @@ static void recv_generator(char *fname, 
+ 		}
+ #ifdef SUPPORT_HARD_LINKS
+ 		if (preserve_hard_links && F_HLINK_NOT_LAST(file))
+-			return;
++			goto cleanup;
+ #endif
+ 		if (do_symlink(sl, fname) != 0) {
+ 			rsyserr(FERROR, errno, "symlink %s -> \"%s\" failed",
+@@ -1303,7 +1358,7 @@ static void recv_generator(char *fname, 
  		} else {
  			set_file_attrs(fname, file, NULL, 0);
  			if (itemizing) {
@@ -1859,7 +1894,16 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  					ITEM_LOCAL_CHANGE, 0, NULL);
  			}
  			if (code != FNONE && verbose)
-@@ -1332,33 +1387,38 @@ static void recv_generator(char *fname, 
+@@ -1319,7 +1374,7 @@ static void recv_generator(char *fname, 
+ 				goto return_with_success;
+ 		}
+ #endif
+-		return;
++		goto cleanup;
+ 	}
+ 
+ 	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
+@@ -1329,33 +1384,38 @@ static void recv_generator(char *fname, 
  		if (statret == 0) {
  			char *t;
  			if (IS_DEVICE(file->mode)) {
@@ -1901,15 +1945,34 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +				goto cleanup;
  			}
 -			if (delete_item(fname, st.st_mode, t, del_opts) != 0)
+-				return;
 +			if (delete_item(fname, sx.st.st_mode, t, del_opts) != 0)
- 				return;
++				goto cleanup;
  		} else if (basis_dir[0] != NULL) {
 -			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &st,
 +			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
  					      itemizing, code);
  			if (j == -2) {
  #ifndef CAN_HARDLINK_SPECIAL
-@@ -1388,7 +1448,11 @@ static void recv_generator(char *fname, 
+@@ -1364,7 +1424,7 @@ static void recv_generator(char *fname, 
+ 				} else
+ #endif
+ 				if (!copy_dest)
+-					return;
++					goto cleanup;
+ 				itemizing = 0;
+ 				code = FNONE;
+ 			} else if (j >= 0)
+@@ -1372,7 +1432,7 @@ static void recv_generator(char *fname, 
+ 		}
+ #ifdef SUPPORT_HARD_LINKS
+ 		if (preserve_hard_links && F_HLINK_NOT_LAST(file))
+-			return;
++			goto cleanup;
+ #endif
+ 		if (verbose > 2) {
+ 			rprintf(FINFO, "mknod(%s, 0%o, [%ld,%ld])\n",
+@@ -1385,7 +1445,11 @@ static void recv_generator(char *fname, 
  		} else {
  			set_file_attrs(fname, file, NULL, 0);
  			if (itemizing) {
@@ -1922,7 +1985,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  					ITEM_LOCAL_CHANGE, 0, NULL);
  			}
  			if (code != FNONE && verbose)
-@@ -1400,7 +1464,7 @@ static void recv_generator(char *fname, 
+@@ -1397,14 +1461,14 @@ static void recv_generator(char *fname, 
  			if (remove_source_files == 1)
  				goto return_with_success;
  		}
@@ -1931,24 +1994,56 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	}
  
  	if (!S_ISREG(file->mode)) {
-@@ -1434,7 +1498,7 @@ static void recv_generator(char *fname, 
+ 		if (solo_file)
+ 			fname = f_name(file, NULL);
+ 		rprintf(FINFO, "skipping non-regular file \"%s\"\n", fname);
+-		return;
++		goto cleanup;
  	}
  
- 	if (update_only && statret == 0
+ 	if (max_size > 0 && F_LENGTH(file) > max_size) {
+@@ -1413,7 +1477,7 @@ static void recv_generator(char *fname, 
+ 				fname = f_name(file, NULL);
+ 			rprintf(FINFO, "%s is over max-size\n", fname);
+ 		}
+-		return;
++		goto cleanup;
+ 	}
+ 	if (min_size > 0 && F_LENGTH(file) < min_size) {
+ 		if (verbose > 1) {
+@@ -1421,39 +1485,39 @@ static void recv_generator(char *fname, 
+ 				fname = f_name(file, NULL);
+ 			rprintf(FINFO, "%s is under min-size\n", fname);
+ 		}
+-		return;
++		goto cleanup;
+ 	}
+ 
+ 	if (ignore_existing > 0 && statret == 0) {
+ 		if (verbose > 1)
+ 			rprintf(FINFO, "%s exists\n", fname);
+-		return;
++		goto cleanup;
+ 	}
+ 
+ 	if (update_only > 0 && statret == 0
 -	    && cmp_time(st.st_mtime, file->modtime) > 0) {
 +	    && cmp_time(sx.st.st_mtime, file->modtime) > 0) {
  		if (verbose > 1)
  			rprintf(FINFO, "%s is newer\n", fname);
- 		return;
-@@ -1443,20 +1507,20 @@ static void recv_generator(char *fname, 
+-		return;
++		goto cleanup;
+ 	}
+ 
  	fnamecmp = fname;
  	fnamecmp_type = FNAMECMP_FNAME;
  
 -	if (statret == 0 && !S_ISREG(st.st_mode)) {
 -		if (delete_item(fname, st.st_mode, "regular file", del_opts) != 0)
+-			return;
 +	if (statret == 0 && !S_ISREG(sx.st.st_mode)) {
 +		if (delete_item(fname, sx.st.st_mode, "regular file", del_opts) != 0)
- 			return;
++			goto cleanup;
  		statret = -1;
  		stat_errno = ENOENT;
  	}
@@ -1965,7 +2060,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		}
  		if (j >= 0) {
  			fnamecmp = fnamecmpbuf;
-@@ -1466,7 +1530,7 @@ static void recv_generator(char *fname, 
+@@ -1463,7 +1527,7 @@ static void recv_generator(char *fname, 
  	}
  
  	real_ret = statret;
@@ -1974,7 +2069,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  	if (partial_dir && (partialptr = partial_dir_fname(fname)) != NULL
  	    && link_stat(partialptr, &partial_st, 0) == 0
-@@ -1485,7 +1549,7 @@ static void recv_generator(char *fname, 
+@@ -1482,7 +1546,7 @@ static void recv_generator(char *fname, 
  				rprintf(FINFO, "fuzzy basis selected for %s: %s\n",
  					fname, fnamecmpbuf);
  			}
@@ -1983,13 +2078,25 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  			statret = 0;
  			fnamecmp = fnamecmpbuf;
  			fnamecmp_type = FNAMECMP_FUZZY;
-@@ -1504,36 +1568,41 @@ static void recv_generator(char *fname, 
- 		return;
+@@ -1492,45 +1556,50 @@ static void recv_generator(char *fname, 
+ 	if (statret != 0) {
+ #ifdef SUPPORT_HARD_LINKS
+ 		if (preserve_hard_links && F_HLINK_NOT_LAST(file))
+-			return;
++			goto cleanup;
+ #endif
+ 		if (stat_errno == ENOENT)
+ 			goto notify_others;
+ 		rsyserr(FERROR, stat_errno, "recv_generator: failed to stat %s",
+ 			full_fname(fname));
+-		return;
++		goto cleanup;
  	}
  
--	if (append_mode && st.st_size > F_LENGTH(file))
-+	if (append_mode && sx.st.st_size > F_LENGTH(file))
- 		return;
+-	if (append_mode > 0 && st.st_size > F_LENGTH(file))
+-		return;
++	if (append_mode > 0 && sx.st.st_size > F_LENGTH(file))
++		goto cleanup;
  
  	if (fnamecmp_type <= FNAMECMP_BASIS_DIR_HIGH)
  		;
@@ -2022,7 +2129,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +			goto cleanup;
  	  return_with_success:
  		if (!dry_run)
- 			send_msg_int(MSG_SUCCESS, ndx);
+ 			send_msg_int(MSG_SUCCESS, ndx + cur_flist->ndx_start);
 -		return;
 +		goto cleanup;
  	}
@@ -2034,7 +2141,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		fnamecmp = partialptr;
  		fnamecmp_type = FNAMECMP_PARTIAL_DIR;
  		statret = 0;
-@@ -1558,16 +1627,20 @@ static void recv_generator(char *fname, 
+@@ -1555,16 +1624,20 @@ static void recv_generator(char *fname, 
  		/* pretend the file didn't exist */
  #ifdef SUPPORT_HARD_LINKS
  		if (preserve_hard_links && F_HLINK_NOT_LAST(file))
@@ -2049,7 +2156,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		goto notify_others;
  	}
  
- 	if (inplace && make_backups && fnamecmp_type == FNAMECMP_FNAME) {
+ 	if (inplace && make_backups > 0 && fnamecmp_type == FNAMECMP_FNAME) {
  		if (!(backupptr = get_backup_name(fname))) {
  			close(fd);
 -			return;
@@ -2057,7 +2164,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		}
  		if (!(back_file = make_file(fname, NULL, NULL, 0, NO_FILTERS))) {
  			close(fd);
-@@ -1578,7 +1651,7 @@ static void recv_generator(char *fname, 
+@@ -1575,7 +1648,7 @@ static void recv_generator(char *fname, 
  				full_fname(backupptr));
  			unmake_file(back_file);
  			close(fd);
@@ -2066,7 +2173,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		}
  		if ((f_copy = do_open(backupptr,
  		    O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, 0600)) < 0) {
-@@ -1586,14 +1659,14 @@ static void recv_generator(char *fname, 
+@@ -1583,14 +1656,14 @@ static void recv_generator(char *fname, 
  				full_fname(backupptr));
  			unmake_file(back_file);
  			close(fd);
@@ -2083,7 +2190,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	}
  
  	if (verbose > 2)
-@@ -1615,26 +1688,34 @@ static void recv_generator(char *fname, 
+@@ -1614,26 +1687,34 @@ static void recv_generator(char *fname, 
  			iflags |= ITEM_BASIS_TYPE_FOLLOWS;
  		if (fnamecmp_type == FNAMECMP_FUZZY)
  			iflags |= ITEM_XNAME_FOLLOWS;
@@ -2124,7 +2231,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  	if (f_copy >= 0) {
  		close(f_copy);
-@@ -1647,6 +1728,13 @@ static void recv_generator(char *fname, 
+@@ -1646,6 +1727,13 @@ static void recv_generator(char *fname, 
  	}
  
  	close(fd);
@@ -2137,16 +2244,16 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	return;
  }
  
- void generate_files(int f_out, struct file_list *flist, char *local_name)
-@@ -1713,6 +1801,8 @@ void generate_files(int f_out, struct fi
+ void generate_files(int f_out, char *local_name)
+@@ -1708,6 +1796,8 @@ void generate_files(int f_out, char *loc
  	 * notice that and let us know via the redo pipe (or its closing). */
  	ignore_timeout = 1;
  
 +	dflt_perms = (ACCESSPERMS & ~orig_umask);
 +
- 	for (i = 0; i < flist->count; i++) {
- 		struct file_struct *file = flist->files[i];
- 
+ 	do {
+ 		if (incremental && delete_during && cur_flist->ndx_start) {
+ 			struct file_struct *fp = dir_flist->files[cur_flist->parent_ndx];
 --- old/hlink.c
 +++ new/hlink.c
 @@ -27,6 +27,7 @@ extern int verbose;
@@ -5630,7 +5737,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  int preserve_perms = 0;
  int preserve_executability = 0;
  int preserve_devices = 0;
-@@ -198,6 +199,7 @@ static void print_rsync_version(enum log
+@@ -199,6 +200,7 @@ static void print_rsync_version(enum log
  	char const *got_socketpair = "no ";
  	char const *have_inplace = "no ";
  	char const *hardlinks = "no ";
@@ -5638,7 +5745,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	char const *links = "no ";
  	char const *ipv6 = "no ";
  	STRUCT_STAT *dumstat;
-@@ -214,6 +216,10 @@ static void print_rsync_version(enum log
+@@ -215,6 +217,10 @@ static void print_rsync_version(enum log
  	hardlinks = "";
  #endif
  
@@ -5649,7 +5756,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #ifdef SUPPORT_LINKS
  	links = "";
  #endif
-@@ -232,8 +238,8 @@ static void print_rsync_version(enum log
+@@ -233,8 +239,8 @@ static void print_rsync_version(enum log
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -5660,7 +5767,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -279,7 +285,7 @@ void usage(enum logcode F)
+@@ -280,7 +286,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -5669,7 +5776,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
    rprintf(F," -R, --relative              use relative path names\n");
-@@ -301,6 +307,9 @@ void usage(enum logcode F)
+@@ -302,6 +308,9 @@ void usage(enum logcode F)
    rprintf(F," -p, --perms                 preserve permissions\n");
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
@@ -5679,7 +5786,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
-@@ -421,6 +430,9 @@ static struct poptOption long_options[] 
+@@ -422,6 +431,9 @@ static struct poptOption long_options[] 
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
@@ -5689,7 +5796,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1086,6 +1098,24 @@ int parse_arguments(int *argc, const cha
+@@ -1093,6 +1105,24 @@ int parse_arguments(int *argc, const cha
  			usage(FINFO);
  			exit_cleanup(0);
  
@@ -5714,20 +5821,20 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1528,6 +1558,10 @@ void server_options(char **args,int *arg
- 
- 	if (preserve_hard_links)
- 		argstr[x++] = 'H';
+@@ -1556,6 +1586,10 @@ void server_options(char **args,int *arg
+ 		argstr[x++] = 'p';
+ 	else if (preserve_executability && am_sender)
+ 		argstr[x++] = 'E';
 +#ifdef SUPPORT_ACLS
 +	if (preserve_acls)
 +		argstr[x++] = 'A';
 +#endif
- 	if (preserve_uid)
- 		argstr[x++] = 'o';
- 	if (preserve_gid)
+ 	if (recurse)
+ 		argstr[x++] = 'r';
+ 	if (always_checksum)
 --- old/receiver.c
 +++ new/receiver.c
-@@ -47,6 +47,7 @@ extern int keep_partial;
+@@ -48,6 +48,7 @@ extern int keep_partial;
  extern int checksum_seed;
  extern int inplace;
  extern int delay_updates;
@@ -5735,7 +5842,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern struct stats stats;
  extern char *stdout_format;
  extern char *tmpdir;
-@@ -347,6 +348,10 @@ int recv_files(int f_in, struct file_lis
+@@ -349,6 +350,10 @@ int recv_files(int f_in, char *local_nam
  	int itemizing = am_server ? logfile_format_has_i : stdout_format_has_i;
  	enum logcode log_code = log_before_transfer ? FLOG : FINFO;
  	int max_phase = protocol_version >= 29 ? 2 : 1;
@@ -5746,7 +5853,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	int ndx, recv_ok;
  
  	if (verbose > 2)
-@@ -545,7 +550,16 @@ int recv_files(int f_in, struct file_lis
+@@ -562,7 +567,16 @@ int recv_files(int f_in, char *local_nam
  		 * mode based on the local permissions and some heuristics. */
  		if (!preserve_perms) {
  			int exists = fd1 != -1;
@@ -5774,15 +5881,15 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern int preserve_perms;
  extern int preserve_executability;
  extern int preserve_times;
-@@ -48,7 +49,6 @@ extern int preserve_gid;
- extern int inplace;
+@@ -50,7 +51,6 @@ extern int inplace;
+ extern int flist_eof;
  extern int keep_dirlinks;
  extern int make_backups;
 -extern mode_t orig_umask;
  extern struct stats stats;
- extern struct file_list *the_file_list;
+ extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct chmod_mode_struct *daemon_chmod_modes;
-@@ -153,7 +153,8 @@ void free_sums(struct sum_struct *s)
+@@ -203,7 +203,8 @@ void free_sums(struct sum_struct *s)
  
  /* This is only called when we aren't preserving permissions.  Figure out what
   * the permissions should be and return them merged back into the mode. */
@@ -5792,7 +5899,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  {
  	int new_mode;
  	/* If the file already exists, we'll return the local permissions,
-@@ -170,56 +171,65 @@ mode_t dest_mode(mode_t flist_mode, mode
+@@ -220,56 +221,65 @@ mode_t dest_mode(mode_t flist_mode, mode
  				new_mode |= (new_mode & 0444) >> 2;
  		}
  	} else {
@@ -5873,7 +5980,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		;
  	else
  #endif
-@@ -229,45 +239,57 @@ int set_file_attrs(char *fname, struct f
+@@ -279,45 +289,57 @@ int set_file_attrs(char *fname, struct f
  				rprintf(FINFO,
  					"set uid of %s from %ld to %ld\n",
  					fname,
@@ -5941,7 +6048,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		}
  		if (ret == 0) /* ret == 1 if symlink could not be set */
  			updated = 1;
-@@ -280,6 +302,11 @@ int set_file_attrs(char *fname, struct f
+@@ -330,6 +352,11 @@ int set_file_attrs(char *fname, struct f
  		else
  			rprintf(FCLIENT, "%s is uptodate\n", fname);
  	}
@@ -5955,7 +6062,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/rsync.h
 +++ new/rsync.h
-@@ -532,6 +532,14 @@ struct idev_node {
+@@ -546,6 +546,14 @@ struct idev_node {
  #define IN_LOOPBACKNET 127
  #endif
  
@@ -5970,7 +6077,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #define GID_NONE ((gid_t)-1)
  
  union file_extras {
-@@ -551,6 +559,7 @@ struct file_struct {
+@@ -565,6 +573,7 @@ struct file_struct {
  extern int file_extra_cnt;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -5978,20 +6085,20 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
  #define FILE_STRUCT_LEN (offsetof(struct file_struct, basename))
  #define EXTRA_LEN (sizeof (union file_extras))
-@@ -583,10 +592,12 @@ extern int preserve_gid;
+@@ -597,10 +606,12 @@ extern int preserve_gid;
  /* When the associated option is on, all entries will have these present: */
- #define F_UID(f) REQ_EXTRA(f, preserve_uid)->unum
- #define F_GID(f) REQ_EXTRA(f, preserve_gid)->unum
+ #define F_OWNER(f) REQ_EXTRA(f, preserve_uid)->unum
+ #define F_GROUP(f) REQ_EXTRA(f, preserve_gid)->unum
 +#define F_ACL(f) REQ_EXTRA(f, preserve_acls)->unum
  
  /* These items are per-entry optional and mutally exclusive: */
  #define F_HL_GNUM(f) OPT_EXTRA(f, LEN64_BUMP(f))->num
  #define F_HL_PREV(f) OPT_EXTRA(f, LEN64_BUMP(f))->num
 +#define F_DEF_ACL(f) OPT_EXTRA(f, LEN64_BUMP(f))->unum
+ #define F_DIRDEV_P(f) (&OPT_EXTRA(f, LEN64_BUMP(f) + 2 - 1)->unum)
+ #define F_DIRNODE_P(f) (&OPT_EXTRA(f, LEN64_BUMP(f) + 3 - 1)->num)
  
- /* This optional item might follow an F_HL_*() item.
-  * (Note: a device doesn't need to check LEN64_BUMP(f).) */
-@@ -722,6 +733,17 @@ struct stats {
+@@ -752,6 +763,17 @@ struct stats {
  
  struct chmod_mode_struct;
  
@@ -6009,7 +6116,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  #include "byteorder.h"
  #include "lib/mdfour.h"
  #include "lib/wildmatch.h"
-@@ -740,6 +762,16 @@ struct chmod_mode_struct;
+@@ -770,6 +792,16 @@ struct chmod_mode_struct;
  #define NORETURN __attribute__((__noreturn__))
  #endif
  
@@ -6579,24 +6686,26 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  fi
 --- old/testsuite/itemize.test
 +++ new/testsuite/itemize.test
-@@ -38,15 +38,15 @@ rm -f "$to2dir" "$to2dir.test"
+@@ -47,16 +47,16 @@ rm -f "$to2dir" "$to2dir.test"
  $RSYNC -iplr "$fromdir/" "$todir/" \
      | tee "$outfile"
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
 -cd+++++++ ./
 -cd+++++++ bar/
+-cd+++++++ foo/_P30_
 -cd+++++++ bar/baz/
 ->f+++++++ bar/baz/rsync
--cd+++++++ foo/
+-cd+++++++ foo/_P29_
 ->f+++++++ foo/config1
 ->f+++++++ foo/config2
 ->f+++++++ foo/extra
 -cL+++++++ foo/sym -> ../bar/baz/rsync
 +cd+++++++++ ./
 +cd+++++++++ bar/
++cd+++++++++ foo/_P30_
 +cd+++++++++ bar/baz/
 +>f+++++++++ bar/baz/rsync
-+cd+++++++++ foo/
++cd+++++++++ foo/_P29_
 +>f+++++++++ foo/config1
 +>f+++++++++ foo/config2
 +>f+++++++++ foo/extra
@@ -6604,10 +6713,10 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 1 failed"
  
-@@ -58,10 +58,10 @@ chmod 601 "$fromdir/foo/config2"
+@@ -68,10 +68,10 @@ chmod 601 "$fromdir/foo/config2"
  $RSYNC -iplrH "$fromdir/" "$todir/" \
      | tee "$outfile"
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
 ->f..T.... bar/baz/rsync
 ->f..T.... foo/config1
 ->f.sTp... foo/config2
@@ -6619,27 +6728,29 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 2 failed"
  
-@@ -78,11 +78,11 @@ chmod 777 "$todir/bar/baz/rsync"
+@@ -88,12 +88,12 @@ chmod 777 "$todir/bar/baz/rsync"
  $RSYNC -iplrtc "$fromdir/" "$todir/" \
      | tee "$outfile"
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
+-.d..t.... foo/_P30_
 -.f..tp... bar/baz/rsync
--.d..t.... foo/
+-.d..t.... foo/_P29_
 -.f..t.... foo/config1
 ->fcstp... foo/config2
 -cL..T.... foo/sym -> ../bar/baz/rsync
++.d..t...... foo/_P30_
 +.f..tp..... bar/baz/rsync
-+.d..t...... foo/
++.d..t...... foo/_P29_
 +.f..t...... foo/config1
 +>fcstp..... foo/config2
 +cL..T...... foo/sym -> ../bar/baz/rsync
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
  
-@@ -107,15 +107,15 @@ $RSYNC -ivvplrtH "$fromdir/" "$todir/" \
+@@ -118,15 +118,15 @@ $RSYNC -ivvplrtH "$fromdir/" "$todir/" \
      | tee "$outfile"
  filter_outfile
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
 -.d        ./
 -.d        bar/
 -.d        bar/baz/
@@ -6661,10 +6772,10 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 5 failed"
  
-@@ -134,8 +134,8 @@ touch "$todir/foo/config2"
+@@ -145,8 +145,8 @@ touch "$todir/foo/config2"
  $RSYNC -iplrtH "$fromdir/" "$todir/" \
      | tee "$outfile"
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
 -.f...p... foo/config1
 ->f..t.... foo/config2
 +.f...p..... foo/config1
@@ -6672,10 +6783,10 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 7 failed"
  
-@@ -143,15 +143,15 @@ $RSYNC -ivvplrtH --copy-dest=../to "$fro
+@@ -154,15 +154,15 @@ $RSYNC -ivvplrtH --copy-dest=../to "$fro
      | tee "$outfile"
  filter_outfile
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
 -cd        ./
 -cd        bar/
 -cd        bar/baz/
@@ -6697,19 +6808,19 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 8 failed"
  
-@@ -159,7 +159,7 @@ rm -rf "$to2dir"
+@@ -170,7 +170,7 @@ rm -rf "$to2dir"
  $RSYNC -iplrtH --copy-dest=../to "$fromdir/" "$to2dir/" \
      | tee "$outfile"
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
 -hf        foo/extra => foo/config1
 +hf          foo/extra => foo/config1
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 9 failed"
  
-@@ -185,15 +185,15 @@ $RSYNC -ivvplrtH --link-dest="$todir" "$
+@@ -196,15 +196,15 @@ $RSYNC -ivvplrtH --link-dest="$todir" "$
      | tee "$outfile"
  filter_outfile
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
 -cd        ./
 -cd        bar/
 -cd        bar/baz/
@@ -6731,10 +6842,10 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  EOT
  diff $diffopt "$chkfile" "$outfile" || test_fail "test 11 failed"
  
-@@ -233,15 +233,15 @@ $RSYNC -ivvplrtH --compare-dest="$todir"
+@@ -244,15 +244,15 @@ $RSYNC -ivvplrtH --compare-dest="$todir"
      | tee "$outfile"
  filter_outfile
- cat <<EOT >"$chkfile"
+ sed -e "$sed_cmd" <<EOT >"$chkfile"
 -cd        ./
 -cd        bar/
 -cd        bar/baz/
@@ -6758,15 +6869,15 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  
 --- old/uidlist.c
 +++ new/uidlist.c
-@@ -35,6 +35,7 @@
- extern int verbose;
+@@ -36,6 +36,7 @@ extern int verbose;
+ extern int am_root;
  extern int preserve_uid;
  extern int preserve_gid;
 +extern int preserve_acls;
  extern int numeric_ids;
- extern int am_root;
  
-@@ -270,7 +271,7 @@ void send_uid_list(int f)
+ struct idlist {
+@@ -272,7 +273,7 @@ void send_uid_list(int f)
  {
  	struct idlist *list;
  
@@ -6775,7 +6886,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		int len;
  		/* we send sequences of uid/byte-length/name */
  		for (list = uidlist; list; list = list->next) {
-@@ -287,7 +288,7 @@ void send_uid_list(int f)
+@@ -289,7 +290,7 @@ void send_uid_list(int f)
  		write_int(f, 0);
  	}
  
@@ -6784,26 +6895,22 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		int len;
  		for (list = gidlist; list; list = list->next) {
  			if (!list->name)
-@@ -308,7 +309,7 @@ void recv_uid_list(int f, struct file_li
+@@ -329,18 +330,28 @@ void recv_uid_list(int f, struct file_li
+ {
  	int id, i;
- 	char *name;
  
 -	if (preserve_uid && !numeric_ids) {
 +	if ((preserve_uid || preserve_acls) && !numeric_ids) {
  		/* read the uid list */
- 		while ((id = read_int(f)) != 0) {
- 			int len = read_byte(f);
-@@ -320,7 +321,7 @@ void recv_uid_list(int f, struct file_li
- 		}
+ 		while ((id = read_int(f)) != 0)
+ 			recv_user_name(f, (uid_t)id);
  	}
  
 -	if (preserve_gid && !numeric_ids) {
 +	if ((preserve_gid || preserve_acls) && !numeric_ids) {
  		/* read the gid list */
- 		while ((id = read_int(f)) != 0) {
- 			int len = read_byte(f);
-@@ -332,6 +333,16 @@ void recv_uid_list(int f, struct file_li
- 		}
+ 		while ((id = read_int(f)) != 0)
+ 			recv_group_name(f, (gid_t)id);
  	}
  
 +#ifdef SUPPORT_ACLS
