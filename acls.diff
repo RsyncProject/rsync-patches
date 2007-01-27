@@ -1804,7 +1804,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		if (real_ret != 0 && one_file_system)
 -			real_st.st_dev = filesystem_dev;
 +			real_sx.st.st_dev = filesystem_dev;
- 		if (incremental) {
+ 		if (inc_recurse) {
  			if (one_file_system) {
  				uint32 *devp = F_DIRDEV_P(file);
 -				DEV_MAJOR(devp) = major(real_st.st_dev);
@@ -2252,7 +2252,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
 +	dflt_perms = (ACCESSPERMS & ~orig_umask);
 +
  	do {
- 		if (incremental && delete_during && cur_flist->ndx_start) {
+ 		if (inc_recurse && delete_during && cur_flist->ndx_start) {
  			struct file_struct *fp = dir_flist->files[cur_flist->parent_ndx];
 --- old/hlink.c
 +++ new/hlink.c
@@ -5840,9 +5840,9 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern int delay_updates;
 +extern mode_t orig_umask;
  extern struct stats stats;
- extern char *stdout_format;
  extern char *tmpdir;
-@@ -349,6 +350,10 @@ int recv_files(int f_in, char *local_nam
+ extern char *partial_dir;
+@@ -348,6 +349,10 @@ int recv_files(int f_in, char *local_nam
  	int itemizing = am_server ? logfile_format_has_i : stdout_format_has_i;
  	enum logcode log_code = log_before_transfer ? FLOG : FINFO;
  	int max_phase = protocol_version >= 29 ? 2 : 1;
@@ -5853,7 +5853,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  	int ndx, recv_ok;
  
  	if (verbose > 2)
-@@ -562,7 +567,16 @@ int recv_files(int f_in, char *local_nam
+@@ -563,7 +568,16 @@ int recv_files(int f_in, char *local_nam
  		 * mode based on the local permissions and some heuristics. */
  		if (!preserve_perms) {
  			int exists = fd1 != -1;
@@ -5886,10 +5886,10 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  extern int keep_dirlinks;
  extern int make_backups;
 -extern mode_t orig_umask;
- extern struct stats stats;
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct chmod_mode_struct *daemon_chmod_modes;
-@@ -203,7 +203,8 @@ void free_sums(struct sum_struct *s)
+ 
+@@ -202,7 +202,8 @@ void free_sums(struct sum_struct *s)
  
  /* This is only called when we aren't preserving permissions.  Figure out what
   * the permissions should be and return them merged back into the mode. */
@@ -5899,7 +5899,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  {
  	int new_mode;
  	/* If the file already exists, we'll return the local permissions,
-@@ -220,56 +221,65 @@ mode_t dest_mode(mode_t flist_mode, mode
+@@ -219,56 +220,65 @@ mode_t dest_mode(mode_t flist_mode, mode
  				new_mode |= (new_mode & 0444) >> 2;
  		}
  	} else {
@@ -5980,7 +5980,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		;
  	else
  #endif
-@@ -279,45 +289,57 @@ int set_file_attrs(char *fname, struct f
+@@ -278,45 +288,57 @@ int set_file_attrs(char *fname, struct f
  				rprintf(FINFO,
  					"set uid of %s from %ld to %ld\n",
  					fname,
@@ -6048,7 +6048,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  		}
  		if (ret == 0) /* ret == 1 if symlink could not be set */
  			updated = 1;
-@@ -330,6 +352,11 @@ int set_file_attrs(char *fname, struct f
+@@ -329,6 +351,11 @@ int set_file_attrs(char *fname, struct f
  		else
  			rprintf(FCLIENT, "%s is uptodate\n", fname);
  	}
@@ -6193,7 +6193,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  dit(bf(--chmod)) This option tells rsync to apply one or more
  comma-separated "chmod" strings to the permission of the files in the
  transfer.  The resulting value is treated as though it was the permissions
-@@ -1426,8 +1439,8 @@ if the receiving rsync is at least versi
+@@ -1432,8 +1445,8 @@ if the receiving rsync is at least versi
  with older versions of rsync, but that also turns on the output of other
  verbose messages).
  
@@ -6204,7 +6204,7 @@ latest ACL-enabling patch to send files to an older ACL-enabled rsync.
  type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -1476,7 +1489,11 @@ quote(itemization(
+@@ -1482,7 +1495,11 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
