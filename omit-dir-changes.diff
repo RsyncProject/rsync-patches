@@ -9,7 +9,7 @@ To use this patch, run these commands for a successful build:
 
 --- old/generator.c
 +++ new/generator.c
-@@ -45,6 +45,7 @@ extern int preserve_uid;
+@@ -44,6 +44,7 @@ extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_times;
  extern int omit_dir_times;
@@ -17,7 +17,7 @@ To use this patch, run these commands for a successful build:
  extern int delete_mode;
  extern int delete_before;
  extern int delete_during;
-@@ -541,10 +542,11 @@ void itemize(struct file_struct *file, i
+@@ -543,10 +544,11 @@ void itemize(struct file_struct *file, i
  			iflags |= ITEM_REPORT_TIME;
  		if (!BITS_EQUAL(st->st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
@@ -32,18 +32,18 @@ To use this patch, run these commands for a successful build:
  			iflags |= ITEM_REPORT_GROUP;
  	} else
  		iflags |= ITEM_IS_NEW;
-@@ -1161,7 +1163,7 @@ static void recv_generator(char *fname, 
+@@ -1216,7 +1218,7 @@ static void recv_generator(char *fname, 
  
  	/* If we're not preserving permissions, change the file-list's
  	 * mode based on the local permissions and some heuristics. */
 -	if (!preserve_perms) {
 +	if (!preserve_perms || (omit_dir_changes && S_ISDIR(st.st_mode))) {
- 		int exists = statret == 0
- 			  && S_ISDIR(st.st_mode) == S_ISDIR(file->mode);
+ 		int exists = statret == 0 && !S_ISDIR(st.st_mode);
  		file->mode = dest_mode(file->mode, st.st_mode, exists);
+ 	}
 --- old/options.c
 +++ new/options.c
-@@ -55,6 +55,7 @@ int preserve_uid = 0;
+@@ -54,6 +54,7 @@ int preserve_uid = 0;
  int preserve_gid = 0;
  int preserve_times = 0;
  int omit_dir_times = 0;
@@ -51,7 +51,7 @@ To use this patch, run these commands for a successful build:
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -309,6 +310,7 @@ void usage(enum logcode F)
+@@ -308,6 +309,7 @@ void usage(enum logcode F)
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve times\n");
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
@@ -59,7 +59,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
-@@ -426,6 +428,7 @@ static struct poptOption long_options[] 
+@@ -425,6 +427,7 @@ static struct poptOption long_options[] 
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
@@ -67,7 +67,7 @@ To use this patch, run these commands for a successful build:
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
-@@ -1293,6 +1296,9 @@ int parse_arguments(int *argc, const cha
+@@ -1292,6 +1295,9 @@ int parse_arguments(int *argc, const cha
  			"P *%s", backup_suffix);
  		parse_rule(&filter_list, backup_dir_buf, 0, 0);
  	}
@@ -77,7 +77,7 @@ To use this patch, run these commands for a successful build:
  	if (make_backups && !backup_dir)
  		omit_dir_times = 1;
  
-@@ -1526,6 +1532,8 @@ void server_options(char **args,int *arg
+@@ -1525,6 +1531,8 @@ void server_options(char **args,int *arg
  			argstr[x++] = 'm';
  		if (omit_dir_times == 2)
  			argstr[x++] = 'O';
@@ -88,7 +88,7 @@ To use this patch, run these commands for a successful build:
  			argstr[x++] = 'L';
 --- old/receiver.c
 +++ new/receiver.c
-@@ -38,6 +38,7 @@ extern int protocol_version;
+@@ -37,6 +37,7 @@ extern int protocol_version;
  extern int relative_paths;
  extern int preserve_hard_links;
  extern int preserve_perms;
@@ -107,7 +107,7 @@ To use this patch, run these commands for a successful build:
  		}
 --- old/rsync.c
 +++ new/rsync.c
-@@ -36,6 +36,7 @@ extern int preserve_perms;
+@@ -35,6 +35,7 @@ extern int preserve_perms;
  extern int preserve_executability;
  extern int preserve_times;
  extern int omit_dir_times;
