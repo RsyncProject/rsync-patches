@@ -32,15 +32,15 @@ To use this patch, run these commands for a successful build:
  			iflags |= ITEM_REPORT_GROUP;
  	} else
  		iflags |= ITEM_IS_NEW;
-@@ -1216,7 +1218,7 @@ static void recv_generator(char *fname, 
- 
- 	/* If we're not preserving permissions, change the file-list's
- 	 * mode based on the local permissions and some heuristics. */
--	if (!preserve_perms) {
-+	if (!preserve_perms || (omit_dir_changes && S_ISDIR(st.st_mode))) {
- 		int exists = statret == 0 && !S_ISDIR(st.st_mode);
- 		file->mode = dest_mode(file->mode, st.st_mode, exists);
- 	}
+@@ -1165,7 +1167,7 @@ static void recv_generator(char *fname, 
+ 				statret = -1;
+ 			new_root_dir = 0;
+ 		}
+-		if (!preserve_perms) { /* See comment in non-dir code below. */
++		if (!preserve_perms || omit_dir_changes) { /* See comment in non-dir code below. */
+ 			file->mode = dest_mode(file->mode, st.st_mode,
+ 					       statret == 0);
+ 		}
 --- old/options.c
 +++ new/options.c
 @@ -54,6 +54,7 @@ int preserve_uid = 0;
@@ -86,25 +86,6 @@ To use this patch, run these commands for a successful build:
  	} else {
  		if (copy_links)
  			argstr[x++] = 'L';
---- old/receiver.c
-+++ new/receiver.c
-@@ -37,6 +37,7 @@ extern int protocol_version;
- extern int relative_paths;
- extern int preserve_hard_links;
- extern int preserve_perms;
-+extern int omit_dir_changes;
- extern int basis_dir_cnt;
- extern int make_backups;
- extern int cleanup_got_literal;
-@@ -560,7 +561,7 @@ int recv_files(int f_in, char *local_nam
- 
- 		/* If we're not preserving permissions, change the file-list's
- 		 * mode based on the local permissions and some heuristics. */
--		if (!preserve_perms) {
-+		if (!preserve_perms || (omit_dir_changes && S_ISDIR(st.st_mode))) {
- 			int exists = fd1 != -1;
- 			file->mode = dest_mode(file->mode, st.st_mode, exists);
- 		}
 --- old/rsync.c
 +++ new/rsync.c
 @@ -35,6 +35,7 @@ extern int preserve_perms;
