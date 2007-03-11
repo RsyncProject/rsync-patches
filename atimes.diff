@@ -136,7 +136,7 @@ To use this patch, run these commands for a successful build:
  		 || (keep_time && cmp_time(file->modtime, sxp->st.st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
 +		if (preserve_atimes && !S_ISDIR(file->mode) && !S_ISLNK(file->mode)
-+		 && cmp_time(F_ATIME(file), st->st_atime) != 0)
++		 && cmp_time(F_ATIME(file), sxp->st.st_atime) != 0)
 +			iflags |= ITEM_REPORT_ATIME;
  		if (!BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
@@ -146,10 +146,19 @@ To use this patch, run these commands for a successful build:
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
 +			if (preserve_atimes)
-+				set_file_attrs(fname, file, stp, 0);
++				set_file_attrs(fname, file, sxp, 0);
  			if (preserve_hard_links && F_IS_HLINKED(file))
  				finish_hard_link(file, fname, &sxp->st, itemizing, code, j);
  			if (itemizing && (verbose > 1 || stdout_format_has_i > 1)) {
+@@ -1700,7 +1706,7 @@ static void touch_up_dirs(struct file_li
+ 		if (!(file->mode & S_IWUSR))
+ 			do_chmod(fname, file->mode);
+ 		if (need_retouch_dir_times)
+-			set_modtime(fname, file->modtime, file->mode);
++			set_times(fname, file->modtime, file->modtime, file->mode);
+ 		if (allowed_lull && !(++j % lull_mod))
+ 			maybe_send_keepalive();
+ 		else if (!(j % 200))
 --- old/log.c
 +++ new/log.c
 @@ -36,6 +36,7 @@ extern int msg_fd_out;
