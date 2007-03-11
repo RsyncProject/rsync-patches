@@ -12,15 +12,15 @@ To use this patch, run these commands for a successful build:
 @@ -27,7 +27,7 @@ VERSION=@VERSION@
  .SUFFIXES: .c .o
  
- HEADERS=byteorder.h config.h errcode.h proto.h rsync.h lib/pool_alloc.h
+ HEADERS=byteorder.h config.h errcode.h proto.h rsync.h smb_acls.h lib/pool_alloc.h
 -LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o \
 +LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
- 	lib/permstring.o lib/pool_alloc.o @LIBOBJS@
+ 	lib/permstring.o lib/pool_alloc.o lib/sysacls.o @LIBOBJS@
  ZLIBOBJ=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  	zlib/trees.o zlib/zutil.o zlib/adler32.o zlib/compress.o zlib/crc32.o
 --- old/checksum.c
 +++ new/checksum.c
-@@ -21,6 +21,7 @@
+@@ -20,6 +20,7 @@
   */
  
  #include "rsync.h"
@@ -28,7 +28,7 @@ To use this patch, run these commands for a successful build:
  
  int csum_length = SHORT_SUM_LENGTH; /* initial value */
  
-@@ -28,6 +29,7 @@ int csum_length = SHORT_SUM_LENGTH; /* i
+@@ -27,6 +28,7 @@ int csum_length = SHORT_SUM_LENGTH; /* i
  
  extern int checksum_seed;
  extern int protocol_version;
@@ -36,7 +36,7 @@ To use this patch, run these commands for a successful build:
  
  /*
    a simple 32 bit checksum that can be upadted from either end
-@@ -58,6 +60,7 @@ void get_checksum2(char *buf, int32 len,
+@@ -57,6 +59,7 @@ void get_checksum2(char *buf, int32 len,
  	static char *buf1;
  	static int32 len1;
  	struct mdfour m;
@@ -44,7 +44,7 @@ To use this patch, run these commands for a successful build:
  
  	if (len > len1) {
  		if (buf1)
-@@ -68,7 +71,10 @@ void get_checksum2(char *buf, int32 len,
+@@ -67,7 +70,10 @@ void get_checksum2(char *buf, int32 len,
  			out_of_memory("get_checksum2");
  	}
  
@@ -56,7 +56,7 @@ To use this patch, run these commands for a successful build:
  
  	memcpy(buf1,buf,len);
  	if (checksum_seed) {
-@@ -77,7 +83,10 @@ void get_checksum2(char *buf, int32 len,
+@@ -76,7 +82,10 @@ void get_checksum2(char *buf, int32 len,
  	}
  
  	for(i = 0; i + CSUM_CHUNK <= len; i += CSUM_CHUNK) {
@@ -68,7 +68,7 @@ To use this patch, run these commands for a successful build:
  	}
  	/*
  	 * Prior to version 27 an incorrect MD4 checksum was computed
-@@ -86,10 +95,16 @@ void get_checksum2(char *buf, int32 len,
+@@ -85,10 +94,16 @@ void get_checksum2(char *buf, int32 len,
  	 * even when there are no more bytes.
  	 */
  	if (len - i > 0 || protocol_version >= 27) {
@@ -87,7 +87,7 @@ To use this patch, run these commands for a successful build:
  }
  
  
-@@ -99,6 +114,7 @@ void file_checksum(char *fname,char *sum
+@@ -98,6 +113,7 @@ void file_checksum(char *fname,char *sum
  	OFF_T i, len = size;
  	struct mdfour m;
  	int32 remainder;
@@ -95,7 +95,7 @@ To use this patch, run these commands for a successful build:
  	int fd;
  
  	memset(sum,0,MD4_SUM_LENGTH);
-@@ -109,11 +125,19 @@ void file_checksum(char *fname,char *sum
+@@ -108,11 +124,19 @@ void file_checksum(char *fname,char *sum
  
  	buf = map_file(fd, size, MAX_MAP_SIZE, CSUM_CHUNK);
  
@@ -118,7 +118,7 @@ To use this patch, run these commands for a successful build:
  	}
  
  	/* Prior to version 27 an incorrect MD4 checksum was computed
-@@ -121,10 +145,17 @@ void file_checksum(char *fname,char *sum
+@@ -120,10 +144,17 @@ void file_checksum(char *fname,char *sum
  	 * are multiples of 64.  This is fixed by calling mdfour_update()
  	 * even when there are no more bytes. */
  	remainder = (int32)(len - i);
@@ -139,7 +139,7 @@ To use this patch, run these commands for a successful build:
  
  	close(fd);
  	unmap_file(buf);
-@@ -134,11 +165,15 @@ void file_checksum(char *fname,char *sum
+@@ -133,11 +164,15 @@ void file_checksum(char *fname,char *sum
  static int32 sumresidue;
  static char sumrbuf[CSUM_CHUNK];
  static struct mdfour md;
@@ -156,7 +156,7 @@ To use this patch, run these commands for a successful build:
  	sumresidue = 0;
  	SIVAL(s, 0, seed);
  	sum_update(s, 4);
-@@ -163,13 +198,19 @@ void sum_update(const char *p, int32 len
+@@ -162,13 +197,19 @@ void sum_update(const char *p, int32 len
  	if (sumresidue) {
  		int32 i = CSUM_CHUNK - sumresidue;
  		memcpy(sumrbuf + sumresidue, p, i);
@@ -178,7 +178,7 @@ To use this patch, run these commands for a successful build:
  		len -= CSUM_CHUNK;
  		p += CSUM_CHUNK;
  	}
-@@ -181,8 +222,15 @@ void sum_update(const char *p, int32 len
+@@ -180,8 +221,15 @@ void sum_update(const char *p, int32 len
  
  void sum_end(char *sum)
  {
@@ -571,7 +571,7 @@ To use this patch, run these commands for a successful build:
  int fuzzy_basis = 0;
  size_t bwlimit_writemax = 0;
  int ignore_existing = 0;
-@@ -378,6 +379,7 @@ void usage(enum logcode F)
+@@ -386,6 +387,7 @@ void usage(enum logcode F)
    rprintf(F,"     --only-write-batch=FILE like --write-batch but w/o updating destination\n");
    rprintf(F,"     --read-batch=FILE       read a batched update from FILE\n");
    rprintf(F,"     --protocol=NUM          force an older protocol version to be used\n");
@@ -579,7 +579,7 @@ To use this patch, run these commands for a successful build:
  #ifdef INET6
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
-@@ -492,6 +494,7 @@ static struct poptOption long_options[] 
+@@ -503,6 +505,7 @@ static struct poptOption long_options[] 
    {"whole-file",      'W', POPT_ARG_VAL,    &whole_file, 1, 0, 0 },
    {"no-whole-file",    0,  POPT_ARG_VAL,    &whole_file, 0, 0, 0 },
    {"no-W",             0,  POPT_ARG_VAL,    &whole_file, 0, 0, 0 },
@@ -587,7 +587,7 @@ To use this patch, run these commands for a successful build:
    {"checksum",        'c', POPT_ARG_NONE,   &always_checksum, 0, 0, 0 },
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
-@@ -1656,6 +1659,9 @@ void server_options(char **args,int *arg
+@@ -1685,6 +1688,9 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  

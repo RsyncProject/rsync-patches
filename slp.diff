@@ -23,7 +23,7 @@ and we can't honor that request.
  INSTALLMAN=@INSTALL@
 @@ -36,7 +38,7 @@ OBJS1=flist.o rsync.o generator.o receiv
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o \
- 	fileio.o batch.o clientname.o chmod.o
+ 	fileio.o batch.o clientname.o chmod.o acls.o
  OBJS3=progress.o pipe.o
 -DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
 +DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o $(SLPOBJ)
@@ -57,7 +57,7 @@ and we can't honor that request.
  		int fd;
 --- old/configure.in
 +++ new/configure.in
-@@ -619,6 +619,29 @@ if test $rsync_cv_can_hardlink_special =
+@@ -624,6 +624,29 @@ if test $rsync_cv_can_hardlink_special =
      AC_DEFINE(CAN_HARDLINK_SPECIAL, 1, [Define to 1 if link() can hard-link special files.])
  fi
  
@@ -89,7 +89,7 @@ and we can't honor that request.
  #include <sys/types.h>
 --- old/loadparm.c
 +++ new/loadparm.c
-@@ -108,6 +108,9 @@ typedef struct
+@@ -107,6 +107,9 @@ typedef struct
  	char *socket_options;
  
  	int rsync_port;
@@ -99,7 +99,7 @@ and we can't honor that request.
  } global;
  
  static global Globals;
-@@ -291,6 +294,9 @@ static struct parm_struct parm_table[] =
+@@ -290,6 +293,9 @@ static struct parm_struct parm_table[] =
   {"motd file",         P_STRING, P_GLOBAL,&Globals.motd_file,          NULL,0},
   {"pid file",          P_STRING, P_GLOBAL,&Globals.pid_file,           NULL,0},
   {"port",              P_INTEGER,P_GLOBAL,&Globals.rsync_port,         NULL,0},
@@ -109,7 +109,7 @@ and we can't honor that request.
   {"socket options",    P_STRING, P_GLOBAL,&Globals.socket_options,     NULL,0},
  
   {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
-@@ -381,6 +387,9 @@ FN_GLOBAL_STRING(lp_pid_file, &Globals.p
+@@ -380,6 +386,9 @@ FN_GLOBAL_STRING(lp_pid_file, &Globals.p
  FN_GLOBAL_STRING(lp_socket_options, &Globals.socket_options)
  
  FN_GLOBAL_INTEGER(lp_rsync_port, &Globals.rsync_port)
@@ -142,15 +142,15 @@ and we can't honor that request.
  			int dummy2;
 --- old/options.c
 +++ new/options.c
-@@ -201,6 +201,7 @@ static void print_rsync_version(enum log
- 	char const *hardlinks = "no ";
+@@ -202,6 +202,7 @@ static void print_rsync_version(enum log
+ 	char const *acls = "no ";
  	char const *links = "no ";
  	char const *ipv6 = "no ";
 +	char const *slp = "no ";
  	STRUCT_STAT *dumstat;
  
  #ifdef HAVE_SOCKETPAIR
-@@ -223,6 +224,10 @@ static void print_rsync_version(enum log
+@@ -228,6 +229,10 @@ static void print_rsync_version(enum log
  	ipv6 = "";
  #endif
  
@@ -160,21 +160,21 @@ and we can't honor that request.
 +
  	rprintf(f, "%s  version %s  protocol version %d\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
- 	rprintf(f, "Copyright (C) 1996-2006 by Andrew Tridgell, Wayne Davison, and others.\n");
-@@ -233,8 +238,8 @@ static void print_rsync_version(enum log
+ 	rprintf(f, "Copyright (C) 1996-2007 by Andrew Tridgell, Wayne Davison, and others.\n");
+@@ -238,8 +243,8 @@ static void print_rsync_version(enum log
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
--	rprintf(f, "    %sappend\n",
--		have_inplace);
-+	rprintf(f, "    %sappend, %sSLP\n",
-+		have_inplace, slp);
+-	rprintf(f, "    %sappend, %sACLs\n",
+-		have_inplace, acls);
++	rprintf(f, "    %sappend, %sACLs, %sSLP\n",
++		have_inplace, acls, slp);
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
 --- old/rsync.h
 +++ new/rsync.h
-@@ -173,6 +173,9 @@
+@@ -174,6 +174,9 @@
  #define SIGNIFICANT_ITEM_FLAGS (~(\
  	ITEM_BASIS_TYPE_FOLLOWS | ITEM_XNAME_FOLLOWS | ITEM_LOCAL_CHANGE))
  
@@ -234,7 +234,7 @@ and we can't honor that request.
          path = /var/ftp/pub
 --- old/socket.c
 +++ new/socket.c
-@@ -466,6 +466,16 @@ void start_accept_loop(int port, int (*f
+@@ -465,6 +465,16 @@ void start_accept_loop(int port, int (*f
  {
  	fd_set deffds;
  	int *sp, maxfd, i;
@@ -251,7 +251,7 @@ and we can't honor that request.
  
  #ifdef HAVE_SIGACTION
  	sigact.sa_flags = SA_NOCLDSTOP;
-@@ -494,14 +504,25 @@ void start_accept_loop(int port, int (*f
+@@ -493,14 +503,25 @@ void start_accept_loop(int port, int (*f
  			maxfd = sp[i];
  	}
  
@@ -277,7 +277,7 @@ and we can't honor that request.
  
  		/* close log file before the potentially very long select so
  		 * file can be trimmed by another process instead of growing
-@@ -513,8 +534,18 @@ void start_accept_loop(int port, int (*f
+@@ -512,8 +533,18 @@ void start_accept_loop(int port, int (*f
  #else
  		fds = deffds;
  #endif
