@@ -7,9 +7,42 @@ To use this patch, run these commands for a successful build:
     ./configure                            (optional if already run)
     make
 
+--- old/exclude.c
++++ new/exclude.c
+@@ -32,6 +32,7 @@ extern int io_error;
+ extern int local_server;
+ extern int prune_empty_dirs;
+ extern int ignore_perishable;
++extern int ignore_case;
+ extern int delete_mode;
+ extern int delete_excluded;
+ extern int cvs_exclude;
+@@ -580,16 +581,17 @@ static int rule_matches(char *name, stru
+ 		if (litmatch_array(pattern, strings, slash_handling))
+ 			return ret_match;
+ 	} else if (anchored_match) {
+-		if (strcmp(name, pattern) == 0)
++		if ((ignore_case ? strcasecmp(name, pattern)
++				 : strcmp(name, pattern)) == 0)
+ 			return ret_match;
+ 	} else {
+ 		int l1 = strlen(name);
+ 		int l2 = strlen(pattern);
+-		if (l2 <= l1 &&
+-		    strcmp(name+(l1-l2),pattern) == 0 &&
+-		    (l1==l2 || name[l1-(l2+1)] == '/')) {
++		if (l2 <= l1
++		 && (ignore_case ? strcasecmp(name + (l1-l2), pattern)
++				 : strcmp(name + (l1-l2), pattern)) == 0
++		 && (l1 == l2 || name[l1 - (l2+1)] == '/'))
+ 			return ret_match;
+-		}
+ 	}
+ 
+ 	return !ret_match;
 --- old/flist.c
 +++ new/flist.c
-@@ -34,6 +34,7 @@ extern int incremental;
+@@ -34,6 +34,7 @@ extern int inc_recurse;
  extern int do_progress;
  extern int always_checksum;
  extern int module_id;
@@ -17,7 +50,7 @@ To use this patch, run these commands for a successful build:
  extern int ignore_errors;
  extern int numeric_ids;
  extern int recurse;
-@@ -2161,7 +2162,7 @@ int f_name_cmp(struct file_struct *f1, s
+@@ -2224,7 +2225,7 @@ int f_name_cmp(struct file_struct *f1, s
  	if (type1 != type2)
  		return type1 == t_PATH ? 1 : -1;
  
@@ -26,7 +59,7 @@ To use this patch, run these commands for a successful build:
  		if (!*c1) {
  			switch (state1) {
  			case s_DIR:
-@@ -2224,7 +2225,16 @@ int f_name_cmp(struct file_struct *f1, s
+@@ -2287,7 +2288,16 @@ int f_name_cmp(struct file_struct *f1, s
  			if (type1 != type2)
  				return type1 == t_PATH ? 1 : -1;
  		}
@@ -64,7 +97,30 @@ To use this patch, run these commands for a successful build:
  	while ((t_ch = *text) == '\0') {
  	    if (*a == NULL) {
  		if (p_ch != '*')
-@@ -288,10 +292,14 @@ static const uchar *trailing_N_elements(
+@@ -237,12 +241,21 @@ static int dowild(const uchar *p, const 
+  * of "text" and any strings in array "a". */
+ static int doliteral(const uchar *s, const uchar *text, const uchar*const *a)
+ {
++    uchar s_ch, t_ch;
+     for ( ; *s != '\0'; text++, s++) {
+ 	while (*text == '\0') {
+ 	    if ((text = *a++) == NULL)
+ 		return FALSE;
+ 	}
+-	if (*text != *s)
++	s_ch = *s;
++	t_ch = *text;
++	if (ignore_case) {
++	    if (ISUPPER(s_ch))
++		s_ch = tolower(s_ch);
++	    if (ISUPPER(t_ch))
++		t_ch = tolower(t_ch);
++	}
++	if (t_ch != s_ch)
+ 	    return FALSE;
+     }
+ 
+@@ -288,10 +301,14 @@ static const uchar *trailing_N_elements(
  int wildmatch(const char *pattern, const char *text)
  {
      static const uchar *nomore[1]; /* A NULL pointer. */
@@ -90,7 +146,7 @@ To use this patch, run these commands for a successful build:
  int blocking_io = -1;
  int checksum_seed = 0;
  int inplace = 0;
-@@ -358,6 +359,7 @@ void usage(enum logcode F)
+@@ -366,6 +367,7 @@ void usage(enum logcode F)
    rprintf(F,"     --include-from=FILE     read include patterns from FILE\n");
    rprintf(F,"     --files-from=FILE       read list of source-file names from FILE\n");
    rprintf(F," -0, --from0                 all *-from/filter files are delimited by 0s\n");
@@ -98,7 +154,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --address=ADDRESS       bind address for outgoing socket to daemon\n");
    rprintf(F,"     --port=PORT             specify double-colon alternate port number\n");
    rprintf(F,"     --sockopts=OPTIONS      specify custom TCP options\n");
-@@ -523,6 +525,7 @@ static struct poptOption long_options[] 
+@@ -534,6 +536,7 @@ static struct poptOption long_options[] 
    {"only-write-batch", 0,  POPT_ARG_STRING, &batch_name, OPT_ONLY_WRITE_BATCH, 0, 0 },
    {"files-from",       0,  POPT_ARG_STRING, &files_from, 0, 0, 0 },
    {"from0",           '0', POPT_ARG_NONE,   &eol_nulls, 0, 0, 0},
@@ -106,7 +162,7 @@ To use this patch, run these commands for a successful build:
    {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, 0, 0, 0 },
    {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
-@@ -1704,6 +1707,9 @@ void server_options(char **args,int *arg
+@@ -1733,6 +1736,9 @@ void server_options(char **args,int *arg
  		args[ac++] = arg;
  	}
  
@@ -118,7 +174,7 @@ To use this patch, run these commands for a successful build:
  			args[ac++] = "--partial-dir";
 --- old/wildtest.c
 +++ new/wildtest.c
-@@ -32,6 +32,7 @@ int fnmatch_errors = 0;
+@@ -31,6 +31,7 @@ int fnmatch_errors = 0;
  #endif
  
  int wildmatch_errors = 0;
