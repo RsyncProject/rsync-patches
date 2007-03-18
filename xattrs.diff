@@ -28,7 +28,7 @@ TODO:
 @@ -28,13 +28,13 @@ VERSION=@VERSION@
  
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h smb_acls.h lib/pool_alloc.h
- LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o \
+ LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
 -	lib/permstring.o lib/pool_alloc.o lib/sysacls.o @LIBOBJS@
 +	lib/permstring.o lib/pool_alloc.o lib/sysacls.o lib/sysxattr.o @LIBOBJS@
  ZLIBOBJ=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
@@ -99,7 +99,7 @@ TODO:
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
 --- old/compat.c
 +++ new/compat.c
-@@ -64,6 +64,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -65,6 +65,8 @@ void setup_protocol(int f_out,int f_in)
  		preserve_gid = ++file_extra_cnt;
  	if (preserve_acls && !am_sender)
  		preserve_acls = ++file_extra_cnt;
@@ -110,7 +110,7 @@ TODO:
  		if (!read_batch)
 --- old/configure.in
 +++ new/configure.in
-@@ -881,6 +881,40 @@ samba_cv_HAVE_ACL_GET_PERM_NP=yes,samba_
+@@ -891,6 +891,40 @@ samba_cv_HAVE_ACL_GET_PERM_NP=yes,samba_
      esac
  fi
  
@@ -153,7 +153,7 @@ TODO:
  
 --- old/flist.c
 +++ new/flist.c
-@@ -42,6 +42,7 @@ extern int one_file_system;
+@@ -43,6 +43,7 @@ extern int one_file_system;
  extern int copy_dirlinks;
  extern int keep_dirlinks;
  extern int preserve_acls;
@@ -161,7 +161,7 @@ TODO:
  extern int preserve_links;
  extern int preserve_hard_links;
  extern int preserve_devices;
-@@ -864,6 +865,10 @@ static struct file_struct *recv_file_ent
+@@ -888,6 +889,10 @@ static struct file_struct *recv_file_ent
  	if (preserve_acls && !S_ISLNK(mode))
  		receive_acl(file, f);
  #endif
@@ -172,7 +172,7 @@ TODO:
  
  	if (S_ISREG(mode) || S_ISLNK(mode))
  		stats.total_size += file_length;
-@@ -1136,7 +1141,7 @@ static struct file_struct *send_file_nam
+@@ -1160,7 +1165,7 @@ static struct file_struct *send_file_nam
  					  int flags, int filter_flags)
  {
  	struct file_struct *file;
@@ -181,7 +181,7 @@ TODO:
  	statx sx;
  #endif
  
-@@ -1155,6 +1160,13 @@ static struct file_struct *send_file_nam
+@@ -1179,6 +1184,13 @@ static struct file_struct *send_file_nam
  			return NULL;
  	}
  #endif
@@ -195,7 +195,7 @@ TODO:
  
  	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
-@@ -1168,6 +1180,10 @@ static struct file_struct *send_file_nam
+@@ -1192,6 +1204,10 @@ static struct file_struct *send_file_nam
  			free_acl(&sx);
  		}
  #endif
@@ -383,7 +383,7 @@ TODO:
  int preserve_perms = 0;
  int preserve_executability = 0;
  int preserve_devices = 0;
-@@ -200,6 +201,7 @@ static void print_rsync_version(enum log
+@@ -201,6 +202,7 @@ static void print_rsync_version(enum log
  	char const *have_inplace = "no ";
  	char const *hardlinks = "no ";
  	char const *acls = "no ";
@@ -391,7 +391,7 @@ TODO:
  	char const *links = "no ";
  	char const *ipv6 = "no ";
  	STRUCT_STAT *dumstat;
-@@ -219,7 +221,9 @@ static void print_rsync_version(enum log
+@@ -220,7 +222,9 @@ static void print_rsync_version(enum log
  #ifdef SUPPORT_ACLS
  	acls = "";
  #endif
@@ -402,7 +402,7 @@ TODO:
  #ifdef SUPPORT_LINKS
  	links = "";
  #endif
-@@ -238,8 +242,8 @@ static void print_rsync_version(enum log
+@@ -239,8 +243,8 @@ static void print_rsync_version(enum log
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -413,7 +413,7 @@ TODO:
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -285,7 +289,7 @@ void usage(enum logcode F)
+@@ -286,7 +290,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -422,7 +422,7 @@ TODO:
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
    rprintf(F," -R, --relative              use relative path names\n");
-@@ -310,6 +314,9 @@ void usage(enum logcode F)
+@@ -311,6 +315,9 @@ void usage(enum logcode F)
  #ifdef SUPPORT_ACLS
    rprintf(F," -A, --acls                  preserve ACLs (implies --perms)\n");
  #endif
@@ -432,7 +432,7 @@ TODO:
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
-@@ -433,6 +440,9 @@ static struct poptOption long_options[] 
+@@ -438,6 +445,9 @@ static struct poptOption long_options[] 
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
    {"no-A",             0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
@@ -442,7 +442,7 @@ TODO:
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-@@ -1121,6 +1131,17 @@ int parse_arguments(int *argc, const cha
+@@ -1126,6 +1136,17 @@ int parse_arguments(int *argc, const cha
  			return 0;
  #endif
  
@@ -460,7 +460,7 @@ TODO:
  
  		default:
  			/* A large opt value means that set_refuse_options()
-@@ -1585,6 +1606,10 @@ void server_options(char **args,int *arg
+@@ -1590,6 +1611,10 @@ void server_options(char **args,int *arg
  	if (preserve_acls)
  		argstr[x++] = 'A';
  #endif
@@ -494,7 +494,7 @@ TODO:
  	 * will enable owner-writability using chmod, if necessary.
 --- old/rsync.h
 +++ new/rsync.h
-@@ -551,6 +551,10 @@ struct idev_node {
+@@ -549,6 +549,10 @@ struct idev_node {
  #define ACLS_NEED_MASK 1
  #endif
  
@@ -505,7 +505,7 @@ TODO:
  #define GID_NONE ((gid_t)-1)
  
  union file_extras {
-@@ -571,6 +575,7 @@ extern int file_extra_cnt;
+@@ -569,6 +573,7 @@ extern int file_extra_cnt;
  extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_acls;
@@ -513,7 +513,7 @@ TODO:
  
  #define FILE_STRUCT_LEN (offsetof(struct file_struct, basename))
  #define EXTRA_LEN (sizeof (union file_extras))
-@@ -604,6 +609,7 @@ extern int preserve_acls;
+@@ -602,6 +607,7 @@ extern int preserve_acls;
  #define F_OWNER(f) REQ_EXTRA(f, preserve_uid)->unum
  #define F_GROUP(f) REQ_EXTRA(f, preserve_gid)->unum
  #define F_ACL(f) REQ_EXTRA(f, preserve_acls)->unum
@@ -521,7 +521,7 @@ TODO:
  
  /* These items are per-entry optional and mutally exclusive: */
  #define F_HL_GNUM(f) OPT_EXTRA(f, LEN64_BUMP(f))->num
-@@ -795,6 +801,9 @@ typedef struct {
+@@ -793,6 +799,9 @@ typedef struct {
      struct rsync_acl *acc_acl; /* access ACL */
      struct rsync_acl *def_acl; /* default ACL */
  #endif

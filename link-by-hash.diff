@@ -33,7 +33,7 @@ To use this patch, run these commands for a successful build:
  
  extern char curr_dir[MAXPATHLEN];
  
-@@ -724,7 +725,7 @@ static struct file_struct *recv_file_ent
+@@ -747,7 +748,7 @@ static struct file_struct *recv_file_ent
  		extra_len += (S_ISDIR(mode) ? 2 : 1) * EXTRA_LEN;
  #endif
  
@@ -383,7 +383,7 @@ To use this patch, run these commands for a successful build:
 +#endif
 --- old/options.c
 +++ new/options.c
-@@ -144,6 +144,7 @@ char *backup_suffix = NULL;
+@@ -145,6 +145,7 @@ char *backup_suffix = NULL;
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
@@ -391,7 +391,7 @@ To use this patch, run these commands for a successful build:
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *logfile_name = NULL;
-@@ -354,6 +355,7 @@ void usage(enum logcode F)
+@@ -355,6 +356,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -399,7 +399,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F," -C, --cvs-exclude           auto-ignore files the same way CVS does\n");
-@@ -403,7 +405,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -404,7 +406,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -408,7 +408,7 @@ To use this patch, run these commands for a successful build:
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -508,6 +510,7 @@ static struct poptOption long_options[] 
+@@ -513,6 +515,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -416,7 +416,7 @@ To use this patch, run these commands for a successful build:
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
-@@ -1122,6 +1125,21 @@ int parse_arguments(int *argc, const cha
+@@ -1127,6 +1130,21 @@ int parse_arguments(int *argc, const cha
  #endif
  
  
@@ -438,7 +438,7 @@ To use this patch, run these commands for a successful build:
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1784,6 +1802,11 @@ void server_options(char **args,int *arg
+@@ -1789,6 +1807,11 @@ void server_options(char **args,int *arg
  		}
  	}
  
@@ -456,16 +456,16 @@ To use this patch, run these commands for a successful build:
  
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
--			char *fname, int fd, OFF_T total_size)
+-			const char *fname, int fd, OFF_T total_size)
 +			const char *fname, int fd, OFF_T total_size,
 +			const char *md4)
  {
- 	static char file_sum1[MD4_SUM_LENGTH];
- 	static char file_sum2[MD4_SUM_LENGTH];
+ 	static char file_sum1[MAX_DIGEST_LEN];
+ 	static char file_sum2[MAX_DIGEST_LEN];
  	struct map_struct *mapbuf;
  	struct sum_struct sum;
-+	struct mdfour mdfour_data;
- 	int32 len;
++	md_context mdfour_data;
+ 	int32 len, sum_len;
  	OFF_T offset = 0;
  	OFF_T offset2;
 @@ -148,6 +150,9 @@ static int receive_data(int f_in, char *
@@ -499,9 +499,9 @@ To use this patch, run these commands for a successful build:
 @@ -258,6 +267,8 @@ static int receive_data(int f_in, char *
  	}
  
- 	sum_end(file_sum1);
+ 	sum_len = sum_end(file_sum1);
 +	if (md4)
-+		mdfour_result(&mdfour_data, (unsigned char*)md4);
++		mdfour_result(&mdfour_data, (uchar*)md4);
  
  	if (mapbuf)
  		unmap_file(mapbuf);
@@ -553,7 +553,7 @@ To use this patch, run these commands for a successful build:
  			ret == -2 ? "copy" : "rename",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -758,6 +758,14 @@ struct stats {
+@@ -756,6 +756,14 @@ struct stats {
  	int current_file_index;
  };
  
