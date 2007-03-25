@@ -1,27 +1,19 @@
-This patch adds basic support for extended attributes.  It works, but there
-are some things that still needs to be improved (see TODO list below).
+This patch adds support for extended attributes.
 
 To use this patch, run these commands for a successful build:
 
-    patch -p1 <patches/acls.diff
     patch -p1 <patches/xattrs.diff
     ./prepare-source
-    ./configure --enable-acl-support --enable-xattr-support
+    ./configure
     make
 
-Alternately, if you don't want ACL support, configure it this way:
-
-    ./configure --enable-xattr-support
+CAUTION:  this patch has been recently reworked, and needs more testing!
 
 TODO:
 
- - This patch needs to more efficiently handle large xattrs, especially when
-   they're unchanged.
-
- - We need to affect the itemized output to know when xattrs are being updated.
-
- - We need to affect the --link-dest option to avoid hard-linking two files
-   that differ in their xattrs (when --xattrs was specified).
+ - When an xattr value is long enough to be checksummed and is not changed,
+   we need to have the receiver get the unchanged value from the receiving
+   side instead of requesting that it be sent from the sender.
 
 --- old/Makefile.in
 +++ new/Makefile.in
@@ -30,14 +22,14 @@ TODO:
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h smb_acls.h lib/pool_alloc.h
  LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
 -	lib/permstring.o lib/pool_alloc.o lib/sysacls.o @LIBOBJS@
-+	lib/permstring.o lib/pool_alloc.o lib/sysacls.o lib/sysxattr.o @LIBOBJS@
++	lib/permstring.o lib/pool_alloc.o lib/sysacls.o lib/sysxattrs.o @LIBOBJS@
  ZLIBOBJ=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  	zlib/trees.o zlib/zutil.o zlib/adler32.o zlib/compress.o zlib/crc32.o
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util.o main.o checksum.o match.o syscall.o log.o backup.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o \
 -	fileio.o batch.o clientname.o chmod.o acls.o
-+	fileio.o batch.o clientname.o chmod.o acls.o xattr.o
++	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
@@ -61,7 +53,7 @@ TODO:
  				if (!(file = make_file(rel, NULL, NULL, 0, NO_FILTERS)))
  					continue;
  #ifdef SUPPORT_ACLS
-@@ -143,6 +147,12 @@ static int make_bak_dir(char *fullpath)
+@@ -143,6 +147,13 @@ static int make_bak_dir(char *fullpath)
  					free_acl(&sx);
  				}
  #endif
@@ -69,12 +61,13 @@ TODO:
 +				if (preserve_xattrs) {
 +					get_xattr(rel, &sx);
 +					cache_xattr(file, &sx);
++					free_xattr(&sx);
 +				}
 +#endif
  				set_file_attrs(fullpath, file, NULL, 0);
  				free(file);
  			}
-@@ -194,6 +204,9 @@ static int keep_backup(const char *fname
+@@ -194,6 +205,9 @@ static int keep_backup(const char *fname
  #ifdef SUPPORT_ACLS
  	sx.acc_acl = sx.def_acl = NULL;
  #endif
@@ -84,7 +77,7 @@ TODO:
  
  	if (!(file = make_file(fname, NULL, NULL, 0, NO_FILTERS)))
  		return 1; /* the file could have disappeared */
-@@ -210,6 +223,12 @@ static int keep_backup(const char *fname
+@@ -210,6 +224,13 @@ static int keep_backup(const char *fname
  		free_acl(&sx);
  	}
  #endif
@@ -92,6 +85,7 @@ TODO:
 +	if (preserve_xattrs) {
 +		get_xattr(fname, &sx);
 +		cache_xattr(file, &sx);
++		free_xattr(&sx);
 +	}
 +#endif
  
@@ -99,54 +93,82 @@ TODO:
  	if ((am_root && preserve_devices && IS_DEVICE(file->mode))
 --- old/compat.c
 +++ new/compat.c
-@@ -65,6 +65,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -43,6 +43,7 @@ extern int protocol_version;
+ extern int preserve_uid;
+ extern int preserve_gid;
+ extern int preserve_acls;
++extern int preserve_xattrs;
+ extern int preserve_hard_links;
+ extern int need_messages_from_generator;
+ extern int delete_mode, delete_before, delete_during, delete_after;
+@@ -65,6 +66,8 @@ void setup_protocol(int f_out,int f_in)
  		preserve_gid = ++file_extra_cnt;
  	if (preserve_acls && !am_sender)
  		preserve_acls = ++file_extra_cnt;
-+	if (preserve_xattrs && !am_sender)
++	if (preserve_xattrs)
 +		preserve_xattrs = ++file_extra_cnt;
  
  	if (remote_protocol == 0) {
  		if (!read_batch)
+@@ -119,6 +122,13 @@ void setup_protocol(int f_out,int f_in)
+ 			    protocol_version);
+ 			exit_cleanup(RERR_PROTOCOL);
+ 		}
++		if (preserve_xattrs) {
++			rprintf(FERROR,
++			    "--xattrs requires protocol 30 or higher"
++			    " (negotiated %d).\n",
++			    protocol_version);
++			exit_cleanup(RERR_PROTOCOL);
++		}
+ 	}
+ 
+ 	if (delete_mode && !(delete_before+delete_during+delete_after)) {
 --- old/configure.in
 +++ new/configure.in
-@@ -891,6 +891,40 @@ samba_cv_HAVE_ACL_GET_PERM_NP=yes,samba_
+@@ -891,6 +891,46 @@ samba_cv_HAVE_ACL_GET_PERM_NP=yes,samba_
      esac
  fi
  
 +AC_CHECK_HEADERS(attr/xattr.h)
 +AC_CHECK_HEADERS(sys/xattr.h)
 +AC_CHECK_HEADERS(sys/extattr.h)
++
++#################################################
++# check for extended attribute support
 +AC_MSG_CHECKING(whether to support extended attributes)
 +AC_ARG_ENABLE(xattr-support,
-+AC_HELP_STRING([--enable-xattr-support], [Include extended attribute support (default=no)]),
-+[ case "$enableval" in
-+  yes)
-+      case "$host_os" in
-+      *linux*)
-+            AC_MSG_RESULT(Using Linux xattrs)
-+            AC_DEFINE(HAVE_LINUX_XATTRS, 1, [True if you have Linux xattrs])
-+            ;;
-+      darwin*)
-+            AC_MSG_RESULT(Using OS X xattrs)
-+            AC_DEFINE(HAVE_OSX_XATTRS, 1, [True if you have Mac OS X xattrs])
-+            ;;
-+      freebsd*)
-+            AC_MSG_RESULT(Using FreeBSD extattrs)
-+            AC_DEFINE(HAVE_FREEBSD_XATTRS, 1, [True if you have FreeBSD xattrs])
-+            ;;
-+      *)
-+            AC_MSG_RESULT(Xattrs requested but not Linux or OS X.  Good luck...)
-+            ;;
-+      esac
-+      ;;
-+  *)
-+      AC_MSG_RESULT(no)
-+      AC_DEFINE(HAVE_NO_XATTRS, 1, [True if you don't have extended attributes])
-+  esac ],
-+  AC_MSG_RESULT(no)
-+  AC_DEFINE(HAVE_NO_XATTRS, 1, [True if you don't have extended attributes])
-+)
++	AC_HELP_STRING([--disable-xattr-support],
++		       [Turn off extended attribute support]))
++
++if test x"$enable_xattr_support" = x"no"; then
++    AC_MSG_RESULT(no)
++else
++    case "$host_os" in
++    *linux*)
++	AC_MSG_RESULT(Using Linux xattrs)
++	AC_DEFINE(HAVE_LINUX_XATTRS, 1, [True if you have Linux xattrs])
++	AC_DEFINE(SUPPORT_XATTRS, 1, [Define to 1 to add support for extended attributes])
++	;;
++    darwin*)
++	AC_MSG_RESULT(Using OS X xattrs)
++	AC_DEFINE(HAVE_OSX_XATTRS, 1, [True if you have Mac OS X xattrs])
++	AC_DEFINE(SUPPORT_XATTRS, 1)
++	;;
++    freebsd*)
++	AC_MSG_RESULT(Using FreeBSD extattrs)
++	AC_DEFINE(HAVE_FREEBSD_XATTRS, 1, [True if you have FreeBSD xattrs])
++	AC_DEFINE(SUPPORT_XATTRS, 1)
++	;;
++    *)
++	if test x"$enable_xattr_support" = x"yes"; then
++	    AC_MSG_ERROR(Failed to find extended attribute support)
++	else
++	    AC_MSG_RESULT(No extended attribute support found)
++	fi
++	;;
++    esac
++fi
 +
  AC_CONFIG_FILES([Makefile lib/dummy zlib/dummy popt/dummy shconfig])
  AC_OUTPUT
@@ -195,19 +217,110 @@ TODO:
  
  	maybe_emit_filelist_progress(flist->count + flist_count_offset);
  
-@@ -1192,6 +1204,10 @@ static struct file_struct *send_file_nam
+@@ -1192,6 +1204,12 @@ static struct file_struct *send_file_nam
  			free_acl(&sx);
  		}
  #endif
 +#ifdef SUPPORT_XATTRS
-+		if (preserve_xattrs)
-+			send_xattr(&sx, f);
++		if (preserve_xattrs) {
++			F_XATTR(file) = send_xattr(&sx, f);
++			free_xattr(&sx);
++		}
 +#endif
  	}
  	return file;
  }
---- old/lib/sysxattr.c
-+++ new/lib/sysxattr.c
+--- old/generator.c
++++ new/generator.c
+@@ -36,6 +36,7 @@ extern int relative_paths;
+ extern int implied_dirs;
+ extern int keep_dirlinks;
+ extern int preserve_acls;
++extern int preserve_xattrs;
+ extern int preserve_links;
+ extern int preserve_devices;
+ extern int preserve_specials;
+@@ -532,6 +533,14 @@ int unchanged_attrs(const char *fname, s
+ 			return 0;
+ 	}
+ #endif
++#ifdef SUPPORT_XATTRS
++	if (preserve_xattrs) {
++		if (!XATTR_READY(*sxp))
++			get_xattr(fname, sxp);
++		if (xattr_diff(file, sxp, 0))
++			return 0;
++	}
++#endif
+ 
+ 	return 1;
+ }
+@@ -567,11 +576,19 @@ void itemize(const char *fname, struct f
+ 				iflags |= ITEM_REPORT_ACL;
+ 		}
+ #endif
++#ifdef SUPPORT_XATTRS
++		if (preserve_xattrs) {
++			if (!XATTR_READY(*sxp))
++				get_xattr(fname, sxp);
++			if (xattr_diff(file, sxp, 1))
++				iflags |= ITEM_REPORT_XATTR;
++		}
++#endif
+ 	} else
+ 		iflags |= ITEM_IS_NEW;
+ 
+ 	iflags &= 0xffff;
+-	if ((iflags & SIGNIFICANT_ITEM_FLAGS || verbose > 1
++	if ((iflags & (SIGNIFICANT_ITEM_FLAGS|ITEM_REPORT_XATTR) || verbose > 1
+ 	  || stdout_format_has_i > 1 || (xname && *xname)) && !read_batch) {
+ 		if (protocol_version >= 29) {
+ 			if (ndx >= 0)
+@@ -581,6 +598,10 @@ void itemize(const char *fname, struct f
+ 				write_byte(sock_f_out, fnamecmp_type);
+ 			if (iflags & ITEM_XNAME_FOLLOWS)
+ 				write_vstring(sock_f_out, xname, strlen(xname));
++#ifdef SUPPORT_XATTRS
++			if (iflags & ITEM_REPORT_XATTR && !dry_run)
++				send_xattr_request(NULL, file, sock_f_out);
++#endif
+ 		} else if (ndx >= 0) {
+ 			enum logcode code = logfile_format_has_i ? FINFO : FCLIENT;
+ 			log_item(code, file, &stats, iflags, xname);
+@@ -1112,6 +1133,9 @@ static void recv_generator(char *fname, 
+ #ifdef SUPPORT_ACLS
+ 	sx.acc_acl = sx.def_acl = NULL;
+ #endif
++#ifdef SUPPORT_XATTRS
++	sx.xattr = NULL;
++#endif
+ 	if (dry_run > 1) {
+ 		if (fuzzy_dirlist) {
+ 			flist_free(fuzzy_dirlist);
+@@ -1636,6 +1660,10 @@ static void recv_generator(char *fname, 
+ 		if (preserve_acls)
+ 			free_acl(&real_sx);
+ #endif
++#ifdef SUPPORT_XATTRS
++		if (preserve_xattrs)
++			free_xattr(&real_sx);
++#endif
+ 	}
+ 
+ 	if (!do_xfers) {
+@@ -1672,6 +1700,10 @@ static void recv_generator(char *fname, 
+ 	if (preserve_acls)
+ 		free_acl(&sx);
+ #endif
++#ifdef SUPPORT_XATTRS
++	if (preserve_xattrs)
++		free_xattr(&sx);
++#endif
+ 	return;
+ }
+ 
+--- old/lib/sysxattrs.c
++++ new/lib/sysxattrs.c
 @@ -0,0 +1,135 @@
 +/*
 + * Extended attribute support for rsync.
@@ -231,7 +344,7 @@ TODO:
 + */
 +
 +#include "rsync.h"
-+#include "sysxattr.h"
++#include "sysxattrs.h"
 +
 +#ifdef SUPPORT_XATTRS
 +
@@ -344,8 +457,8 @@ TODO:
 +#endif
 +
 +#endif /* SUPPORT_XATTRS */
---- old/lib/sysxattr.h
-+++ new/lib/sysxattr.h
+--- old/lib/sysxattrs.h
++++ new/lib/sysxattrs.h
 @@ -0,0 +1,26 @@
 +#ifdef SUPPORT_XATTRS
 +
@@ -373,6 +486,55 @@ TODO:
 +/* No xattrs available */
 +
 +#endif
+--- old/main.c
++++ new/main.c
+@@ -608,7 +608,7 @@ static void fix_basis_dirs(void)
+ }
+ 
+ /* This is only called by the sender. */
+-static void read_final_goodbye(int f_in, int f_out)
++static void read_final_goodbye(int f_in)
+ {
+ 	int i, iflags, xlen;
+ 	uchar fnamecmp_type;
+@@ -617,8 +617,8 @@ static void read_final_goodbye(int f_in,
+ 	if (protocol_version < 29)
+ 		i = read_int(f_in);
+ 	else {
+-		i = read_ndx_and_attrs(f_in, f_out, &iflags,
+-				       &fnamecmp_type, xname, &xlen);
++		i = read_ndx_and_attrs(f_in, &iflags, &fnamecmp_type,
++				       xname, &xlen);
+ 	}
+ 
+ 	if (i != NDX_DONE) {
+@@ -677,7 +677,7 @@ static void do_server_sender(int f_in, i
+ 	io_flush(FULL_FLUSH);
+ 	handle_stats(f_out);
+ 	if (protocol_version >= 24)
+-		read_final_goodbye(f_in, f_out);
++		read_final_goodbye(f_in);
+ 	io_flush(FULL_FLUSH);
+ 	exit_cleanup(0);
+ }
+@@ -740,7 +740,7 @@ static int do_recv(int f_in, int f_out, 
+ 			kluge_around_eof = -1;
+ 
+ 			/* This should only get stopped via a USR2 signal. */
+-			read_ndx_and_attrs(f_in, -1, &iflags, &fnamecmp_type,
++			read_ndx_and_attrs(f_in, &iflags, &fnamecmp_type,
+ 					   xname, &xlen);
+ 
+ 			rprintf(FERROR, "Invalid packet at end of run [%s]\n",
+@@ -977,7 +977,7 @@ int client_run(int f_in, int f_out, pid_
+ 		io_flush(FULL_FLUSH);
+ 		handle_stats(-1);
+ 		if (protocol_version >= 24)
+-			read_final_goodbye(f_in, f_out);
++			read_final_goodbye(f_in);
+ 		if (pid != -1) {
+ 			if (verbose > 3)
+ 				rprintf(FINFO,"client_run waiting on %d\n", (int) pid);
 --- old/options.c
 +++ new/options.c
 @@ -47,6 +47,7 @@ int copy_links = 0;
@@ -471,6 +633,45 @@ TODO:
  	if (recurse)
  		argstr[x++] = 'r';
  	if (always_checksum)
+--- old/receiver.c
++++ new/receiver.c
+@@ -22,6 +22,7 @@
+ #include "rsync.h"
+ 
+ extern int verbose;
++extern int dry_run;
+ extern int do_xfers;
+ extern int am_server;
+ extern int do_progress;
+@@ -366,8 +367,8 @@ int recv_files(int f_in, char *local_nam
+ 		cleanup_disable();
+ 
+ 		/* This call also sets cur_flist. */
+-		ndx = read_ndx_and_attrs(f_in, -1, &iflags,
+-					 &fnamecmp_type, xname, &xlen);
++		ndx = read_ndx_and_attrs(f_in, &iflags, &fnamecmp_type,
++					 xname, &xlen);
+ 		if (ndx == NDX_DONE) {
+ 			if (inc_recurse && first_flist) {
+ 				flist_free(first_flist);
+@@ -397,8 +398,17 @@ int recv_files(int f_in, char *local_nam
+ 		if (verbose > 2)
+ 			rprintf(FINFO, "recv_files(%s)\n", fname);
+ 
++#ifdef SUPPORT_XATTRS
++		if (iflags & ITEM_REPORT_XATTR && !dry_run)
++			recv_xattr_request(file, f_in);
++#endif
++
+ 		if (!(iflags & ITEM_TRANSFER)) {
+ 			maybe_log_item(file, iflags, itemizing, xname);
++#ifdef SUPPORT_XATTRS
++			if (iflags & ITEM_REPORT_XATTR && !dry_run)
++				set_file_attrs(fname, file, NULL, 0);
++#endif
+ 			continue;
+ 		}
+ 		if (phase == 2) {
 --- old/rsync.c
 +++ new/rsync.c
 @@ -32,6 +32,7 @@
@@ -481,31 +682,74 @@ TODO:
  extern int preserve_perms;
  extern int preserve_executability;
  extern int preserve_times;
-@@ -321,6 +322,10 @@ int set_file_attrs(char *fname, struct f
+@@ -91,10 +92,8 @@ void setup_iconv()
+ }
+ #endif
+ 
+-/* This is used by sender.c with a valid f_out, and by receive.c with
+- * f_out = -1. */
+-int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr,
+-		       uchar *type_ptr, char *buf, int *len_ptr)
++int read_ndx_and_attrs(int f_in, int *iflag_ptr, uchar *type_ptr,
++		       char *buf, int *len_ptr)
+ {
+ 	int len, iflags = 0;
+ 	struct file_list *flist;
+@@ -181,11 +180,6 @@ int read_ndx_and_attrs(int f_in, int f_o
+ 				ndx, who_am_i());
+ 			exit_cleanup(RERR_PROTOCOL);
+ 		}
+-	} else if (f_out >= 0) {
+-		if (inc_recurse)
+-			send_extra_file_list(f_out, FILECNT_LOOKAHEAD);
+-		write_ndx_and_attrs(f_out, ndx, iflags,
+-				    fnamecmp_type, buf, len);
+ 	}
+ 
+ 	*iflag_ptr = iflags;
+@@ -247,6 +241,9 @@ int set_file_attrs(char *fname, struct f
+ #ifdef SUPPORT_ACLS
+ 		sx2.acc_acl = sx2.def_acl = NULL;
+ #endif
++#ifdef SUPPORT_XATTRS
++		sx2.xattr = NULL;
++#endif
+ 		if (!preserve_perms && S_ISDIR(new_mode)
+ 		 && sx2.st.st_mode & S_ISGID) {
+ 			/* We just created this directory and its setgid
+@@ -321,6 +318,10 @@ int set_file_attrs(char *fname, struct f
  	if (daemon_chmod_modes && !S_ISLNK(new_mode))
  		new_mode = tweak_mode(new_mode, daemon_chmod_modes);
  
 +#ifdef SUPPORT_XATTRS
-+	if (preserve_xattrs && set_xattr(fname, file, sxp) == 0)
-+		updated = 1;
++	if (preserve_xattrs && !am_generator)
++		set_xattr(fname, file, sxp);
 +#endif
  #ifdef SUPPORT_ACLS
  	/* It's OK to call set_acl() now, even for a dir, as the generator
  	 * will enable owner-writability using chmod, if necessary.
+@@ -353,10 +354,16 @@ int set_file_attrs(char *fname, struct f
+ 			rprintf(FCLIENT, "%s is uptodate\n", fname);
+ 	}
+   cleanup:
++	if (sxp == &sx2) {
+ #ifdef SUPPORT_ACLS
+-	if (preserve_acls && sxp == &sx2)
+-		free_acl(&sx2);
++		if (preserve_acls)
++			free_acl(&sx2);
+ #endif
++#ifdef SUPPORT_XATTRS
++		if (preserve_xattrs)
++			free_xattr(&sx2);
++#endif
++	}
+ 	return updated;
+ }
+ 
 --- old/rsync.h
 +++ new/rsync.h
-@@ -549,6 +549,10 @@ struct idev_node {
- #define ACLS_NEED_MASK 1
- #endif
- 
-+#ifndef HAVE_NO_XATTRS
-+#define SUPPORT_XATTRS 1
-+#endif
-+
- #define GID_NONE ((gid_t)-1)
- 
- union file_extras {
-@@ -569,6 +573,7 @@ extern int file_extra_cnt;
+@@ -569,6 +569,7 @@ extern int file_extra_cnt;
  extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_acls;
@@ -513,15 +757,17 @@ TODO:
  
  #define FILE_STRUCT_LEN (offsetof(struct file_struct, basename))
  #define EXTRA_LEN (sizeof (union file_extras))
-@@ -602,6 +607,7 @@ extern int preserve_acls;
+@@ -601,7 +602,8 @@ extern int preserve_acls;
+ /* When the associated option is on, all entries will have these present: */
  #define F_OWNER(f) REQ_EXTRA(f, preserve_uid)->unum
  #define F_GROUP(f) REQ_EXTRA(f, preserve_gid)->unum
- #define F_ACL(f) REQ_EXTRA(f, preserve_acls)->unum
-+#define F_XATTR(f) REQ_EXTRA(f, preserve_xattrs)->unum
+-#define F_ACL(f) REQ_EXTRA(f, preserve_acls)->unum
++#define F_ACL(f) REQ_EXTRA(f, preserve_acls)->num
++#define F_XATTR(f) REQ_EXTRA(f, preserve_xattrs)->num
  
  /* These items are per-entry optional and mutally exclusive: */
  #define F_HL_GNUM(f) OPT_EXTRA(f, LEN64_BUMP(f))->num
-@@ -793,6 +799,9 @@ typedef struct {
+@@ -793,9 +795,13 @@ typedef struct {
      struct rsync_acl *acc_acl; /* access ACL */
      struct rsync_acl *def_acl; /* default ACL */
  #endif
@@ -531,6 +777,10 @@ TODO:
  } statx;
  
  #define ACL_READY(sx) ((sx).acc_acl != NULL)
++#define XATTR_READY(sx) ((sx).xattr != NULL)
+ 
+ #include "proto.h"
+ 
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -301,7 +301,7 @@ to the detailed description below for a 
@@ -562,20 +812,171 @@ TODO:
  dit(bf(--chmod)) This option tells rsync to apply one or more
  comma-separated "chmod" strings to the permission of the files in the
  transfer.  The resulting value is treated as though it was the permissions
---- old/xattr.c
-+++ new/xattr.c
-@@ -0,0 +1,459 @@
+--- old/sender.c
++++ new/sender.c
+@@ -22,6 +22,7 @@
+ #include "rsync.h"
+ 
+ extern int verbose;
++extern int dry_run;
+ extern int do_xfers;
+ extern int am_server;
+ extern int am_daemon;
+@@ -144,8 +145,9 @@ void successful_send(int ndx)
+ 		rsyserr(FERROR, errno, "sender failed to remove %s", fname);
+ }
+ 
+-void write_ndx_and_attrs(int f_out, int ndx, int iflags,
+-			 uchar fnamecmp_type, char *buf, int len)
++static void write_ndx_and_attrs(int f_out, int ndx, int iflags,
++				const char *fname, struct file_struct *file,
++				uchar fnamecmp_type, char *buf, int len)
+ {
+ 	write_ndx(f_out, ndx);
+ 	if (protocol_version < 29)
+@@ -155,6 +157,10 @@ void write_ndx_and_attrs(int f_out, int 
+ 		write_byte(f_out, fnamecmp_type);
+ 	if (iflags & ITEM_XNAME_FOLLOWS)
+ 		write_vstring(f_out, buf, len);
++#ifdef SUPPORT_XATTRS
++	if (iflags & ITEM_REPORT_XATTR && !dry_run)
++		send_xattr_request(fname, file, f_out);
++#endif
+ }
+ 
+ void send_files(int f_in, int f_out)
+@@ -183,8 +189,8 @@ void send_files(int f_in, int f_out)
+ 			send_extra_file_list(f_out, FILECNT_LOOKAHEAD);
+ 
+ 		/* This call also sets cur_flist. */
+-		ndx = read_ndx_and_attrs(f_in, f_out, &iflags,
+-					 &fnamecmp_type, xname, &xlen);
++		ndx = read_ndx_and_attrs(f_in, &iflags, &fnamecmp_type,
++					 xname, &xlen);
+ 		if (ndx == NDX_DONE) {
+ 			if (inc_recurse && first_flist) {
+ 				flist_free(first_flist);
+@@ -201,6 +207,9 @@ void send_files(int f_in, int f_out)
+ 			continue;
+ 		}
+ 
++		if (inc_recurse)
++			send_extra_file_list(f_out, FILECNT_LOOKAHEAD);
++
+ 		file = cur_flist->files[ndx - cur_flist->ndx_start];
+ 		if (F_ROOTDIR(file)) {
+ 			path = F_ROOTDIR(file);
+@@ -215,8 +224,13 @@ void send_files(int f_in, int f_out)
+ 		if (verbose > 2)
+ 			rprintf(FINFO, "send_files(%d, %s%s%s)\n", ndx, path,slash,fname);
+ 
++		if (iflags & ITEM_REPORT_XATTR)
++			recv_xattr_request(file, f_in);
++
+ 		if (!(iflags & ITEM_TRANSFER)) {
+ 			maybe_log_item(file, iflags, itemizing, xname);
++			write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
++					    fnamecmp_type, xname, xlen);
+ 			continue;
+ 		}
+ 		if (phase == 2) {
+@@ -251,8 +265,8 @@ void send_files(int f_in, int f_out)
+ 
+ 		if (!do_xfers) { /* log the transfer */
+ 			log_item(FCLIENT, file, &stats, iflags, NULL);
+-			write_ndx_and_attrs(f_out, ndx, iflags, fnamecmp_type,
+-					    xname, xlen);
++			write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
++					    fnamecmp_type, xname, xlen);
+ 			continue;
+ 		}
+ 
+@@ -305,8 +319,8 @@ void send_files(int f_in, int f_out)
+ 				path,slash,fname, (double)st.st_size);
+ 		}
+ 
+-		write_ndx_and_attrs(f_out, ndx, iflags, fnamecmp_type,
+-				    xname, xlen);
++		write_ndx_and_attrs(f_out, ndx, iflags, fname, file,
++				    fnamecmp_type, xname, xlen);
+ 		write_sum_head(f_xfer, s);
+ 
+ 		if (verbose > 2)
+--- old/testsuite/xattrs.test
++++ new/testsuite/xattrs.test
+@@ -0,0 +1,59 @@
++#! /bin/sh
++
++# This program is distributable under the terms of the GNU GPL (see
++# COPYING).
++
++# Test that rsync handles basic xattr preservation.
++
++. $srcdir/testsuite/rsync.fns
++
++$RSYNC --version | grep ", xattrs" >/dev/null || test_skipped "Rsync is configured without xattr support"
++
++case "$RSYNC" in
++*protocol=29*) test_skipped "xattr support requires protocol 30" ;;
++esac
++
++makepath "$fromdir/foo"
++echo something >"$fromdir/file1"
++echo else >"$fromdir/file2"
++echo last >"$fromdir/foo/file3"
++
++makepath "$todir/foo"
++echo wow >"$todir/file1"
++cp -p "$fromdir/foo/file3" "$todir/foo"
++
++files='foo file1 file2 foo/file3'
++
++cd "$fromdir"
++
++setfattr -n user.foo -v foo file2
++setfattr -n user.bar -v bar file2
++
++setfattr -n user.short -v 'this is short' file1 2>/dev/null || test_skipped "Unable to set an xattr"
++setfattr -n user.long -v 'this is a long attribute that will be truncated in the initial data send' file1
++setfattr -n user.good -v 'this is good' file1
++setfattr -n user.nice -v 'this is nice' file1
++
++setfattr -n user.foo -v foo file2
++setfattr -n user.bar -v bar file2
++
++setfattr -n user.foo -v 'new foo' foo/file3
++setfattr -n user.bar -v 'new bar' foo/file3
++setfattr -n user.long -v 'this is also a long attribute that will be truncated in the initial data send' foo/file3
++setfattr -n user.equal -v 'this long attribute should remain the same and not need to be transferred' foo/file3
++
++setfattr -n user.short -v 'old short' "$todir/file1"
++setfattr -n user.extra -v 'remove me' "$todir/file1"
++
++setfattr -n user.foo -v 'old foo' "$todir/foo/file3"
++setfattr -n user.equal -v 'this long attribute should remain the same and not need to be transferred' "$todir/foo/file3"
++
++$RSYNC -avX . "$todir/"
++
++getfattr -d $files >"$scratchdir/xattrs.txt"
++
++cd "$todir"
++getfattr -d $files | diff $diffopt "$scratchdir/xattrs.txt" -
++
++# The script would have aborted on error, so getting here means we've won.
++exit 0
+--- old/xattrs.c
++++ new/xattrs.c
+@@ -0,0 +1,686 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
 + *
 + * Copyright (C) 2004 Red Hat, Inc.
-+ * Copyright (C) 2006 Wayne Davison
++ * Copyright (C) 2006, 2007 Wayne Davison
 + *
 + * This program is free software; you can redistribute it and/or modify
-+ * it under the terms of the GNU General Public License as published by
-+ * the Free Software Foundation; either version 2 of the License, or
-+ * (at your option) any later version.
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
 + *
 + * This program is distributed in the hope that it will be useful,
 + * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -588,17 +989,21 @@ TODO:
 + */
 +
 +#include "rsync.h"
-+#include "lib/sysxattr.h"
++#include "lib/sysxattrs.h"
 +
 +#ifdef SUPPORT_XATTRS
 +
 +extern int dry_run;
 +extern int am_root;
++extern int am_sender;
 +extern int read_only;
 +extern int list_only;
++extern int checksum_seed;
 +
 +#define RSYNC_XAL_INITIAL 5
 +#define RSYNC_XAL_LIST_INITIAL 100
++
++#define MAX_FULL_DATUM 32
 +
 +#define HAS_PREFIX(str, prfx) (*(str) == *(prfx) \
 +			    && strncmp(str, prfx, sizeof (prfx) - 1) == 0)
@@ -642,6 +1047,8 @@ TODO:
 +
 +void free_xattr(statx *sxp)
 +{
++	if (!sxp->xattr)
++		return;
 +	rsync_xal_free(sxp->xattr);
 +	free(sxp->xattr);
 +	sxp->xattr = NULL;
@@ -654,7 +1061,7 @@ TODO:
 +	return strcmp(xa1->name, xa2->name);
 +}
 +
-+static ssize_t rsync_xal_list(const char *fname)
++static ssize_t get_xattr_names(const char *fname)
 +{
 +	ssize_t list_len;
 +
@@ -662,7 +1069,7 @@ TODO:
 +		namebuf_len = 1024;
 +		namebuf = new_array(char, namebuf_len);
 +		if (!namebuf)
-+			out_of_memory("rsync_xal_list");
++			out_of_memory("get_xattr_names");
 +	}
 +
 +	/* The length returned includes all the '\0' terminators. */
@@ -678,24 +1085,26 @@ TODO:
 +			list_len = sys_llistxattr(fname, NULL, 0);
 +			if (list_len < 0) {
 +				rsyserr(FERROR, errno,
-+					"rsync_xal_list: llistxattr(\"%s\",0) failed",
++					"get_xattr_names: llistxattr(\"%s\",0) failed",
 +					fname);
 +				return -1;
 +			}
-+			namebuf = realloc_array(namebuf, char, list_len + 1024);
-+			if (!namebuf)
-+				out_of_memory("rsync_xal_list");
++			if (namebuf_len)
++				free(namebuf);
 +			namebuf_len = list_len + 1024;
++			namebuf = new_array(char, namebuf_len);
++			if (!namebuf)
++				out_of_memory("get_xattr_names");
 +			list_len = sys_llistxattr(fname, namebuf, namebuf_len);
 +			if (list_len < 0) {
 +				rsyserr(FERROR, errno,
-+					"rsync_xal_list: llistxattr(\"%s\",%ld) failed",
++					"get_xattr_names: llistxattr(\"%s\",%ld) failed",
 +					fname, (long)namebuf_len);
 +				return -1;
 +			}
 +		} else {
 +			rsyserr(FERROR, errno,
-+				"rsync_xal_list: llistxattr(\"%s\",%ld) failed",
++				"get_xattr_names: llistxattr(\"%s\",%ld) failed",
 +				fname, (long)namebuf_len);
 +			return -1;
 +		}
@@ -704,13 +1113,59 @@ TODO:
 +	return list_len;
 +}
 +
++/* On entry, the *len_ptr parameter contains the size of the extra space we
++ * should allocate when we create a buffer for the data.  On exit, it contains
++ * the length of the datum. */
++static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr)
++{
++	size_t datum_len = sys_lgetxattr(fname, name, NULL, 0);
++	char *ptr;
++
++	if (datum_len == (size_t)-1) {
++		if (errno == ENOTSUP)
++			return NULL;
++		rsyserr(FERROR, errno,
++			"get_xattr_data: lgetxattr(\"%s\",\"%s\",0) failed",
++			fname, name);
++		return NULL;
++	}
++
++	*len_ptr = datum_len;
++
++	if (datum_len + *len_ptr < datum_len /* checks for overflow */
++	 || !(ptr = new_array(char, datum_len + *len_ptr)))
++		out_of_memory("get_xattr_data");
++
++	if (datum_len) {
++		size_t len = sys_lgetxattr(fname, name, ptr, datum_len);
++		if (len != datum_len) {
++			if (len == (size_t)-1) {
++				rsyserr(FERROR, errno,
++				    "get_xattr_data: lgetxattr(\"%s\",\"%s\",%ld)"
++				    " failed", fname, name, (long)datum_len);
++			} else {
++				rprintf(FERROR,
++				    "get_xattr_data: lgetxattr(\"%s\",\"%s\",%ld)"
++				    " returned %ld\n", fname, name,
++				    (long)datum_len, (long)len);
++			}
++			free(ptr);
++			return NULL;
++		}
++	}
++
++	return ptr;
++}
++
 +static int rsync_xal_get(const char *fname, item_list *xalp)
 +{
-+	ssize_t list_len, name_len, datum_len;
++	ssize_t list_len, name_len;
++	size_t datum_len, name_offset;
 +	char *name, *ptr;
++	int user_only = am_sender ? 0 : !am_root;
 +
 +	/* This puts the name list into the "namebuf" buffer. */
-+	if ((list_len = rsync_xal_list(fname)) < 0)
++	if ((list_len = get_xattr_names(fname)) < 0)
 +		return -1;
 +
 +	for (name = namebuf; list_len > 0; name += name_len) {
@@ -720,46 +1175,37 @@ TODO:
 +		list_len -= name_len;
 +
 +#ifdef HAVE_LINUX_XATTRS
-+		/* We don't send the system namespace. */
-+		if (HAS_PREFIX(name, SYSTEM_PREFIX))
++		/* We always ignore the system namespace, and non-root
++		 * ignores everything but the user namespace. */
++		if (user_only ? !HAS_PREFIX(name, USER_PREFIX)
++			      : HAS_PREFIX(name, SYSTEM_PREFIX))
 +			continue;
 +#endif
 +
-+		datum_len = sys_lgetxattr(fname, name, NULL, 0);
-+		if (datum_len < 0) {
-+			if (errno == ENOTSUP)
-+				return -1;
-+			rsyserr(FERROR, errno,
-+			    "rsync_xal_get: lgetxattr(\"%s\",\"%s\",0) failed",
-+			    fname, name);
++		datum_len = name_len; /* Pass extra size to get_xattr_data() */
++		if (!(ptr = get_xattr_data(fname, name, &datum_len)))
 +			return -1;
-+		}
-+		ptr = new_array(char, name_len + datum_len);
-+		if (!ptr)
-+			out_of_memory("rsync_xal_get");
-+		if (datum_len) {
-+			ssize_t len = sys_lgetxattr(fname, name, ptr, datum_len);
-+			if (len != datum_len) {
-+				if (len < 0) {
-+					rsyserr(FERROR, errno,
-+					    "rsync_xal_get: lgetxattr(\"%s\",\"%s\",%ld)"
-+					    " failed", fname, name, (long)datum_len);
-+				} else {
-+					rprintf(FERROR,
-+					    "rsync_xal_get: lgetxattr(\"%s\",\"%s\",%ld)"
-+					    " returned %ld\n", fname, name,
-+					    (long)datum_len, (long)len);
-+				}
-+				free(ptr);
-+				return -1;
-+			}
-+		}
++
++		if (datum_len > MAX_FULL_DATUM) {
++			/* For large datums, we store a flag and a checksum. */
++			name_offset = 1 + MAX_DIGEST_LEN;
++			sum_init(checksum_seed);
++			sum_update(ptr, datum_len);
++			free(ptr);
++
++			if (!(ptr = new_array(char, name_offset + name_len)))
++				out_of_memory("rsync_xal_get");
++			*ptr = 0;
++			sum_end(ptr + 1);
++		} else
++			name_offset = datum_len;
++
 +		rxas = EXPAND_ITEM_LIST(xalp, rsync_xa, RSYNC_XAL_INITIAL);
-+		rxas->name = ptr + datum_len;
++		rxas->name = ptr + name_offset;
++		memcpy(rxas->name, name, name_len);
 +		rxas->datum = ptr;
 +		rxas->name_len = name_len;
 +		rxas->datum_len = datum_len;
-+		memcpy(rxas->name, name, name_len);
 +	}
 +	if (xalp->count > 1)
 +		qsort(xalp->items, xalp->count, sizeof (rsync_xa), rsync_xal_compare_names);
@@ -794,9 +1240,18 @@ TODO:
 +		for (j = 0; j < xalp->count; j++) {
 +			if (rxas1[j].name_len != rxas2[j].name_len
 +			 || rxas1[j].datum_len != rxas2[j].datum_len
-+			 || strcmp(rxas1[j].name, rxas2[j].name)
-+			 || memcmp(rxas1[j].datum, rxas2[j].datum, rxas2[j].datum_len))
++			 || strcmp(rxas1[j].name, rxas2[j].name))
 +				break;
++			if (rxas1[j].datum_len > MAX_FULL_DATUM) {
++				if (memcmp(rxas1[j].datum + 1,
++					   rxas2[j].datum + 1,
++					   MAX_DIGEST_LEN) != 0)
++					break;
++			} else {
++				if (memcmp(rxas1[j].datum, rxas2[j].datum,
++					   rxas2[j].datum_len))
++					break;
++			}
 +		}
 +		/* no differences found.  This is The One! */
 +		if (j == xalp->count)
@@ -820,43 +1275,203 @@ TODO:
 +}
 +
 +/* Send the make_xattr()-generated xattr list for this flist entry. */
-+void send_xattr(statx *sxp, int f)
++int send_xattr(statx *sxp, int f)
 +{
 +	int ndx = find_matching_xattr(sxp->xattr);
-+	if (ndx != -1) {
-+		write_byte(f, 'x');
-+		write_int(f, ndx);
-+		rsync_xal_free(sxp->xattr);
-+	} else {
++
++	/* Send 0 (-1 + 1) to indicate that literal xattr data follows. */
++	write_abbrevint(f, ndx + 1);
++
++	if (ndx < 0) {
 +		rsync_xa *rxa;
 +		int count = sxp->xattr->count;
-+		write_byte(f, 'X');
-+		write_int(f, count);
++		write_abbrevint(f, count);
 +		for (rxa = sxp->xattr->items; count--; rxa++) {
 +#ifdef HAVE_LINUX_XATTRS
-+			write_int(f, rxa->name_len);
-+			write_int(f, rxa->datum_len);
++			write_abbrevint(f, rxa->name_len);
++			write_abbrevint(f, rxa->datum_len);
 +			write_buf(f, rxa->name, rxa->name_len);
 +#else
 +			/* We strip the rsync prefix from disguised namespaces
 +			 * and put everything else in the user namespace. */
 +			if (HAS_PREFIX(rxa->name, RSYNC_PREFIX)
 +			 && rxa->name[RPRE_LEN] != '%') {
-+				write_int(f, rxa->name_len - RPRE_LEN);
-+				write_int(f, rxa->datum_len);
++				write_abbrevint(f, rxa->name_len - RPRE_LEN);
++				write_abbrevint(f, rxa->datum_len);
 +				write_buf(f, rxa->name + RPRE_LEN, rxa->name_len - RPRE_LEN);
 +			} else {
-+				write_int(f, rxa->name_len + UPRE_LEN);
-+				write_int(f, rxa->datum_len);
++				write_abbrevint(f, rxa->name_len + UPRE_LEN);
++				write_abbrevint(f, rxa->datum_len);
 +				write_buf(f, USER_PREFIX, UPRE_LEN);
 +				write_buf(f, rxa->name, rxa->name_len);
 +			}
 +#endif
-+			write_buf(f, rxa->datum, rxa->datum_len);
++			if (rxa->datum_len > MAX_FULL_DATUM)
++				write_buf(f, rxa->datum + 1, MAX_DIGEST_LEN);
++			else
++				write_buf(f, rxa->datum, rxa->datum_len);
 +		}
++		ndx = rsync_xal_l.count; /* pre-incremented count */
 +		rsync_xal_store(sxp->xattr); /* adds item to rsync_xal_l */
 +	}
-+	free_xattr(sxp);
++
++	return ndx;
++}
++
++/* Return a flag indicating if we need to change a file's xattrs.  If
++ * "find_all" is specified, also mark any abbreviated xattrs that we
++ * need so that send_xattr_request() can tell the sender about them. */
++int xattr_diff(struct file_struct *file, statx *sxp, int find_all)
++{
++	item_list *lst = rsync_xal_l.items;
++	rsync_xa *snd_rxa, *rec_rxa;
++	int snd_cnt, rec_cnt;
++	int cmp, same, xattrs_equal = 1;
++
++	if (!XATTR_READY(*sxp)) {
++		rec_rxa = NULL;
++		rec_cnt = 0;
++	} else {
++		rec_rxa = sxp->xattr->items;
++		rec_cnt = sxp->xattr->count;
++	}
++
++	if (F_XATTR(file) >= 0)
++		lst += F_XATTR(file);
++	else
++		lst = &empty_xattr;
++
++	snd_rxa = lst->items;
++	snd_cnt = lst->count;
++
++	/* If the count of the sender's xattrs is different from our
++	 * (receiver's) xattrs, the lists are not the same. */
++	if (snd_cnt != rec_cnt) {
++		if (!find_all)
++			return 1;
++		xattrs_equal = 0;
++	}
++
++	while (snd_cnt) {
++		cmp = rec_cnt ? strcmp(snd_rxa->name, rec_rxa->name) : -1;
++		if (cmp > 0)
++			same = 0;
++		else if (snd_rxa->datum_len > MAX_FULL_DATUM) {
++			same = cmp == 0 && snd_rxa->datum_len == rec_rxa->datum_len
++			    && memcmp(snd_rxa->datum + 1, rec_rxa->datum + 1,
++				      MAX_DIGEST_LEN) == 0;
++			/* Flag unrequested items that we need. */
++			if (/*!same &&*/ find_all && snd_rxa->datum[0] == 0)
++				snd_rxa->datum[0] = 1;
++		} else {
++			same = cmp == 0 && snd_rxa->datum_len == rec_rxa->datum_len
++			    && memcmp(snd_rxa->datum, rec_rxa->datum,
++				      snd_rxa->datum_len) == 0;
++		}
++		if (!same) {
++			if (!find_all)
++				return 1;
++			xattrs_equal = 0;
++		}
++
++		if (cmp <= 0) {
++			snd_rxa++;
++			snd_cnt--;
++		}
++		if (cmp >= 0) {
++			rec_rxa++;
++			rec_cnt--;
++		}
++	}
++
++	if (rec_cnt)
++		xattrs_equal = 0;
++
++	return !xattrs_equal;
++}
++
++/* When called by the generator with a NULL fname, this tells the sender
++ * which abbreviated xattr values we need.  When called by the sender
++ * with a non-NULL fname, we send all the extra xattr data it needs. */
++void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
++{
++	item_list *lst = rsync_xal_l.items;
++	int j, cnt, prior_req = -1;
++	rsync_xa *rxa;
++
++	lst += F_XATTR(file);
++	cnt = lst->count;
++	for (rxa = lst->items, j = 0; j < cnt; rxa++, j++) {
++		if (rxa->datum_len <= MAX_FULL_DATUM
++		 || rxa->datum[0] != 1)
++			continue;
++
++		/* Flag that we handled this abbreviated item. */
++		rxa->datum[0] = 2;
++
++		write_abbrevint(f_out, j - prior_req);
++		prior_req = j;
++
++		if (fname) {
++			size_t len = 0;
++			char *ptr;
++
++			/* Re-read the long datum. */
++			if (!(ptr = get_xattr_data(fname, rxa->name, &len)))
++				continue;
++
++			write_abbrevint(f_out, len); /* length might have changed! */
++			write_buf(f_out, ptr, len);
++			free(ptr);
++		}
++	}
++
++	write_byte(f_out, 0); /* end the list */
++}
++
++/* Read the request from the generator, and mark any needed xattrs
++ * with a flag that lets us know they need to be sent. */
++void recv_xattr_request(struct file_struct *file, int f_in)
++{
++	item_list *lst = rsync_xal_l.items;
++	char *old_datum, *name;
++	rsync_xa *rxa;
++	int rel_pos, cnt;
++
++	if (F_XATTR(file) >= 0)
++		lst += F_XATTR(file);
++	else
++		exit_cleanup(RERR_STREAMIO); /* XXX */
++
++	cnt = lst->count;
++	rxa = lst->items;
++	rxa -= 1;
++	while ((rel_pos = read_abbrevint(f_in)) != 0) {
++		rxa += rel_pos;
++		cnt -= rel_pos;
++		if (cnt < 0 || rxa->datum_len <= MAX_FULL_DATUM
++		 || rxa->datum[0] != 0)
++			exit_cleanup(RERR_STREAMIO); /* XXX */
++
++		if (am_sender) {
++			rxa->datum[0] = 1;
++			continue;
++		}
++
++		old_datum = rxa->datum;
++		rxa->datum_len = read_abbrevint(f_in);
++
++		if (rxa->name_len + rxa->datum_len < rxa->name_len)
++			out_of_memory("recv_xattr_request"); /* overflow */
++		rxa->datum = new_array(char, rxa->datum_len + rxa->name_len);
++		if (!rxa->datum)
++			out_of_memory("recv_xattr_request");
++		name = rxa->datum + rxa->datum_len;
++		memcpy(name, rxa->name, rxa->name_len);
++		rxa->name = name;
++		free(old_datum);
++		read_buf(f_in, rxa->datum, rxa->datum_len);
++	}
 +}
 +
 +/* ------------------------------------------------------------------------- */
@@ -865,72 +1480,82 @@ TODO:
 +void receive_xattr(struct file_struct *file, int f)
 +{
 +	static item_list temp_xattr = EMPTY_ITEM_LIST;
-+	int ndx, tag = read_byte(f);
++	int count;
++	int ndx = read_abbrevint(f);
 +
-+	if (tag == 'X') {
-+		int i, count = read_int(f);
-+		for (i = 0; i < count; i++) {
-+			char *ptr, *name;
-+			rsync_xa *rxa;
-+			size_t name_len = read_int(f);
-+			size_t datum_len = read_int(f);
-+#ifdef HAVE_LINUX_XATTRS
-+			size_t extra_len = 0;
-+#else
-+			size_t extra_len = am_root ? RPRE_LEN : 0;
-+			if (datum_len + extra_len < datum_len)
-+				out_of_memory("receive_xattr"); /* overflow */
-+#endif
-+			if (name_len + datum_len + extra_len < name_len)
-+				out_of_memory("receive_xattr"); /* overflow */
-+			ptr = new_array(char, name_len + datum_len + extra_len);
-+			if (!ptr)
-+				out_of_memory("receive_xattr");
-+			name = ptr + datum_len + extra_len;
-+			read_buf(f, name, name_len);
-+			read_buf(f, ptr, datum_len);
-+#ifdef HAVE_LINUX_XATTRS
-+			/* Non-root can only save the user namespace. */
-+			if (!am_root && !HAS_PREFIX(name, USER_PREFIX)) {
-+				free(ptr);
-+				continue;
-+			}
-+#else
-+			/* This OS only has a user namespace, so we either
-+			 * strip the user prefix, or we put a non-user
-+			 * namespace inside our rsync hierarchy. */
-+			if (HAS_PREFIX(name, USER_PREFIX)) {
-+				name += UPRE_LEN;
-+				name_len -= UPRE_LEN;
-+			} else if (am_root) {
-+				name -= RPRE_LEN;
-+				name_len += RPRE_LEN;
-+				memcpy(name, RSYNC_PREFIX, RPRE_LEN);
-+			} else {
-+				free(ptr);
-+				continue;
-+			}
-+#endif
-+			rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
-+			rxa->name = name;
-+			rxa->datum = ptr;
-+			rxa->name_len = name_len;
-+			rxa->datum_len = datum_len;
-+		}
-+		ndx = rsync_xal_l.count; /* pre-incremented count */
-+		rsync_xal_store(&temp_xattr); /* adds item to rsync_xal_l */
-+	} else if (tag == 'x') {
-+		ndx = read_int(f);
-+		if (ndx < 0 || (size_t)ndx >= rsync_xal_l.count) {
-+			rprintf(FERROR, "receive_xattr: xa index %d out of"
-+				" range for %s\n", ndx, f_name(file, NULL));
-+			exit_cleanup(RERR_STREAMIO);
-+		}
-+	} else {
-+		rprintf(FERROR, "receive_xattr: unknown extended attribute"
-+			" type tag (%c) for %s\n", tag, f_name(file, NULL));
++	if (ndx < 0 || (size_t)ndx > rsync_xal_l.count) {
++		rprintf(FERROR, "receive_xattr: xa index %d out of"
++			" range for %s\n", ndx, f_name(file, NULL));
 +		exit_cleanup(RERR_STREAMIO);
 +	}
++
++	if (ndx != 0) {
++		F_XATTR(file) = ndx - 1;
++		return;
++	}
++	
++	if ((count = read_abbrevint(f)) != 0) {
++		(void)EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
++		temp_xattr.count = 0;
++	}
++
++	while (count--) {
++		char *ptr, *name;
++		rsync_xa *rxa;
++		size_t name_len = read_abbrevint(f);
++		size_t datum_len = read_abbrevint(f);
++		size_t dget_len = datum_len > MAX_FULL_DATUM ? 1 + MAX_DIGEST_LEN : datum_len;
++#ifdef HAVE_LINUX_XATTRS
++		size_t extra_len = 0;
++#else
++		size_t extra_len = am_root ? RPRE_LEN : 0;
++		if (dget_len + extra_len < dget_len)
++			out_of_memory("receive_xattr"); /* overflow */
++#endif
++		if (dget_len + extra_len + name_len < dget_len)
++			out_of_memory("receive_xattr"); /* overflow */
++		ptr = new_array(char, dget_len + extra_len + name_len);
++		if (!ptr)
++			out_of_memory("receive_xattr");
++		name = ptr + dget_len + extra_len;
++		read_buf(f, name, name_len);
++		if (dget_len == datum_len)
++			read_buf(f, ptr, dget_len);
++		else {
++			*ptr = 0;
++			read_buf(f, ptr + 1, MAX_DIGEST_LEN);
++		}
++#ifdef HAVE_LINUX_XATTRS
++		/* Non-root can only save the user namespace. */
++		if (!am_root && !HAS_PREFIX(name, USER_PREFIX)) {
++			free(ptr);
++			continue;
++		}
++#else
++		/* This OS only has a user namespace, so we either
++		 * strip the user prefix, or we put a non-user
++		 * namespace inside our rsync hierarchy. */
++		if (HAS_PREFIX(name, USER_PREFIX)) {
++			name += UPRE_LEN;
++			name_len -= UPRE_LEN;
++		} else if (am_root) {
++			name -= RPRE_LEN;
++			name_len += RPRE_LEN;
++			memcpy(name, RSYNC_PREFIX, RPRE_LEN);
++		} else {
++			free(ptr);
++			continue;
++		}
++#endif
++		rxa = EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, 1);
++		rxa->name = name;
++		rxa->datum = ptr;
++		rxa->name_len = name_len;
++		rxa->datum_len = datum_len;
++	}
++
++	ndx = rsync_xal_l.count; /* pre-incremented count */
++	rsync_xal_store(&temp_xattr); /* adds item to rsync_xal_l */
 +
 +	F_XATTR(file) = ndx;
 +}
@@ -945,9 +1570,8 @@ TODO:
 +		return;
 +
 +	ndx = find_matching_xattr(sxp->xattr);
-+	if (ndx == -1)
++	if (ndx < 0)
 +		rsync_xal_store(sxp->xattr); /* adds item to rsync_xal_l */
-+	free_xattr(sxp);
 +
 +	F_XATTR(file) = ndx;
 +}
@@ -958,14 +1582,19 @@ TODO:
 +	ssize_t list_len;
 +	size_t i;
 +	char *name;
-+	int name_len, ret = 0;
++	int name_len, status, ret = 0;
 +
 +	/* This puts the current name list into the "namebuf" buffer. */
-+	if ((list_len = rsync_xal_list(fname)) < 0)
++	if ((list_len = get_xattr_names(fname)) < 0)
 +		return -1;
 +
 +	for (i = 0; i < xalp->count; i++) {
-+		int status = sys_lsetxattr(fname, rxas[i].name, rxas[i].datum, rxas[i].datum_len);
++		if ((size_t)(rxas[i].name - rxas[i].datum) < rxas[i].datum_len) {
++			rprintf(FERROR, "Abbreviated xattr value, %s, not received for %s\n",
++				rxas[i].name, full_fname(fname));
++			exit_cleanup(RERR_STREAMIO);
++		}
++		status = sys_lsetxattr(fname, rxas[i].name, rxas[i].datum, rxas[i].datum_len);
 +		if (status < 0) {
 +			rsyserr(FERROR, errno,
 +				"rsync_xal_set: lsetxattr(\"%s\",\"%s\") failed",
@@ -1020,7 +1649,7 @@ TODO:
 +	}
 +
 +	ndx = F_XATTR(file);
-+	return rsync_xal_set(fname, lst + ndx); /* TODO:  This needs to return 1 if no xattrs changed! */
++	return rsync_xal_set(fname, lst + ndx);
 +}
 +
 +#endif /* SUPPORT_XATTRS */
