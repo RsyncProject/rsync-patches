@@ -963,7 +963,7 @@ TODO:
 +exit 0
 --- old/xattrs.c
 +++ new/xattrs.c
-@@ -0,0 +1,686 @@
+@@ -0,0 +1,688 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -1127,11 +1127,11 @@ TODO:
 +		return NULL;
 +	}
 +
-+	*len_ptr = datum_len;
-+
 +	if (datum_len + *len_ptr < datum_len /* checks for overflow */
 +	 || !(ptr = new_array(char, datum_len + *len_ptr)))
 +		out_of_memory("get_xattr_data");
++
++	*len_ptr = datum_len;
 +
 +	if (datum_len) {
 +		size_t len = sys_lgetxattr(fname, name, ptr, datum_len);
@@ -1389,7 +1389,7 @@ TODO:
 +
 +/* When called by the generator with a NULL fname, this tells the sender
 + * which abbreviated xattr values we need.  When called by the sender
-+ * with a non-NULL fname, we send all the extra xattr data it needs. */
++ * (with a non-NULL fname), we send all the extra xattr data it needs. */
 +void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
 +{
 +	item_list *lst = rsync_xal_l.items;
@@ -1426,8 +1426,10 @@ TODO:
 +	write_byte(f_out, 0); /* end the list */
 +}
 +
-+/* Read the request from the generator, and mark any needed xattrs
-+ * with a flag that lets us know they need to be sent. */
++/* When called by the sender, read the request from the generator and mark
++ * any needed xattrs with a flag that lets us know they need to be sent to
++ * the receiver.  When called by the receiver, reads the sent data and
++ * stores it in place of its checksum. */
 +void recv_xattr_request(struct file_struct *file, int f_in)
 +{
 +	item_list *lst = rsync_xal_l.items;
