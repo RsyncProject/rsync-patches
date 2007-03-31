@@ -256,7 +256,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  extern int preserve_links;
  extern int preserve_devices;
  extern int preserve_specials;
-@@ -532,6 +533,14 @@ int unchanged_attrs(const char *fname, s
+@@ -532,11 +533,19 @@ int unchanged_attrs(const char *fname, s
  			return 0;
  	}
  #endif
@@ -271,14 +271,26 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  
  	return 1;
  }
-@@ -567,11 +576,19 @@ void itemize(const char *fname, struct f
+ 
+-void itemize(const char *fname, struct file_struct *file, int ndx, int statret,
++void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statret,
+ 	     statx *sxp, int32 iflags, uchar fnamecmp_type,
+ 	     const char *xname)
+ {
+@@ -562,16 +571,24 @@ void itemize(const char *fname, struct f
+ #ifdef SUPPORT_ACLS
+ 		if (preserve_acls && !S_ISLNK(file->mode)) {
+ 			if (!ACL_READY(*sxp))
+-				get_acl(fname, sxp);
++				get_acl(fnamecmp, sxp);
+ 			if (set_acl(NULL, file, sxp) == 0)
  				iflags |= ITEM_REPORT_ACL;
  		}
  #endif
 +#ifdef SUPPORT_XATTRS
 +		if (preserve_xattrs) {
 +			if (!XATTR_READY(*sxp))
-+				get_xattr(fname, sxp);
++				get_xattr(fnamecmp, sxp);
 +			if (xattr_diff(file, sxp, 1))
 +				iflags |= ITEM_REPORT_XATTR;
 +		}
@@ -303,16 +315,49 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		} else if (ndx >= 0) {
  			enum logcode code = logfile_format_has_i ? FINFO : FCLIENT;
  			log_item(code, file, &stats, iflags, xname);
-@@ -881,7 +902,7 @@ static int try_dests_reg(struct file_str
- 		}
+@@ -855,14 +876,14 @@ static int try_dests_reg(struct file_str
+ 			if (preserve_hard_links && F_IS_HLINKED(file))
+ 				finish_hard_link(file, fname, &sxp->st, itemizing, code, j);
+ 			if (itemizing && (verbose > 1 || stdout_format_has_i > 1)) {
+-				itemize(fname, file, ndx, 1, sxp,
++				itemize(cmpbuf, file, ndx, 1, sxp,
+ 					ITEM_LOCAL_CHANGE | ITEM_XNAME_FOLLOWS,
+ 					0, "");
+ 			}
+ 		} else
+ #endif
  		if (itemizing)
- 			itemize(fname, file, ndx, 0, sxp, ITEM_LOCAL_CHANGE, 0, NULL);
+-			itemize(fname, file, ndx, 0, sxp, 0, 0, NULL);
++			itemize(cmpbuf, file, ndx, 0, sxp, 0, 0, NULL);
+ 		if (verbose > 1 && maybe_ATTRS_REPORT)
+ 			rprintf(FCLIENT, "%s is uptodate\n", fname);
+ 		return -2;
+@@ -879,9 +900,13 @@ static int try_dests_reg(struct file_str
+ 			}
+ 			return -1;
+ 		}
++		set_file_attrs(fname, file, NULL, cmpbuf, 0);
+ 		if (itemizing)
+-			itemize(fname, file, ndx, 0, sxp, ITEM_LOCAL_CHANGE, 0, NULL);
 -		set_file_attrs(fname, file, NULL, 0);
-+		set_file_attrs(fname, file, NULL, NULL, 0);
++			itemize(cmpbuf, file, ndx, 0, sxp, ITEM_LOCAL_CHANGE, 0, NULL);
++#ifdef SUPPORT_XATTRS
++		if (preserve_xattrs)
++			xattr_clear_locals(file);
++#endif
  		if (maybe_ATTRS_REPORT
  		 && ((!itemizing && verbose && match_level == 2)
  		  || (verbose > 1 && match_level == 3))) {
-@@ -1112,6 +1133,9 @@ static void recv_generator(char *fname, 
+@@ -1029,7 +1054,7 @@ static int try_dests_non(struct file_str
+ 			    : ITEM_LOCAL_CHANGE
+ 			     + (match_level == 3 ? ITEM_XNAME_FOLLOWS : 0);
+ 			char *lp = match_level == 3 ? "" : NULL;
+-			itemize(fname, file, ndx, 0, sxp, chg + ITEM_MATCHED, 0, lp);
++			itemize(cmpbuf, file, ndx, 0, sxp, chg + ITEM_MATCHED, 0, lp);
+ 		}
+ 		if (verbose > 1 && maybe_ATTRS_REPORT) {
+ 			rprintf(FCLIENT, "%s%s is uptodate\n",
+@@ -1112,6 +1137,9 @@ static void recv_generator(char *fname, 
  #ifdef SUPPORT_ACLS
  	sx.acc_acl = sx.def_acl = NULL;
  #endif
@@ -322,7 +367,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  	if (dry_run > 1) {
  		if (fuzzy_dirlist) {
  			flist_free(fuzzy_dirlist);
-@@ -1224,7 +1248,7 @@ static void recv_generator(char *fname, 
+@@ -1224,7 +1252,7 @@ static void recv_generator(char *fname, 
  				goto cleanup;
  			}
  		}
@@ -331,16 +376,18 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		    && verbose && code != FNONE && f_out != -1)
  			rprintf(code, "%s/\n", fname);
  		if (real_ret != 0 && one_file_system)
-@@ -1280,7 +1304,7 @@ static void recv_generator(char *fname, 
+@@ -1278,9 +1306,9 @@ static void recv_generator(char *fname, 
+ 			else if ((len = readlink(fname, lnk, MAXPATHLEN-1)) > 0
+ 			      && strncmp(lnk, sl, len) == 0 && sl[len] == '\0') {
  				/* The link is pointing to the right place. */
++				set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
  				if (itemizing)
  					itemize(fname, file, ndx, 0, &sx, 0, 0, NULL);
 -				set_file_attrs(fname, file, &sx, maybe_ATTRS_REPORT);
-+				set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
  #ifdef SUPPORT_HARD_LINKS
  				if (preserve_hard_links && F_IS_HLINKED(file))
  					finish_hard_link(file, fname, &sx.st, itemizing, code, -1);
-@@ -1317,7 +1341,7 @@ static void recv_generator(char *fname, 
+@@ -1317,7 +1345,7 @@ static void recv_generator(char *fname, 
  			rsyserr(FERROR, errno, "symlink %s -> \"%s\" failed",
  				full_fname(fname), sl);
  		} else {
@@ -349,16 +396,18 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  			if (itemizing) {
  				itemize(fname, file, ndx, statret, &sx,
  					ITEM_LOCAL_CHANGE, 0, NULL);
-@@ -1359,7 +1383,7 @@ static void recv_generator(char *fname, 
+@@ -1357,9 +1385,9 @@ static void recv_generator(char *fname, 
+ 			 && BITS_EQUAL(sx.st.st_mode, file->mode, _S_IFMT)
+ 			 && sx.st.st_rdev == rdev) {
  				/* The device or special file is identical. */
++				set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
  				if (itemizing)
  					itemize(fname, file, ndx, 0, &sx, 0, 0, NULL);
 -				set_file_attrs(fname, file, &sx, maybe_ATTRS_REPORT);
-+				set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
  #ifdef SUPPORT_HARD_LINKS
  				if (preserve_hard_links && F_IS_HLINKED(file))
  					finish_hard_link(file, fname, &sx.st, itemizing, code, -1);
-@@ -1399,7 +1423,7 @@ static void recv_generator(char *fname, 
+@@ -1399,7 +1427,7 @@ static void recv_generator(char *fname, 
  			rsyserr(FERROR, errno, "mknod %s failed",
  				full_fname(fname));
  		} else {
@@ -367,16 +416,18 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  			if (itemizing) {
  				itemize(fname, file, ndx, statret, &sx,
  					ITEM_LOCAL_CHANGE, 0, NULL);
-@@ -1531,7 +1555,7 @@ static void recv_generator(char *fname, 
+@@ -1529,9 +1557,9 @@ static void recv_generator(char *fname, 
+ 			do_unlink(partialptr);
+ 			handle_partial_dir(partialptr, PDIR_DELETE);
  		}
++		set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
  		if (itemizing)
  			itemize(fnamecmp, file, ndx, statret, &sx, 0, 0, NULL);
 -		set_file_attrs(fname, file, &sx, maybe_ATTRS_REPORT);
-+		set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
  #ifdef SUPPORT_HARD_LINKS
  		if (preserve_hard_links && F_IS_HLINKED(file))
  			finish_hard_link(file, fname, &sx.st, itemizing, code, -1);
-@@ -1636,6 +1660,10 @@ static void recv_generator(char *fname, 
+@@ -1636,6 +1664,10 @@ static void recv_generator(char *fname, 
  		if (preserve_acls)
  			free_acl(&real_sx);
  #endif
@@ -387,7 +438,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  	}
  
  	if (!do_xfers) {
-@@ -1657,7 +1685,7 @@ static void recv_generator(char *fname, 
+@@ -1657,7 +1689,7 @@ static void recv_generator(char *fname, 
  
  	if (f_copy >= 0) {
  		close(f_copy);
@@ -396,7 +447,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		if (verbose > 1) {
  			rprintf(FINFO, "backed up %s to %s\n",
  				fname, backupptr);
-@@ -1672,6 +1700,10 @@ static void recv_generator(char *fname, 
+@@ -1672,6 +1704,10 @@ static void recv_generator(char *fname, 
  	if (preserve_acls)
  		free_acl(&sx);
  #endif
@@ -731,7 +782,15 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  extern int do_xfers;
  extern int am_server;
  extern int do_progress;
-@@ -366,8 +367,8 @@ int recv_files(int f_in, char *local_nam
+@@ -37,6 +38,7 @@ extern int protocol_version;
+ extern int relative_paths;
+ extern int preserve_hard_links;
+ extern int preserve_perms;
++extern int preserve_xattrs;
+ extern int basis_dir_cnt;
+ extern int make_backups;
+ extern int cleanup_got_literal;
+@@ -366,8 +368,8 @@ int recv_files(int f_in, char *local_nam
  		cleanup_disable();
  
  		/* This call also sets cur_flist. */
@@ -742,7 +801,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		if (ndx == NDX_DONE) {
  			if (inc_recurse && first_flist) {
  				flist_free(first_flist);
-@@ -397,8 +398,17 @@ int recv_files(int f_in, char *local_nam
+@@ -397,8 +399,17 @@ int recv_files(int f_in, char *local_nam
  		if (verbose > 2)
  			rprintf(FINFO, "recv_files(%s)\n", fname);
  
@@ -754,13 +813,13 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		if (!(iflags & ITEM_TRANSFER)) {
  			maybe_log_item(file, iflags, itemizing, xname);
 +#ifdef SUPPORT_XATTRS
-+			if (iflags & ITEM_REPORT_XATTR && !dry_run)
++			if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && !dry_run)
 +				set_file_attrs(fname, file, NULL, fname, 0);
 +#endif
  			continue;
  		}
  		if (phase == 2) {
-@@ -655,15 +665,15 @@ int recv_files(int f_in, char *local_nam
+@@ -655,15 +666,15 @@ int recv_files(int f_in, char *local_nam
  				temp_copy_name = NULL;
  			else
  				temp_copy_name = partialptr;
@@ -1050,7 +1109,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		if (verbose > 2)
 --- old/testsuite/xattrs.test
 +++ new/testsuite/xattrs.test
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,76 @@
 +#! /bin/sh
 +
 +# This program is distributable under the terms of the GNU GPL (see
@@ -1071,9 +1130,9 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +echo else >"$fromdir/file2"
 +echo last >"$fromdir/foo/file3"
 +
-+makepath "$todir/foo"
-+echo wow >"$todir/file1"
-+cp -p "$fromdir/foo/file3" "$todir/foo"
++makepath "$chkdir/foo"
++echo wow >"$chkdir/file1"
++cp -p "$fromdir/foo/file3" "$chkdir/foo"
 +
 +files='foo file1 file2 foo/file3'
 +
@@ -1092,15 +1151,35 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +setfattr -n user.long -v 'this is also a long attribute that will be truncated in the initial data send' foo/file3
 +setfattr -n user.equal -v 'this long attribute should remain the same and not need to be transferred' foo/file3
 +
-+setfattr -n user.short -v 'old short' "$todir/file1"
-+setfattr -n user.extra -v 'remove me' "$todir/file1"
++setfattr -n user.short -v 'old short' "$chkdir/file1"
++setfattr -n user.extra -v 'remove me' "$chkdir/file1"
 +
-+setfattr -n user.foo -v 'old foo' "$todir/foo/file3"
-+setfattr -n user.equal -v 'this long attribute should remain the same and not need to be transferred' "$todir/foo/file3"
-+
-+$RSYNC -avX . "$todir/"
++setfattr -n user.foo -v 'old foo' "$chkdir/foo/file3"
++setfattr -n user.equal -v 'this long attribute should remain the same and not need to be transferred' "$chkdir/foo/file3"
 +
 +getfattr -d $files >"$scratchdir/xattrs.txt"
++
++# OK, let's try a simple xattr copy.
++checkit "$RSYNC -avX . \"$chkdir/\"" "$fromdir" "$chkdir"
++
++cd "$chkdir"
++getfattr -d $files | diff $diffopt "$scratchdir/xattrs.txt" -
++
++cd "$fromdir"
++
++checkit "$RSYNC -aiX --copy-dest=../chk . ../to" "$fromdir" "$todir"
++
++cd "$todir"
++getfattr -d $files | diff $diffopt "$scratchdir/xattrs.txt" -
++
++cd "$fromdir"
++setfattr -n user.nice -v 'this is nice, but different' file1
++
++getfattr -d $files >"$scratchdir/xattrs.txt"
++
++rm -rf "$todir"
++
++checkit "$RSYNC -aiX --link-dest=../chk . ../to" "$chkdir" "$todir"
 +
 +cd "$todir"
 +getfattr -d $files | diff $diffopt "$scratchdir/xattrs.txt" -
@@ -1109,7 +1188,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +exit 0
 --- old/xattrs.c
 +++ new/xattrs.c
-@@ -0,0 +1,713 @@
+@@ -0,0 +1,769 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -1139,6 +1218,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +extern int dry_run;
 +extern int am_root;
 +extern int am_sender;
++extern int am_generator;
 +extern int read_only;
 +extern int list_only;
 +extern int checksum_seed;
@@ -1150,6 +1230,13 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +
 +#define HAS_PREFIX(str, prfx) (*(str) == *(prfx) \
 +			    && strncmp(str, prfx, sizeof (prfx) - 1) == 0)
++
++#define XATTR_ABBREV(x) ((size_t)((x).name - (x).datum) < (x).datum_len)
++
++#define XSTATE_ABBREV	0
++#define XSTATE_DONE	1
++#define XSTATE_TODO	2
++#define XSTATE_LOCAL	3
 +
 +#define USER_PREFIX "user."
 +#define UPRE_LEN ((int)sizeof USER_PREFIX - 1)
@@ -1259,13 +1346,14 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +/* On entry, the *len_ptr parameter contains the size of the extra space we
 + * should allocate when we create a buffer for the data.  On exit, it contains
 + * the length of the datum. */
-+static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr)
++static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr,
++			    int no_missing_error)
 +{
 +	size_t datum_len = sys_lgetxattr(fname, name, NULL, 0);
 +	char *ptr;
 +
 +	if (datum_len == (size_t)-1) {
-+		if (errno == ENOTSUP)
++		if (errno == ENOTSUP || no_missing_error)
 +			return NULL;
 +		rsyserr(FERROR, errno,
 +			"get_xattr_data: lgetxattr(\"%s\",\"%s\",0) failed",
@@ -1326,7 +1414,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +#endif
 +
 +		datum_len = name_len; /* Pass extra size to get_xattr_data() */
-+		if (!(ptr = get_xattr_data(fname, name, &datum_len)))
++		if (!(ptr = get_xattr_data(fname, name, &datum_len, 0)))
 +			return -1;
 +
 +		if (datum_len > MAX_FULL_DATUM) {
@@ -1338,7 +1426,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +
 +			if (!(ptr = new_array(char, name_offset + name_len)))
 +				out_of_memory("rsync_xal_get");
-+			*ptr = 0;
++			*ptr = XSTATE_ABBREV;
 +			sum_end(ptr + 1);
 +		} else
 +			name_offset = datum_len;
@@ -1504,8 +1592,8 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +			    && memcmp(snd_rxa->datum + 1, rec_rxa->datum + 1,
 +				      MAX_DIGEST_LEN) == 0;
 +			/* Flag unrequested items that we need. */
-+			if (!same && find_all && snd_rxa->datum[0] == 0)
-+				snd_rxa->datum[0] = 1;
++			if (!same && find_all && snd_rxa->datum[0] == XSTATE_ABBREV)
++				snd_rxa->datum[0] = XSTATE_TODO;
 +		} else {
 +			same = cmp == 0 && snd_rxa->datum_len == rec_rxa->datum_len
 +			    && memcmp(snd_rxa->datum, rec_rxa->datum,
@@ -1545,12 +1633,21 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +	lst += F_XATTR(file);
 +	cnt = lst->count;
 +	for (rxa = lst->items, j = 0; j < cnt; rxa++, j++) {
-+		if (rxa->datum_len <= MAX_FULL_DATUM
-+		 || rxa->datum[0] != 1)
++		if (rxa->datum_len <= MAX_FULL_DATUM)
 +			continue;
++		switch (rxa->datum[0]) {
++		case XSTATE_LOCAL:
++			/* Items set locally will get cached by receiver. */
++			rxa->datum[0] = XSTATE_DONE;
++			continue;
++		case XSTATE_TODO:
++			break;
++		default:
++			continue;
++		}
 +
 +		/* Flag that we handled this abbreviated item. */
-+		rxa->datum[0] = 2;
++		rxa->datum[0] = XSTATE_DONE;
 +
 +		write_abbrevint(f_out, j - prior_req);
 +		prior_req = j;
@@ -1560,7 +1657,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +			char *ptr;
 +
 +			/* Re-read the long datum. */
-+			if (!(ptr = get_xattr_data(fname, rxa->name, &len)))
++			if (!(ptr = get_xattr_data(fname, rxa->name, &len, 0)))
 +				continue;
 +
 +			write_abbrevint(f_out, len); /* length might have changed! */
@@ -1570,6 +1667,27 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +	}
 +
 +	write_byte(f_out, 0); /* end the list */
++}
++
++/* Any items set locally by the generator that the receiver doesn't
++ * get told about get changed back to XSTATE_ABBREV. */
++void xattr_clear_locals(struct file_struct *file)
++{
++	item_list *lst = rsync_xal_l.items;
++	rsync_xa *rxa;
++	int cnt;
++
++	if (F_XATTR(file) < 0)
++		return;
++
++	lst += F_XATTR(file);
++	cnt = lst->count;
++	for (rxa = lst->items; cnt--; rxa++) {
++		if (rxa->datum_len <= MAX_FULL_DATUM)
++			continue;
++		if (rxa->datum[0] == XSTATE_LOCAL)
++			rxa->datum[0] = XSTATE_ABBREV;
++	}
 +}
 +
 +/* When called by the sender, read the request from the generator and mark
@@ -1583,10 +1701,9 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +	rsync_xa *rxa;
 +	int rel_pos, cnt;
 +
-+	if (F_XATTR(file) >= 0)
-+		lst += F_XATTR(file);
-+	else
++	if (F_XATTR(file) < 0)
 +		exit_cleanup(RERR_STREAMIO); /* XXX */
++	lst += F_XATTR(file);
 +
 +	cnt = lst->count;
 +	rxa = lst->items;
@@ -1595,11 +1712,11 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +		rxa += rel_pos;
 +		cnt -= rel_pos;
 +		if (cnt < 0 || rxa->datum_len <= MAX_FULL_DATUM
-+		 || rxa->datum[0] != 0)
++		 || rxa->datum[0] != XSTATE_ABBREV)
 +			exit_cleanup(RERR_STREAMIO); /* XXX */
 +
 +		if (am_sender) {
-+			rxa->datum[0] = 1;
++			rxa->datum[0] = XSTATE_TODO;
 +			continue;
 +		}
 +
@@ -1667,7 +1784,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +		if (dget_len == datum_len)
 +			read_buf(f, ptr, dget_len);
 +		else {
-+			*ptr = 0;
++			*ptr = XSTATE_ABBREV;
 +			read_buf(f, ptr + 1, MAX_DIGEST_LEN);
 +		}
 +#ifdef HAVE_LINUX_XATTRS
@@ -1725,50 +1842,69 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +{
 +	rsync_xa *rxas = xalp->items;
 +	ssize_t list_len;
-+	size_t i;
-+	char *name;
-+	int name_len, status, ret = 0;
++	size_t i, len;
++	char *name, *ptr, sum[MAX_DIGEST_LEN];
++	int name_len, ret = 0;
 +
 +	/* This puts the current name list into the "namebuf" buffer. */
 +	if ((list_len = get_xattr_names(fname)) < 0)
 +		return -1;
 +
 +	for (i = 0; i < xalp->count; i++) {
-+		if ((size_t)(rxas[i].name - rxas[i].datum) < rxas[i].datum_len) {
-+			size_t len = rxas[i].name_len;
-+			char *ptr;
++		name = rxas[i].name;
 +
-+			/* See if fnamecmp version is identical. */
-+			if ((ptr = get_xattr_data(fnamecmp, rxas[i].name, &len)) != NULL
-+			 && len == rxas[i].datum_len) {
-+				char sum[MAX_DIGEST_LEN];
-+				sum_init(checksum_seed);
-+				sum_update(ptr, len);
-+				sum_end(sum);
-+				if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) == 0) {
-+					char *name = ptr + len;
-+					memcpy(name, rxas[i].name, rxas[i].name_len);
-+					rxas[i].name = name;
-+					free(rxas[i].datum);
-+					rxas[i].datum = ptr;
-+				} else
-+					len = 0;
-+			} else
-+				len = 0;
-+			if (!len) {
++		if (XATTR_ABBREV(rxas[i])) {
++			/* See if the fnamecmp version is identical. */
++			len = name_len = rxas[i].name_len;
++			if ((ptr = get_xattr_data(fnamecmp, name, &len, 1)) == NULL) {
++			  still_abbrev:
++				if (am_generator)
++					continue;
 +				rprintf(FERROR, "Missing abbreviated xattr value, %s, for %s\n",
 +					rxas[i].name, full_fname(fname));
 +				ret = -1;
 +				continue;
 +			}
-+			if (fname == fnamecmp) /* value is already set */
++			if (len != rxas[i].datum_len) {
++				free(ptr);
++				goto still_abbrev;
++			}
++
++			sum_init(checksum_seed);
++			sum_update(ptr, len);
++			sum_end(sum);
++			if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) != 0) {
++				free(ptr);
++				goto still_abbrev;
++			}
++
++			if (fname != fnamecmp /* value is already set */
++			 && sys_lsetxattr(fname, name, ptr, len) < 0) {
++				rsyserr(FERROR, errno,
++					"rsync_xal_set: lsetxattr(\"%s\",\"%s\") failed",
++					fname, name);
++				ret = -1;
++			}
++
++			if (am_generator) { /* generator items stay abbreviated */
++				if (rxas[i].datum[0] == XSTATE_ABBREV)
++					rxas[i].datum[0] = XSTATE_LOCAL;
++				free(ptr);
 +				continue;
++			}
++
++			memcpy(ptr + len, name, name_len);
++			free(rxas[i].datum);
++
++			rxas[i].name = name = ptr + len;
++			rxas[i].datum = ptr;
++			continue;
 +		}
-+		status = sys_lsetxattr(fname, rxas[i].name, rxas[i].datum, rxas[i].datum_len);
-+		if (status < 0) {
++
++		if (sys_lsetxattr(fname, name, rxas[i].datum, rxas[i].datum_len) < 0) {
 +			rsyserr(FERROR, errno,
 +				"rsync_xal_set: lsetxattr(\"%s\",\"%s\") failed",
-+				fname, rxas[i].name);
++				fname, name);
 +			ret = -1;
 +		}
 +	}
@@ -1791,8 +1927,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +				break;
 +		}
 +		if (i == xalp->count) {
-+			int status = sys_lremovexattr(fname, name);
-+			if (status < 0) {
++			if (sys_lremovexattr(fname, name) < 0) {
 +				rsyserr(FERROR, errno,
 +					"rsync_xal_clear: lremovexattr(\"%s\",\"%s\") failed",
 +					fname, name);
