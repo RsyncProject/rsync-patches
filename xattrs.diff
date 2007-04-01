@@ -894,18 +894,19 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		if (!preserve_perms && S_ISDIR(new_mode)
  		 && sx2.st.st_mode & S_ISGID) {
  			/* We just created this directory and its setgid
-@@ -321,6 +318,10 @@ int set_file_attrs(char *fname, struct f
- 	if (daemon_chmod_modes && !S_ISLNK(new_mode))
- 		new_mode = tweak_mode(new_mode, daemon_chmod_modes);
+@@ -261,6 +258,11 @@ int set_file_attrs(char *fname, struct f
+ 		get_acl(fname, sxp);
+ #endif
  
 +#ifdef SUPPORT_XATTRS
 +	if (preserve_xattrs && fnamecmp)
-+		set_xattr(fname, file, fnamecmp);
++		set_xattr(fname, file, fnamecmp, sxp);
 +#endif
- #ifdef SUPPORT_ACLS
- 	/* It's OK to call set_acl() now, even for a dir, as the generator
- 	 * will enable owner-writability using chmod, if necessary.
-@@ -353,10 +354,16 @@ int set_file_attrs(char *fname, struct f
++
+ 	if (!preserve_times || (S_ISDIR(sxp->st.st_mode) && omit_dir_times))
+ 		flags |= ATTRS_SKIP_MTIME;
+ 	if (!(flags & ATTRS_SKIP_MTIME)
+@@ -353,10 +355,16 @@ int set_file_attrs(char *fname, struct f
  			rprintf(FCLIENT, "%s is uptodate\n", fname);
  	}
    cleanup:
@@ -924,7 +925,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  	return updated;
  }
  
-@@ -378,7 +385,8 @@ RETSIGTYPE sig_int(UNUSED(int val))
+@@ -378,7 +386,8 @@ RETSIGTYPE sig_int(UNUSED(int val))
   * attributes (e.g. permissions, ownership, etc.).  If partialptr is not
   * NULL and the robust_rename() call is forced to copy the temp file, we
   * stage the file into the partial-dir and then rename it into place. */
@@ -934,7 +935,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		     struct file_struct *file, int ok_to_set_time,
  		     int overwriting_basis)
  {
-@@ -395,7 +403,7 @@ void finish_transfer(char *fname, char *
+@@ -395,7 +404,7 @@ void finish_transfer(char *fname, char *
  		return;
  
  	/* Change permissions before putting the file into place. */
@@ -943,7 +944,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME);
  
  	/* move tmp file over real file */
-@@ -419,7 +427,7 @@ void finish_transfer(char *fname, char *
+@@ -419,7 +428,7 @@ void finish_transfer(char *fname, char *
  	fnametmp = partialptr ? partialptr : fname;
  
    do_set_file_attrs:
@@ -1027,7 +1028,15 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  extern int do_xfers;
  extern int am_server;
  extern int am_daemon;
-@@ -144,8 +145,9 @@ void successful_send(int ndx)
+@@ -33,6 +34,7 @@ extern int csum_length;
+ extern int append_mode;
+ extern int io_error;
+ extern int allowed_lull;
++extern int preserve_xattrs;
+ extern int protocol_version;
+ extern int remove_source_files;
+ extern int updating_basis_file;
+@@ -144,8 +146,9 @@ void successful_send(int ndx)
  		rsyserr(FERROR, errno, "sender failed to remove %s", fname);
  }
  
@@ -1039,18 +1048,18 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  {
  	write_ndx(f_out, ndx);
  	if (protocol_version < 29)
-@@ -155,6 +157,10 @@ void write_ndx_and_attrs(int f_out, int 
+@@ -155,6 +158,10 @@ void write_ndx_and_attrs(int f_out, int 
  		write_byte(f_out, fnamecmp_type);
  	if (iflags & ITEM_XNAME_FOLLOWS)
  		write_vstring(f_out, buf, len);
 +#ifdef SUPPORT_XATTRS
-+	if (iflags & ITEM_REPORT_XATTR && !dry_run)
++	if (preserve_xattrs && iflags & ITEM_REPORT_XATTR && !dry_run)
 +		send_xattr_request(fname, file, f_out);
 +#endif
  }
  
  void send_files(int f_in, int f_out)
-@@ -183,8 +189,8 @@ void send_files(int f_in, int f_out)
+@@ -183,8 +190,8 @@ void send_files(int f_in, int f_out)
  			send_extra_file_list(f_out, FILECNT_LOOKAHEAD);
  
  		/* This call also sets cur_flist. */
@@ -1061,7 +1070,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		if (ndx == NDX_DONE) {
  			if (inc_recurse && first_flist) {
  				flist_free(first_flist);
-@@ -201,6 +207,9 @@ void send_files(int f_in, int f_out)
+@@ -201,6 +208,9 @@ void send_files(int f_in, int f_out)
  			continue;
  		}
  
@@ -1071,12 +1080,14 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  		file = cur_flist->files[ndx - cur_flist->ndx_start];
  		if (F_ROOTDIR(file)) {
  			path = F_ROOTDIR(file);
-@@ -215,8 +224,13 @@ void send_files(int f_in, int f_out)
+@@ -215,8 +225,15 @@ void send_files(int f_in, int f_out)
  		if (verbose > 2)
  			rprintf(FINFO, "send_files(%d, %s%s%s)\n", ndx, path,slash,fname);
  
-+		if (iflags & ITEM_REPORT_XATTR)
++#ifdef SUPPORT_XATTRS
++		if (preserve_xattrs && iflags & ITEM_REPORT_XATTR)
 +			recv_xattr_request(file, f_in);
++#endif
 +
  		if (!(iflags & ITEM_TRANSFER)) {
  			maybe_log_item(file, iflags, itemizing, xname);
@@ -1085,7 +1096,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  			continue;
  		}
  		if (phase == 2) {
-@@ -251,8 +265,8 @@ void send_files(int f_in, int f_out)
+@@ -251,8 +268,8 @@ void send_files(int f_in, int f_out)
  
  		if (!do_xfers) { /* log the transfer */
  			log_item(FCLIENT, file, &stats, iflags, NULL);
@@ -1096,7 +1107,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
  			continue;
  		}
  
-@@ -305,8 +319,8 @@ void send_files(int f_in, int f_out)
+@@ -305,8 +322,8 @@ void send_files(int f_in, int f_out)
  				path,slash,fname, (double)st.st_size);
  		}
  
@@ -1188,7 +1199,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +exit 0
 --- old/xattrs.c
 +++ new/xattrs.c
-@@ -0,0 +1,769 @@
+@@ -0,0 +1,775 @@
 +/*
 + * Extended Attribute support for rsync.
 + * Written by Jay Fenlason, vaguely based on the ACLs patch.
@@ -1838,7 +1849,8 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +	F_XATTR(file) = ndx;
 +}
 +
-+static int rsync_xal_set(const char *fname, item_list *xalp, const char *fnamecmp)
++static int rsync_xal_set(const char *fname, item_list *xalp,
++			 const char *fnamecmp, statx *sxp)
 +{
 +	rsync_xa *rxas = xalp->items;
 +	ssize_t list_len;
@@ -1878,13 +1890,15 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +				goto still_abbrev;
 +			}
 +
-+			if (fname != fnamecmp /* value is already set */
-+			 && sys_lsetxattr(fname, name, ptr, len) < 0) {
++			if (fname == fnamecmp)
++				; /* Value is already set when identical */
++			else if (sys_lsetxattr(fname, name, ptr, len) < 0) {
 +				rsyserr(FERROR, errno,
 +					"rsync_xal_set: lsetxattr(\"%s\",\"%s\") failed",
 +					fname, name);
 +				ret = -1;
-+			}
++			} else /* make sure caller sets mtime */
++				sxp->st.st_mtime = (time_t)-1;
 +
 +			if (am_generator) { /* generator items stay abbreviated */
 +				if (rxas[i].datum[0] == XSTATE_ABBREV)
@@ -1906,7 +1920,8 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +				"rsync_xal_set: lsetxattr(\"%s\",\"%s\") failed",
 +				fname, name);
 +			ret = -1;
-+		}
++		} else /* make sure caller sets mtime */
++			sxp->st.st_mtime = (time_t)-1;
 +	}
 +
 +	/* Remove any extraneous names. */
@@ -1932,7 +1947,8 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +					"rsync_xal_clear: lremovexattr(\"%s\",\"%s\") failed",
 +					fname, name);
 +				ret = -1;
-+			}
++			} else /* make sure caller sets mtime */
++				sxp->st.st_mtime = (time_t)-1;
 +		}
 +	}
 +
@@ -1940,7 +1956,8 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +}
 +
 +/* Set extended attributes on indicated filename. */
-+int set_xattr(const char *fname, const struct file_struct *file, const char *fnamecmp)
++int set_xattr(const char *fname, const struct file_struct *file,
++	      const char *fnamecmp, statx *sxp)
 +{
 +	int ndx;
 +	item_list *lst = rsync_xal_l.items;
@@ -1954,7 +1971,7 @@ CAUTION:  this patch has been recently reworked, and needs more testing!
 +	}
 +
 +	ndx = F_XATTR(file);
-+	return rsync_xal_set(fname, lst + ndx, fnamecmp);
++	return rsync_xal_set(fname, lst + ndx, fnamecmp, sxp);
 +}
 +
 +#endif /* SUPPORT_XATTRS */
