@@ -75,14 +75,16 @@ To use this patch, run these commands for a successful build:
  				if (memcmp(rxas1[j].datum + 1,
  					   rxas2[j].datum + 1,
  					   MAX_DIGEST_LEN) != 0)
-@@ -315,34 +317,46 @@ int send_xattr(statx *sxp, int f)
+@@ -315,34 +317,43 @@ int send_xattr(statx *sxp, int f)
  {
  	int ndx = find_matching_xattr(sxp->xattr);
  
 -	/* Send 0 (-1 + 1) to indicate that literal xattr data follows. */
 -	write_abbrevint(f, ndx + 1);
 +	if (protocol_version < 30) {
-+		if (ndx >= 0) {
++		if (ndx < 0)
++			write_byte(f, 'X');
++		else {
 +			write_byte(f, 'x');
 +			write_int(f, ndx);
 +		}
@@ -95,12 +97,7 @@ To use this patch, run these commands for a successful build:
  		rsync_xa *rxa;
  		int count = sxp->xattr->count;
 -		write_abbrevint(f, count);
-+		if (protocol_version >= 30)
-+			write_abbrevint(f, count);
-+		else {
-+			write_byte(f, 'X');
-+			write_int(f, count);
-+		}
++		write_abbrevint30(f, count);
  		for (rxa = sxp->xattr->items; count--; rxa++) {
  #ifdef HAVE_LINUX_XATTRS
 -			write_abbrevint(f, rxa->name_len);
@@ -132,7 +129,7 @@ To use this patch, run these commands for a successful build:
  				write_buf(f, rxa->datum + 1, MAX_DIGEST_LEN);
  			else
  				write_buf(f, rxa->datum, rxa->datum_len);
-@@ -392,7 +406,7 @@ int xattr_diff(struct file_struct *file,
+@@ -392,7 +403,7 @@ int xattr_diff(struct file_struct *file,
  		cmp = rec_cnt ? strcmp(snd_rxa->name, rec_rxa->name) : -1;
  		if (cmp > 0)
  			same = 0;
@@ -141,7 +138,7 @@ To use this patch, run these commands for a successful build:
  			same = cmp == 0 && snd_rxa->datum_len == rec_rxa->datum_len
  			    && memcmp(snd_rxa->datum + 1, rec_rxa->datum + 1,
  				      MAX_DIGEST_LEN) == 0;
-@@ -435,6 +449,9 @@ void send_xattr_request(const char *fnam
+@@ -435,6 +446,9 @@ void send_xattr_request(const char *fnam
  	int j, cnt, prior_req = -1;
  	rsync_xa *rxa;
  
@@ -151,7 +148,7 @@ To use this patch, run these commands for a successful build:
  	lst += F_XATTR(file);
  	cnt = lst->count;
  	for (rxa = lst->items, j = 0; j < cnt; rxa++, j++) {
-@@ -506,6 +523,9 @@ void recv_xattr_request(struct file_stru
+@@ -506,6 +520,9 @@ void recv_xattr_request(struct file_stru
  	rsync_xa *rxa;
  	int rel_pos, cnt;
  
@@ -161,7 +158,7 @@ To use this patch, run these commands for a successful build:
  	if (F_XATTR(file) < 0) {
  		rprintf(FERROR, "recv_xattr_request: internal data error!\n");
  		exit_cleanup(RERR_STREAMIO);
-@@ -552,7 +572,22 @@ void receive_xattr(struct file_struct *f
+@@ -552,7 +569,22 @@ void receive_xattr(struct file_struct *f
  {
  	static item_list temp_xattr = EMPTY_ITEM_LIST;
  	int count;
@@ -185,7 +182,7 @@ To use this patch, run these commands for a successful build:
  
  	if (ndx < 0 || (size_t)ndx > rsync_xal_l.count) {
  		rprintf(FERROR, "receive_xattr: xa index %d out of"
-@@ -565,7 +600,7 @@ void receive_xattr(struct file_struct *f
+@@ -565,7 +597,7 @@ void receive_xattr(struct file_struct *f
  		return;
  	}
  	
@@ -194,7 +191,7 @@ To use this patch, run these commands for a successful build:
  		(void)EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
  		temp_xattr.count = 0;
  	}
-@@ -573,9 +608,10 @@ void receive_xattr(struct file_struct *f
+@@ -573,9 +605,10 @@ void receive_xattr(struct file_struct *f
  	while (count--) {
  		char *ptr, *name;
  		rsync_xa *rxa;
