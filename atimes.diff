@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
 
 --- old/compat.c
 +++ new/compat.c
-@@ -62,6 +62,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -64,6 +64,8 @@ void setup_protocol(int f_out,int f_in)
  		preserve_uid = ++file_extra_cnt;
  	if (preserve_gid)
  		preserve_gid = ++file_extra_cnt;
@@ -16,10 +16,10 @@ To use this patch, run these commands for a successful build:
 +		preserve_atimes = ++file_extra_cnt;
  	if (preserve_acls && !am_sender)
  		preserve_acls = ++file_extra_cnt;
- 
+ 	if (preserve_xattrs)
 --- old/flist.c
 +++ new/flist.c
-@@ -49,6 +49,7 @@ extern int preserve_devices;
+@@ -50,6 +50,7 @@ extern int preserve_devices;
  extern int preserve_specials;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -27,7 +27,7 @@ To use this patch, run these commands for a successful build:
  extern int relative_paths;
  extern int implied_dirs;
  extern int file_extra_cnt;
-@@ -144,6 +145,7 @@ void show_flist_stats(void)
+@@ -147,6 +148,7 @@ void show_flist_stats(void)
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -35,7 +35,7 @@ To use this patch, run these commands for a successful build:
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -158,14 +160,16 @@ static void list_file_entry(struct file_
+@@ -161,14 +163,16 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -54,7 +54,7 @@ To use this patch, run these commands for a successful build:
  			f_name(f, NULL));
  	}
  }
-@@ -349,6 +353,7 @@ int push_flist_dir(const char *dir, int 
+@@ -352,6 +356,7 @@ int push_flist_dir(const char *dir, int 
  static void send_file_entry(int f, struct file_struct *file, int ndx)
  {
  	static time_t modtime;
@@ -62,7 +62,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -416,6 +421,13 @@ static void send_file_entry(int f, struc
+@@ -419,6 +424,13 @@ static void send_file_entry(int f, struc
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -76,7 +76,7 @@ To use this patch, run these commands for a successful build:
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != 0) {
-@@ -483,6 +495,8 @@ static void send_file_entry(int f, struc
+@@ -486,6 +498,8 @@ static void send_file_entry(int f, struc
  		write_int(f, modtime);
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -85,7 +85,7 @@ To use this patch, run these commands for a successful build:
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -569,7 +583,7 @@ static void send_file_entry(int f, struc
+@@ -572,7 +586,7 @@ static void send_file_entry(int f, struc
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   int flags, int f)
  {
@@ -94,7 +94,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -667,6 +681,8 @@ static struct file_struct *recv_file_ent
+@@ -670,6 +684,8 @@ static struct file_struct *recv_file_ent
  		modtime = (time_t)read_int(f);
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -103,7 +103,7 @@ To use this patch, run these commands for a successful build:
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -791,6 +807,8 @@ static struct file_struct *recv_file_ent
+@@ -794,6 +810,8 @@ static struct file_struct *recv_file_ent
  		F_OWNER(file) = uid;
  	if (preserve_gid)
  		F_GROUP(file) = gid;
@@ -112,7 +112,7 @@ To use this patch, run these commands for a successful build:
  
  	if (basename != thisname) {
  		file->dirname = lastdir;
-@@ -1096,6 +1114,8 @@ struct file_struct *make_file(const char
+@@ -1103,6 +1121,8 @@ struct file_struct *make_file(const char
  		F_OWNER(file) = st.st_uid;
  	if (preserve_gid)
  		F_GROUP(file) = st.st_gid;
@@ -123,7 +123,7 @@ To use this patch, run these commands for a successful build:
  		file->dirname = lastdir;
 --- old/generator.c
 +++ new/generator.c
-@@ -44,6 +44,7 @@ extern int preserve_perms;
+@@ -45,6 +45,7 @@ extern int preserve_perms;
  extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_times;
@@ -131,7 +131,7 @@ To use this patch, run these commands for a successful build:
  extern int omit_dir_times;
  extern int delete_mode;
  extern int delete_before;
-@@ -552,6 +553,9 @@ void itemize(const char *fname, struct f
+@@ -561,6 +562,9 @@ void itemize(const char *fnamecmp, struc
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, sxp->st.st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
@@ -141,7 +141,7 @@ To use this patch, run these commands for a successful build:
  		if (!BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
  		if (preserve_uid && am_root && F_UID(file) != sxp->st.st_uid)
-@@ -852,6 +856,8 @@ static int try_dests_reg(struct file_str
+@@ -878,6 +882,8 @@ static int try_dests_reg(struct file_str
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
@@ -150,7 +150,7 @@ To use this patch, run these commands for a successful build:
  			if (preserve_hard_links && F_IS_HLINKED(file))
  				finish_hard_link(file, fname, &sxp->st, itemizing, code, j);
  			if (itemizing && (verbose > 1 || stdout_format_has_i > 1)) {
-@@ -1700,7 +1706,7 @@ static void touch_up_dirs(struct file_li
+@@ -1741,7 +1747,7 @@ static void touch_up_dirs(struct file_li
  		if (!(file->mode & S_IWUSR))
  			do_chmod(fname, file->mode);
  		if (need_retouch_dir_times)
@@ -181,7 +181,7 @@ To use this patch, run these commands for a successful build:
  			c[11] = '\0';
 --- old/options.c
 +++ new/options.c
-@@ -55,6 +55,7 @@ int preserve_uid = 0;
+@@ -56,6 +56,7 @@ int preserve_uid = 0;
  int preserve_gid = 0;
  int preserve_times = 0;
  int omit_dir_times = 0;
@@ -189,7 +189,7 @@ To use this patch, run these commands for a successful build:
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -315,8 +316,9 @@ void usage(enum logcode F)
+@@ -323,8 +324,9 @@ void usage(enum logcode F)
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
@@ -201,7 +201,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
-@@ -436,6 +438,9 @@ static struct poptOption long_options[] 
+@@ -451,6 +453,9 @@ static struct poptOption long_options[] 
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
@@ -211,7 +211,7 @@ To use this patch, run these commands for a successful build:
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
-@@ -1577,6 +1582,8 @@ void server_options(char **args,int *arg
+@@ -1603,6 +1608,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -222,15 +222,15 @@ To use this patch, run these commands for a successful build:
  	else if (preserve_executability && am_sender)
 --- old/rsync.c
 +++ new/rsync.c
-@@ -34,6 +34,7 @@ extern int dry_run;
- extern int preserve_acls;
+@@ -35,6 +35,7 @@ extern int preserve_acls;
+ extern int preserve_xattrs;
  extern int preserve_perms;
  extern int preserve_executability;
 +extern int preserve_atimes;
  extern int preserve_times;
  extern int omit_dir_times;
  extern int am_root;
-@@ -234,6 +235,7 @@ int set_file_attrs(char *fname, struct f
+@@ -228,6 +229,7 @@ int set_file_attrs(const char *fname, st
  	int updated = 0;
  	statx sx2;
  	int change_uid, change_gid;
@@ -238,8 +238,8 @@ To use this patch, run these commands for a successful build:
  	mode_t new_mode = file->mode;
  
  	if (!sxp) {
-@@ -261,18 +263,36 @@ int set_file_attrs(char *fname, struct f
- 		get_acl(fname, sxp);
+@@ -263,18 +265,36 @@ int set_file_attrs(const char *fname, st
+ 		set_xattr(fname, file, fnamecmp, sxp);
  #endif
  
 +	/* This code must be the first update in the function due to
@@ -296,25 +296,25 @@ To use this patch, run these commands for a successful build:
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -571,6 +573,7 @@ extern int file_extra_cnt;
+@@ -568,6 +570,7 @@ struct file_struct {
+ extern int file_extra_cnt;
  extern int preserve_uid;
  extern int preserve_gid;
- extern int preserve_acls;
 +extern int preserve_atimes;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
  
- #define FILE_STRUCT_LEN (offsetof(struct file_struct, basename))
- #define EXTRA_LEN (sizeof (union file_extras))
-@@ -603,6 +606,7 @@ extern int preserve_acls;
+@@ -602,6 +605,7 @@ extern int preserve_xattrs;
  /* When the associated option is on, all entries will have these present: */
  #define F_OWNER(f) REQ_EXTRA(f, preserve_uid)->unum
  #define F_GROUP(f) REQ_EXTRA(f, preserve_gid)->unum
 +#define F_ATIME(f) REQ_EXTRA(f, preserve_atimes)->unum
- #define F_ACL(f) REQ_EXTRA(f, preserve_acls)->unum
+ #define F_ACL(f) REQ_EXTRA(f, preserve_acls)->num
+ #define F_XATTR(f) REQ_EXTRA(f, preserve_xattrs)->num
  
- /* These items are per-entry optional and mutally exclusive: */
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -329,8 +329,9 @@ to the detailed description below for a 
+@@ -330,8 +330,9 @@ to the detailed description below for a 
       --devices               preserve device files (super-user only)
       --specials              preserve special files
   -D                          same as --devices --specials
@@ -326,7 +326,7 @@ To use this patch, run these commands for a successful build:
       --super                 receiver attempts super-user activities
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
-@@ -896,6 +897,12 @@ it is preserving modification times (see
+@@ -902,6 +903,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -339,7 +339,7 @@ To use this patch, run these commands for a successful build:
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1482,7 +1489,7 @@ quote(itemization(
+@@ -1488,7 +1495,7 @@ quote(itemization(
    by the file transfer.
    it() A bf(t) means the modification time is different and is being updated
    to the sender's value (requires bf(--times)).  An alternate value of bf(T)
@@ -348,7 +348,7 @@ To use this patch, run these commands for a successful build:
    anytime a symlink is transferred, or when a file or device is transferred
    without bf(--times).
    it() A bf(p) means the permissions are different and are being updated to
-@@ -1491,8 +1498,10 @@ quote(itemization(
+@@ -1497,8 +1504,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
@@ -363,7 +363,7 @@ To use this patch, run these commands for a successful build:
    (a feature that is not yet released).
 --- old/sender.c
 +++ new/sender.c
-@@ -41,6 +41,7 @@ extern int do_progress;
+@@ -43,6 +43,7 @@ extern int do_progress;
  extern int inplace;
  extern int batch_fd;
  extern int write_batch;

@@ -22,7 +22,7 @@ To use this patch, run these commands for a successful build:
  if test $ac_cv_func_getpgrp = yes; then
 --- old/options.c
 +++ new/options.c
-@@ -69,6 +69,7 @@ int remove_source_files = 0;
+@@ -70,6 +70,7 @@ int remove_source_files = 0;
  int one_file_system = 0;
  int protocol_version = PROTOCOL_VERSION;
  int sparse_files = 0;
@@ -30,15 +30,15 @@ To use this patch, run these commands for a successful build:
  int do_compression = 0;
  int def_compress_level = Z_DEFAULT_COMPRESSION;
  int am_root = 0;
-@@ -202,6 +203,7 @@ static void print_rsync_version(enum log
- 	char const *acls = "no ";
+@@ -205,6 +206,7 @@ static void print_rsync_version(enum log
+ 	char const *xattrs = "no ";
  	char const *links = "no ";
  	char const *ipv6 = "no ";
 +	char const *preallocation = "no ";
  	STRUCT_STAT *dumstat;
  
  #ifdef HAVE_SOCKETPAIR
-@@ -228,6 +230,10 @@ static void print_rsync_version(enum log
+@@ -233,6 +235,10 @@ static void print_rsync_version(enum log
  	ipv6 = "";
  #endif
  
@@ -49,18 +49,18 @@ To use this patch, run these commands for a successful build:
  	rprintf(f, "%s  version %s  protocol version %d\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION);
  	rprintf(f, "Copyright (C) 1996-2007 by Andrew Tridgell, Wayne Davison, and others.\n");
-@@ -238,8 +244,8 @@ static void print_rsync_version(enum log
+@@ -243,8 +249,8 @@ static void print_rsync_version(enum log
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
--	rprintf(f, "    %sappend, %sACLs\n",
--		have_inplace, acls);
-+	rprintf(f, "    %sappend, %sACLs, %spreallocation\n",
-+		have_inplace, acls, preallocation);
+-	rprintf(f, "    %sappend, %sACLs, %sxattrs\n",
+-		have_inplace, acls, xattrs);
++	rprintf(f, "    %sappend, %sACLs, %sxattrs, %spreallocation\n",
++		have_inplace, acls, xattrs, preallocation);
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -319,6 +325,9 @@ void usage(enum logcode F)
+@@ -327,6 +333,9 @@ void usage(enum logcode F)
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
@@ -70,7 +70,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
    rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
-@@ -479,6 +488,7 @@ static struct poptOption long_options[] 
+@@ -494,6 +503,7 @@ static struct poptOption long_options[] 
    {"max-size",         0,  POPT_ARG_STRING, &max_size_arg, OPT_MAX_SIZE, 0, 0 },
    {"min-size",         0,  POPT_ARG_STRING, &min_size_arg, OPT_MIN_SIZE, 0, 0 },
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
@@ -78,7 +78,7 @@ To use this patch, run these commands for a successful build:
    {"inplace",          0,  POPT_ARG_NONE,   &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_VAL,    &append_mode, 1, 0, 0 },
    {"del",              0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
-@@ -1161,6 +1171,15 @@ int parse_arguments(int *argc, const cha
+@@ -1187,6 +1197,15 @@ int parse_arguments(int *argc, const cha
  	}
  #endif
  
@@ -94,7 +94,7 @@ To use this patch, run these commands for a successful build:
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -1808,6 +1827,9 @@ void server_options(char **args,int *arg
+@@ -1838,6 +1857,9 @@ void server_options(char **args,int *arg
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -106,7 +106,7 @@ To use this patch, run these commands for a successful build:
  
 --- old/receiver.c
 +++ new/receiver.c
-@@ -43,6 +43,7 @@ extern int cleanup_got_literal;
+@@ -45,6 +45,7 @@ extern int cleanup_got_literal;
  extern int remove_source_files;
  extern int append_mode;
  extern int sparse_files;
@@ -114,7 +114,7 @@ To use this patch, run these commands for a successful build:
  extern int keep_partial;
  extern int checksum_seed;
  extern int inplace;
-@@ -136,6 +137,19 @@ static int receive_data(int f_in, char *
+@@ -138,6 +139,19 @@ static int receive_data(int f_in, char *
  	int32 i;
  	char *map = NULL;
  
@@ -134,7 +134,7 @@ To use this patch, run these commands for a successful build:
  	read_sum_head(f_in, &sum);
  
  	if (fd_r >= 0 && size_r > 0) {
-@@ -243,8 +257,18 @@ static int receive_data(int f_in, char *
+@@ -245,8 +259,18 @@ static int receive_data(int f_in, char *
  		goto report_write_error;
  
  #ifdef HAVE_FTRUNCATE
@@ -157,7 +157,7 @@ To use this patch, run these commands for a successful build:
  	if (do_progress)
 --- old/rsync.h
 +++ new/rsync.h
-@@ -551,6 +551,10 @@ struct idev_node {
+@@ -549,6 +549,10 @@ struct idev_node {
  #define ACLS_NEED_MASK 1
  #endif
  
@@ -170,7 +170,7 @@ To use this patch, run these commands for a successful build:
  union file_extras {
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -333,6 +333,7 @@ to the detailed description below for a 
+@@ -334,6 +334,7 @@ to the detailed description below for a 
   -O, --omit-dir-times        omit directories when preserving times
       --super                 receiver attempts super-user activities
   -S, --sparse                handle sparse files efficiently
@@ -178,7 +178,7 @@ To use this patch, run these commands for a successful build:
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy files whole (without rsync algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
-@@ -914,6 +915,19 @@ NOTE: Don't use this option when the des
+@@ -920,6 +921,19 @@ NOTE: Don't use this option when the des
  filesystem. It doesn't seem to handle seeks over null regions
  correctly and ends up corrupting the files.
  
