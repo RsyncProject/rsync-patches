@@ -5,6 +5,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
+TODO:  need to fix this to handle 64-bit time_t values!
 
 --- old/compat.c
 +++ new/compat.c
@@ -19,7 +20,7 @@ To use this patch, run these commands for a successful build:
  	if (preserve_xattrs)
 --- old/flist.c
 +++ new/flist.c
-@@ -50,6 +50,7 @@ extern int preserve_devices;
+@@ -51,6 +51,7 @@ extern int preserve_devices;
  extern int preserve_specials;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -27,7 +28,7 @@ To use this patch, run these commands for a successful build:
  extern int relative_paths;
  extern int implied_dirs;
  extern int file_extra_cnt;
-@@ -147,6 +148,7 @@ void show_flist_stats(void)
+@@ -148,6 +149,7 @@ void show_flist_stats(void)
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -35,7 +36,7 @@ To use this patch, run these commands for a successful build:
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -161,14 +163,16 @@ static void list_file_entry(struct file_
+@@ -162,14 +164,16 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -54,7 +55,7 @@ To use this patch, run these commands for a successful build:
  			f_name(f, NULL));
  	}
  }
-@@ -352,6 +356,7 @@ int push_flist_dir(const char *dir, int 
+@@ -353,6 +357,7 @@ int push_flist_dir(const char *dir, int 
  static void send_file_entry(int f, struct file_struct *file, int ndx)
  {
  	static time_t modtime;
@@ -62,7 +63,7 @@ To use this patch, run these commands for a successful build:
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -419,6 +424,13 @@ static void send_file_entry(int f, struc
+@@ -420,6 +425,13 @@ static void send_file_entry(int f, struc
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -76,43 +77,51 @@ To use this patch, run these commands for a successful build:
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != 0) {
-@@ -486,6 +498,8 @@ static void send_file_entry(int f, struc
- 		write_int(f, modtime);
+@@ -491,6 +503,8 @@ static void send_file_entry(int f, struc
+ 	}
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
 +	if (preserve_atimes && !S_ISDIR(mode) && !(flags & XMIT_SAME_ATIME))
-+		write_int(f, atime);
++		write_varlong(f, atime, 4);
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -572,7 +586,7 @@ static void send_file_entry(int f, struc
+@@ -577,7 +591,7 @@ static void send_file_entry(int f, struc
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   int flags, int f)
  {
--	static time_t modtime;
-+	static time_t modtime, atime;
+-	static int64 modtime;
++	static int64 modtime, atime;
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -670,6 +684,8 @@ static struct file_struct *recv_file_ent
- 		modtime = (time_t)read_int(f);
+@@ -686,6 +700,16 @@ static struct file_struct *recv_file_ent
+ 	}
  	if (!(flags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
-+	if (preserve_atimes && !S_ISDIR(mode) && !(flags & XMIT_SAME_ATIME))
-+		atime = (time_t)read_int(f);
++	if (preserve_atimes && !S_ISDIR(mode) && !(flags & XMIT_SAME_ATIME)) {
++		atime = read_varlong(f, 4);
++#if SIZEOF_TIME_T < SIZEOF_INT64
++		if ((atime > INT_MAX || atime < INT_MIN) && !am_generator) {
++			rprintf(FERROR,
++				"Access time value of %s truncated on receiver.\n",
++				lastname);
++		}
++#endif
++	}
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -794,6 +810,8 @@ static struct file_struct *recv_file_ent
+@@ -810,6 +834,8 @@ static struct file_struct *recv_file_ent
  		F_OWNER(file) = uid;
  	if (preserve_gid)
  		F_GROUP(file) = gid;
 +	if (preserve_atimes)
-+		F_ATIME(file) = atime;
++		F_ATIME(file) = (time_t)atime;
  
  	if (basename != thisname) {
  		file->dirname = lastdir;
-@@ -1103,6 +1121,8 @@ struct file_struct *make_file(const char
+@@ -1119,6 +1145,8 @@ struct file_struct *make_file(const char
  		F_OWNER(file) = st.st_uid;
  	if (preserve_gid)
  		F_GROUP(file) = st.st_gid;
@@ -230,7 +239,7 @@ To use this patch, run these commands for a successful build:
  extern int preserve_times;
  extern int omit_dir_times;
  extern int am_root;
-@@ -228,6 +229,7 @@ int set_file_attrs(const char *fname, st
+@@ -224,6 +225,7 @@ int set_file_attrs(const char *fname, st
  	int updated = 0;
  	statx sx2;
  	int change_uid, change_gid;
@@ -238,7 +247,7 @@ To use this patch, run these commands for a successful build:
  	mode_t new_mode = file->mode;
  
  	if (!sxp) {
-@@ -263,18 +265,36 @@ int set_file_attrs(const char *fname, st
+@@ -259,18 +261,36 @@ int set_file_attrs(const char *fname, st
  		set_xattr(fname, file, fnamecmp, sxp);
  #endif
  
@@ -326,7 +335,7 @@ To use this patch, run these commands for a successful build:
       --super                 receiver attempts super-user activities
   -S, --sparse                handle sparse files efficiently
   -n, --dry-run               show what would have been transferred
-@@ -902,6 +903,12 @@ it is preserving modification times (see
+@@ -908,6 +909,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -339,7 +348,7 @@ To use this patch, run these commands for a successful build:
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1488,7 +1495,7 @@ quote(itemization(
+@@ -1494,7 +1501,7 @@ quote(itemization(
    by the file transfer.
    it() A bf(t) means the modification time is different and is being updated
    to the sender's value (requires bf(--times)).  An alternate value of bf(T)
@@ -348,7 +357,7 @@ To use this patch, run these commands for a successful build:
    anytime a symlink is transferred, or when a file or device is transferred
    without bf(--times).
    it() A bf(p) means the permissions are different and are being updated to
-@@ -1497,8 +1504,10 @@ quote(itemization(
+@@ -1503,8 +1510,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
