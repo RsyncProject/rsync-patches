@@ -29,18 +29,18 @@ To use this patch, run these commands for a successful build:
 +int preallocate_files = 0;
  int do_compression = 0;
  int def_compress_level = Z_DEFAULT_COMPRESSION;
- int am_root = 0;
-@@ -206,6 +207,7 @@ static void print_rsync_version(enum log
- 	char const *xattrs = "no ";
+ int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
+@@ -212,6 +213,7 @@ static void print_rsync_version(enum log
  	char const *links = "no ";
+ 	char const *iconv = "no ";
  	char const *ipv6 = "no ";
 +	char const *preallocation = "no ";
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -232,6 +234,9 @@ static void print_rsync_version(enum log
- #ifdef INET6
- 	ipv6 = "";
+@@ -241,6 +243,9 @@ static void print_rsync_version(enum log
+ #ifdef ICONV_OPTION
+ 	iconv = "";
  #endif
 +#ifdef SUPPORT_PREALLOCATION
 +	preallocation = "";
@@ -48,20 +48,20 @@ To use this patch, run these commands for a successful build:
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -245,8 +250,8 @@ static void print_rsync_version(enum log
+@@ -254,8 +259,8 @@ static void print_rsync_version(enum log
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
--	rprintf(f, "    %sappend, %sACLs, %sxattrs\n",
--		have_inplace, acls, xattrs);
-+	rprintf(f, "    %sappend, %sACLs, %sxattrs, %spreallocation\n",
-+		have_inplace, acls, xattrs, preallocation);
+-	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv\n",
+-		have_inplace, acls, xattrs, iconv);
++	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %spreallocation\n",
++		have_inplace, acls, xattrs, iconv, preallocation);
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -329,6 +334,9 @@ void usage(enum logcode F)
-   rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
-   rprintf(F,"     --super                 receiver attempts super-user activities\n");
+@@ -341,6 +346,9 @@ void usage(enum logcode F)
+   rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
+ #endif
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
 +#ifdef SUPPORT_PREALLOCATION
 +  rprintf(F,"     --preallocate           posix_fallocate dest files before writing them\n");
@@ -69,7 +69,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -n, --dry-run               show what would have been transferred\n");
    rprintf(F," -W, --whole-file            copy files whole (without rsync algorithm)\n");
    rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
-@@ -496,6 +504,7 @@ static struct poptOption long_options[] 
+@@ -512,6 +520,7 @@ static struct poptOption long_options[] 
    {"max-size",         0,  POPT_ARG_STRING, &max_size_arg, OPT_MAX_SIZE, 0, 0 },
    {"min-size",         0,  POPT_ARG_STRING, &min_size_arg, OPT_MIN_SIZE, 0, 0 },
    {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
@@ -77,7 +77,7 @@ To use this patch, run these commands for a successful build:
    {"inplace",          0,  POPT_ARG_NONE,   &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_VAL,    &append_mode, 1, 0, 0 },
    {"del",              0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
-@@ -1189,6 +1198,15 @@ int parse_arguments(int *argc, const cha
+@@ -1236,6 +1245,15 @@ int parse_arguments(int *argc, const cha
  	}
  #endif
  
@@ -93,7 +93,7 @@ To use this patch, run these commands for a successful build:
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -1849,6 +1867,9 @@ void server_options(char **args,int *arg
+@@ -1909,6 +1927,9 @@ void server_options(char **args,int *arg
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -156,7 +156,7 @@ To use this patch, run these commands for a successful build:
  	if (do_progress)
 --- old/rsync.h
 +++ new/rsync.h
-@@ -554,6 +554,10 @@ struct idev_node {
+@@ -563,6 +563,10 @@ struct idev_node {
  #define ACLS_NEED_MASK 1
  #endif
  
@@ -169,15 +169,15 @@ To use this patch, run these commands for a successful build:
  union file_extras {
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -334,6 +334,7 @@ to the detailed description below for a 
-  -O, --omit-dir-times        omit directories when preserving times
+@@ -335,6 +335,7 @@ to the detailed description below for a 
       --super                 receiver attempts super-user activities
+      --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
 +     --preallocate           posix_fallocate dest files before writing
   -n, --dry-run               show what would have been transferred
   -W, --whole-file            copy files whole (without rsync algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
-@@ -926,6 +927,19 @@ NOTE: Don't use this option when the des
+@@ -956,6 +957,19 @@ NOTE: Don't use this option when the des
  filesystem. It doesn't seem to handle seeks over null regions
  correctly and ends up corrupting the files.
  
