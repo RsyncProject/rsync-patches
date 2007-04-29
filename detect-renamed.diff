@@ -34,15 +34,15 @@ TODO:
 
 --- old/compat.c
 +++ new/compat.c
-@@ -47,6 +47,7 @@ extern int preserve_hard_links;
+@@ -48,6 +48,7 @@ extern int preserve_hard_links;
  extern int need_messages_from_generator;
  extern int delete_mode, delete_before, delete_during, delete_after;
  extern int delete_excluded;
 +extern int detect_renamed;
  extern int make_backups;
+ extern char *shell_cmd; /* contains VER.SUB string if client is a pre-release */
  extern char *backup_dir, *backup_suffix;
- extern char *partial_dir;
-@@ -163,7 +164,7 @@ void setup_protocol(int f_out,int f_in)
+@@ -205,7 +206,7 @@ void setup_protocol(int f_out,int f_in)
  	} else if (protocol_version >= 30) {
  		if (recurse && allow_inc_recurse && !preserve_hard_links
  		 && !delete_before && !delete_after && !delay_updates
@@ -53,7 +53,7 @@ TODO:
  	}
 --- old/flist.c
 +++ new/flist.c
-@@ -57,6 +57,7 @@ extern int non_perishable_cnt;
+@@ -59,6 +59,7 @@ extern int non_perishable_cnt;
  extern int prune_empty_dirs;
  extern int copy_links;
  extern int copy_unsafe_links;
@@ -61,7 +61,7 @@ TODO:
  extern int protocol_version;
  extern int sanitize_paths;
  extern struct stats stats;
-@@ -87,6 +88,8 @@ static int64 tmp_dev, tmp_ino;
+@@ -95,6 +96,8 @@ static int64 tmp_dev, tmp_ino;
  #endif
  static char tmp_sum[MAX_DIGEST_LEN];
  
@@ -70,8 +70,8 @@ TODO:
  static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
  
-@@ -273,6 +276,45 @@ static mode_t from_wire_mode(int mode)
- 	return mode;
+@@ -261,6 +264,45 @@ static int is_excluded(char *fname, int 
+ 	return 0;
  }
  
 +static int fattr_compare(struct file_struct **file1, struct file_struct **file2)
@@ -113,12 +113,12 @@ TODO:
 +	return u_strcmp(f1->dirname, f2->dirname);
 +}
 +
- static void send_directory(int f, struct file_list *flist, int ndx,
+ static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len, int flags);
  
-@@ -1767,6 +1809,25 @@ struct file_list *recv_file_list(int f)
- 
- 	clean_flist(flist, relative_paths, 1);
+@@ -1855,6 +1897,25 @@ struct file_list *send_file_list(int f, 
+ 	if (verbose > 2)
+ 		rprintf(FINFO, "send_file_list done\n");
  
 +	if (detect_renamed) {
 +		int j = flist->count;
@@ -140,11 +140,11 @@ TODO:
 +	}
 +
  	if (inc_recurse) {
- 		qsort(dir_flist->files + dstart, dir_flist->count - dstart,
- 		      sizeof dir_flist->files[0], (int (*)())file_compare);
+ #ifdef ICONV_OPTION
+ 		if (!need_unsorted_flist)
 --- old/generator.c
 +++ new/generator.c
-@@ -79,6 +79,7 @@ extern char *basis_dir[];
+@@ -80,6 +80,7 @@ extern char *basis_dir[];
  extern int compare_dest;
  extern int copy_dest;
  extern int link_dest;
@@ -152,15 +152,15 @@ TODO:
  extern int whole_file;
  extern int list_only;
  extern int new_root_dir;
-@@ -96,6 +97,7 @@ extern char *backup_suffix;
+@@ -97,6 +98,7 @@ extern char *backup_suffix;
  extern int backup_suffix_len;
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct filter_list_struct server_filter_list;
 +extern struct file_list the_fattr_list;
- 
- int ignore_perishable = 0;
- int non_perishable_cnt = 0;
-@@ -103,6 +105,7 @@ int maybe_ATTRS_REPORT = 0;
+ #ifdef ICONV_OPTION
+ extern int ic_ndx;
+ #endif
+@@ -107,6 +109,7 @@ int maybe_ATTRS_REPORT = 0;
  
  static dev_t dev_zero;
  static int deletion_count = 0; /* used to implement --max-delete */
@@ -168,7 +168,7 @@ TODO:
  static int deldelay_size = 0, deldelay_cnt = 0;
  static char *deldelay_buf = NULL;
  static int deldelay_fd = -1;
-@@ -111,7 +114,8 @@ static int dir_tweaking;
+@@ -115,7 +118,8 @@ static int dir_tweaking;
  static int need_retouch_dir_times;
  static const char *solo_file = NULL;
  
@@ -178,7 +178,7 @@ TODO:
  #define DEL_RECURSE		(1<<1) /* recurse */
  #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
  
-@@ -133,11 +137,120 @@ static int is_backup_file(char *fn)
+@@ -137,11 +141,120 @@ static int is_backup_file(char *fn)
  	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
  }
  
@@ -299,7 +299,7 @@ TODO:
   */
  static enum delret delete_item(char *fbuf, int mode, char *replace, int flags)
  {
-@@ -159,6 +272,8 @@ static enum delret delete_item(char *fbu
+@@ -163,6 +276,8 @@ static enum delret delete_item(char *fbu
  			goto check_ret;
  		/* OK: try to delete the directory. */
  	}
@@ -308,7 +308,7 @@ TODO:
  
  	if (!replace && max_delete >= 0 && ++deletion_count > max_delete)
  		return DR_AT_LIMIT;
-@@ -205,6 +320,8 @@ static enum delret delete_item(char *fbu
+@@ -209,6 +324,8 @@ static enum delret delete_item(char *fbu
   * its contents, otherwise just checks for content.  Returns DR_SUCCESS or
   * DR_NOT_EMPTY.  Note that fname must point to a MAXPATHLEN buffer!  (The
   * buffer is used for recursion, but returned unchanged.)
@@ -317,7 +317,7 @@ TODO:
   */
  static enum delret delete_dir_contents(char *fname, int flags)
  {
-@@ -224,7 +341,9 @@ static enum delret delete_dir_contents(c
+@@ -228,7 +345,9 @@ static enum delret delete_dir_contents(c
  	save_filters = push_local_filters(fname, dlen);
  
  	non_perishable_cnt = 0;
@@ -327,7 +327,7 @@ TODO:
  	ret = non_perishable_cnt ? DR_NOT_EMPTY : DR_SUCCESS;
  
  	if (!dirlist->count)
-@@ -261,6 +380,8 @@ static enum delret delete_dir_contents(c
+@@ -265,6 +384,8 @@ static enum delret delete_dir_contents(c
  		if (S_ISDIR(fp->mode)
  		 && delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
@@ -336,18 +336,18 @@ TODO:
  		if (delete_item(fname, fp->mode, NULL, flags) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
  	}
-@@ -413,13 +534,17 @@ static void do_delayed_deletions(char *d
+@@ -417,12 +538,17 @@ static void do_delayed_deletions(char *d
   * all the --delete-WHEN options.  Note that the fbuf pointer must point to a
   * MAXPATHLEN buffer with the name of the directory in it (the functions we
   * call will append names onto the end, but the old dir value will be restored
 - * on exit). */
+-static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
 + * on exit).
 + *
 + * Note:  --detect-rename may use this routine with DEL_NO_DELETIONS set!
 + */
- static void delete_in_dir(struct file_list *flist, char *fbuf,
--			  struct file_struct *file, dev_t *fs_dev)
-+			  struct file_struct *file, dev_t *fs_dev, int flags)
++static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev,
++			  int flags)
  {
  	static int already_warned = 0;
  	struct file_list *dirlist;
@@ -356,8 +356,8 @@ TODO:
 +	unsigned remainder;
  	int dlen, i;
  
- 	if (!flist) {
-@@ -430,21 +555,28 @@ static void delete_in_dir(struct file_li
+ 	if (!fbuf) {
+@@ -433,21 +559,28 @@ static void delete_in_dir(char *fbuf, st
  	if (verbose > 2)
  		rprintf(FINFO, "delete_in_dir(%s)\n", fbuf);
  
@@ -391,7 +391,7 @@ TODO:
  	if (one_file_system) {
  		if (file->flags & FLAG_TOP_DIR)
  			filesystem_dev = *fs_dev;
-@@ -454,6 +586,11 @@ static void delete_in_dir(struct file_li
+@@ -457,6 +590,11 @@ static void delete_in_dir(char *fbuf, st
  
  	dirlist = get_dirlist(fbuf, dlen, 0);
  
@@ -403,7 +403,7 @@ TODO:
  	/* If an item in dirlist is not found in flist, delete it
  	 * from the filesystem. */
  	for (i = dirlist->count; i--; ) {
-@@ -466,16 +603,23 @@ static void delete_in_dir(struct file_li
+@@ -469,16 +607,23 @@ static void delete_in_dir(char *fbuf, st
  					f_name(fp, NULL));
  			continue;
  		}
@@ -411,7 +411,7 @@ TODO:
 +			strlcpy(p, fp->basename, remainder);
 +			look_for_rename(fp, fbuf);
 +		}
- 		if (flist_find(flist, fp) < 0) {
+ 		if (flist_find(cur_flist, fp) < 0) {
  			f_name(fp, delbuf);
 -			if (delete_during == 2) {
 +			if (delete_during == 2 && !(flags & DEL_NO_DELETIONS)) {
@@ -430,19 +430,19 @@ TODO:
  	flist_free(dirlist);
  }
  
-@@ -505,9 +649,9 @@ static void do_delete_pass(struct file_l
+@@ -508,9 +653,9 @@ static void do_delete_pass(void)
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
--		delete_in_dir(flist, fbuf, file, &st.st_dev);
-+		delete_in_dir(flist, fbuf, file, &st.st_dev, 0);
+-		delete_in_dir(fbuf, file, &st.st_dev);
++		delete_in_dir(fbuf, file, &st.st_dev, 0);
  	}
--	delete_in_dir(NULL, NULL, NULL, &dev_zero);
-+	delete_in_dir(NULL, NULL, NULL, &dev_zero, 0);
+-	delete_in_dir(NULL, NULL, &dev_zero);
++	delete_in_dir(NULL, NULL, &dev_zero, 0);
  
  	if (do_progress && !am_server)
  		rprintf(FINFO, "                    \r");
-@@ -1041,6 +1185,7 @@ static int try_dests_non(struct file_str
+@@ -1073,6 +1218,7 @@ static int try_dests_non(struct file_str
  	return j;
  }
  
@@ -450,22 +450,22 @@ TODO:
  static int phase = 0;
  static int dflt_perms;
  
-@@ -1237,8 +1382,12 @@ static void recv_generator(char *fname, 
+@@ -1272,8 +1418,12 @@ static void recv_generator(char *fname, 
  			}
  		}
  		else if (delete_during && f_out != -1 && !phase && dry_run < 2
 -		    && (file->flags & FLAG_XFER_DIR))
--			delete_in_dir(cur_flist, fname, file, &real_sx.st.st_dev);
+-			delete_in_dir(fname, file, &real_sx.st.st_dev);
 +		    && (file->flags & FLAG_XFER_DIR)) {
 +			if (detect_renamed && real_ret != 0)
 +				unexplored_dirs++;
-+			delete_in_dir(cur_flist, fname, file, &real_sx.st.st_dev,
++			delete_in_dir(fname, file, &real_sx.st.st_dev,
 +				      delete_during < 0 ? DEL_NO_DELETIONS : 0);
 +		}
  		goto cleanup;
  	}
  
-@@ -1510,8 +1659,14 @@ static void recv_generator(char *fname, 
+@@ -1545,8 +1695,14 @@ static void recv_generator(char *fname, 
  		if (preserve_hard_links && F_HLINK_NOT_LAST(file))
  			goto cleanup;
  #endif
@@ -481,7 +481,7 @@ TODO:
  		rsyserr(FERROR, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		goto cleanup;
-@@ -1818,6 +1973,12 @@ void generate_files(int f_out, const cha
+@@ -1861,6 +2017,12 @@ void generate_files(int f_out, const cha
  	if (verbose > 2)
  		rprintf(FINFO, "generator starting pid=%ld\n", (long)getpid());
  
@@ -492,9 +492,9 @@ TODO:
 +	}
 +
  	if (delete_before && !solo_file && cur_flist->count > 0)
- 		do_delete_pass(cur_flist);
+ 		do_delete_pass();
  	if (delete_during == 2) {
-@@ -1828,7 +1989,7 @@ void generate_files(int f_out, const cha
+@@ -1871,7 +2033,7 @@ void generate_files(int f_out, const cha
  	}
  	do_progress = 0;
  
@@ -503,21 +503,21 @@ TODO:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1855,7 +2016,7 @@ void generate_files(int f_out, const cha
+@@ -1898,7 +2060,7 @@ void generate_files(int f_out, const cha
  					dirdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
  				} else
  					dirdev = MAKEDEV(0, 0);
--				delete_in_dir(cur_flist, f_name(fp, fbuf), fp, &dirdev);
-+				delete_in_dir(cur_flist, f_name(fp, fbuf), fp, &dirdev, 0);
+-				delete_in_dir(f_name(fp, fbuf), fp, &dirdev);
++				delete_in_dir(f_name(fp, fbuf), fp, &dirdev, 0);
  			}
  		}
  		for (i = cur_flist->low; i <= cur_flist->high; i++) {
-@@ -1911,7 +2072,21 @@ void generate_files(int f_out, const cha
+@@ -1960,7 +2122,21 @@ void generate_files(int f_out, const cha
  	} while ((cur_flist = cur_flist->next) != NULL);
  
  	if (delete_during)
--		delete_in_dir(NULL, NULL, NULL, &dev_zero);
-+		delete_in_dir(NULL, NULL, NULL, &dev_zero, 0);
+-		delete_in_dir(NULL, NULL, &dev_zero);
++		delete_in_dir(NULL, NULL, &dev_zero, 0);
 +	if (detect_renamed) {
 +		if (delete_during < 0)
 +			delete_during = 0;
@@ -537,7 +537,7 @@ TODO:
  		rprintf(FINFO, "generate_files phase=%d\n", phase);
 --- old/options.c
 +++ new/options.c
-@@ -78,6 +78,7 @@ int am_generator = 0;
+@@ -79,6 +79,7 @@ int am_generator = 0;
  int am_starting_up = 1;
  int relative_paths = -1;
  int implied_dirs = 1;
@@ -545,7 +545,7 @@ TODO:
  int numeric_ids = 0;
  int allow_8bit_chars = 0;
  int force_delete = 0;
-@@ -352,6 +353,7 @@ void usage(enum logcode F)
+@@ -373,6 +374,7 @@ void usage(enum logcode F)
    rprintf(F,"     --modify-window=NUM     compare mod-times with reduced accuracy\n");
    rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F," -y, --fuzzy                 find similar file for basis if no dest file\n");
@@ -553,7 +553,7 @@ TODO:
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
-@@ -513,6 +515,7 @@ static struct poptOption long_options[] 
+@@ -541,6 +543,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -561,7 +561,7 @@ TODO:
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
-@@ -1402,7 +1405,7 @@ int parse_arguments(int *argc, const cha
+@@ -1472,7 +1475,7 @@ int parse_arguments(int *argc, const cha
  		inplace = 1;
  	}
  
@@ -570,7 +570,7 @@ TODO:
  		partial_dir = tmp_partialdir;
  
  	if (inplace) {
-@@ -1411,6 +1414,7 @@ int parse_arguments(int *argc, const cha
+@@ -1481,6 +1484,7 @@ int parse_arguments(int *argc, const cha
  			snprintf(err_buf, sizeof err_buf,
  				 "--%s cannot be used with --%s\n",
  				 append_mode ? "append" : "inplace",
@@ -578,7 +578,7 @@ TODO:
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -1724,6 +1728,8 @@ void server_options(char **args,int *arg
+@@ -1820,6 +1824,8 @@ void server_options(char **args,int *arg
  			args[ac++] = "--super";
  		if (size_only)
  			args[ac++] = "--size-only";
@@ -589,7 +589,7 @@ TODO:
  	if (modify_window_set) {
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -365,6 +365,7 @@ to the detailed description below for a 
+@@ -367,6 +367,7 @@ to the detailed description below for a 
       --modify-window=NUM     compare mod-times with reduced accuracy
   -T, --temp-dir=DIR          create temporary files in directory DIR
   -y, --fuzzy                 find similar file for basis if no dest file
@@ -597,7 +597,7 @@ TODO:
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
-@@ -1305,6 +1306,15 @@ Note that the use of the bf(--delete) op
+@@ -1347,6 +1348,15 @@ Note that the use of the bf(--delete) op
  fuzzy-match files, so either use bf(--delete-after) or specify some
  filename exclusions if you need to prevent this.
  
