@@ -1,0 +1,487 @@
+From: Tobi Oetiker tobi{at}oetiker.ch
+Date: 2007-04-23
+
+I am using rsync for hard-link backup. I found that there is a
+major problem with frequent backup filling up the file system cache
+with all the data from the files being backed up. The effect is
+that all the other 'sensible' data in the cache gets thrown out in
+the process. This is rather unfortunate as the performance of the
+system becomes very bad after running rsync.
+
+Some research showed, that
+
+  posix_fadvise64(fd, 0, 0,POSIX_FADV_DONTNEED);
+
+would tell the OS that it should  not keep the file in cache. I
+have written a patch for rsync that adds the
+
+  --drop-cache
+
+option which activates posix_fadvise64.
+
+There are some caveats though:
+
+  * When calling posix_fadvise64 while writing a file, only the
+    part of the cache will be release which has already been
+    written to disk. This means we have to call fdatasync before
+    calling posix_fadvise64 and this will unfortunately slow down
+    operations considerably. On my test system I get 240 KByte/s.
+
+    The patch has been optimized, so that the impact on large files
+    will be considerably lowered by calling posix_fadvise64 only
+    after a few megabytes have been written.
+
+  * When reading a file which has been cached *Before* rsync read
+    it, the content of the file will be released from cache never
+    the less, which may not be intended. I have unfortunately not
+    found a method for determining if a file is in cache or not
+    (ideas?)
+
+    I found that running rsync of an lvm snapshot is a good way
+    around this problem, since the snapshot data is cached
+    separately from the original. It has the additional benefit of
+    making the backups more consistent.
+
+  * I don't really know the rsync code, so it may be that the patch
+    is calling fadvise for files where this would not be necessary.
+
+  * The patch is tested only on Linux 2.6.18
+
+If you have any input on this, please let me know.
+
+You can get the latest edition of the patch from
+
+  http://tobi.oetiker.ch/patches/
+
+cheers
+tobi
+
+Changes: 
+
+ 2007-04-23
+
+* pass --drop-cache on to the remote server
+* make test works now
+
+--- old/checksum.c
++++ new/checksum.c
+@@ -148,7 +148,7 @@ void file_checksum(char *fname, char *su
+ 		mdfour_result(&m, (uchar *)sum);
+ 	}
+ 
+-	close(fd);
++	fadv_close(fd);
+ 	unmap_file(buf);
+ }
+ 
+--- old/fileio.c
++++ new/fileio.c
+@@ -26,15 +26,18 @@
+ #endif
+ 
+ extern int sparse_files;
+-
+ static char last_byte;
+ static int last_sparse;
+ 
++extern int drop_cache;
++
++
++
+ int sparse_end(int f)
+ {
+ 	if (last_sparse) {
+ 		do_lseek(f,-1,SEEK_CUR);
+-		return (write(f,&last_byte,1) == 1 ? 0 : -1);
++		return (fadv_write(f,&last_byte,1) == 1 ? 0 : -1);
+ 	}
+ 	last_sparse = 0;
+ 	return 0;
+@@ -61,7 +64,7 @@ static int write_sparse(int f,char *buf,
+ 	if (l1 == len)
+ 		return len;
+ 
+-	ret = write(f, buf + l1, len - (l1+l2));
++	ret = fadv_write(f, buf + l1, len - (l1+l2));
+ 	if (ret == -1 || ret == 0)
+ 		return ret;
+ 	else if (ret != (int) (len - (l1+l2)))
+@@ -84,7 +87,7 @@ int flush_write_file(int f)
+ 	char *bp = wf_writeBuf;
+ 
+ 	while (wf_writeBufCnt > 0) {
+-		if ((ret = write(f, bp, wf_writeBufCnt)) < 0) {
++		if ((ret = fadv_write(f, bp, wf_writeBufCnt)) < 0) {
+ 			if (errno == EINTR)
+ 				continue;
+ 			return ret;
+@@ -235,7 +238,7 @@ char *map_ptr(struct map_struct *map, OF
+ 	map->p_len = window_size;
+ 
+ 	while (read_size > 0) {
+-		nread = read(map->fd, map->p + read_offset, read_size);
++		nread = fadv_read(map->fd, map->p + read_offset, read_size);
+ 		if (nread <= 0) {
+ 			if (!map->status)
+ 				map->status = nread ? errno : ENODATA;
+--- old/generator.c
++++ new/generator.c
+@@ -1614,18 +1614,18 @@ static void recv_generator(char *fname, 
+ 
+ 	if (inplace && make_backups > 0 && fnamecmp_type == FNAMECMP_FNAME) {
+ 		if (!(backupptr = get_backup_name(fname))) {
+-			close(fd);
++			fadv_close(fd);
+ 			goto cleanup;
+ 		}
+ 		if (!(back_file = make_file(fname, NULL, NULL, 0, NO_FILTERS))) {
+-			close(fd);
++			fadv_close(fd);
+ 			goto pretend_missing;
+ 		}
+ 		if (robust_unlink(backupptr) && errno != ENOENT) {
+ 			rsyserr(FERROR, errno, "unlink %s",
+ 				full_fname(backupptr));
+ 			unmake_file(back_file);
+-			close(fd);
++			fadv_close(fd);
+ 			goto cleanup;
+ 		}
+ 		if ((f_copy = do_open(backupptr,
+@@ -1633,7 +1633,7 @@ static void recv_generator(char *fname, 
+ 			rsyserr(FERROR, errno, "open %s",
+ 				full_fname(backupptr));
+ 			unmake_file(back_file);
+-			close(fd);
++			fadv_close(fd);
+ 			goto cleanup;
+ 		}
+ 		fnamecmp_type = FNAMECMP_BACKUP;
+@@ -1695,7 +1695,7 @@ static void recv_generator(char *fname, 
+ 	generate_and_send_sums(fd, sx.st.st_size, f_out, f_copy);
+ 
+ 	if (f_copy >= 0) {
+-		close(f_copy);
++		fadv_close(f_copy);
+ 		set_file_attrs(backupptr, back_file, NULL, NULL, 0);
+ 		if (verbose > 1) {
+ 			rprintf(FINFO, "backed up %s to %s\n",
+@@ -1704,7 +1704,7 @@ static void recv_generator(char *fname, 
+ 		unmake_file(back_file);
+ 	}
+ 
+-	close(fd);
++	fadv_close(fd);
+ 
+   cleanup:
+ #ifdef SUPPORT_ACLS
+--- old/options.c
++++ new/options.c
+@@ -57,6 +57,7 @@ int preserve_gid = 0;
+ int preserve_times = 0;
+ int omit_dir_times = 0;
+ int update_only = 0;
++int drop_cache = 0;
+ int cvs_exclude = 0;
+ int dry_run = 0;
+ int do_xfers = 1;
+@@ -310,6 +311,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --backup-dir=DIR        make backups into hierarchy based in DIR\n");
+   rprintf(F,"     --suffix=SUFFIX         set backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
+   rprintf(F," -u, --update                skip files that are newer on the receiver\n");
++  rprintf(F,"     --drop-cache            tell OS to drop caching of file data\n");
+   rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
+   rprintf(F,"     --append                append data onto shorter files\n");
+   rprintf(F," -d, --dirs                  transfer directories without recursing\n");
+@@ -506,6 +508,7 @@ static struct poptOption long_options[] 
+   {"size-only",        0,  POPT_ARG_NONE,   &size_only, 0, 0, 0 },
+   {"one-file-system", 'x', POPT_ARG_NONE,   0, 'x', 0, 0 },
+   {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
++  {"drop-cache",       0,  POPT_ARG_NONE,   &drop_cache, 0, 0, 0 },
+   {"existing",         0,  POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
+   {"ignore-non-existing",0,POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
+   {"ignore-existing",  0,  POPT_ARG_NONE,   &ignore_existing, 0, 0, 0 },
+@@ -1603,6 +1606,9 @@ void server_options(char **args,int *arg
+ 	if (!am_sender)
+ 		args[ac++] = "--sender";
+ 
++	if (drop_cache)
++		args[ac++] = "--drop-cache";
++
+ 	x = 1;
+ 	argstr[0] = '-';
+ 	for (i = 0; i < verbose; i++)
+--- old/receiver.c
++++ new/receiver.c
+@@ -554,7 +554,7 @@ int recv_files(int f_in, char *local_nam
+ 			rsyserr(FERROR, errno, "fstat %s failed",
+ 				full_fname(fnamecmp));
+ 			discard_receive_data(f_in, F_LENGTH(file));
+-			close(fd1);
++			fadv_close(fd1);
+ 			if (inc_recurse)
+ 				send_msg_int(MSG_NO_SEND, ndx);
+ 			continue;
+@@ -569,14 +569,14 @@ int recv_files(int f_in, char *local_nam
+ 			rprintf(FERROR,"recv_files: %s is a directory\n",
+ 				full_fname(fnamecmp));
+ 			discard_receive_data(f_in, F_LENGTH(file));
+-			close(fd1);
++			fadv_close(fd1);
+ 			if (inc_recurse)
+ 				send_msg_int(MSG_NO_SEND, ndx);
+ 			continue;
+ 		}
+ 
+ 		if (fd1 != -1 && !S_ISREG(st.st_mode)) {
+-			close(fd1);
++			fadv_close(fd1);
+ 			fd1 = -1;
+ 		}
+ 
+@@ -604,7 +604,7 @@ int recv_files(int f_in, char *local_nam
+ 					full_fname(fname));
+ 				discard_receive_data(f_in, F_LENGTH(file));
+ 				if (fd1 != -1)
+-					close(fd1);
++					fadv_close(fd1);
+ 				if (inc_recurse)
+ 					send_msg_int(MSG_NO_SEND, ndx);
+ 				continue;
+@@ -613,7 +613,7 @@ int recv_files(int f_in, char *local_nam
+ 			if (!get_tmpname(fnametmp,fname)) {
+ 				discard_receive_data(f_in, F_LENGTH(file));
+ 				if (fd1 != -1)
+-					close(fd1);
++					fadv_close(fd1);
+ 				if (inc_recurse)
+ 					send_msg_int(MSG_NO_SEND, ndx);
+ 				continue;
+@@ -641,7 +641,7 @@ int recv_files(int f_in, char *local_nam
+ 					full_fname(fnametmp));
+ 				discard_receive_data(f_in, F_LENGTH(file));
+ 				if (fd1 != -1)
+-					close(fd1);
++					fadv_close(fd1);
+ 				if (inc_recurse)
+ 					send_msg_int(MSG_NO_SEND, ndx);
+ 				continue;
+@@ -663,8 +663,8 @@ int recv_files(int f_in, char *local_nam
+ 		log_item(log_code, file, &initial_stats, iflags, NULL);
+ 
+ 		if (fd1 != -1)
+-			close(fd1);
+-		if (close(fd2) < 0) {
++			fadv_close(fd1);
++		if (fadv_close(fd2) < 0) {
+ 			rsyserr(FERROR, errno, "close failed on %s",
+ 				full_fname(fnametmp));
+ 			exit_cleanup(RERR_FILEIO);
+--- old/rsync.yo
++++ new/rsync.yo
+@@ -335,6 +335,7 @@ to the detailed description below for a 
+      --super                 receiver attempts super-user activities
+      --fake-super            store/recover privileged attrs using xattrs
+  -S, --sparse                handle sparse files efficiently
++     --drop-cache            tell OS to drop caching of file data
+  -n, --dry-run               show what would have been transferred
+  -W, --whole-file            copy files whole (without rsync algorithm)
+  -x, --one-file-system       don't cross filesystem boundaries
+@@ -956,6 +957,10 @@ NOTE: Don't use this option when the des
+ filesystem. It doesn't seem to handle seeks over null regions
+ correctly and ends up corrupting the files.
+ 
++dit(bf(--drop-cache)) Tell the OS to drop the caching of the file data.  This
++prevents rsync from filling up the filesystem cache.  This can sometimes help
++to make a system perform better by keeping non-rsync files in the disk cache.
++
+ dit(bf(-n, --dry-run)) This tells rsync to not do any file transfers,
+ instead it will just report the actions it would have taken.
+ 
+--- old/sender.c
++++ new/sender.c
+@@ -307,7 +307,7 @@ void send_files(int f_in, int f_out)
+ 			io_error |= IOERR_GENERAL;
+ 			rsyserr(FERROR, errno, "fstat failed");
+ 			free_sums(s);
+-			close(fd);
++			fadv_close(fd);
+ 			exit_cleanup(RERR_PROTOCOL);
+ 		}
+ 
+@@ -351,7 +351,7 @@ void send_files(int f_in, int f_out)
+ 					full_fname(fname));
+ 			}
+ 		}
+-		close(fd);
++		fadv_close(fd);
+ 
+ 		free_sums(s);
+ 
+--- old/t_unsafe.c
++++ new/t_unsafe.c
+@@ -28,6 +28,7 @@ int am_root = 0;
+ int read_only = 0;
+ int list_only = 0;
+ int verbose = 0;
++int drop_cache = 0;
+ int preserve_perms = 0;
+ 
+ int
+--- old/util.c
++++ new/util.c
+@@ -24,6 +24,7 @@
+ 
+ extern int verbose;
+ extern int dry_run;
++extern int drop_cache;
+ extern int module_id;
+ extern int modify_window;
+ extern int relative_paths;
+@@ -39,6 +40,88 @@ char curr_dir[MAXPATHLEN];
+ unsigned int curr_dir_len;
+ int curr_dir_depth; /* This is only set for a sanitizing daemon. */
+ 
++extern int drop_cache;
++
++static struct stat fadv_fd_stat[255];
++static off_t fadv_fd_pos[255];
++static int   fadv_fd_init = 0;
++
++static void fadv_fd_init_func(void){
++        if (fadv_fd_init ==0){
++                int i;
++                fadv_fd_init = 1;
++                for (i=0;i<255;i++){
++                        fadv_fd_pos[i] = 0;
++                        fadv_fd_stat[i].st_dev = 0;
++                        fadv_fd_stat[i].st_ino = 0;
++                }
++        }
++}
++                        
++static void fadv_drop(int fd, int sync){
++        struct stat stat;
++        /* trail 1 MB behind in dropping. we do this to make
++           sure that the same block or stripe does not have
++           to be written twice */
++        int pos = lseek(fd,0,SEEK_CUR) - 1024*1024;     
++        if (fd > 255){
++                return;
++        }
++	fadv_fd_init_func();
++        fstat(fd,&stat);
++        if (   fadv_fd_stat[fd].st_dev == stat.st_dev
++            && fadv_fd_stat[fd].st_ino == stat.st_ino ) {
++                if ( fadv_fd_pos[fd] < pos - 16*1024*1024 ) {
++                        if (sync) {
++                                /* if the file is not flushed to disk before calling fadvise,
++                                   then the Cache will not be freed and the advise gets ignored
++                                   this does give a severe hit on performance. If only there
++                                   was a way to mark cache so that it gets release once the data
++                                   is written to disk. */
++                                fdatasync(fd);
++                        }
++                        posix_fadvise64(fd, 0, pos, POSIX_FADV_DONTNEED);
++                        fadv_fd_pos[fd] = pos;
++                }
++        } else {
++                fadv_fd_stat[fd].st_dev = stat.st_dev;
++                fadv_fd_stat[fd].st_ino = stat.st_ino;
++                fadv_fd_pos[fd] = 0;    
++        }       
++}
++        
++ssize_t fadv_write(int fd, const void *buf, size_t count)
++{
++        int ret = write(fd, buf, count);
++        if (drop_cache) {
++                fadv_drop(fd,1);
++        }
++        return ret;
++}
++
++ssize_t fadv_read(int fd, void *buf, size_t count)
++{
++        int ret = read(fd, buf, count);
++        if (drop_cache) {
++                fadv_drop(fd,0);
++        }
++        return ret;
++}
++
++int fadv_close(int fd){
++        if (drop_cache) {
++                /* drop everything after we are done */
++                /* if the file is not flushed to disk before calling fadvise,
++                   then the Cache will not be freed and the advise gets ignored
++                   this does give a severe hit on performance. If only there
++                   was a way to mark cache so that it gets release once the data
++                   is written to disk. */
++                fdatasync(fd);
++                posix_fadvise64(fd, 0, 0,POSIX_FADV_DONTNEED);
++        }
++        return close(fd);
++}
++
+ /* Set a fd into nonblocking mode. */
+ void set_nonblocking(int fd)
+ {
+@@ -221,7 +304,7 @@ int full_write(int desc, const char *ptr
+ 
+ 	total_written = 0;
+ 	while (len > 0) {
+-		int written = write(desc, ptr, len);
++		int written = fadv_write(desc, ptr, len);
+ 		if (written < 0)  {
+ 			if (errno == EINTR)
+ 				continue;
+@@ -253,7 +336,7 @@ static int safe_read(int desc, char *ptr
+ 		return len;
+ 
+ 	do {
+-		n_chars = read(desc, ptr, len);
++		n_chars = fadv_read(desc, ptr, len);
+ 	} while (n_chars < 0 && errno == EINTR);
+ 
+ 	return n_chars;
+@@ -284,32 +367,32 @@ int copy_file(const char *source, const 
+ 	ofd = do_open(dest, O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, mode);
+ 	if (ofd == -1) {
+ 		rsyserr(FERROR, errno, "open %s", full_fname(dest));
+-		close(ifd);
++		fadv_close(ifd);
+ 		return -1;
+ 	}
+ 
+ 	while ((len = safe_read(ifd, buf, sizeof buf)) > 0) {
+ 		if (full_write(ofd, buf, len) < 0) {
+ 			rsyserr(FERROR, errno, "write %s", full_fname(dest));
+-			close(ifd);
+-			close(ofd);
++			fadv_close(ifd);
++			fadv_close(ofd);
+ 			return -1;
+ 		}
+ 	}
+ 
+ 	if (len < 0) {
+ 		rsyserr(FERROR, errno, "read %s", full_fname(source));
+-		close(ifd);
+-		close(ofd);
++		fadv_close(ifd);
++		fadv_close(ofd);
+ 		return -1;
+ 	}
+ 
+-	if (close(ifd) < 0) {
++	if (fadv_close(ifd) < 0) {
+ 		rsyserr(FINFO, errno, "close failed on %s",
+ 			full_fname(source));
+ 	}
+ 
+-	if (close(ofd) < 0) {
++	if (fadv_close(ofd) < 0) {
+ 		rsyserr(FERROR, errno, "close failed on %s",
+ 			full_fname(dest));
+ 		return -1;
