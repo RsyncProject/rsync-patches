@@ -1,0 +1,309 @@
+This adds a --usermap and a --groupmap option.
+
+TODO:  make this work when --numeric-ids was specified.
+
+--- old/flist.c
++++ new/flist.c
+@@ -61,6 +61,8 @@ extern int copy_links;
+ extern int copy_unsafe_links;
+ extern int protocol_version;
+ extern int sanitize_paths;
++extern char *usermap;
++extern char *groupmap;
+ extern struct stats stats;
+ 
+ extern char curr_dir[MAXPATHLEN];
+@@ -1882,8 +1884,13 @@ struct file_list *recv_file_list(int f)
+ 	int dstart, flags;
+ 	int64 start_read;
+ 
+-	if (!first_flist)
++	if (!first_flist) {
+ 		rprintf(FLOG, "receiving file list\n");
++		if (usermap)
++			parse_name_map(usermap, 1);
++		if (groupmap)
++			parse_name_map(groupmap, 0);
++	}
+ 	if (show_filelist_p())
+ 		start_filelist_progress("receiving file list");
+ 	else if (inc_recurse && verbose && !am_server && !first_flist)
+--- old/options.c
++++ new/options.c
+@@ -156,6 +156,8 @@ char *rsync_path = RSYNC_PATH;
+ char *backup_dir = NULL;
+ char backup_dir_buf[MAXPATHLEN];
+ char *sockopts = NULL;
++char *usermap = NULL;
++char *groupmap = NULL;
+ int rsync_port = 0;
+ int compare_dest = 0;
+ int copy_dest = 0;
+@@ -367,6 +369,8 @@ void usage(enum logcode F)
+   rprintf(F,"     --delay-updates         put all updated files into place at transfer's end\n");
+   rprintf(F," -m, --prune-empty-dirs      prune empty directory chains from the file-list\n");
+   rprintf(F,"     --numeric-ids           don't map uid/gid values by user/group name\n");
++  rprintf(F,"     --usermap=STRING        custom username mapping\n");
++  rprintf(F,"     --groupmap=STRING       custom groupname mapping\n");
+   rprintf(F,"     --timeout=TIME          set I/O timeout in seconds\n");
+   rprintf(F," -I, --ignore-times          don't skip files that match in size and mod-time\n");
+   rprintf(F,"     --size-only             skip files that match in size\n");
+@@ -568,6 +572,8 @@ static struct poptOption long_options[] 
+   {"files-from",       0,  POPT_ARG_STRING, &files_from, 0, 0, 0 },
+   {"from0",           '0', POPT_ARG_NONE,   &eol_nulls, 0, 0, 0},
+   {"numeric-ids",      0,  POPT_ARG_NONE,   &numeric_ids, 0, 0, 0 },
++  {"usermap",          0,  POPT_ARG_STRING, &usermap, 0, 0, 0 },
++  {"groupmap",         0,  POPT_ARG_STRING, &groupmap, 0, 0, 0 },
+   {"timeout",          0,  POPT_ARG_INT,    &io_timeout, 0, 0, 0 },
+   {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
+   {"rsync-path",       0,  POPT_ARG_STRING, &rsync_path, 0, 0, 0 },
+@@ -1857,6 +1863,22 @@ void server_options(char **args,int *arg
+ 		args[ac++] = "--numeric-ids";
+ 
+ 	if (am_sender) {
++		if (usermap) {
++			if (strchr(usermap, '\'') != NULL)
++				usermap = "INVALID";
++			if (asprintf(&arg, "--usermap='%s'", usermap) < 0)
++				goto oom;
++			args[ac++] = arg;
++		}
++
++		if (groupmap) {
++			if (strchr(groupmap, '\'') != NULL)
++				groupmap = "INVALID";
++			if (asprintf(&arg, "--groupmap='%s'", groupmap) < 0)
++				goto oom;
++			args[ac++] = arg;
++		}
++
+ 		if (ignore_existing)
+ 			args[ac++] = "--ignore-existing";
+ 
+--- old/rsync.yo
++++ new/rsync.yo
+@@ -361,6 +361,8 @@ to the detailed description below for a 
+      --delay-updates         put all updated files into place at end
+  -m, --prune-empty-dirs      prune empty directory chains from file-list
+      --numeric-ids           don't map uid/gid values by user/group name
++     --usermap=STRING        custom username mapping
++     --groupmap=STRING       custom groupname mapping
+      --timeout=TIME          set I/O timeout in seconds
+  -I, --ignore-times          don't skip files that match size and time
+      --size-only             skip files that match in size
+@@ -1445,6 +1447,25 @@ from the source system is used instead. 
+ the chroot setting affects rsync's ability to look up the names of the
+ users and groups and what you can do about it.
+ 
++dit(bf(--usermap=STRING, --groupmap=STRING)) These options allow you to
++specify user/group names and IDs that should be mapped to other values by
++the receiving side.  The bf(STRING) is one or more FROM:TO pairs of values
++separated by commas.  Any matching FROM value from the sender is replaced
++with a TO value from the receiver.  You may specify usernames or user IDs
++for the FROM and TO values, and the FROM value may also be a wild-card
++string, which will be matched against the sender's names (it will not match
++IDs).  For example:
++
++  --usermap=0:foo,bar:baz,*:nobody --groupmap=root:1,1:root
++
++The first match in the list is the one that is used.
++
++For the bf(--usermap) option to be effective you will need to have specified
++the bf(-o) (bf(--owner)) option and the receiver will need to be running as
++root (see also the bf(--fake-root) option).  For the bf(--groupmap) option
++to be effective you will need to have specified the bf(-g) (bf(--groups))
++option, and the receiver will need to have permissions to set that group.
++
+ dit(bf(--timeout=TIMEOUT)) This option allows you to set a maximum I/O
+ timeout in seconds. If no data is transferred for the specified time
+ then rsync will exit. The default is 0, which means no timeout.
+--- old/uidlist.c
++++ new/uidlist.c
+@@ -38,6 +38,7 @@ extern int preserve_uid;
+ extern int preserve_gid;
+ extern int preserve_acls;
+ extern int numeric_ids;
++extern int protocol_version;
+ 
+ struct idlist {
+ 	struct idlist *next;
+@@ -45,8 +46,8 @@ struct idlist {
+ 	char *name;
+ };
+ 
+-static struct idlist *uidlist;
+-static struct idlist *gidlist;
++static struct idlist *uidlist, *uidmap;
++static struct idlist *gidlist, *gidmap;
+ 
+ static struct idlist *add_to_list(struct idlist **root, int id, char *name,
+ 				  int id2)
+@@ -158,8 +159,33 @@ static int is_in_group(gid_t gid)
+ /* Add a uid to the list of uids.  Only called on receiving side. */
+ static uid_t recv_add_uid(uid_t id, char *name)
+ {
+-	uid_t id2 = name ? map_uid(id, name) : id;
+ 	struct idlist *node;
++	uid_t id2;
++
++	if (name) {
++		struct idlist *list;
++		for (list = uidmap; list; list = list->next) {
++			switch (list->id) {
++			case -2:
++				if (!wildmatch(list->name, name))
++					continue;
++				break;
++			case -1:
++				if (strcmp(list->name, name) != 0)
++					continue;
++				break;
++			default:
++				if (list->id != (int)id)
++					continue;
++				break;
++			}
++			id2 = list->id2;
++			break;
++		}
++		if (!list)
++			id2 = id ? map_uid(id, name) : 0; /* don't map root */
++	} else
++		 id2 = id;
+ 
+ 	node = add_to_list(&uidlist, (int)id, name, (int)id2);
+ 
+@@ -174,8 +200,33 @@ static uid_t recv_add_uid(uid_t id, char
+ /* Add a gid to the list of gids.  Only called on receiving side. */
+ static gid_t recv_add_gid(gid_t id, char *name)
+ {
+-	gid_t id2 = name ? map_gid(id, name) : id;
+ 	struct idlist *node;
++	gid_t id2;
++
++	if (name) {
++		struct idlist *list;
++		for (list = gidmap; list; list = list->next) {
++			switch (list->id) {
++			case -2:
++				if (!wildmatch(list->name, name))
++					continue;
++				break;
++			case -1:
++				if (strcmp(list->name, name) != 0)
++					continue;
++				break;
++			default:
++				if (list->id != (int)id)
++					continue;
++				break;
++			}
++			id2 = list->id2;
++			break;
++		}
++		if (!list)
++			id2 = id ? map_gid(id, name) : 0; /* don't map root */
++	} else
++		 id2 = id;
+ 
+ 	if (!am_root && !is_in_group(id2))
+ 		id2 = GID_NONE;
+@@ -195,9 +246,6 @@ uid_t match_uid(uid_t uid)
+ 	static uid_t last_in, last_out;
+ 	struct idlist *list;
+ 
+-	if (uid == 0)
+-		return 0;
+-
+ 	if (uid == last_in)
+ 		return last_out;
+ 
+@@ -238,7 +286,7 @@ char *add_uid(uid_t uid)
+ 	struct idlist *list;
+ 	struct idlist *node;
+ 
+-	if (uid == 0)	/* don't map root */
++	if (uid == 0 && protocol_version < 30)
+ 		return NULL;
+ 
+ 	for (list = uidlist; list; list = list->next) {
+@@ -256,7 +304,7 @@ char *add_gid(gid_t gid)
+ 	struct idlist *list;
+ 	struct idlist *node;
+ 
+-	if (gid == 0)	/* don't map root */
++	if (gid == 0 && protocol_version < 30)
+ 		return NULL;
+ 
+ 	for (list = gidlist; list; list = list->next) {
+@@ -356,3 +404,70 @@ void recv_uid_list(int f, struct file_li
+ 			F_GROUP(flist->files[i]) = match_gid(F_GID(flist->files[i]));
+ 	}
+ }
++
++void parse_name_map(char *map, int usernames)
++{
++	char *colon, *end, *cp = map + strlen(map);
++	int id1, id2;
++
++	while (1) {
++		end = cp;
++		while (cp > map && cp[-1] != ',') cp--;
++		if (!(colon = strchr(cp, ':'))) {
++			rprintf(FERROR, "No colon found in --%smap: %s\n",
++				usernames ? "user" : "group", cp);
++			exit_cleanup(RERR_SYNTAX);
++		}
++		*colon = '\0';
++
++		if (isDigit(cp)) {
++			if (strspn(cp, "0123456789") != (size_t)(colon - cp)) {
++			  bad_number:
++				rprintf(FERROR, "Invalid number in --%smap: %s\n",
++					usernames ? "user" : "group", cp);
++				exit_cleanup(RERR_SYNTAX);
++			}
++			id1 = atoi(cp);
++		} else if (strpbrk(cp, "*[?"))
++			id1 = -2;
++		else
++			id1 = -1;
++
++		if (isDigit(colon+1)) {
++			if (strspn(colon+1, "0123456789") != (size_t)(end - colon - 1)) {
++				cp = colon+1;
++				goto bad_number;
++			}
++			id2 = atoi(colon+1);
++		} else {
++			if (usernames) {
++				uid_t uid;
++				if (name_to_uid(colon+1, &uid))
++					id2 = (int)uid;
++				else
++					id2 = -1;
++			} else {
++				gid_t gid;
++				if (name_to_gid(colon+1, &gid))
++					id2 = (int)gid;
++				else
++					id2 = -1;
++			}
++			if (id2 < 0) {
++				rprintf(FERROR, "Invalid name in --%smap: %s\n",
++					usernames ? "user" : "group", colon+1);
++				exit_cleanup(RERR_SYNTAX);
++			}
++		}
++
++		if (usernames)
++			add_to_list(&uidmap, id1, id1 < 0 ? cp : NULL, id2);
++		else
++			add_to_list(&gidmap, id1, id1 < 0 ? cp : NULL, id2);
++
++		if (cp == map)
++			break;
++
++		*--cp = '\0'; /* replace comma */
++	}
++}
