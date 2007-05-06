@@ -1,0 +1,105 @@
+This patch to rsync 2.6.9 adds a --source-backup option that backs up source
+files removed due to --remove-source-files.  In my limited testing, it seems
+to work.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/source-backup.diff
+    ./configure                         (optional if already run)
+    make
+
+-- Matt McCutchen <hashproduct@gmail.com>
+
+--- old/options.c
++++ new/options.c
+@@ -29,6 +29,7 @@ extern struct filter_list_struct filter_
+ extern struct filter_list_struct server_filter_list;
+ 
+ int make_backups = 0;
++int make_source_backups = 0;
+ 
+ /**
+  * If 1, send the whole file as literal data rather than trying to
+@@ -350,6 +351,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --existing              skip creating new files on receiver\n");
+   rprintf(F,"     --ignore-existing       skip updating files that already exist on receiver\n");
+   rprintf(F,"     --remove-source-files   sender removes synchronized files (non-dirs)\n");
++  rprintf(F,"     --source-backup         ... and backs up those files\n");
+   rprintf(F,"     --del                   an alias for --delete-during\n");
+   rprintf(F,"     --delete                delete extraneous files from destination dirs\n");
+   rprintf(F,"     --delete-before         receiver deletes before transfer, not during\n");
+@@ -559,6 +561,7 @@ static struct poptOption long_options[] 
+   {"itemize-changes", 'i', POPT_ARG_NONE,   0, 'i', 0, 0 },
+   {"bwlimit",          0,  POPT_ARG_INT,    &bwlimit, 0, 0, 0 },
+   {"backup",          'b', POPT_ARG_NONE,   &make_backups, 0, 0, 0 },
++  {"source-backup",    0,  POPT_ARG_NONE,   &make_source_backups, 0, 0, 0},
+   {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
+   {"suffix",           0,  POPT_ARG_STRING, &backup_suffix, 0, 0, 0 },
+   {"list-only",        0,  POPT_ARG_VAL,    &list_only, 2, 0, 0 },
+@@ -1820,7 +1823,8 @@ void server_options(char **args,int *arg
+ 			args[ac++] = "--super";
+ 		if (size_only)
+ 			args[ac++] = "--size-only";
+-	}
++	} else if (make_source_backups)
++		args[ac++] = "--source-backup";
+ 
+ 	if (modify_window_set) {
+ 		if (asprintf(&arg, "--modify-window=%d", modify_window) < 0)
+--- old/rsync.yo
++++ new/rsync.yo
+@@ -344,6 +344,7 @@ to the detailed description below for a 
+      --existing              skip creating new files on receiver
+      --ignore-existing       skip updating files that exist on receiver
+      --remove-source-files   sender removes synchronized files (non-dir)
++     --source-backup         ... and backs up those files
+      --del                   an alias for --delete-during
+      --delete                delete extraneous files from dest dirs
+      --delete-before         receiver deletes before transfer (default)
+@@ -998,6 +999,15 @@ dit(bf(--remove-source-files)) This tell
+ side the files (meaning non-directories) that are a part of the transfer
+ and have been successfully duplicated on the receiving side.
+ 
++dit(bf(--source-backup)) Makes the sender back up the source files it removes
++due to bf(--remove-source-files).  This option is independent of
++bf(--backup) but uses the same bf(--backup-dir) and bf(--suffix) settings,
++if any.  With bf(--backup-dir), each backup file is placed inside the backup
++dir according to the source file's full path from the working directory
++(source argument path + file-list path); if you want files placed according
++to the file-list path, you could either make appropriate symlinks or have the
++sender "cd" into the source directory so that the source argument is just ".".
++
+ dit(bf(--delete)) This tells rsync to delete extraneous files from the
+ receiving side (ones that aren't on the sending side), but only for the
+ directories that are being synchronized.  You must have asked rsync to
+--- old/sender.c
++++ new/sender.c
+@@ -39,6 +39,7 @@ extern int protocol_version;
+ extern int remove_source_files;
+ extern int updating_basis_file;
+ extern int make_backups;
++extern int make_source_backups;
+ extern int do_progress;
+ extern int inplace;
+ extern int batch_fd;
+@@ -123,6 +124,7 @@ void successful_send(int ndx)
+ 	char fname[MAXPATHLEN];
+ 	struct file_struct *file;
+ 	struct file_list *flist;
++	int result;
+ 
+ 	if (!remove_source_files)
+ 		return;
+@@ -139,7 +141,11 @@ void successful_send(int ndx)
+ 		return;
+ 	f_name(file, fname);
+ 
+-	if (do_unlink(fname) == 0) {
++	if (make_source_backups)
++		result = !make_backup(fname);
++	else
++		result = do_unlink(fname);
++	if (result == 0) {
+ 		if (verbose > 1)
+ 			rprintf(FINFO, "sender removed %s\n", fname);
+ 	} else
