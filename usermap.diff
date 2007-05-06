@@ -1,6 +1,11 @@
-This adds a --usermap and a --groupmap option.
+This adds a --usermap and a --groupmap option.  See the man page for
+more details.
 
-TODO:  make this work when --numeric-ids was specified.
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/usermap.diff
+    ./configure                         (optional if already run)
+    make
 
 --- old/flist.c
 +++ new/flist.c
@@ -13,6 +18,24 @@ TODO:  make this work when --numeric-ids was specified.
  extern struct stats stats;
  
  extern char curr_dir[MAXPATHLEN];
+@@ -741,7 +743,7 @@ static struct file_struct *recv_file_ent
+ 			uid = (uid_t)read_varint(f);
+ 			if (flags & XMIT_USER_NAME_FOLLOWS)
+ 				uid = recv_user_name(f, uid);
+-			else if (inc_recurse && am_root && !numeric_ids)
++			else if (inc_recurse && am_root)
+ 				uid = match_uid(uid);
+ 		}
+ 	}
+@@ -752,7 +754,7 @@ static struct file_struct *recv_file_ent
+ 			gid = (gid_t)read_varint(f);
+ 			if (flags & XMIT_GROUP_NAME_FOLLOWS)
+ 				gid = recv_group_name(f, gid);
+-			else if (inc_recurse && (!am_root || !numeric_ids))
++			else if (inc_recurse)
+ 				gid = match_gid(gid);
+ 		}
+ 	}
 @@ -1882,8 +1884,13 @@ struct file_list *recv_file_list(int f)
  	int dstart, flags;
  	int64 start_read;
@@ -91,43 +114,61 @@ TODO:  make this work when --numeric-ids was specified.
       --timeout=TIME          set I/O timeout in seconds
   -I, --ignore-times          don't skip files that match size and time
       --size-only             skip files that match in size
-@@ -1445,6 +1447,25 @@ from the source system is used instead. 
+@@ -1445,6 +1447,42 @@ from the source system is used instead. 
  the chroot setting affects rsync's ability to look up the names of the
  users and groups and what you can do about it.
  
 +dit(bf(--usermap=STRING, --groupmap=STRING)) These options allow you to
-+specify user/group names and IDs that should be mapped to other values by
-+the receiving side.  The bf(STRING) is one or more FROM:TO pairs of values
-+separated by commas.  Any matching FROM value from the sender is replaced
-+with a TO value from the receiver.  You may specify usernames or user IDs
-+for the FROM and TO values, and the FROM value may also be a wild-card
-+string, which will be matched against the sender's names (it will not match
-+IDs).  For example:
++specify users and groups that should be mapped to other values by the
++receiving side.  The bf(STRING) is one or more bf(FROM):bf(TO) pairs of
++values separated by commas.  Any matching bf(FROM) value from the sender is
++replaced with a bf(TO) value from the receiver.  You may specify usernames
++or user IDs for the bf(FROM) and bf(TO) values, and the bf(FROM) value may
++also be a wild-card string, which will be matched against the sender's
++names (it will NOT match IDs).  For example:
 +
-+  --usermap=0:foo,bar:baz,*:nobody --groupmap=root:1,1:root
++verb(  --usermap=0:foo,bar:baz,*:nobody --groupmap=usr:1,1:usr)
 +
-+The first match in the list is the one that is used.
++The first match in the list is the one that is used.  You should not use
++multiple options of the same type, but instead include all the user
++mappings you need separated by commas to a single bf(--usermap) option,
++and likewise for groups with the bf(--groupmap) option.
 +
-+For the bf(--usermap) option to be effective you will need to have specified
-+the bf(-o) (bf(--owner)) option and the receiver will need to be running as
-+root (see also the bf(--fake-root) option).  For the bf(--groupmap) option
-+to be effective you will need to have specified the bf(-g) (bf(--groups))
-+option, and the receiver will need to have permissions to set that group.
++Note that the sender's name for the 0 uid/gid is not actually transmitted
++to the receiver, so you should either match these values using a 0, or use
++the names in effect on the receiving side.  All other bf(FROM) names match
++those in use on sending side.  All bf(TO) names match those in use on the
++receiving side.
++
++If the bf(--numeric-ids) option is used, you must specify numeric bf(FROM)
++values for them to be effective, since the sender does not send any names
++when this option is used, and wild-card rules don't match nameless ID
++values.  The only exceptions to this are (1) the names for the 0 uid/gid,
++which are always supplied by the receiving side, and (2) a "*", which
++matches even an empty name.
++
++For the bf(--usermap) option to have any effect, the bf(-o) (bf(--owner))
++option must be used (or implied), and the receiver will need to be running
++as root (see also the bf(--fake-root) option).  For the bf(--groupmap)
++option to have any effect, the bf(-g) (bf(--groups)) option must be used
++(or implied), and the receiver will need to have permissions to set that
++group.
 +
  dit(bf(--timeout=TIMEOUT)) This option allows you to set a maximum I/O
  timeout in seconds. If no data is transferred for the specified time
  then rsync will exit. The default is 0, which means no timeout.
 --- old/uidlist.c
 +++ new/uidlist.c
-@@ -38,6 +38,7 @@ extern int preserve_uid;
+@@ -38,6 +38,8 @@ extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_acls;
  extern int numeric_ids;
-+extern int protocol_version;
++extern char *usermap;
++extern char *groupmap;
  
  struct idlist {
  	struct idlist *next;
-@@ -45,8 +46,8 @@ struct idlist {
+@@ -45,8 +47,8 @@ struct idlist {
  	char *name;
  };
  
@@ -138,42 +179,52 @@ TODO:  make this work when --numeric-ids was specified.
  
  static struct idlist *add_to_list(struct idlist **root, int id, char *name,
  				  int id2)
-@@ -158,8 +159,33 @@ static int is_in_group(gid_t gid)
+@@ -158,14 +160,41 @@ static int is_in_group(gid_t gid)
  /* Add a uid to the list of uids.  Only called on receiving side. */
  static uid_t recv_add_uid(uid_t id, char *name)
  {
 -	uid_t id2 = name ? map_uid(id, name) : id;
  	struct idlist *node;
 +	uid_t id2;
+ 
+-	node = add_to_list(&uidlist, (int)id, name, (int)id2);
++	if (!name)
++		name = "";
 +
-+	if (name) {
-+		struct idlist *list;
-+		for (list = uidmap; list; list = list->next) {
-+			switch (list->id) {
-+			case -2:
-+				if (!wildmatch(list->name, name))
-+					continue;
-+				break;
-+			case -1:
-+				if (strcmp(list->name, name) != 0)
-+					continue;
-+				break;
-+			default:
-+				if (list->id != (int)id)
-+					continue;
-+				break;
-+			}
-+			id2 = list->id2;
++	for (node = uidmap; node; node = node->next) {
++		switch (node->id) {
++		case -2:
++			if (!wildmatch(node->name, name))
++				continue;
++			break;
++		case -1:
++			if (strcmp(node->name, name) != 0)
++				continue;
++			break;
++		default:
++			if (node->id != (int)id)
++				continue;
 +			break;
 +		}
-+		if (!list)
-+			id2 = id ? map_uid(id, name) : 0; /* don't map root */
-+	} else
-+		 id2 = id;
++		break;
++	}
++	if (node)
++		id2 = node->id2;
++	else if (*name && id)
++		id2 = map_uid(id, name);
++	else
++		id2 = id;
++
++	node = add_to_list(&uidlist, (int)id, *name ? name : NULL, (int)id2);
  
- 	node = add_to_list(&uidlist, (int)id, name, (int)id2);
+ 	if (verbose > 3) {
+ 		rprintf(FINFO, "uid %d(%s) maps to %d\n",
+-			(int)id, name ? name : "", (int)id2);
++			(int)id, name, (int)id2);
+ 	}
  
-@@ -174,8 +200,33 @@ static uid_t recv_add_uid(uid_t id, char
+ 	return id2;
+@@ -174,16 +203,43 @@ static uid_t recv_add_uid(uid_t id, char
  /* Add a gid to the list of gids.  Only called on receiving side. */
  static gid_t recv_add_gid(gid_t id, char *name)
  {
@@ -181,35 +232,51 @@ TODO:  make this work when --numeric-ids was specified.
  	struct idlist *node;
 +	gid_t id2;
 +
-+	if (name) {
-+		struct idlist *list;
-+		for (list = gidmap; list; list = list->next) {
-+			switch (list->id) {
-+			case -2:
-+				if (!wildmatch(list->name, name))
-+					continue;
-+				break;
-+			case -1:
-+				if (strcmp(list->name, name) != 0)
-+					continue;
-+				break;
-+			default:
-+				if (list->id != (int)id)
-+					continue;
-+				break;
-+			}
-+			id2 = list->id2;
++	if (!name)
++		name = "";
++
++	for (node = gidmap; node; node = node->next) {
++		switch (node->id) {
++		case -2:
++			if (!wildmatch(node->name, name))
++				continue;
++			break;
++		case -1:
++			if (strcmp(node->name, name) != 0)
++				continue;
++			break;
++		default:
++			if (node->id != (int)id)
++				continue;
 +			break;
 +		}
-+		if (!list)
-+			id2 = id ? map_gid(id, name) : 0; /* don't map root */
-+	} else
-+		 id2 = id;
++		break;
++	}
++	if (node)
++		id2 = node->id2;
++	else if (*name && id)
++		id2 = map_gid(id, name);
++	else
++		id2 = id;
  
  	if (!am_root && !is_in_group(id2))
  		id2 = GID_NONE;
-@@ -195,9 +246,6 @@ uid_t match_uid(uid_t uid)
- 	static uid_t last_in, last_out;
+-	node = add_to_list(&gidlist, (int)id, name, (int)id2);
++	node = add_to_list(&gidlist, (int)id, name ? name : NULL, (int)id2);
+ 
+ 	if (verbose > 3) {
+ 		rprintf(FINFO, "gid %d(%s) maps to %d\n",
+-			(int)id, name ? name : "", (int)id2);
++			(int)id, name, (int)id2);
+ 	}
+ 
+ 	return id2;
+@@ -192,12 +248,9 @@ static gid_t recv_add_gid(gid_t id, char
+ /* this function is a definate candidate for a faster algorithm */
+ uid_t match_uid(uid_t uid)
+ {
+-	static uid_t last_in, last_out;
++	static uid_t last_in = -1, last_out = -1;
  	struct idlist *list;
  
 -	if (uid == 0)
@@ -218,25 +285,31 @@ TODO:  make this work when --numeric-ids was specified.
  	if (uid == last_in)
  		return last_out;
  
-@@ -238,7 +286,7 @@ char *add_uid(uid_t uid)
- 	struct idlist *list;
- 	struct idlist *node;
+@@ -208,7 +261,7 @@ uid_t match_uid(uid_t uid)
+ 			return last_out = (uid_t)list->id2;
+ 	}
  
--	if (uid == 0)	/* don't map root */
-+	if (uid == 0 && protocol_version < 30)
- 		return NULL;
+-	return last_out = uid;
++	return last_out = recv_add_uid(uid, NULL);
+ }
  
- 	for (list = uidlist; list; list = list->next) {
-@@ -256,7 +304,7 @@ char *add_gid(gid_t gid)
- 	struct idlist *list;
- 	struct idlist *node;
+ gid_t match_gid(gid_t gid)
+@@ -344,15 +397,95 @@ void recv_uid_list(int f, struct file_li
  
--	if (gid == 0)	/* don't map root */
-+	if (gid == 0 && protocol_version < 30)
- 		return NULL;
- 
- 	for (list = gidlist; list; list = list->next) {
-@@ -356,3 +404,70 @@ void recv_uid_list(int f, struct file_li
+ 	/* Now convert all the uids/gids from sender values to our values. */
+ #ifdef SUPPORT_ACLS
+-	if (preserve_acls && !numeric_ids)
++	if (preserve_acls && (!numeric_ids || usermap))
+ 		match_acl_ids();
+ #endif
+-	if (am_root && preserve_uid && !numeric_ids) {
++	if (am_root && preserve_uid && (!numeric_ids || usermap)) {
+ 		for (i = 0; i < flist->count; i++)
+ 			F_OWNER(flist->files[i]) = match_uid(F_UID(flist->files[i]));
+ 	}
+-	if (preserve_gid && (!am_root || !numeric_ids)) {
++	if (preserve_gid && (!am_root || !numeric_ids || groupmap)) {
+ 		for (i = 0; i < flist->count; i++)
  			F_GROUP(flist->files[i]) = match_gid(F_GID(flist->files[i]));
  	}
  }
@@ -296,14 +369,27 @@ TODO:  make this work when --numeric-ids was specified.
 +			}
 +		}
 +
-+		if (usernames)
++		if (usernames) {
 +			add_to_list(&uidmap, id1, id1 < 0 ? cp : NULL, id2);
-+		else
++			if (numeric_ids && id2 >= 0)
++				add_to_list(&uidlist, id1, NULL, id2);
++		} else {
 +			add_to_list(&gidmap, id1, id1 < 0 ? cp : NULL, id2);
++			if (numeric_ids && id2 >= 0)
++				add_to_list(&gidlist, id1, NULL, id2);
++		}
 +
 +		if (cp == map)
 +			break;
 +
 +		*--cp = '\0'; /* replace comma */
++	}
++
++	if (usernames) {
++		char *name = uid_to_name(0);
++		recv_add_uid(0, name ? name : "root");
++	} else {
++		char *name = gid_to_name(0);
++		recv_add_gid(0, name ? name : "root");
 +	}
 +}
