@@ -65,116 +65,72 @@ Changes:
 
 --- old/checksum.c
 +++ new/checksum.c
-@@ -148,7 +148,7 @@ void file_checksum(char *fname, char *su
- 		mdfour_result(&m, (uchar *)sum);
- 	}
+@@ -26,6 +26,10 @@ extern int protocol_version;
  
--	close(fd);
-+	fadv_close(fd);
- 	unmap_file(buf);
- }
+ int csum_length = SHORT_SUM_LENGTH; /* initial value */
  
++#ifdef HAVE_POSIX_FADVISE64
++#define close(fd) fadv_close(fd)
++#endif
++
+ /*
+   a simple 32 bit checksum that can be upadted from either end
+   (inspired by Mark Adler's Adler-32 checksum)
+--- old/cleanup.c
++++ new/cleanup.c
+@@ -46,7 +46,13 @@ void close_all(void)
+ 	int fd;
+ 	int ret;
+ 	STRUCT_STAT st;
++#endif
++
++#ifdef HAVE_POSIX_FADVISE64
++	fadv_close_all();
++#endif
+ 
++#ifdef SHUTDOWN_ALL_SOCKETS
+ 	max_fd = sysconf(_SC_OPEN_MAX) - 1;
+ 	for (fd = max_fd; fd >= 0; fd--) {
+ 		if ((ret = do_fstat(fd, &st)) == 0) {
+--- old/configure.in
++++ new/configure.in
+@@ -561,7 +561,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strd
+     strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid \
+     setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
+     strerror putenv iconv_open locale_charset nl_langinfo getxattr \
+-    extattr_get_link sigaction sigprocmask)
++    extattr_get_link sigaction sigprocmask posix_fadvise64)
+ 
+ AC_CHECK_FUNCS(getpgrp tcgetpgrp)
+ if test $ac_cv_func_getpgrp = yes; then
 --- old/fileio.c
 +++ new/fileio.c
-@@ -26,15 +26,18 @@
- #endif
- 
- extern int sparse_files;
--
+@@ -30,6 +30,12 @@ extern int sparse_files;
  static char last_byte;
  static int last_sparse;
  
-+extern int drop_cache;
-+
-+
++#ifdef HAVE_POSIX_FADVISE64
++#define close(fd) fadv_close(fd)
++#define read(fd,buf,len) fadv_read(fd,buf,len)
++#define write(fd,buf,len) fadv_write(fd,buf,len)
++#endif
 +
  int sparse_end(int f)
  {
  	if (last_sparse) {
- 		do_lseek(f,-1,SEEK_CUR);
--		return (write(f,&last_byte,1) == 1 ? 0 : -1);
-+		return (fadv_write(f,&last_byte,1) == 1 ? 0 : -1);
- 	}
- 	last_sparse = 0;
- 	return 0;
-@@ -61,7 +64,7 @@ static int write_sparse(int f,char *buf,
- 	if (l1 == len)
- 		return len;
- 
--	ret = write(f, buf + l1, len - (l1+l2));
-+	ret = fadv_write(f, buf + l1, len - (l1+l2));
- 	if (ret == -1 || ret == 0)
- 		return ret;
- 	else if (ret != (int) (len - (l1+l2)))
-@@ -84,7 +87,7 @@ int flush_write_file(int f)
- 	char *bp = wf_writeBuf;
- 
- 	while (wf_writeBufCnt > 0) {
--		if ((ret = write(f, bp, wf_writeBufCnt)) < 0) {
-+		if ((ret = fadv_write(f, bp, wf_writeBufCnt)) < 0) {
- 			if (errno == EINTR)
- 				continue;
- 			return ret;
-@@ -235,7 +238,7 @@ char *map_ptr(struct map_struct *map, OF
- 	map->p_len = window_size;
- 
- 	while (read_size > 0) {
--		nread = read(map->fd, map->p + read_offset, read_size);
-+		nread = fadv_read(map->fd, map->p + read_offset, read_size);
- 		if (nread <= 0) {
- 			if (!map->status)
- 				map->status = nread ? errno : ENODATA;
 --- old/generator.c
 +++ new/generator.c
-@@ -1614,18 +1614,18 @@ static void recv_generator(char *fname, 
+@@ -115,6 +115,10 @@ static int dir_tweaking;
+ static int need_retouch_dir_times;
+ static const char *solo_file = NULL;
  
- 	if (inplace && make_backups > 0 && fnamecmp_type == FNAMECMP_FNAME) {
- 		if (!(backupptr = get_backup_name(fname))) {
--			close(fd);
-+			fadv_close(fd);
- 			goto cleanup;
- 		}
- 		if (!(back_file = make_file(fname, NULL, NULL, 0, NO_FILTERS))) {
--			close(fd);
-+			fadv_close(fd);
- 			goto pretend_missing;
- 		}
- 		if (robust_unlink(backupptr) && errno != ENOENT) {
- 			rsyserr(FERROR, errno, "unlink %s",
- 				full_fname(backupptr));
- 			unmake_file(back_file);
--			close(fd);
-+			fadv_close(fd);
- 			goto cleanup;
- 		}
- 		if ((f_copy = do_open(backupptr,
-@@ -1633,7 +1633,7 @@ static void recv_generator(char *fname, 
- 			rsyserr(FERROR, errno, "open %s",
- 				full_fname(backupptr));
- 			unmake_file(back_file);
--			close(fd);
-+			fadv_close(fd);
- 			goto cleanup;
- 		}
- 		fnamecmp_type = FNAMECMP_BACKUP;
-@@ -1695,7 +1695,7 @@ static void recv_generator(char *fname, 
- 	generate_and_send_sums(fd, sx.st.st_size, f_out, f_copy);
- 
- 	if (f_copy >= 0) {
--		close(f_copy);
-+		fadv_close(f_copy);
- 		set_file_attrs(backupptr, back_file, NULL, NULL, 0);
- 		if (verbose > 1) {
- 			rprintf(FINFO, "backed up %s to %s\n",
-@@ -1704,7 +1704,7 @@ static void recv_generator(char *fname, 
- 		unmake_file(back_file);
- 	}
- 
--	close(fd);
-+	fadv_close(fd);
- 
-   cleanup:
- #ifdef SUPPORT_ACLS
++#ifdef HAVE_POSIX_FADVISE64
++#define close(fd) fadv_close(fd)
++#endif
++
+ /* For calling delete_item() and delete_dir_contents(). */
+ #define DEL_RECURSE		(1<<1) /* recurse */
+ #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
 --- old/options.c
 +++ new/options.c
 @@ -57,6 +57,7 @@ int preserve_gid = 0;
@@ -185,98 +141,51 @@ Changes:
  int cvs_exclude = 0;
  int dry_run = 0;
  int do_xfers = 1;
-@@ -310,6 +311,7 @@ void usage(enum logcode F)
+@@ -310,6 +311,9 @@ void usage(enum logcode F)
    rprintf(F,"     --backup-dir=DIR        make backups into hierarchy based in DIR\n");
    rprintf(F,"     --suffix=SUFFIX         set backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
    rprintf(F," -u, --update                skip files that are newer on the receiver\n");
++#ifdef HAVE_POSIX_FADVISE64
 +  rprintf(F,"     --drop-cache            tell OS to drop caching of file data\n");
++#endif
    rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
    rprintf(F,"     --append                append data onto shorter files\n");
    rprintf(F," -d, --dirs                  transfer directories without recursing\n");
-@@ -506,6 +508,7 @@ static struct poptOption long_options[] 
+@@ -506,6 +510,9 @@ static struct poptOption long_options[] 
    {"size-only",        0,  POPT_ARG_NONE,   &size_only, 0, 0, 0 },
    {"one-file-system", 'x', POPT_ARG_NONE,   0, 'x', 0, 0 },
    {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
++#ifdef HAVE_POSIX_FADVISE64
 +  {"drop-cache",       0,  POPT_ARG_NONE,   &drop_cache, 0, 0, 0 },
++#endif
    {"existing",         0,  POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
    {"ignore-non-existing",0,POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
    {"ignore-existing",  0,  POPT_ARG_NONE,   &ignore_existing, 0, 0, 0 },
-@@ -1603,6 +1606,9 @@ void server_options(char **args,int *arg
+@@ -1603,6 +1610,11 @@ void server_options(char **args,int *arg
  	if (!am_sender)
  		args[ac++] = "--sender";
  
++#ifdef HAVE_POSIX_FADVISE64
 +	if (drop_cache)
 +		args[ac++] = "--drop-cache";
++#endif
 +
  	x = 1;
  	argstr[0] = '-';
  	for (i = 0; i < verbose; i++)
 --- old/receiver.c
 +++ new/receiver.c
-@@ -554,7 +554,7 @@ int recv_files(int f_in, char *local_nam
- 			rsyserr(FERROR, errno, "fstat %s failed",
- 				full_fname(fnamecmp));
- 			discard_receive_data(f_in, F_LENGTH(file));
--			close(fd1);
-+			fadv_close(fd1);
- 			if (inc_recurse)
- 				send_msg_int(MSG_NO_SEND, ndx);
- 			continue;
-@@ -569,14 +569,14 @@ int recv_files(int f_in, char *local_nam
- 			rprintf(FERROR,"recv_files: %s is a directory\n",
- 				full_fname(fnamecmp));
- 			discard_receive_data(f_in, F_LENGTH(file));
--			close(fd1);
-+			fadv_close(fd1);
- 			if (inc_recurse)
- 				send_msg_int(MSG_NO_SEND, ndx);
- 			continue;
- 		}
+@@ -62,6 +62,10 @@ static int phase = 0, redoing = 0;
+ /* We're either updating the basis file or an identical copy: */
+ static int updating_basis;
  
- 		if (fd1 != -1 && !S_ISREG(st.st_mode)) {
--			close(fd1);
-+			fadv_close(fd1);
- 			fd1 = -1;
- 		}
- 
-@@ -604,7 +604,7 @@ int recv_files(int f_in, char *local_nam
- 					full_fname(fname));
- 				discard_receive_data(f_in, F_LENGTH(file));
- 				if (fd1 != -1)
--					close(fd1);
-+					fadv_close(fd1);
- 				if (inc_recurse)
- 					send_msg_int(MSG_NO_SEND, ndx);
- 				continue;
-@@ -613,7 +613,7 @@ int recv_files(int f_in, char *local_nam
- 			if (!get_tmpname(fnametmp,fname)) {
- 				discard_receive_data(f_in, F_LENGTH(file));
- 				if (fd1 != -1)
--					close(fd1);
-+					fadv_close(fd1);
- 				if (inc_recurse)
- 					send_msg_int(MSG_NO_SEND, ndx);
- 				continue;
-@@ -641,7 +641,7 @@ int recv_files(int f_in, char *local_nam
- 					full_fname(fnametmp));
- 				discard_receive_data(f_in, F_LENGTH(file));
- 				if (fd1 != -1)
--					close(fd1);
-+					fadv_close(fd1);
- 				if (inc_recurse)
- 					send_msg_int(MSG_NO_SEND, ndx);
- 				continue;
-@@ -663,8 +663,8 @@ int recv_files(int f_in, char *local_nam
- 		log_item(log_code, file, &initial_stats, iflags, NULL);
- 
- 		if (fd1 != -1)
--			close(fd1);
--		if (close(fd2) < 0) {
-+			fadv_close(fd1);
-+		if (fadv_close(fd2) < 0) {
- 			rsyserr(FERROR, errno, "close failed on %s",
- 				full_fname(fnametmp));
- 			exit_cleanup(RERR_FILEIO);
++#ifdef HAVE_POSIX_FADVISE64
++#define close(fd) fadv_close(fd)
++#endif
++
+ /*
+  * get_tmpname() - create a tmp filename for a given filename
+  *
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -335,6 +335,7 @@ to the detailed description below for a 
@@ -300,24 +209,17 @@ Changes:
  
 --- old/sender.c
 +++ new/sender.c
-@@ -307,7 +307,7 @@ void send_files(int f_in, int f_out)
- 			io_error |= IOERR_GENERAL;
- 			rsyserr(FERROR, errno, "fstat failed");
- 			free_sums(s);
--			close(fd);
-+			fadv_close(fd);
- 			exit_cleanup(RERR_PROTOCOL);
- 		}
+@@ -46,6 +46,10 @@ extern int write_batch;
+ extern struct stats stats;
+ extern struct file_list *cur_flist, *first_flist;
  
-@@ -351,7 +351,7 @@ void send_files(int f_in, int f_out)
- 					full_fname(fname));
- 			}
- 		}
--		close(fd);
-+		fadv_close(fd);
- 
- 		free_sums(s);
- 
++#ifdef HAVE_POSIX_FADVISE64
++#define close(fd) fadv_close(fd)
++#endif
++
+ /**
+  * @file
+  *
 --- old/t_unsafe.c
 +++ new/t_unsafe.c
 @@ -28,6 +28,7 @@ int am_root = 0;
@@ -330,158 +232,143 @@ Changes:
  int
 --- old/util.c
 +++ new/util.c
-@@ -24,6 +24,7 @@
- 
+@@ -25,6 +25,7 @@
  extern int verbose;
  extern int dry_run;
-+extern int drop_cache;
  extern int module_id;
++extern int drop_cache;
  extern int modify_window;
  extern int relative_paths;
-@@ -39,6 +40,88 @@ char curr_dir[MAXPATHLEN];
+ extern int human_readable;
+@@ -39,6 +40,131 @@ char curr_dir[MAXPATHLEN];
  unsigned int curr_dir_len;
  int curr_dir_depth; /* This is only set for a sanitizing daemon. */
  
-+extern int drop_cache;
++#ifdef HAVE_POSIX_FADVISE64
++#define FADV_BUFFER_SIZE  1024*1024*16
 +
-+static struct stat fadv_fd_stat[255];
-+static off_t fadv_fd_pos[255];
-+static int   fadv_fd_init = 0;
++static struct stat fadv_fd_stat[1024];
++static off_t fadv_fd_pos[1024];
++static int fadv_fd_init = 0;
++static int fadv_max_fd = 0;
++static int fadv_close_ring_tail = 0;
++static int fadv_close_ring_head = 0;
++static int fadv_close_ring_size = 0;
++static int fadv_close_ring[1024];
++static int fadv_close_buffer_size = 0;
 +
-+static void fadv_fd_init_func(void){
-+        if (fadv_fd_init ==0){
-+                int i;
-+                fadv_fd_init = 1;
-+                for (i=0;i<255;i++){
-+                        fadv_fd_pos[i] = 0;
-+                        fadv_fd_stat[i].st_dev = 0;
-+                        fadv_fd_stat[i].st_ino = 0;
-+                }
-+        }
++static void fadv_fd_init_func(void)
++{
++	if (fadv_fd_init == 0) {
++		int i;
++		fadv_fd_init = 1;
++		if (fadv_max_fd == 0){
++			fadv_max_fd = sysconf(_SC_OPEN_MAX) - 20;
++			if (fadv_max_fd < 0)
++				fadv_max_fd = 1;
++			if (fadv_max_fd > 1000)
++				fadv_max_fd = 1000;
++		}
++		for (i = 0; i < fadv_max_fd; i++) {
++			fadv_fd_pos[i] = 0;
++			fadv_fd_stat[i].st_dev = 0;
++			fadv_fd_stat[i].st_ino = 0;
++		}
++	}
 +}
-+                        
-+static void fadv_drop(int fd, int sync){
-+        struct stat stat;
-+        /* trail 1 MB behind in dropping. we do this to make
-+           sure that the same block or stripe does not have
-+           to be written twice */
-+        int pos = lseek(fd,0,SEEK_CUR) - 1024*1024;     
-+        if (fd > 255){
-+                return;
-+        }
++
++static void fadv_drop(int fd, int sync)
++{
++	struct stat sb;
++	int pos;
++
++	/* Trail 1 MB behind in dropping. we do this to make
++	 * sure that the same block or stripe does not have
++	 * to be written twice. */
++	if (fd > fadv_max_fd)
++		return;
++	pos = lseek(fd, 0, SEEK_CUR) - 1024*1024;
 +	fadv_fd_init_func();
-+        fstat(fd,&stat);
-+        if (   fadv_fd_stat[fd].st_dev == stat.st_dev
-+            && fadv_fd_stat[fd].st_ino == stat.st_ino ) {
-+                if ( fadv_fd_pos[fd] < pos - 16*1024*1024 ) {
-+                        if (sync) {
-+                                /* if the file is not flushed to disk before calling fadvise,
-+                                   then the Cache will not be freed and the advise gets ignored
-+                                   this does give a severe hit on performance. If only there
-+                                   was a way to mark cache so that it gets release once the data
-+                                   is written to disk. */
-+                                fdatasync(fd);
-+                        }
-+                        posix_fadvise64(fd, 0, pos, POSIX_FADV_DONTNEED);
-+                        fadv_fd_pos[fd] = pos;
-+                }
-+        } else {
-+                fadv_fd_stat[fd].st_dev = stat.st_dev;
-+                fadv_fd_stat[fd].st_ino = stat.st_ino;
-+                fadv_fd_pos[fd] = 0;    
-+        }       
++	fstat(fd, &sb);
++	if (fadv_fd_stat[fd].st_dev == sb.st_dev
++	 && fadv_fd_stat[fd].st_ino == sb.st_ino) {
++		if (fadv_fd_pos[fd] < pos - FADV_BUFFER_SIZE) {
++			if (sync) {
++				/* If the file is not flushed to disk before calling fadvise,
++				 * then the Cache will not be freed and the advise gets ignored
++				 * this does give a severe hit on performance. If only there
++				 * was a way to mark cache so that it gets release once the data
++				 * is written to disk. */
++				fdatasync(fd);
++			}
++			posix_fadvise64(fd, 0, pos, POSIX_FADV_DONTNEED);
++			fadv_fd_pos[fd] = pos;
++		}
++	} else {
++		fadv_fd_stat[fd].st_dev = sb.st_dev;
++		fadv_fd_stat[fd].st_ino = sb.st_ino;
++		fadv_fd_pos[fd] = 0;
++	}
 +}
-+        
++
 +ssize_t fadv_write(int fd, const void *buf, size_t count)
 +{
-+        int ret = write(fd, buf, count);
-+        if (drop_cache) {
-+                fadv_drop(fd,1);
-+        }
-+        return ret;
++	int ret = write(fd, buf, count);
++	if (drop_cache)
++		fadv_drop(fd, 1);
++	return ret;
 +}
 +
 +ssize_t fadv_read(int fd, void *buf, size_t count)
 +{
-+        int ret = read(fd, buf, count);
-+        if (drop_cache) {
-+                fadv_drop(fd,0);
-+        }
-+        return ret;
++	int ret = read(fd, buf, count);
++	if (drop_cache)
++		fadv_drop(fd, 0);
++	return ret;
 +}
 +
-+int fadv_close(int fd){
-+        if (drop_cache) {
-+                /* drop everything after we are done */
-+                /* if the file is not flushed to disk before calling fadvise,
-+                   then the Cache will not be freed and the advise gets ignored
-+                   this does give a severe hit on performance. If only there
-+                   was a way to mark cache so that it gets release once the data
-+                   is written to disk. */
-+                fdatasync(fd);
-+                posix_fadvise64(fd, 0, 0,POSIX_FADV_DONTNEED);
-+        }
-+        return close(fd);
++void fadv_close_all(void)
++{
++	while (fadv_close_ring_size > 0){
++		fdatasync(fadv_close_ring[fadv_close_ring_tail]);
++		posix_fadvise64(fadv_close_ring[fadv_close_ring_tail], 0, 0,POSIX_FADV_DONTNEED);
++		fadv_close_ring_size--;
++		close(fadv_close_ring[fadv_close_ring_tail]);
++		fadv_close_ring_tail = (fadv_close_ring_tail + 1) % fadv_max_fd;
++		fadv_close_buffer_size = 0;
++	}
 +}
++
++int fadv_close(int fd)
++{
++	if (drop_cache) {
++		/* If the file is not flushed to disk before calling fadvise,
++		 * then the Cache will not be freed and the advise gets ignored
++		 * this does give a severe hit on performance. So instead of doing
++		 * it right away, we save us a copy of the filehandle and do it
++		 * some time before we are out of filehandles. This speeds
++		 * up operation for small files massively. It is directly
++		 * related to the number of spare file handles you have. */
++		int newfd = dup(fd);
++		int pos = lseek(fd, 0, SEEK_CUR);
++		fadv_fd_init_func();
++		fadv_close_buffer_size += pos - fadv_fd_pos[fd];
++		fadv_close_ring[fadv_close_ring_head] = newfd;
++		fadv_close_ring_head = (fadv_close_ring_head + 1) % fadv_max_fd;	
++		fadv_close_ring_size ++;
++		if (fadv_close_ring_size == fadv_max_fd || fadv_close_buffer_size > 1024*1024 ){
++			/* it seems fastest to drop things 'in groups' */
++			fadv_close_all();
++		} 
++	}
++	return close(fd);
++}
++
++#define close(fd) fadv_close(fd)
++#define read(fd,buf,len) fadv_read(fd,buf,len)
++#define write(fd,buf,len) fadv_write(fd,buf,len)
++#endif
 +
  /* Set a fd into nonblocking mode. */
  void set_nonblocking(int fd)
  {
-@@ -221,7 +304,7 @@ int full_write(int desc, const char *ptr
- 
- 	total_written = 0;
- 	while (len > 0) {
--		int written = write(desc, ptr, len);
-+		int written = fadv_write(desc, ptr, len);
- 		if (written < 0)  {
- 			if (errno == EINTR)
- 				continue;
-@@ -253,7 +336,7 @@ static int safe_read(int desc, char *ptr
- 		return len;
- 
- 	do {
--		n_chars = read(desc, ptr, len);
-+		n_chars = fadv_read(desc, ptr, len);
- 	} while (n_chars < 0 && errno == EINTR);
- 
- 	return n_chars;
-@@ -284,32 +367,32 @@ int copy_file(const char *source, const 
- 	ofd = do_open(dest, O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, mode);
- 	if (ofd == -1) {
- 		rsyserr(FERROR, errno, "open %s", full_fname(dest));
--		close(ifd);
-+		fadv_close(ifd);
- 		return -1;
- 	}
- 
- 	while ((len = safe_read(ifd, buf, sizeof buf)) > 0) {
- 		if (full_write(ofd, buf, len) < 0) {
- 			rsyserr(FERROR, errno, "write %s", full_fname(dest));
--			close(ifd);
--			close(ofd);
-+			fadv_close(ifd);
-+			fadv_close(ofd);
- 			return -1;
- 		}
- 	}
- 
- 	if (len < 0) {
- 		rsyserr(FERROR, errno, "read %s", full_fname(source));
--		close(ifd);
--		close(ofd);
-+		fadv_close(ifd);
-+		fadv_close(ofd);
- 		return -1;
- 	}
- 
--	if (close(ifd) < 0) {
-+	if (fadv_close(ifd) < 0) {
- 		rsyserr(FINFO, errno, "close failed on %s",
- 			full_fname(source));
- 	}
- 
--	if (close(ofd) < 0) {
-+	if (fadv_close(ofd) < 0) {
- 		rsyserr(FERROR, errno, "close failed on %s",
- 			full_fname(dest));
- 		return -1;
