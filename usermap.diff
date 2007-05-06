@@ -23,7 +23,7 @@ To use this patch, run these commands for a successful build:
  			if (flags & XMIT_USER_NAME_FOLLOWS)
  				uid = recv_user_name(f, uid);
 -			else if (inc_recurse && am_root && !numeric_ids)
-+			else if (inc_recurse && am_root)
++			else if (inc_recurse && am_root && (!numeric_ids || usermap))
  				uid = match_uid(uid);
  		}
  	}
@@ -32,7 +32,7 @@ To use this patch, run these commands for a successful build:
  			if (flags & XMIT_GROUP_NAME_FOLLOWS)
  				gid = recv_group_name(f, gid);
 -			else if (inc_recurse && (!am_root || !numeric_ids))
-+			else if (inc_recurse)
++			else if (inc_recurse && (!am_root || !numeric_ids || groupmap))
  				gid = match_gid(gid);
  		}
  	}
@@ -80,22 +80,18 @@ To use this patch, run these commands for a successful build:
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, 0, 0, 0 },
    {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
    {"rsync-path",       0,  POPT_ARG_STRING, &rsync_path, 0, 0, 0 },
-@@ -1857,6 +1863,22 @@ void server_options(char **args,int *arg
+@@ -1857,6 +1863,18 @@ void server_options(char **args,int *arg
  		args[ac++] = "--numeric-ids";
  
  	if (am_sender) {
 +		if (usermap) {
-+			if (strchr(usermap, '\'') != NULL)
-+				usermap = "INVALID";
-+			if (asprintf(&arg, "--usermap='%s'", usermap) < 0)
++			if (asprintf(&arg, "--usermap=%s", usermap) < 0)
 +				goto oom;
 +			args[ac++] = arg;
 +		}
 +
 +		if (groupmap) {
-+			if (strchr(groupmap, '\'') != NULL)
-+				groupmap = "INVALID";
-+			if (asprintf(&arg, "--groupmap='%s'", groupmap) < 0)
++			if (asprintf(&arg, "--groupmap=%s", groupmap) < 0)
 +				goto oom;
 +			args[ac++] = arg;
 +		}
@@ -125,9 +121,9 @@ To use this patch, run these commands for a successful build:
 +replaced with a bf(TO) value from the receiver.  You may specify usernames
 +or user IDs for the bf(FROM) and bf(TO) values, and the bf(FROM) value may
 +also be a wild-card string, which will be matched against the sender's
-+names (it will NOT match IDs).  For example:
++names (wild-cards do NOT match against ID numbers).  For example:
 +
-+verb(  --usermap=0:foo,bar:baz,*:nobody --groupmap=usr:1,1:usr)
++verb(  --usermap=0:bin,wayne:admin,*:nobody --groupmap=usr:1,1:usr)
 +
 +The first match in the list is the one that is used.  You should not use
 +multiple options of the same type, but instead include all the user
@@ -149,7 +145,7 @@ To use this patch, run these commands for a successful build:
 +
 +For the bf(--usermap) option to have any effect, the bf(-o) (bf(--owner))
 +option must be used (or implied), and the receiver will need to be running
-+as root (see also the bf(--fake-root) option).  For the bf(--groupmap)
++as root (see also the bf(--fake-super) option).  For the bf(--groupmap)
 +option to have any effect, the bf(-g) (bf(--groups)) option must be used
 +(or implied), and the receiver will need to have permissions to set that
 +group.
