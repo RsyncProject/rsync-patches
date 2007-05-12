@@ -101,7 +101,7 @@ To use this patch, run these commands for a successful build:
  
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -361,6 +361,8 @@ to the detailed description below for a 
+@@ -367,6 +367,8 @@ to the detailed description below for a 
       --delay-updates         put all updated files into place at end
   -m, --prune-empty-dirs      prune empty directory chains from file-list
       --numeric-ids           don't map uid/gid values by user/group name
@@ -110,7 +110,7 @@ To use this patch, run these commands for a successful build:
       --timeout=TIME          set I/O timeout in seconds
   -I, --ignore-times          don't skip files that match size and time
       --size-only             skip files that match in size
-@@ -1445,6 +1447,42 @@ from the source system is used instead. 
+@@ -1451,6 +1453,46 @@ from the source system is used instead. 
  the chroot setting affects rsync's ability to look up the names of the
  users and groups and what you can do about it.
  
@@ -130,22 +130,26 @@ To use this patch, run these commands for a successful build:
 +mappings you need separated by commas to a single bf(--usermap) option,
 +and likewise for groups with the bf(--groupmap) option.
 +
-+Note that the sender's name for the 0 uid/gid is not actually transmitted
++Note that the sender's name for the 0 user and group are not transmitted
 +to the receiver, so you should either match these values using a 0, or use
 +the names in effect on the receiving side.  All other bf(FROM) names match
-+those in use on sending side.  All bf(TO) names match those in use on the
-+receiving side.
++those in use on the sending side.  All bf(TO) names match those in use on
++the receiving side.
 +
-+If the bf(--numeric-ids) option is used, you must specify numeric bf(FROM)
-+values for them to be effective, since the sender does not send any names
-+when this option is used, and wild-card rules don't match nameless ID
-+values.  The only exceptions to this are (1) the names for the 0 uid/gid,
-+which are always supplied by the receiving side, and (2) a "*", which
-+matches even an empty name.
++Any IDs that do not have name on the sending side are treaded as having an
++empty name for the purpose of matching.  This allows them to be matched via
++a "*" as well as an empty name mapping.  For instance:
++
++verb(  --usermap=:nobody --groupmap=*:nobody)
++
++When the bf(--numeric-ids) option is used,the sender does not send any
++names, so all the IDs are treaded as having an empty name.  This means that
++you will need to specify numeric bf(FROM) values if you want to map these
++nameless IDs to different values.
 +
 +For the bf(--usermap) option to have any effect, the bf(-o) (bf(--owner))
 +option must be used (or implied), and the receiver will need to be running
-+as root (see also the bf(--fake-super) option).  For the bf(--groupmap)
++as a super-user (see also the bf(--fake-super) option).  For the bf(--groupmap)
 +option to have any effect, the bf(-g) (bf(--groups)) option must be used
 +(or implied), and the receiver will need to have permissions to set that
 +group.
@@ -175,63 +179,50 @@ To use this patch, run these commands for a successful build:
  
  static struct idlist *add_to_list(struct idlist **root, int id, char *name,
  				  int id2)
-@@ -158,14 +160,41 @@ static int is_in_group(gid_t gid)
- /* Add a uid to the list of uids.  Only called on receiving side. */
- static uid_t recv_add_uid(uid_t id, char *name)
+@@ -80,22 +82,6 @@ static char *gid_to_name(gid_t gid)
+ 	return NULL;
+ }
+ 
+-static uid_t map_uid(uid_t id, char *name)
+-{
+-	uid_t uid;
+-	if (id != 0 && name_to_uid(name, &uid))
+-		return uid;
+-	return id;
+-}
+-
+-static gid_t map_gid(gid_t id, char *name)
+-{
+-	gid_t gid;
+-	if (id != 0 && name_to_gid(name, &gid))
+-		return gid;
+-	return id;
+-}
+-
+ static int is_in_group(gid_t gid)
+ {
+ #ifdef HAVE_GETGROUPS
+@@ -155,35 +141,52 @@ static int is_in_group(gid_t gid)
+ #endif
+ }
+ 
+-/* Add a uid to the list of uids.  Only called on receiving side. */
+-static uid_t recv_add_uid(uid_t id, char *name)
++/* Add a uid/gid to its list of ids.  Only called on receiving side. */
++static int recv_add_id(struct idlist **idmap_ptr, int id, char *name)
  {
 -	uid_t id2 = name ? map_uid(id, name) : id;
  	struct idlist *node;
-+	uid_t id2;
++	int id2;
  
 -	node = add_to_list(&uidlist, (int)id, name, (int)id2);
 +	if (!name)
 +		name = "";
-+
-+	for (node = uidmap; node; node = node->next) {
-+		switch (node->id) {
-+		case -2:
-+			if (!wildmatch(node->name, name))
-+				continue;
-+			break;
-+		case -1:
-+			if (strcmp(node->name, name) != 0)
-+				continue;
-+			break;
-+		default:
-+			if (node->id != (int)id)
-+				continue;
-+			break;
-+		}
-+		break;
-+	}
-+	if (node)
-+		id2 = node->id2;
-+	else if (*name && id)
-+		id2 = map_uid(id, name);
-+	else
-+		id2 = id;
-+
-+	node = add_to_list(&uidlist, (int)id, *name ? name : NULL, (int)id2);
  
- 	if (verbose > 3) {
- 		rprintf(FINFO, "uid %d(%s) maps to %d\n",
+-	if (verbose > 3) {
+-		rprintf(FINFO, "uid %d(%s) maps to %d\n",
 -			(int)id, name ? name : "", (int)id2);
-+			(int)id, name, (int)id2);
- 	}
- 
- 	return id2;
-@@ -174,16 +203,43 @@ static uid_t recv_add_uid(uid_t id, char
- /* Add a gid to the list of gids.  Only called on receiving side. */
- static gid_t recv_add_gid(gid_t id, char *name)
- {
--	gid_t id2 = name ? map_gid(id, name) : id;
- 	struct idlist *node;
-+	gid_t id2;
-+
-+	if (!name)
-+		name = "";
-+
-+	for (node = gidmap; node; node = node->next) {
++	for (node = *idmap_ptr; node; node = node->next) {
 +		switch (node->id) {
 +		case -2:
 +			if (!wildmatch(node->name, name))
@@ -242,32 +233,49 @@ To use this patch, run these commands for a successful build:
 +				continue;
 +			break;
 +		default:
-+			if (node->id != (int)id)
++			if (node->id != id)
 +				continue;
 +			break;
 +		}
 +		break;
-+	}
+ 	}
 +	if (node)
 +		id2 = node->id2;
-+	else if (*name && id)
-+		id2 = map_gid(id, name);
-+	else
++	else if (*name && id) {
++		if (idmap_ptr == &uidmap) {
++			uid_t uid;
++			id2 = name_to_uid(name, &uid) ? (int)uid : id;
++		} else {
++			gid_t gid;
++			id2 = name_to_gid(name, &gid) ? (int)gid : id;
++		}
++	} else
 +		id2 = id;
  
- 	if (!am_root && !is_in_group(id2))
+-	return id2;
+-}
+-
+-/* Add a gid to the list of gids.  Only called on receiving side. */
+-static gid_t recv_add_gid(gid_t id, char *name)
+-{
+-	gid_t id2 = name ? map_gid(id, name) : id;
+-	struct idlist *node;
+-
+-	if (!am_root && !is_in_group(id2))
++	if (idmap_ptr == &gidmap && !am_root && !is_in_group(id2))
  		id2 = GID_NONE;
 -	node = add_to_list(&gidlist, (int)id, name, (int)id2);
-+	node = add_to_list(&gidlist, (int)id, name ? name : NULL, (int)id2);
++	node = add_to_list(idmap_ptr, id, *name ? name : NULL, id2);
  
  	if (verbose > 3) {
- 		rprintf(FINFO, "gid %d(%s) maps to %d\n",
+-		rprintf(FINFO, "gid %d(%s) maps to %d\n",
 -			(int)id, name ? name : "", (int)id2);
-+			(int)id, name, (int)id2);
++		rprintf(FINFO, "%sid %d(%s) maps to %d\n",
++			idmap_ptr == &uidmap ? "u" : "g", id, name, id2);
  	}
  
  	return id2;
-@@ -192,12 +248,9 @@ static gid_t recv_add_gid(gid_t id, char
+@@ -192,12 +195,9 @@ static gid_t recv_add_gid(gid_t id, char
  /* this function is a definate candidate for a faster algorithm */
  uid_t match_uid(uid_t uid)
  {
@@ -281,16 +289,43 @@ To use this patch, run these commands for a successful build:
  	if (uid == last_in)
  		return last_out;
  
-@@ -208,7 +261,7 @@ uid_t match_uid(uid_t uid)
+@@ -208,7 +208,7 @@ uid_t match_uid(uid_t uid)
  			return last_out = (uid_t)list->id2;
  	}
  
 -	return last_out = uid;
-+	return last_out = recv_add_uid(uid, NULL);
++	return last_out = (uid_t)recv_add_id(&uidmap, (int)uid, NULL);
  }
  
  gid_t match_gid(gid_t gid)
-@@ -344,15 +397,95 @@ void recv_uid_list(int f, struct file_li
+@@ -229,7 +229,7 @@ gid_t match_gid(gid_t gid)
+ 			return last_out = (gid_t)list->id2;
+ 	}
+ 
+-	return last_out = recv_add_gid(gid, NULL);
++	return last_out = (gid_t)recv_add_id(&gidmap, (int)gid, NULL);
+ }
+ 
+ /* Add a uid to the list of uids.  Only called on sending side. */
+@@ -311,7 +311,7 @@ uid_t recv_user_name(int f, uid_t uid)
+ 	if (!name)
+ 		out_of_memory("recv_user_name");
+ 	read_sbuf(f, name, len);
+-	return recv_add_uid(uid, name); /* node keeps name's memory */
++	return (uid_t)recv_add_id(&uidmap, (int)uid, name); /* node keeps name's memory */
+ }
+ 
+ gid_t recv_group_name(int f, gid_t gid)
+@@ -321,7 +321,7 @@ gid_t recv_group_name(int f, gid_t gid)
+ 	if (!name)
+ 		out_of_memory("recv_group_name");
+ 	read_sbuf(f, name, len);
+-	return recv_add_gid(gid, name); /* node keeps name's memory */
++	return (gid_t)recv_add_id(&gidmap, (int)gid, name); /* node keeps name's memory */
+ }
+ 
+ /* recv a complete uid/gid mapping from the peer and map the uid/gid
+@@ -344,15 +344,88 @@ void recv_uid_list(int f, struct file_li
  
  	/* Now convert all the uids/gids from sender values to our values. */
  #ifdef SUPPORT_ACLS
@@ -312,6 +347,8 @@ To use this patch, run these commands for a successful build:
 +
 +void parse_name_map(char *map, int usernames)
 +{
++	struct idlist **idmap_ptr = usernames ? &uidmap : &gidmap;
++	struct idlist **idlist_ptr = usernames ? &uidlist : &gidlist;
 +	char *colon, *end, *cp = map + strlen(map);
 +	int id1, id2;
 +
@@ -347,33 +384,26 @@ To use this patch, run these commands for a successful build:
 +		} else {
 +			if (usernames) {
 +				uid_t uid;
-+				if (name_to_uid(colon+1, &uid))
-+					id2 = (int)uid;
-+				else
-+					id2 = -1;
++				if (!name_to_uid(colon+1, &uid)) {
++				  bad_name:
++					rprintf(FERROR,
++						"Invalid name in --%smap: %s\n",
++						usernames ? "user" : "group",
++						colon+1);
++					exit_cleanup(RERR_SYNTAX);
++				}
++				id2 = (int)uid;
 +			} else {
 +				gid_t gid;
-+				if (name_to_gid(colon+1, &gid))
-+					id2 = (int)gid;
-+				else
-+					id2 = -1;
-+			}
-+			if (id2 < 0) {
-+				rprintf(FERROR, "Invalid name in --%smap: %s\n",
-+					usernames ? "user" : "group", colon+1);
-+				exit_cleanup(RERR_SYNTAX);
++				if (!name_to_gid(colon+1, &gid))
++					goto bad_name;
++				id2 = (int)gid;
 +			}
 +		}
 +
-+		if (usernames) {
-+			add_to_list(&uidmap, id1, id1 < 0 ? cp : NULL, id2);
-+			if (numeric_ids && id2 >= 0)
-+				add_to_list(&uidlist, id1, NULL, id2);
-+		} else {
-+			add_to_list(&gidmap, id1, id1 < 0 ? cp : NULL, id2);
-+			if (numeric_ids && id2 >= 0)
-+				add_to_list(&gidlist, id1, NULL, id2);
-+		}
++		add_to_list(idmap_ptr, id1, id1 < 0 ? cp : NULL, id2);
++		if (numeric_ids && id2 >= 0)
++			add_to_list(idlist_ptr, id1, NULL, id2);
 +
 +		if (cp == map)
 +			break;
@@ -381,11 +411,9 @@ To use this patch, run these commands for a successful build:
 +		*--cp = '\0'; /* replace comma */
 +	}
 +
-+	if (usernames) {
-+		char *name = uid_to_name(0);
-+		recv_add_uid(0, name ? name : "root");
-+	} else {
-+		char *name = gid_to_name(0);
-+		recv_add_gid(0, name ? name : "root");
-+	}
++	if (numeric_ids)
++		cp = NULL;
++	else
++		cp = usernames ? uid_to_name(0) : gid_to_name(0);
++	recv_add_id(idmap_ptr, 0, cp);
 +}
