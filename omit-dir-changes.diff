@@ -9,7 +9,7 @@ To use this patch, run these commands for a successful build:
 
 --- old/generator.c
 +++ new/generator.c
-@@ -45,6 +45,7 @@ extern int preserve_uid;
+@@ -46,6 +46,7 @@ extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_times;
  extern int omit_dir_times;
@@ -17,7 +17,7 @@ To use this patch, run these commands for a successful build:
  extern int delete_mode;
  extern int delete_before;
  extern int delete_during;
-@@ -544,6 +545,7 @@ void itemize(const char *fname, struct f
+@@ -555,6 +556,7 @@ void itemize(const char *fnamecmp, struc
  		int keep_time = !preserve_times ? 0
  		    : S_ISDIR(file->mode) ? !omit_dir_times
  		    : !S_ISLNK(file->mode);
@@ -25,22 +25,22 @@ To use this patch, run these commands for a successful build:
  
  		if (S_ISREG(file->mode) && F_LENGTH(file) != sxp->st.st_size)
  			iflags |= ITEM_REPORT_SIZE;
-@@ -554,10 +556,11 @@ void itemize(const char *fname, struct f
+@@ -565,10 +567,11 @@ void itemize(const char *fnamecmp, struc
  			iflags |= ITEM_REPORT_TIME;
  		if (!BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
--		if (preserve_uid && am_root && F_UID(file) != sxp->st.st_uid)
+-		if (preserve_uid && am_root && F_OWNER(file) != sxp->st.st_uid)
 +		if (preserve_uid && am_root && !omit_changes
-+		 && F_UID(file) != sxp->st.st_uid)
++		 && F_OWNER(file) != sxp->st.st_uid)
  			iflags |= ITEM_REPORT_OWNER;
--		if (preserve_gid && F_GID(file) != GID_NONE
--		    && sxp->st.st_gid != F_GID(file))
+-		if (preserve_gid && !(file->flags & FLAG_SKIP_GROUP)
+-		    && sxp->st.st_gid != F_GROUP(file))
 +		if (preserve_gid && !omit_changes
-+		 && F_GID(file) != GID_NONE && sxp->st.st_gid != F_GID(file))
++		 && !(file->FLAG_SKIP_GROUP) && sxp->st.st_gid != F_GROUP(file))
  			iflags |= ITEM_REPORT_GROUP;
  #ifdef SUPPORT_ACLS
  		if (preserve_acls && !S_ISLNK(file->mode)) {
-@@ -1193,7 +1196,7 @@ static void recv_generator(char *fname, 
+@@ -1228,7 +1231,7 @@ static void recv_generator(char *fname, 
  				statret = -1;
  			new_root_dir = 0;
  		}
@@ -51,7 +51,7 @@ To use this patch, run these commands for a successful build:
  		}
 --- old/options.c
 +++ new/options.c
-@@ -55,6 +55,7 @@ int preserve_uid = 0;
+@@ -56,6 +56,7 @@ int preserve_uid = 0;
  int preserve_gid = 0;
  int preserve_times = 0;
  int omit_dir_times = 0;
@@ -59,15 +59,15 @@ To use this patch, run these commands for a successful build:
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -317,6 +318,7 @@ void usage(enum logcode F)
+@@ -336,6 +337,7 @@ void usage(enum logcode F)
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve times\n");
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
 +  rprintf(F,"     --omit-dir-changes      omit directories when preserving any attributes\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
-   rprintf(F," -S, --sparse                handle sparse files efficiently\n");
-   rprintf(F," -n, --dry-run               show what would have been transferred\n");
-@@ -437,6 +439,7 @@ static struct poptOption long_options[] 
+ #ifdef SUPPORT_XATTRS
+   rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
+@@ -469,6 +471,7 @@ static struct poptOption long_options[] 
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
@@ -75,7 +75,7 @@ To use this patch, run these commands for a successful build:
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
-@@ -1322,6 +1325,9 @@ int parse_arguments(int *argc, const cha
+@@ -1397,6 +1400,9 @@ int parse_arguments(int *argc, const cha
  			"P *%s", backup_suffix);
   		parse_rule(&filter_list, backup_dir_buf, 0, 0);
  	}
@@ -85,7 +85,7 @@ To use this patch, run these commands for a successful build:
  	if (make_backups && !backup_dir)
  		omit_dir_times = 1;
  
-@@ -1551,6 +1557,8 @@ void server_options(char **args,int *arg
+@@ -1626,6 +1632,8 @@ void server_options(char **args,int *arg
  			argstr[x++] = 'm';
  		if (omit_dir_times == 2)
  			argstr[x++] = 'O';
@@ -96,7 +96,7 @@ To use this patch, run these commands for a successful build:
  			argstr[x++] = 'L';
 --- old/rsync.c
 +++ new/rsync.c
-@@ -36,6 +36,7 @@ extern int preserve_perms;
+@@ -34,6 +34,7 @@ extern int preserve_perms;
  extern int preserve_executability;
  extern int preserve_times;
  extern int omit_dir_times;
@@ -104,17 +104,17 @@ To use this patch, run these commands for a successful build:
  extern int am_root;
  extern int am_server;
  extern int am_sender;
-@@ -275,9 +276,11 @@ int set_file_attrs(char *fname, struct f
+@@ -322,9 +323,11 @@ int set_file_attrs(const char *fname, st
  			updated = 1;
  	}
  
--	change_uid = am_root && preserve_uid && sxp->st.st_uid != F_UID(file);
-+	change_uid = am_root && preserve_uid && sxp->st.st_uid != F_UID(file)
-+		&& !(omit_dir_changes && S_ISDIR(sxp->st.st_mode));
- 	change_gid = preserve_gid && F_GID(file) != GID_NONE
--		&& sxp->st.st_gid != F_GID(file);
-+		&& sxp->st.st_gid != F_GID(file)
-+		&& !(omit_dir_changes && S_ISDIR(sxp->st.st_mode));
+-	change_uid = am_root && preserve_uid && sxp->st.st_uid != F_OWNER(file);
++	change_uid = am_root && preserve_uid && sxp->st.st_uid != F_OWNER(file)
++		  && !(omit_dir_changes && S_ISDIR(sxp->st.st_mode));
+ 	change_gid = preserve_gid && !(file->flags & FLAG_SKIP_GROUP)
+-		  && sxp->st.st_gid != F_GROUP(file);
++		  && sxp->st.st_gid != F_GROUP(file)
++		  && !(omit_dir_changes && S_ISDIR(sxp->st.st_mode));
  #if !defined HAVE_LCHOWN && !defined CHOWN_MODIFIES_SYMLINK
  	if (S_ISLNK(sxp->st.st_mode))
  		;
