@@ -27,16 +27,16 @@ To use this patch, run these commands for a successful build:
  				uid = match_uid(uid);
  		}
  	}
-@@ -753,7 +755,7 @@ static struct file_struct *recv_file_ent
- 			gid = (gid_t)read_varint(f);
+@@ -754,7 +756,7 @@ static struct file_struct *recv_file_ent
+ 			gid_flags = 0;
  			if (xflags & XMIT_GROUP_NAME_FOLLOWS)
- 				gid = recv_group_name(f, gid, &new_flags);
+ 				gid = recv_group_name(f, gid, &gid_flags);
 -			else if (inc_recurse && (!am_root || !numeric_ids))
 +			else if (inc_recurse && (!am_root || !numeric_ids || groupmap))
- 				gid = match_gid(gid, &new_flags);
+ 				gid = match_gid(gid, &gid_flags);
  		}
  	}
-@@ -1882,8 +1884,13 @@ struct file_list *recv_file_list(int f)
+@@ -1886,8 +1888,13 @@ struct file_list *recv_file_list(int f)
  	int dstart, flags;
  	int64 start_read;
  
@@ -312,16 +312,16 @@ To use this patch, run these commands for a successful build:
  }
  
  gid_t match_gid(gid_t gid, uint16 *flags_ptr)
-@@ -230,7 +234,7 @@ gid_t match_gid(gid_t gid, uint16 *flags
+@@ -227,7 +231,7 @@ gid_t match_gid(gid_t gid, uint16 *flags
+ 				break;
+ 		}
+ 		if (!list)
+-			list = recv_add_gid(gid, flags_ptr);
++			list = recv_add_id(&gidmap, gid, flags_ptr);
+ 		last = list;
  	}
  
- 	if (!list)
--		list = recv_add_gid(gid, NULL);
-+		list = recv_add_id(&gidmap, gid, NULL);
- 
- 	if (flags_ptr && list->flags & FLAG_SKIP_GROUP)
- 		*flags_ptr |= FLAG_SKIP_GROUP;
-@@ -317,7 +321,7 @@ uid_t recv_user_name(int f, uid_t uid)
+@@ -316,7 +320,7 @@ uid_t recv_user_name(int f, uid_t uid)
  	if (!name)
  		out_of_memory("recv_user_name");
  	read_sbuf(f, name, len);
@@ -330,7 +330,7 @@ To use this patch, run these commands for a successful build:
  	return node->id2;
  }
  
-@@ -329,7 +333,7 @@ gid_t recv_group_name(int f, gid_t gid, 
+@@ -328,7 +332,7 @@ gid_t recv_group_name(int f, gid_t gid, 
  	if (!name)
  		out_of_memory("recv_group_name");
  	read_sbuf(f, name, len);
@@ -339,7 +339,7 @@ To use this patch, run these commands for a successful build:
  	if (flags_ptr && node->flags & FLAG_SKIP_GROUP)
  		*flags_ptr |= FLAG_SKIP_GROUP;
  	return node->id2;
-@@ -356,17 +360,96 @@ void recv_id_list(int f, struct file_lis
+@@ -355,17 +359,96 @@ void recv_id_list(int f, struct file_lis
  
  	/* Now convert all the uids/gids from sender values to our values. */
  #ifdef SUPPORT_ACLS

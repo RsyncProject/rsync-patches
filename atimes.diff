@@ -55,7 +55,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  			f_name(f, NULL));
  	}
  }
-@@ -339,6 +343,7 @@ int push_pathname(const char *dir, int l
+@@ -344,6 +348,7 @@ int push_pathname(const char *dir, int l
  static void send_file_entry(int f, struct file_struct *file, int ndx)
  {
  	static time_t modtime;
@@ -63,7 +63,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -434,6 +439,13 @@ static void send_file_entry(int f, struc
+@@ -439,6 +444,13 @@ static void send_file_entry(int f, struc
  		flags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -77,7 +77,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != 0) {
-@@ -505,6 +517,8 @@ static void send_file_entry(int f, struc
+@@ -510,6 +522,8 @@ static void send_file_entry(int f, struc
  	}
  	if (!(flags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -86,18 +86,18 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	if (preserve_uid && !(flags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -591,7 +605,7 @@ static void send_file_entry(int f, struc
+@@ -596,7 +610,7 @@ static void send_file_entry(int f, struc
  static struct file_struct *recv_file_entry(struct file_list *flist,
- 					   int flags, int f)
+ 					   int xflags, int f)
  {
 -	static int64 modtime;
 +	static int64 modtime, atime;
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -725,6 +739,16 @@ static struct file_struct *recv_file_ent
+@@ -731,6 +745,16 @@ static struct file_struct *recv_file_ent
  	}
- 	if (!(flags & XMIT_SAME_MODE))
+ 	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
 +	if (preserve_atimes && !S_ISDIR(mode) && !(flags & XMIT_SAME_ATIME)) {
 +		atime = read_varlong(f, 4);
@@ -112,16 +112,16 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -850,6 +874,8 @@ static struct file_struct *recv_file_ent
- 		F_OWNER(file) = uid;
- 	if (preserve_gid)
+@@ -859,6 +883,8 @@ static struct file_struct *recv_file_ent
  		F_GROUP(file) = gid;
+ 		file->flags |= gid_flags;
+ 	}
 +	if (preserve_atimes)
 +		F_ATIME(file) = (time_t)atime;
  #ifdef ICONV_OPTION
  	if (ic_ndx)
  		F_NDX(file) = flist->count + flist->ndx_start;
-@@ -1163,6 +1189,8 @@ struct file_struct *make_file(const char
+@@ -1172,6 +1198,8 @@ struct file_struct *make_file(const char
  		F_OWNER(file) = st.st_uid;
  	if (preserve_gid)
  		F_GROUP(file) = st.st_gid;
@@ -149,7 +149,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
 +			iflags |= ITEM_REPORT_ATIME;
  		if (!BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
- 		if (preserve_uid && am_root && F_UID(file) != sxp->st.st_uid)
+ 		if (preserve_uid && am_root && (uid_t)F_OWNER(file) != sxp->st.st_uid)
 @@ -880,6 +884,8 @@ static int try_dests_reg(struct file_str
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
@@ -286,7 +286,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
 +			updated = 0;
  	}
  
- 	change_uid = am_root && preserve_uid && sxp->st.st_uid != F_UID(file);
+ 	change_uid = am_root && preserve_uid && sxp->st.st_uid != (uid_t)F_OWNER(file);
 --- old/rsync.h
 +++ new/rsync.h
 @@ -56,6 +56,7 @@
@@ -297,7 +297,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  /* These flags are used in the live flist data. */
  
-@@ -141,6 +142,7 @@
+@@ -143,6 +144,7 @@
  
  #define ATTRS_REPORT		(1<<0)
  #define ATTRS_SKIP_MTIME	(1<<1)
@@ -323,7 +323,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  #define F_NDX(f) REQ_EXTRA(f, ic_ndx)->num
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -330,8 +330,9 @@ to the detailed description below for a 
+@@ -336,8 +336,9 @@ to the detailed description below for a 
       --devices               preserve device files (super-user only)
       --specials              preserve special files
   -D                          same as --devices --specials
@@ -335,7 +335,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
-@@ -910,6 +911,12 @@ it is preserving modification times (see
+@@ -916,6 +917,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -348,7 +348,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1524,7 +1531,7 @@ quote(itemization(
+@@ -1530,7 +1537,7 @@ quote(itemization(
    by the file transfer.
    it() A bf(t) means the modification time is different and is being updated
    to the sender's value (requires bf(--times)).  An alternate value of bf(T)
@@ -357,7 +357,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
    anytime a symlink is transferred, or when a file or device is transferred
    without bf(--times).
    it() A bf(p) means the permissions are different and are being updated to
-@@ -1533,8 +1540,10 @@ quote(itemization(
+@@ -1539,8 +1546,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
