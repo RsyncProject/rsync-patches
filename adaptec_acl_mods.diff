@@ -1,15 +1,12 @@
 To use this patch, run these commands for a successful build:
 
-    patch -p1 <patches/acls.diff
     patch -p1 <patches/adaptec_acl_mods.diff
     ./prepare-source
     ./configure --enable-acl-support
     make
 
 Philip Lowman wrote:
-> Attached is a small patch which is meant to be applied to a copy of
-> rsync which has already been patched with acl support (the acls.diff
-> file in the patches folder).  It allows the preservation of the delete,
+> Attached is a small patch which allows the preservation of the delete,
 > chmod, and chown bits which Adaptec has added to XFS on their SnapOS NAS
 > units.  This is nice for backing up files between different NAS units
 > and preserving all of the Samba ACLs.
@@ -20,113 +17,67 @@ Philip Lowman wrote:
 > will allow you to preserve acls when copying between different Adaptec
 > based NAS units running SnapOS.
 
-I (Wayne) tweaked the patch for style and to avoid using SMB_* constants
-with literal values were needed.
+I (Wayne) tweaked the patch to work with the latest source.
 
-I've also updated it to apply to the updated version of the acls.diff,
-though I don't know if there might be some bits lost in the current
-algorithm when using the file's mode bits to reconstruct a stripped ACL
-entry.
+Todo:
 
---- old/acls.c
-+++ new/acls.c
-@@ -306,6 +306,9 @@ static BOOL unpack_smb_acl(SMB_ACL_T sac
- 		}
- 		access = (sys_acl_get_perm(permset, SMB_ACL_READ) ? 4 : 0)
- 		       | (sys_acl_get_perm(permset, SMB_ACL_WRITE) ? 2 : 0)
-+		       | (sys_acl_get_perm(permset, SMB_ACL_DELETE) ? 8 : 0)
-+		       | (sys_acl_get_perm(permset, SMB_ACL_CHMOD) ? 16 : 0)
-+		       | (sys_acl_get_perm(permset, SMB_ACL_CHOWN) ? 32 : 0)
- 		       | (sys_acl_get_perm(permset, SMB_ACL_EXECUTE) ? 1 : 0);
- 		/* continue == done with entry; break == store in temporary ida list */
- 		switch (tag_type) {
-@@ -400,6 +403,12 @@ static int store_access_in_entry(uchar a
+Fix a bug that could lose some bits when stripping some (supposedly)
+superfluous ACL info.
+
+--- old/lib/sysacls.c
++++ new/lib/sysacls.c
+@@ -31,6 +31,18 @@
+ #endif
+ #define DEBUG(x,y)
  
- 	COE( sys_acl_get_permset,(entry, &permset) );
- 	COE( sys_acl_clear_perms,(permset) );
-+	if (access & 32)
-+		COE( sys_acl_add_perm(permset, SMB_ACL_CHOWN) );
-+	if (access & 16)
-+		COE( sys_acl_add_perm(permset, SMB_ACL_CHMOD) );
-+	if (access & 8)
-+		COE( sys_acl_add_perm(permset, SMB_ACL_DELETE) );
- 	if (access & 4)
- 		COE( sys_acl_add_perm,(permset, SMB_ACL_READ) );
- 	if (access & 2)
-@@ -433,7 +442,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
- 
- 	COE( sys_acl_create_entry,(smb_acl, &entry) );
- 	COE( sys_acl_set_tag_type,(entry, SMB_ACL_USER_OBJ) );
--	COE2( store_access_in_entry,(racl->user_obj & 7, entry) );
-+	COE2( store_access_in_entry,(racl->user_obj & 077, entry) );
- 
- 	for (ida = racl->users.idas, count = racl->users.count; count--; ida++) {
- 		COE( sys_acl_create_entry,(smb_acl, &entry) );
-@@ -444,7 +453,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
- 
- 	COE( sys_acl_create_entry,(smb_acl, &entry) );
- 	COE( sys_acl_set_tag_type,(entry, SMB_ACL_GROUP_OBJ) );
--	COE2( store_access_in_entry,(racl->group_obj & 7, entry) );
-+	COE2( store_access_in_entry,(racl->group_obj & 077, entry) );
- 
- 	for (ida = racl->groups.idas, count = racl->groups.count; count--; ida++) {
- 		COE( sys_acl_create_entry,(smb_acl, &entry) );
-@@ -454,7 +463,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
- 	}
- 
- #ifdef ACLS_NEED_MASK
--	mask_bits = racl->mask_obj == NO_ENTRY ? racl->group_obj & 7 : racl->mask_obj;
-+	mask_bits = racl->mask_obj == NO_ENTRY ? racl->group_obj & 077 : racl->mask_obj;
- 	COE( sys_acl_create_entry,(smb_acl, &entry) );
- 	COE( sys_acl_set_tag_type,(entry, SMB_ACL_MASK) );
- 	COE2( store_access_in_entry,(mask_bits, entry) );
-@@ -468,7 +477,7 @@ static BOOL pack_smb_acl(SMB_ACL_T *smb_
- 
- 	COE( sys_acl_create_entry,(smb_acl, &entry) );
- 	COE( sys_acl_set_tag_type,(entry, SMB_ACL_OTHER) );
--	COE2( store_access_in_entry,(racl->other_obj & 7, entry) );
-+	COE2( store_access_in_entry,(racl->other_obj & 077, entry) );
- 
- #ifdef DEBUG
- 	if (sys_acl_valid(*smb_acl) < 0)
-@@ -765,7 +774,7 @@ static void old_recv_rsync_acl(rsync_acl
- 	while (count--) {
- 		char tag = read_byte(f);
- 		uchar access = read_byte(f);
--		if (access & ~ (4 | 2 | 1)) {
-+		if (access & ~(32 | 16 | 8 | 4 | 2 | 1)) {
- 			rprintf(FERROR, "old_recv_rsync_acl: bogus permset %o\n",
- 				access);
- 			exit_cleanup(RERR_STREAMIO);
-@@ -831,7 +840,7 @@ static void old_recv_rsync_acl(rsync_acl
- 			racl->mask_obj = NO_ENTRY;
- 		}
- 	} else if (racl->mask_obj == NO_ENTRY) /* Must be non-empty with lists. */
--		racl->mask_obj = computed_mask_bits | (racl->group_obj & 7);
-+		racl->mask_obj = computed_mask_bits | (racl->group_obj & 077);
- }
- 
- /* Receive the ACL info the sender has included for this file-list entry. */
-@@ -903,7 +912,7 @@ static uchar recv_acl_access(uchar *name
- 			*name_follows_val = 0;
- 	}
- 
--	if (access & ~(4 | 2 | 1)) {
-+	if (access & ~(32 | 16 | 8 | 4 | 2 | 1)) {
- 		rprintf(FERROR, "recv_acl_access: bogus permset %o\n", access);
- 		exit_cleanup(RERR_STREAMIO);
- 	}
---- old/lib/sysacls.h
-+++ new/lib/sysacls.h
-@@ -45,6 +45,11 @@
- #define SMB_ACL_READ		ACL_READ
- #define SMB_ACL_WRITE		ACL_WRITE
- #define SMB_ACL_EXECUTE		ACL_EXECUTE
 +/* These are custom ACL bits used by Adaptec's modifications
 + * to XFS on their SnapOS units. */
-+#define SMB_ACL_DELETE		0x08
-+#define SMB_ACL_CHMOD		0x10
-+#define SMB_ACL_CHOWN		0x20
++#ifndef ACL_DELETE
++#define ACL_DELETE 8
++#endif
++#ifndef ACL_CHMOD
++#define ACL_CHMOD 16
++#endif
++#ifndef ACL_CHOWN
++#define ACL_CHOWN 32
++#endif
++
+ void SAFE_FREE(void *mem)
+ {
+ 	if (mem)
+@@ -115,6 +127,9 @@ int sys_acl_get_access_bits(SMB_ACL_ENTR
+ 	if ((rc = acl_get_permset(entry_d, &permset)) != 0)
+ 		return rc;
+ 	*bits = (acl_get_perm(permset, ACL_READ) ? 4 : 0)
++	      | (acl_get_perm(permset, ACL_CHOWN) ? 32 : 0)
++	      | (acl_get_perm(permset, ACL_CHMOD) ? 16 : 0)
++	      | (acl_get_perm(permset, ACL_DELETE) ? 8 : 0)
+ 	      | (acl_get_perm(permset, ACL_WRITE) ? 2 : 0)
+ 	      | (acl_get_perm(permset, ACL_EXECUTE) ? 1 : 0);
+ 	return 0;
+@@ -147,6 +162,12 @@ int sys_acl_set_access_bits(SMB_ACL_ENTR
+ 	if ((rc = acl_get_permset(entry, &permset)) != 0)
+ 		return rc;
+ 	acl_clear_perms(permset);
++	if (bits & 32)
++		acl_add_perm(permset, ACL_CHOWN);
++	if (bits & 16)
++		acl_add_perm(permset, ACL_CHMOD);
++	if (bits & 8)
++		acl_add_perm(permset, ACL_DELETE);
+ 	if (bits & 4)
+ 		acl_add_perm(permset, ACL_READ);
+ 	if (bits & 2)
+--- old/lib/sysacls.h
++++ new/lib/sysacls.h
+@@ -60,8 +60,8 @@
+ #define SMB_ACL_TYPE_ACCESS	ACL_TYPE_ACCESS
+ #define SMB_ACL_TYPE_DEFAULT	ACL_TYPE_DEFAULT
  
- /* Types of ACLs. */
- #define SMB_ACL_USER		ACL_USER
+-#define SMB_ACL_VALID_NAME_BITS	(4 | 2 | 1)
+-#define SMB_ACL_VALID_OBJ_BITS	(4 | 2 | 1)
++#define SMB_ACL_VALID_NAME_BITS	(32 | 16 | 8 | 4 | 2 | 1)
++#define SMB_ACL_VALID_OBJ_BITS	(32 | 16 | 8 | 4 | 2 | 1)
+ 
+ #define SMB_ACL_NEED_SORT
+ 
