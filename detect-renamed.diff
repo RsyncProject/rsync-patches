@@ -34,7 +34,7 @@ TODO:
 
 --- old/compat.c
 +++ new/compat.c
-@@ -48,6 +48,7 @@ extern int preserve_hard_links;
+@@ -49,6 +49,7 @@ extern int preserve_hard_links;
  extern int need_messages_from_generator;
  extern int delete_mode, delete_before, delete_during, delete_after;
  extern int delete_excluded;
@@ -42,18 +42,18 @@ TODO:
  extern int make_backups;
  extern char *shell_cmd; /* contains VER.SUB string if client is a pre-release */
  extern char *backup_dir, *backup_suffix;
-@@ -205,7 +206,7 @@ void setup_protocol(int f_out,int f_in)
+@@ -206,7 +207,7 @@ void setup_protocol(int f_out,int f_in)
  	} else if (protocol_version >= 30) {
  		if (recurse && allow_inc_recurse && !preserve_hard_links
  		 && !delete_before && !delete_after && !delay_updates
--		 && !prune_empty_dirs)
-+		 && !prune_empty_dirs && !detect_renamed)
+-		 && !prune_empty_dirs && !use_qsort)
++		 && !prune_empty_dirs && !use_qsort && !detect_renamed)
  			inc_recurse = 1;
  		need_messages_from_generator = 1;
  	}
 --- old/flist.c
 +++ new/flist.c
-@@ -59,6 +59,7 @@ extern int non_perishable_cnt;
+@@ -60,6 +60,7 @@ extern int non_perishable_cnt;
  extern int prune_empty_dirs;
  extern int copy_links;
  extern int copy_unsafe_links;
@@ -61,7 +61,7 @@ TODO:
  extern int protocol_version;
  extern int sanitize_paths;
  extern struct stats stats;
-@@ -95,6 +96,8 @@ static int64 tmp_dev, tmp_ino;
+@@ -98,6 +99,8 @@ static int64 tmp_dev, tmp_ino;
  #endif
  static char tmp_sum[MAX_DIGEST_LEN];
  
@@ -69,8 +69,8 @@ TODO:
 +
  static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
- 
-@@ -261,6 +264,45 @@ static int is_excluded(char *fname, int 
+ static int dir_count = 0;
+@@ -265,6 +268,45 @@ static int is_excluded(char *fname, int 
  	return 0;
  }
  
@@ -116,7 +116,7 @@ TODO:
  static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len, int flags);
  
-@@ -1855,6 +1897,25 @@ struct file_list *send_file_list(int f, 
+@@ -1915,6 +1957,25 @@ struct file_list *send_file_list(int f, 
  	if (verbose > 2)
  		rprintf(FINFO, "send_file_list done\n");
  
@@ -140,8 +140,8 @@ TODO:
 +	}
 +
  	if (inc_recurse) {
- #ifdef ICONV_OPTION
- 		if (!need_unsorted_flist)
+ 		add_dirs_to_tree(-1, flist, dir_count);
+ 		if (send_dir_ndx < 0) {
 --- old/generator.c
 +++ new/generator.c
 @@ -80,6 +80,7 @@ extern char *basis_dir[];
@@ -481,7 +481,7 @@ TODO:
  		rsyserr(FERROR, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		goto cleanup;
-@@ -1861,6 +2017,12 @@ void generate_files(int f_out, const cha
+@@ -1867,6 +2023,12 @@ void generate_files(int f_out, const cha
  	if (verbose > 2)
  		rprintf(FINFO, "generator starting pid=%ld\n", (long)getpid());
  
@@ -494,7 +494,7 @@ TODO:
  	if (delete_before && !solo_file && cur_flist->count > 0)
  		do_delete_pass();
  	if (delete_during == 2) {
-@@ -1871,7 +2033,7 @@ void generate_files(int f_out, const cha
+@@ -1877,7 +2039,7 @@ void generate_files(int f_out, const cha
  	}
  	do_progress = 0;
  
@@ -503,7 +503,7 @@ TODO:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -1898,7 +2060,7 @@ void generate_files(int f_out, const cha
+@@ -1904,7 +2066,7 @@ void generate_files(int f_out, const cha
  					dirdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
  				} else
  					dirdev = MAKEDEV(0, 0);
@@ -512,7 +512,7 @@ TODO:
  			}
  		}
  		for (i = cur_flist->low; i <= cur_flist->high; i++) {
-@@ -1960,7 +2122,21 @@ void generate_files(int f_out, const cha
+@@ -1966,7 +2128,21 @@ void generate_files(int f_out, const cha
  	} while ((cur_flist = cur_flist->next) != NULL);
  
  	if (delete_during)
@@ -545,7 +545,7 @@ TODO:
  int numeric_ids = 0;
  int allow_8bit_chars = 0;
  int force_delete = 0;
-@@ -373,6 +374,7 @@ void usage(enum logcode F)
+@@ -374,6 +375,7 @@ void usage(enum logcode F)
    rprintf(F,"     --modify-window=NUM     compare mod-times with reduced accuracy\n");
    rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F," -y, --fuzzy                 find similar file for basis if no dest file\n");
@@ -553,15 +553,15 @@ TODO:
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
-@@ -541,6 +543,7 @@ static struct poptOption long_options[] 
+@@ -546,6 +548,7 @@ static struct poptOption long_options[] 
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
 +  {"detect-renamed",   0,  POPT_ARG_NONE,   &detect_renamed, 0, 0, 0 },
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
-   {"compress-level",   0,  POPT_ARG_INT,    &def_compress_level, 'z', 0, 0 },
-@@ -1472,7 +1475,7 @@ int parse_arguments(int *argc, const cha
+   {"no-compress",      0,  POPT_ARG_VAL,    &do_compression, 0, 0, 0 },
+@@ -1488,7 +1491,7 @@ int parse_arguments(int *argc, const cha
  		inplace = 1;
  	}
  
@@ -570,7 +570,7 @@ TODO:
  		partial_dir = tmp_partialdir;
  
  	if (inplace) {
-@@ -1481,6 +1484,7 @@ int parse_arguments(int *argc, const cha
+@@ -1497,6 +1500,7 @@ int parse_arguments(int *argc, const cha
  			snprintf(err_buf, sizeof err_buf,
  				 "--%s cannot be used with --%s\n",
  				 append_mode ? "append" : "inplace",
@@ -578,7 +578,7 @@ TODO:
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -1820,6 +1824,8 @@ void server_options(char **args,int *arg
+@@ -1836,6 +1840,8 @@ void server_options(char **args,int *arg
  			args[ac++] = "--super";
  		if (size_only)
  			args[ac++] = "--size-only";
@@ -589,7 +589,7 @@ TODO:
  	if (modify_window_set) {
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -367,6 +367,7 @@ to the detailed description below for a 
+@@ -373,6 +373,7 @@ to the detailed description below for a 
       --modify-window=NUM     compare mod-times with reduced accuracy
   -T, --temp-dir=DIR          create temporary files in directory DIR
   -y, --fuzzy                 find similar file for basis if no dest file
@@ -597,7 +597,7 @@ TODO:
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
-@@ -1347,6 +1348,15 @@ Note that the use of the bf(--delete) op
+@@ -1353,6 +1354,15 @@ Note that the use of the bf(--delete) op
  fuzzy-match files, so either use bf(--delete-after) or specify some
  filename exclusions if you need to prevent this.
  
