@@ -1,0 +1,164 @@
+This patch to rsync 2.6.9 adds a --trust-append option that, in combination with
+--append, makes rsync exclude the portion of a transferred file that was already
+on the receiver from the post-transfer checksum.  In my limited testing, it
+seems to work.
+
+-- Matt McCutchen <hashproduct@gmail.com>
+
+--- old/match.c
++++ new/match.c
+@@ -25,6 +25,7 @@ extern int verbose;
+ extern int do_progress;
+ extern int checksum_seed;
+ extern int append_mode;
++extern int trust_append;
+ 
+ int updating_basis_file;
+ 
+@@ -315,21 +316,23 @@ void match_sums(int f, struct sum_struct
+ 	sum_init(checksum_seed);
+ 
+ 	if (append_mode > 0) {
+-		OFF_T j = 0;
+-		for (j = CHUNK_SIZE; j < s->flength; j += CHUNK_SIZE) {
+-			if (buf && do_progress)
+-				show_progress(last_match, buf->file_size);
+-			sum_update(map_ptr(buf, last_match, CHUNK_SIZE),
+-				   CHUNK_SIZE);
+-			last_match = j;
+-		}
+-		if (last_match < s->flength) {
+-			int32 n = (int32)(s->flength - last_match);
+-			if (buf && do_progress)
+-				show_progress(last_match, buf->file_size);
+-			sum_update(map_ptr(buf, last_match, n), n);
+-			last_match = s->flength;
++		if (!trust_append) {
++			OFF_T j = 0;
++			for (j = CHUNK_SIZE; j < s->flength; j += CHUNK_SIZE) {
++				if (buf && do_progress)
++					show_progress(last_match, buf->file_size);
++				sum_update(map_ptr(buf, last_match, CHUNK_SIZE),
++					   CHUNK_SIZE);
++				last_match = j;
++			}
++			if (last_match < s->flength) {
++				int32 n = (int32)(s->flength - last_match);
++				if (buf && do_progress)
++					show_progress(last_match, buf->file_size);
++				sum_update(map_ptr(buf, last_match, n), n);
++			}
+ 		}
++		last_match = s->flength;
+ 		s->count = 0;
+ 	}
+ 
+--- old/options.c
++++ new/options.c
+@@ -41,6 +41,7 @@ int make_backups = 0;
+ int whole_file = -1;
+ 
+ int append_mode = 0;
++int trust_append = 0;
+ int keep_dirlinks = 0;
+ int copy_dirlinks = 0;
+ int copy_links = 0;
+@@ -313,6 +314,7 @@ void usage(enum logcode F)
+   rprintf(F," -u, --update                skip files that are newer on the receiver\n");
+   rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
+   rprintf(F,"     --append                append data onto shorter files\n");
++  rprintf(F,"     --trust-append          ... and don't checksum portion already on dest\n");
+   rprintf(F," -d, --dirs                  transfer directories without recursing\n");
+   rprintf(F," -l, --links                 copy symlinks as symlinks\n");
+   rprintf(F," -L, --copy-links            transform symlink into referent file/dir\n");
+@@ -517,6 +519,7 @@ static struct poptOption long_options[] 
+   {"sparse",          'S', POPT_ARG_NONE,   &sparse_files, 0, 0, 0 },
+   {"inplace",          0,  POPT_ARG_NONE,   &inplace, 0, 0, 0 },
+   {"append",           0,  POPT_ARG_VAL,    &append_mode, 1, 0, 0 },
++  {"trust-append",     0,  POPT_ARG_NONE,   &trust_append, 0, 0, 0 },
+   {"del",              0,  POPT_ARG_NONE,   &delete_during, 0, 0, 0 },
+   {"delete",           0,  POPT_ARG_NONE,   &delete_mode, 0, 0, 0 },
+   {"delete-before",    0,  POPT_ARG_NONE,   &delete_before, 0, 0, 0 },
+@@ -1898,9 +1901,11 @@ void server_options(char **args,int *arg
+ 		}
+ 	}
+ 
+-	if (append_mode)
++	if (append_mode) {
+ 		args[ac++] = "--append";
+-	else if (inplace)
++		if (trust_append)
++			args[ac++] = "--trust-append";
++	} else if (inplace)
+ 		args[ac++] = "--inplace";
+ 
+ 	if (files_from && (!am_sender || filesfrom_host)) {
+--- old/receiver.c
++++ new/receiver.c
+@@ -44,6 +44,7 @@ extern int make_backups;
+ extern int cleanup_got_literal;
+ extern int remove_source_files;
+ extern int append_mode;
++extern int trust_append;
+ extern int sparse_files;
+ extern int keep_partial;
+ extern int checksum_seed;
+@@ -157,20 +158,22 @@ static int receive_data(int f_in, char *
+ 		sum.flength = (OFF_T)sum.count * sum.blength;
+ 		if (sum.remainder)
+ 			sum.flength -= sum.blength - sum.remainder;
+-		for (j = CHUNK_SIZE; j < sum.flength; j += CHUNK_SIZE) {
+-			if (do_progress)
+-				show_progress(offset, total_size);
+-			sum_update(map_ptr(mapbuf, offset, CHUNK_SIZE),
+-				   CHUNK_SIZE);
+-			offset = j;
+-		}
+-		if (offset < sum.flength) {
+-			int32 len = (int32)(sum.flength - offset);
+-			if (do_progress)
+-				show_progress(offset, total_size);
+-			sum_update(map_ptr(mapbuf, offset, len), len);
+-			offset = sum.flength;
++		if (!trust_append) {
++			for (j = CHUNK_SIZE; j < sum.flength; j += CHUNK_SIZE) {
++				if (do_progress)
++					show_progress(offset, total_size);
++				sum_update(map_ptr(mapbuf, offset, CHUNK_SIZE),
++					   CHUNK_SIZE);
++				offset = j;
++			}
++			if (offset < sum.flength) {
++				int32 len = (int32)(sum.flength - offset);
++				if (do_progress)
++					show_progress(offset, total_size);
++				sum_update(map_ptr(mapbuf, offset, len), len);
++			}
+ 		}
++		offset = sum.flength;
+ 		if (fd != -1 && (j = do_lseek(fd, offset, SEEK_SET)) != offset) {
+ 			rsyserr(FERROR, errno, "lseek of %s returned %.0f, not %.0f",
+ 				full_fname(fname), (double)j, (double)offset);
+--- old/rsync.yo
++++ new/rsync.yo
+@@ -318,6 +318,7 @@ to the detailed description below for a 
+  -u, --update                skip files that are newer on the receiver
+      --inplace               update destination files in-place
+      --append                append data onto shorter files
++     --trust-append          ... and don't checksum portion already on dest
+  -d, --dirs                  transfer directories without recursing
+  -l, --links                 copy symlinks as symlinks
+  -L, --copy-links            transform symlink into referent file/dir
+@@ -709,6 +710,12 @@ Implies bf(--inplace), but does not conf
+ bf(--sparse) option will be auto-disabled if a resend of the already-existing
+ data is required).
+ 
++dit(bf(--trust-append)) In combination with bf(--append), this option excludes
++the portion of a transferred file that was already on the receiver from the
++post-transfer checksum.  You can use this option to improve performance if you
++are certain that the receiver's file is identical to the start of the sender's
++file.
++
+ dit(bf(-d, --dirs)) Tell the sending side to include any directories that
+ are encountered.  Unlike bf(--recursive), a directory's contents are not copied
+ unless the directory name specified is "." or ends with a trailing slash
