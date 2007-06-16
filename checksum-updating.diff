@@ -1,0 +1,609 @@
+This adds a sender optimization feature that allows a cache of checksums
+to be created/updated and used when the client specifies the --checksum
+option.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/checksum-updating.diff
+    ./configure                               (optional if already run)
+    make
+
+TODO:  when sending individual files (as opposed to an entire directory),
+we should still update the .md[45]sums file(s) if we compute new checksum
+info.  (Writing currently only occurs if we send an entire dir.)
+
+--- old/clientserver.c
++++ new/clientserver.c
+@@ -37,6 +37,7 @@ extern int sanitize_paths;
+ extern int filesfrom_fd;
+ extern int remote_protocol;
+ extern int protocol_version;
++extern int checksum_updating;
+ extern int io_timeout;
+ extern int no_detach;
+ extern int default_af_hint;
+@@ -634,6 +635,8 @@ static int rsync_module(int f_in, int f_
+ 	else if (am_root < 0) /* Treat --fake-super from client as --super. */
+ 		am_root = 2;
+ 
++	checksum_updating = lp_checksum_updating(i);
++
+ 	if (filesfrom_fd == 0)
+ 		filesfrom_fd = f_in;
+ 
+--- old/flist.c
++++ new/flist.c
+@@ -25,6 +25,7 @@
+ #include "io.h"
+ 
+ extern int verbose;
++extern int dry_run;
+ extern int list_only;
+ extern int am_root;
+ extern int am_server;
+@@ -57,6 +58,7 @@ extern int implied_dirs;
+ extern int file_extra_cnt;
+ extern int ignore_perishable;
+ extern int non_perishable_cnt;
++extern int checksum_updating;
+ extern int prune_empty_dirs;
+ extern int copy_links;
+ extern int copy_unsafe_links;
+@@ -101,6 +103,8 @@ static char tmp_sum[MAX_DIGEST_LEN];
+ static char empty_sum[MAX_DIGEST_LEN];
+ static int flist_count_offset; /* for --delete --progress */
+ static int dir_count = 0;
++static struct file_list *checksum_flist = NULL;
++static int checksum_matches = 0;
+ 
+ static void clean_flist(struct file_list *flist, int strip_root);
+ static void output_flist(struct file_list *flist);
+@@ -317,6 +321,216 @@ static void flist_done_allocating(struct
+ 		flist->pool_boundary = ptr;
+ }
+ 
++/* The len count is the length of the basename + 1 for the null. */
++static void add_checksum(const char *dirname, const char *basename, int len,
++			 OFF_T file_length, time_t mtime, const char *sum,
++			 int flags)
++{
++	struct file_struct *file;
++	int alloc_len, extra_len;
++	char *bp;
++
++	if (len == 8+1 && *basename == '.'
++	 && (strcmp(basename, ".md5sums") == 0
++	  || strcmp(basename, ".md4sums") == 0))
++		return;
++
++	if (len < 0)
++		len = strlen(basename) + 1;
++
++	extra_len = (file_extra_cnt + (file_length > 0xFFFFFFFFu) + SUM_EXTRA_CNT)
++	          * EXTRA_LEN;
++#if EXTRA_ROUNDING > 0
++	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
++		extra_len = (extra_len | (EXTRA_ROUNDING * EXTRA_LEN)) + EXTRA_LEN;
++#endif
++	alloc_len = FILE_STRUCT_LEN + extra_len + len;
++	bp = pool_alloc(checksum_flist->file_pool, alloc_len, "add_checksum");
++
++	memset(bp, 0, extra_len + FILE_STRUCT_LEN);
++	bp += extra_len;
++	file = (struct file_struct *)bp;
++	bp += FILE_STRUCT_LEN;
++
++	memcpy(bp, basename, len);
++
++	file->flags = flags;
++	file->mode = S_IFREG;
++	file->modtime = mtime;
++	file->len32 = (uint32)file_length;
++	if (file_length > 0xFFFFFFFFu) {
++		file->flags |= FLAG_LENGTH64;
++		OPT_EXTRA(file, 0)->unum = (uint32)(file_length >> 32);
++	}
++	file->dirname = dirname;
++	bp = (char*)F_SUM(file);
++	memcpy(bp, sum, checksum_len);
++
++	flist_expand(checksum_flist, 1);
++	checksum_flist->files[checksum_flist->count++] = file;
++
++	checksum_flist->sorted = checksum_flist->files;
++}
++
++/* The direname value must remain unchanged during the lifespan of the
++ * created checksum_flist object because we use it directly. */
++static void read_checksums(const char *dirname)
++{
++	char line[MAXPATHLEN+1024], fbuf[MAXPATHLEN], sum[MAX_DIGEST_LEN];
++	const char *filename;
++	OFF_T file_length;
++	time_t mtime;
++	int len, dlen, i, flags;
++	char *cp;
++	FILE *fp;
++
++	if (checksum_flist) {
++		/* Reset the pool memory and empty the file-list array. */
++		pool_free_old(checksum_flist->file_pool,
++			      pool_boundary(checksum_flist->file_pool, 0));
++		checksum_flist->count = 0;
++	} else
++		checksum_flist = flist_new(FLIST_TEMP, "read_checksums");
++
++	checksum_flist->low = 0;
++	checksum_flist->high = -1;
++	checksum_matches = 0;
++
++	if (protocol_version >= 30)
++		filename = ".md5sums";
++	else
++		filename = ".md4sums";
++	if (dirname) {
++		dlen = strlcpy(fbuf, dirname, sizeof fbuf);
++		if (dlen >= (int)sizeof fbuf)
++			return;
++		fbuf[dlen++] = '/';
++	} else
++		dlen = 0;
++	strlcpy(fbuf+dlen, filename, sizeof fbuf - dlen);
++	if (!(fp = fopen(fbuf, "r")))
++		return;
++
++	while (fgets(line, sizeof line, fp)) {
++		for (i = 0, cp = line; i < checksum_len*2; i++, cp++) {
++			int x;
++			if (isDigit(cp))
++				x = *cp - '0';
++			else if (isAlpha(cp)) {
++				x = (*cp & 0xF) + 9;
++				if (x > 0xF) {
++					cp = "";
++					break;
++				}
++			} else {
++				cp = "";
++				break;
++			}
++			if (i & 1)
++				sum[i/2] |= x;
++			else
++				sum[i/2] = x << 4;
++		}
++
++		if (*cp != ' ')
++			continue;
++		while (*++cp == ' ') {}
++
++		file_length = 0;
++		while (isDigit(cp))
++			file_length = file_length * 10 + *cp++ - '0';
++
++		if (*cp != ' ')
++			continue;
++		while (*++cp == ' ') {}
++
++		mtime = 0;
++		while (isDigit(cp))
++			mtime = mtime * 10 + *cp++ - '0';
++
++		if (*cp != ' ')
++			continue;
++		while (*++cp == ' ') {}
++
++		len = strlen(cp);
++		while (len && (cp[len-1] == '\n' || cp[len-1] == '\r'))
++			len--;
++		if (!len)
++			continue;
++		cp[len++] = '\0'; /* len now counts the null */
++		if (strchr(cp, '/') || len > MAXPATHLEN)
++			continue;
++
++		strlcpy(fbuf+dlen, cp, sizeof fbuf - dlen);
++		if (is_excluded(fbuf, 0, ALL_FILTERS)) {
++			flags = FLAG_FILE_SENT;
++			checksum_matches++;
++		} else
++			flags = 0;
++
++		add_checksum(dirname, cp, len, file_length, mtime, sum, flags);
++	}
++	fclose(fp);
++
++	clean_flist(checksum_flist, 0);
++}
++
++static void write_checksums(const char *dirname)
++{
++	char buf[MAXPATHLEN+1024];
++	const char *filename;
++	int new_entries = checksum_flist->count > checksum_flist->high + 1;
++	int orphan_entires = checksum_flist->count != checksum_matches;
++	FILE *out_fp;
++	int i;
++
++	if (dry_run)
++		return;
++
++	for (i = checksum_flist->high + 1; i < checksum_flist->count; i++) {
++		struct file_struct *file = checksum_flist->sorted[i];
++		file->flags |= FLAG_FILE_SENT;
++	}
++
++	clean_flist(checksum_flist, 0);
++
++	if (protocol_version >= 30)
++		filename = ".md5sums";
++	else
++		filename = ".md4sums";
++	if (dirname) {
++		if (pathjoin(buf, sizeof buf, dirname, filename) >= sizeof buf)
++			return;
++	} else
++		strlcpy(buf, filename, sizeof buf);
++
++	if (checksum_flist->high - checksum_flist->low < 0) {
++		unlink(buf);
++		return;
++	}
++
++	if (!new_entries && !orphan_entires)
++		return;
++
++	if (!(out_fp = fopen(buf, "w")))
++		return;
++
++	for (i = checksum_flist->low; i <= checksum_flist->high; i++) {
++		struct file_struct *file = checksum_flist->sorted[i];
++		const char *cp = F_SUM(file);
++		const char *end = cp + checksum_len;
++		if (!(file->flags & FLAG_FILE_SENT))
++			continue;
++		while (cp != end)
++			fprintf(out_fp, "%02x", CVAL(cp++, 0));
++		fprintf(out_fp, " %10.0f %10ld %s\n",
++			(double)F_LENGTH(file), (long)file->modtime,
++			file->basename);
++	}
++
++	fclose(out_fp);
++}
++
+ int push_pathname(const char *dir, int len)
+ {
+ 	if (dir == pathname)
+@@ -973,34 +1187,24 @@ static struct file_struct *recv_file_ent
+ 	return file;
+ }
+ 
+-/**
+- * Create a file_struct for a named file by reading its stat()
+- * information and performing extensive checks against global
+- * options.
+- *
+- * @return the new file, or NULL if there was an error or this file
+- * should be excluded.
++/* Create a file_struct for a named file by reading its stat() information
++ * and performing extensive checks against global options.
+  *
+- * @todo There is a small optimization opportunity here to avoid
+- * stat()ing the file in some circumstances, which has a certain cost.
+- * We are called immediately after doing readdir(), and so we may
+- * already know the d_type of the file.  We could for example avoid
+- * statting directories if we're not recursing, but this is not a very
+- * important case.  Some systems may not have d_type.
+- **/
++ * Returns a pointer to the new file struct, or NULL if there was an error
++ * or this file should be excluded. */
+ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 			      STRUCT_STAT *stp, int flags, int filter_level)
+ {
+ 	static char *lastdir;
+-	static int lastdir_len = -1;
++	static int lastdir_len = -2;
+ 	struct file_struct *file;
+-	STRUCT_STAT st;
+ 	char thisname[MAXPATHLEN];
+ 	char linkname[MAXPATHLEN];
+ 	int alloc_len, basename_len, linkname_len;
+ 	int extra_len = file_extra_cnt * EXTRA_LEN;
+ 	const char *basename;
+ 	alloc_pool_t *pool;
++	STRUCT_STAT st;
+ 	char *bp;
+ 
+ 	if (strlcpy(thisname, fname, sizeof thisname)
+@@ -1115,9 +1319,16 @@ struct file_struct *make_file(const char
+ 			memcpy(lastdir, thisname, len);
+ 			lastdir[len] = '\0';
+ 			lastdir_len = len;
++			if (always_checksum && am_sender && flist)
++				read_checksums(lastdir);
+ 		}
+-	} else
++	} else {
+ 		basename = thisname;
++		if (always_checksum && am_sender && flist && lastdir_len == -2) {
++			lastdir_len = -1;
++			read_checksums(NULL);
++		}
++	}
+ 	basename_len = strlen(basename) + 1; /* count the '\0' */
+ 
+ #ifdef SUPPORT_LINKS
+@@ -1193,11 +1404,30 @@ struct file_struct *make_file(const char
+ 	}
+ #endif
+ 
+-	if (always_checksum && am_sender && S_ISREG(st.st_mode))
+-		file_checksum(thisname, tmp_sum, st.st_size);
+-
+ 	F_PATHNAME(file) = pathname;
+ 
++	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
++		int j;
++		if (flist && (j = flist_find(checksum_flist, file)) >= 0) {
++			struct file_struct *fp = checksum_flist->sorted[j];
++			if (fp->modtime == file->modtime && F_LENGTH(fp) == F_LENGTH(file)) {
++				memcpy(tmp_sum, F_SUM(fp), MAX_DIGEST_LEN);
++				fp->flags |= FLAG_FILE_SENT;
++				checksum_matches++;
++			} else {
++				clear_file(fp);
++				goto compute_checksum;
++			}
++		} else {
++		  compute_checksum:
++			file_checksum(thisname, tmp_sum, st.st_size);
++			if (checksum_updating && flist) {
++				add_checksum(file->dirname, basename, basename_len,
++					     st.st_size, st.st_mtime, tmp_sum, 0);
++			}
++		}
++	}
++
+ 	/* This code is only used by the receiver when it is building
+ 	 * a list of files for a delete pass. */
+ 	if (keep_dirlinks && linkname_len && flist) {
+@@ -1241,14 +1471,14 @@ void unmake_file(struct file_struct *fil
+ 
+ static struct file_struct *send_file_name(int f, struct file_list *flist,
+ 					  char *fname, STRUCT_STAT *stp,
+-					  int flags, int filter_flags)
++					  int flags, int filter_level)
+ {
+ 	struct file_struct *file;
+ #if defined SUPPORT_ACLS || defined SUPPORT_XATTRS
+ 	statx sx;
+ #endif
+ 
+-	file = make_file(fname, flist, stp, flags, filter_flags);
++	file = make_file(fname, flist, stp, flags, filter_level);
+ 	if (!file)
+ 		return NULL;
+ 
+@@ -1442,7 +1672,7 @@ static void send_directory(int f, struct
+ 	DIR *d;
+ 	int divert_dirs = (flags & FLAG_DIVERT_DIRS) != 0;
+ 	int start = flist->count;
+-	int filter_flags = f == -2 ? SERVER_FILTERS : ALL_FILTERS;
++	int filter_level = f == -2 ? SERVER_FILTERS : ALL_FILTERS;
+ 
+ 	assert(flist != NULL);
+ 
+@@ -1471,7 +1701,7 @@ static void send_directory(int f, struct
+ 			continue;
+ 		}
+ 
+-		send_file_name(f, flist, fbuf, NULL, flags, filter_flags);
++		send_file_name(f, flist, fbuf, NULL, flags, filter_level);
+ 	}
+ 
+ 	fbuf[len] = '\0';
+@@ -1483,6 +1713,9 @@ static void send_directory(int f, struct
+ 
+ 	closedir(d);
+ 
++	if (checksum_updating && always_checksum && am_sender && f >= 0)
++		write_checksums(fbuf);
++
+ 	if (f >= 0 && recurse && !divert_dirs) {
+ 		int i, end = flist->count - 1;
+ 		/* send_if_directory() bumps flist->count, so use "end". */
+@@ -2206,7 +2439,7 @@ void flist_free(struct file_list *flist)
+ 
+ 	if (!flist->prev || !flist_cnt)
+ 		pool_destroy(flist->file_pool);
+-	else
++	else if (flist->pool_boundary)
+ 		pool_free_old(flist->file_pool, flist->pool_boundary);
+ 
+ 	if (flist->sorted && flist->sorted != flist->files)
+@@ -2225,6 +2458,7 @@ static void clean_flist(struct file_list
+ 	if (!flist)
+ 		return;
+ 	if (flist->count == 0) {
++		flist->low = 0;
+ 		flist->high = -1;
+ 		return;
+ 	}
+--- old/loadparm.c
++++ new/loadparm.c
+@@ -149,6 +149,7 @@ typedef struct
+ 	int syslog_facility;
+ 	int timeout;
+ 
++	BOOL checksum_updating;
+ 	BOOL fake_super;
+ 	BOOL ignore_errors;
+ 	BOOL ignore_nonreadable;
+@@ -197,6 +198,7 @@ static service sDefault =
+  /* syslog_facility; */		LOG_DAEMON,
+  /* timeout; */			0,
+ 
++ /* checksum_updating; */	False,
+  /* fake_super; */		False,
+  /* ignore_errors; */		False,
+  /* ignore_nonreadable; */	False,
+@@ -313,6 +315,7 @@ static struct parm_struct parm_table[] =
+  {"lock file",         P_STRING, P_LOCAL, &sDefault.lock_file,         NULL,0},
+  {"log file",          P_STRING, P_LOCAL, &sDefault.log_file,          NULL,0},
+  {"log format",        P_STRING, P_LOCAL, &sDefault.log_format,        NULL,0},
++ {"checksum updating", P_BOOL,   P_LOCAL, &sDefault.checksum_updating, NULL,0},
+  {"max connections",   P_INTEGER,P_LOCAL, &sDefault.max_connections,   NULL,0},
+  {"max verbosity",     P_INTEGER,P_LOCAL, &sDefault.max_verbosity,     NULL,0},
+  {"name",              P_STRING, P_LOCAL, &sDefault.name,              NULL,0},
+@@ -418,6 +421,7 @@ FN_LOCAL_BOOL(lp_fake_super, fake_super)
+ FN_LOCAL_BOOL(lp_ignore_errors, ignore_errors)
+ FN_LOCAL_BOOL(lp_ignore_nonreadable, ignore_nonreadable)
+ FN_LOCAL_BOOL(lp_list, list)
++FN_LOCAL_BOOL(lp_checksum_updating, checksum_updating)
+ FN_LOCAL_BOOL(lp_read_only, read_only)
+ FN_LOCAL_BOOL(lp_strict_modes, strict_modes)
+ FN_LOCAL_BOOL(lp_transfer_logging, transfer_logging)
+--- old/options.c
++++ new/options.c
+@@ -109,6 +109,7 @@ size_t bwlimit_writemax = 0;
+ int ignore_existing = 0;
+ int ignore_non_existing = 0;
+ int need_messages_from_generator = 0;
++int checksum_updating = 0;
+ int max_delete = -1;
+ OFF_T max_size = 0;
+ OFF_T min_size = 0;
+@@ -302,6 +303,7 @@ void usage(enum logcode F)
+   rprintf(F," -q, --quiet                 suppress non-error messages\n");
+   rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
+   rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
++  rprintf(F,"     --checksum-updating     sender updates .md[45]sums files\n");
+   rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
+   rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
+   rprintf(F," -r, --recursive             recurse into directories\n");
+@@ -542,6 +544,7 @@ static struct poptOption long_options[] 
+   {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
+   {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
+   {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
++  {"checksum-updating",0,  POPT_ARG_NONE,   &checksum_updating, 0, 0, 0 },
+   {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
+   {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
+   {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
+@@ -1896,7 +1899,9 @@ void server_options(char **args,int *arg
+ 				args[ac++] = basis_dir[i];
+ 			}
+ 		}
+-	}
++	} else if (checksum_updating)
++		args[ac++] = "--checksum-updating";
++
+ 
+ 	if (append_mode)
+ 		args[ac++] = "--append";
+--- old/rsync.h
++++ new/rsync.h
+@@ -1070,6 +1070,12 @@ isDigit(const char *ptr)
+ }
+ 
+ static inline int
++isAlpha(const char *ptr)
++{
++	return isalpha(*(unsigned char *)ptr);
++}
++
++static inline int
+ isPrint(const char *ptr)
+ {
+ 	return isprint(*(unsigned char *)ptr);
+--- old/rsync.yo
++++ new/rsync.yo
+@@ -307,6 +307,7 @@ to the detailed description below for a 
+  -q, --quiet                 suppress non-error messages
+      --no-motd               suppress daemon-mode MOTD (see caveat)
+  -c, --checksum              skip based on checksum, not mod-time & size
++     --checksum-updating     sender updates .md[45]sums files
+  -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
+      --no-OPTION             turn off an implied OPTION (e.g. --no-D)
+  -r, --recursive             recurse into directories
+@@ -502,9 +503,9 @@ uses a "quick check" that (by default) c
+ of last modification match between the sender and receiver.  This option
+ changes this to compare a 128-bit MD4 checksum for each file that has a
+ matching size.  Generating the checksums means that both sides will expend
+-a lot of disk I/O reading all the data in the files in the transfer (and
+-this is prior to any reading that will be done to transfer changed files),
+-so this can slow things down significantly.
++a lot of disk I/O reading the data in all the files in the transfer, so
++this can slow things down significantly (and this is prior to any reading
++that will be done to transfer the files that have changed).
+ 
+ The sending side generates its checksums while it is doing the file-system
+ scan that builds the list of the available files.  The receiver generates
+@@ -512,12 +513,43 @@ its checksums when it is scanning for ch
+ file that has the same size as the corresponding sender's file:  files with
+ either a changed size or a changed checksum are selected for transfer.
+ 
++Starting with version 3.0.0, the sending side will look for a checksum
++summary file and use a pre-generated checksum that it reads out of the file
++(as long as it matches the file's size and modified time).  This allows a
++server to support the --checksum option to clients without having to
++recompute the checksums for each client.  See the bf(--checksum-updating)
++option for a way to have rsync create/update the checksum files.
++
+ Note that rsync always verifies that each em(transferred) file was
+ correctly reconstructed on the receiving side by checking a whole-file
+ checksum that is generated when as the file is transferred, but that
+ automatic after-the-transfer verification has nothing to do with this
+ option's before-the-transfer "Does this file need to be updated?" check.
+ 
++dit(bf(--checksum-updating)) This option tells the sending side to create
++and/or update per-directory checksum files that are used by the
++bf(--checksum) option.  The file that is updated is either .md5sums (for
++protocols >= 30) or .md4sums (for older protocols).  If pre-transfer
++checksums are not being computed, this option has no effect.
++
++The checksum files stores the computed checksum, last-known size,
++modification time, and name for each file in the current directory.  If a
++later transfer finds that a file matches its prior size and modification
++time, the checksum is assumed to still be correct.  Otherwise it is
++recomputed and udpated in the file.
++
++To avoid transferring the system's checksum files, you can use an exclude
++(e.g. bf(--exclude=.md[45]sums)).  To make this easier to type, you can use
++a popt alias.  For instance, adding the following line in your ~/.popt file
++defines a bf(-cc) option that enables checksum updating and excludes the
++checksum files:
++
++verb(  rsync alias --cc --checksum-updating --exclude='.md[45]sums')
++
++An rsync daemon does not allow the client to control this setting, so see
++the "checksum updating" daemon config option for information on how to make
++a daemon maintain these checksum files.
++
+ dit(bf(-a, --archive)) This is equivalent to bf(-rlptgoD). It is a quick
+ way of saying you want recursion and want to preserve almost
+ everything (with -H being a notable omission).
+--- old/rsyncd.conf.yo
++++ new/rsyncd.conf.yo
+@@ -198,6 +198,21 @@ locking on this file to ensure that the 
+ exceeded for the modules sharing the lock file.
+ The default is tt(/var/run/rsyncd.lock).
+ 
++dit(bf(checksum updating)) This option tells rsync to update/create the
++checksum information in the per-directory checksum files when users copy
++files using the bf(--checksum) option.  Any file that has changed since it
++was last checksummed (or is not mentioned) has its data updated in the
++.md4sums or .md5sums file (the file used depends on what protocol version
++is used for the transfer).  
++
++Note that this updating will occur even if the module is listed as being
++read-only.  If you want to hide these files (and you will almost always
++want to do), add ".md[45]sums" to the module's exclude setting.
++
++Note also that the client's command-line option, bf(--checksum-updating),
++has no effect on a daemon.  A daemon will only update/create checksum files
++if this config option is true.
++
+ dit(bf(read only)) The "read only" option determines whether clients
+ will be able to upload files or not. If "read only" is true then any
+ attempted uploads will fail. If "read only" is false then uploads will
