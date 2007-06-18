@@ -54,8 +54,8 @@ we should still update the .rsyncsums file if we compute a new checksum.
  
  #define PTR_SIZE (sizeof (struct file_struct *))
  
-+#define FLAG_SUM_MISSING (1<<1)
-+#define FLAG_SUM_FOUND (1<<2)
++#define FLAG_SUM_MISSING (1<<1) /* F_SUM() data is undefined */
++#define FLAG_SUM_KEEP (1<<2) /* keep entry when rewriting */
 +
  int io_error;
  int checksum_len;
@@ -70,7 +70,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  
  static void clean_flist(struct file_list *flist, int strip_root);
  static void output_flist(struct file_list *flist);
-@@ -317,6 +325,275 @@ static void flist_done_allocating(struct
+@@ -317,6 +325,283 @@ static void flist_done_allocating(struct
  		flist->pool_boundary = ptr;
  }
  
@@ -123,7 +123,11 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +	file->dirname = dirname;
 +	bp = (char*)F_SUM(file);
 +	memcpy(bp, sum, checksum_len);
++#if SIZEOF_TIME_T == 4
++	OPT_EXTRA(file, LEN64_BUMP(file) + SUM_EXTRA_CNT)->num = ctime;
++#else
 +	memcpy(bp - SIZEOF_TIME_T, &ctime, SIZEOF_TIME_T);
++#endif
 +
 +	flist_expand(checksum_flist, 1);
 +	checksum_flist->files[checksum_flist->count++] = file;
@@ -255,7 +259,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +
 +		strlcpy(fbuf+dlen, cp, sizeof fbuf - dlen);
 +		if (is_excluded(fbuf, 0, ALL_FILTERS)) {
-+			flags |= FLAG_SUM_FOUND;
++			flags |= FLAG_SUM_KEEP;
 +			checksum_matches++;
 +		}
 +
@@ -309,9 +313,13 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +		const char *cp = F_SUM(file);
 +		const char *end = cp + checksum_len;
 +		time_t ctime;
-+		if (!(file->flags & FLAG_SUM_FOUND))
++		if (!(file->flags & FLAG_SUM_KEEP))
 +			continue;
++#if SIZEOF_TIME_T == 4
++		ctime = OPT_EXTRA(file, LEN64_BUMP(file) + SUM_EXTRA_CNT)->num;
++#else
 +		memcpy(&ctime, cp - SIZEOF_TIME_T, SIZEOF_TIME_T);
++#endif
 +		if (protocol_version >= 30) {
 +			fprintf(out_fp, "%s ", 
 +				file->basename + strlen(file->basename) + 1);
@@ -329,9 +337,9 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +			fprintf(out_fp, " %s", 
 +				file->basename + strlen(file->basename) + 1);
 +		}
-+		fprintf(out_fp, " %10.0f %10ld %10ld %s\n",
-+			(double)F_LENGTH(file), (long)file->modtime,
-+			(long)ctime, file->basename);
++		fprintf(out_fp, " %10.0f %10.0f %10.0f %s\n",
++			(double)F_LENGTH(file), (double)file->modtime,
++			(double)ctime, file->basename);
 +		if (file->modtime > ctime)
 +			ctime = file->modtime;
 +		if (ctime > latest_time)
@@ -346,7 +354,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  int push_pathname(const char *dir, int len)
  {
  	if (dir == pathname)
-@@ -973,34 +1250,24 @@ static struct file_struct *recv_file_ent
+@@ -973,34 +1258,24 @@ static struct file_struct *recv_file_ent
  	return file;
  }
  
@@ -387,7 +395,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	char *bp;
  
  	if (strlcpy(thisname, fname, sizeof thisname)
-@@ -1077,6 +1344,8 @@ struct file_struct *make_file(const char
+@@ -1077,6 +1352,8 @@ struct file_struct *make_file(const char
  	if (is_excluded(thisname, S_ISDIR(st.st_mode) != 0, filter_level)) {
  		if (ignore_perishable)
  			non_perishable_cnt++;
@@ -396,7 +404,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  		return NULL;
  	}
  
-@@ -1115,9 +1384,16 @@ struct file_struct *make_file(const char
+@@ -1115,9 +1392,16 @@ struct file_struct *make_file(const char
  			memcpy(lastdir, thisname, len);
  			lastdir[len] = '\0';
  			lastdir_len = len;
@@ -414,7 +422,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	basename_len = strlen(basename) + 1; /* count the '\0' */
  
  #ifdef SUPPORT_LINKS
-@@ -1193,11 +1469,40 @@ struct file_struct *make_file(const char
+@@ -1193,11 +1477,44 @@ struct file_struct *make_file(const char
  	}
  #endif
  
@@ -428,7 +436,11 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +		if (flist && (j = flist_find(checksum_flist, file)) >= 0) {
 +			struct file_struct *fp = checksum_flist->sorted[j];
 +			time_t ctime;
++#if SIZEOF_TIME_T == 4
++			ctime = OPT_EXTRA(fp, LEN64_BUMP(fp) + SUM_EXTRA_CNT)->num;
++#else
 +			memcpy(&ctime, F_SUM(fp) - SIZEOF_TIME_T, SIZEOF_TIME_T);
++#endif
 +			if (F_LENGTH(fp) == st.st_size
 +			 && fp->modtime == st.st_mtime && ctime == st.st_ctime) {
 +				if (fp->flags & FLAG_SUM_MISSING) {
@@ -439,18 +451,18 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +					checksum_matches++;
 +					memcpy(tmp_sum, F_SUM(fp), MAX_DIGEST_LEN);
 +				}
-+				fp->flags |= FLAG_SUM_FOUND;
++				fp->flags |= FLAG_SUM_KEEP;
 +			} else {
 +				clear_file(fp);
-+				goto compute_checksum;
++				goto compute_new_checksum;
 +			}
 +		} else {
-+		  compute_checksum:
++		  compute_new_checksum:
 +			file_checksum(thisname, tmp_sum, st.st_size);
 +			if (checksum_updating && flist) {
 +				add_checksum(file->dirname, basename, basename_len,
 +					     st.st_size, st.st_mtime, st.st_ctime,
-+					     tmp_sum, NULL, FLAG_SUM_FOUND);
++					     tmp_sum, NULL, FLAG_SUM_KEEP);
 +			}
 +		}
 +	}
@@ -458,7 +470,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	/* This code is only used by the receiver when it is building
  	 * a list of files for a delete pass. */
  	if (keep_dirlinks && linkname_len && flist) {
-@@ -1241,14 +1546,14 @@ void unmake_file(struct file_struct *fil
+@@ -1241,14 +1558,14 @@ void unmake_file(struct file_struct *fil
  
  static struct file_struct *send_file_name(int f, struct file_list *flist,
  					  char *fname, STRUCT_STAT *stp,
@@ -475,7 +487,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	if (!file)
  		return NULL;
  
-@@ -1442,7 +1747,7 @@ static void send_directory(int f, struct
+@@ -1442,7 +1759,7 @@ static void send_directory(int f, struct
  	DIR *d;
  	int divert_dirs = (flags & FLAG_DIVERT_DIRS) != 0;
  	int start = flist->count;
@@ -484,7 +496,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  
  	assert(flist != NULL);
  
-@@ -1471,7 +1776,7 @@ static void send_directory(int f, struct
+@@ -1471,7 +1788,7 @@ static void send_directory(int f, struct
  			continue;
  		}
  
@@ -493,7 +505,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	}
  
  	fbuf[len] = '\0';
-@@ -1483,6 +1788,9 @@ static void send_directory(int f, struct
+@@ -1483,6 +1800,9 @@ static void send_directory(int f, struct
  
  	closedir(d);
  
@@ -503,7 +515,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	if (f >= 0 && recurse && !divert_dirs) {
  		int i, end = flist->count - 1;
  		/* send_if_directory() bumps flist->count, so use "end". */
-@@ -2206,7 +2514,7 @@ void flist_free(struct file_list *flist)
+@@ -2206,7 +2526,7 @@ void flist_free(struct file_list *flist)
  
  	if (!flist->prev || !flist_cnt)
  		pool_destroy(flist->file_pool);
@@ -512,7 +524,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  		pool_free_old(flist->file_pool, flist->pool_boundary);
  
  	if (flist->sorted && flist->sorted != flist->files)
-@@ -2225,6 +2533,7 @@ static void clean_flist(struct file_list
+@@ -2225,6 +2545,7 @@ static void clean_flist(struct file_list
  	if (!flist)
  		return;
  	if (flist->count == 0) {
@@ -705,7 +717,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  attempted uploads will fail. If "read only" is false then uploads will
 --- old/support/rsyncsums
 +++ new/support/rsyncsums
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,185 @@
 +#!/usr/bin/perl -w
 +use strict;
 +
@@ -843,7 +855,8 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +		}
 +		$sum4 = $md4->hexdigest;
 +		$sum5 = $md5->hexdigest;
-+		print " $sum4 $sum5 $fn\n" if $verbosity > 1;
++		print " $sum4 $sum5" if $verbosity > 2;
++		print " $fn\n" if $verbosity > 1;
 +		my($size2,$mtime2,$ctime2) = (stat(IN))[7,9,10];
 +		last if $size == $size2 && $mtime == $mtime2 && $ctime == $ctime2;
 +		$size = $size2;
