@@ -9,10 +9,6 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-TODO:  when sending individual files (as opposed to an entire directory),
-we should still update the .rsyncsums file if we compute a new checksum.
-(The file is currently only written if we send an entire dir.)
-
 --- old/clientserver.c
 +++ new/clientserver.c
 @@ -37,6 +37,7 @@ extern int sanitize_paths;
@@ -60,17 +56,18 @@ we should still update the .rsyncsums file if we compute a new checksum.
  int io_error;
  int checksum_len;
  dev_t filesystem_dev; /* used to implement -x */
-@@ -101,6 +106,9 @@ static char tmp_sum[MAX_DIGEST_LEN];
+@@ -101,6 +106,10 @@ static char tmp_sum[MAX_DIGEST_LEN];
  static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
  static int dir_count = 0;
 +static struct file_list *checksum_flist = NULL;
 +static int checksum_matches = 0;
++static int checksum_updates = 0;
 +static int regular_skipped = 0;
  
  static void clean_flist(struct file_list *flist, int strip_root);
  static void output_flist(struct file_list *flist);
-@@ -317,6 +325,283 @@ static void flist_done_allocating(struct
+@@ -317,6 +326,304 @@ static void flist_done_allocating(struct
  		flist->pool_boundary = ptr;
  }
  
@@ -135,6 +132,101 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +	checksum_flist->sorted = checksum_flist->files;
 +}
 +
++static void write_checksums(const char *next_dirname, int whole_dir)
++{
++	static const char *dirname_save;
++	char fbuf[MAXPATHLEN];
++	const char *dirname;
++	int count, new_entries, counts_match, no_skipped;
++	time_t latest_time = 0;
++	FILE *out_fp;
++	int i;
++
++	dirname = dirname_save;
++	dirname_save = next_dirname;
++
++	if (!dirname)
++		return;
++
++	count = checksum_flist->count;
++	new_entries = checksum_updates != 0;
++	counts_match = count == checksum_matches;
++	no_skipped = whole_dir && regular_skipped == 0;
++
++	clean_flist(checksum_flist, 0);
++
++	checksum_flist->count = 0;
++	checksum_matches = 0;
++	checksum_updates = 0;
++	regular_skipped = 0;
++
++	if (dry_run)
++		return;
++
++	if (*dirname) {
++		if (pathjoin(fbuf, sizeof fbuf, dirname, ".rsyncsums") >= sizeof fbuf)
++			return;
++	} else
++		strlcpy(fbuf, ".rsyncsums", sizeof fbuf);
++
++	if (checksum_flist->high - checksum_flist->low < 0 && no_skipped) {
++		unlink(fbuf);
++		return;
++	}
++
++	if (!new_entries && (counts_match || !whole_dir))
++		return;
++
++	if (!(out_fp = fopen(fbuf, "w")))
++		return;
++
++	new_entries = 0;
++	for (i = checksum_flist->low; i <= checksum_flist->high; i++) {
++		struct file_struct *file = checksum_flist->sorted[i];
++		const char *cp = F_SUM(file);
++		const char *end = cp + checksum_len;
++		const char *alt_sum = file->basename + strlen(file->basename) + 1;
++		time_t ctime;
++		if (whole_dir && !(file->flags & FLAG_SUM_KEEP))
++			continue;
++#if SIZEOF_TIME_T == 4
++		ctime = OPT_EXTRA(file, LEN64_BUMP(file) + SUM_EXTRA_CNT)->num;
++#else
++		memcpy(&ctime, cp - SIZEOF_TIME_T, SIZEOF_TIME_T);
++#endif
++		if (protocol_version >= 30)
++			fprintf(out_fp, "%s ", alt_sum);
++		if (file->flags & FLAG_SUM_MISSING) {
++			new_entries++;
++			do {
++				fprintf(out_fp, "==");
++			} while (++cp != end);
++		} else {
++			do {
++				fprintf(out_fp, "%02x", CVAL(cp, 0));
++			} while (++cp != end);
++		}
++		if (protocol_version < 30)
++			fprintf(out_fp, " %s", alt_sum);
++		if (*alt_sum == '=')
++			new_entries++;
++		fprintf(out_fp, " %10.0f %10.0f %10.0f %s\n",
++			(double)F_LENGTH(file), (double)file->modtime,
++			(double)ctime, file->basename);
++		if (file->modtime > ctime)
++			ctime = file->modtime;
++		if (ctime > latest_time)
++			latest_time = ctime;
++	}
++
++	fclose(out_fp);
++
++	if (whole_dir && new_entries == 0)
++		set_modtime(fbuf, latest_time, latest_time);
++	else
++		set_modtime(fbuf, latest_time-1, latest_time-1);
++}
++
 +/* The direname value must remain unchanged during the lifespan of the
 + * created checksum_flist object because we use it directly. */
 +static void read_checksums(const char *dirname)
@@ -147,6 +239,8 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +	char *cp;
 +	FILE *fp;
 +
++	write_checksums(dirname, 0);
++
 +	if (checksum_flist) {
 +		/* Reset the pool memory and empty the file-list array. */
 +		pool_free_old(checksum_flist->file_pool,
@@ -158,15 +252,19 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +	checksum_flist->low = 0;
 +	checksum_flist->high = -1;
 +	checksum_matches = 0;
++	checksum_updates = 0;
 +	regular_skipped = 0;
 +
-+	if (dirname) {
-+		dlen = strlcpy(fbuf, dirname, sizeof fbuf);
-+		if (dlen >= (int)sizeof fbuf)
-+			return;
++	if (!dirname)
++		return;
++
++	dlen = strlcpy(fbuf, dirname, sizeof fbuf);
++	if (dlen >= (int)sizeof fbuf)
++		return;
++	if (dlen)
 +		fbuf[dlen++] = '/';
-+	} else
-+		dlen = 0;
++	else
++		dirname = NULL;
 +	strlcpy(fbuf+dlen, ".rsyncsums", sizeof fbuf - dlen);
 +	if (!(fp = fopen(fbuf, "r")))
 +		return;
@@ -271,90 +369,10 @@ we should still update the .rsyncsums file if we compute a new checksum.
 +	clean_flist(checksum_flist, 0);
 +}
 +
-+static void write_checksums(const char *dirname)
-+{
-+	char fbuf[MAXPATHLEN];
-+	int count = checksum_flist->count;
-+	int new_entries = count > checksum_flist->high + 1;
-+	int counts_match = count == checksum_matches;
-+	int no_skipped = regular_skipped == 0;
-+	time_t latest_time = 0;
-+	FILE *out_fp;
-+	int i;
-+
-+	clean_flist(checksum_flist, 0);
-+
-+	checksum_flist->count = 0;
-+	checksum_matches = 0;
-+	regular_skipped = 0;
-+
-+	if (dry_run)
-+		return;
-+
-+	if (dirname) {
-+		if (pathjoin(fbuf, sizeof fbuf, dirname, ".rsyncsums") >= sizeof fbuf)
-+			return;
-+	} else
-+		strlcpy(fbuf, ".rsyncsums", sizeof fbuf);
-+
-+	if (checksum_flist->high - checksum_flist->low < 0 && no_skipped) {
-+		unlink(fbuf);
-+		return;
-+	}
-+
-+	if (!new_entries && counts_match)
-+		return;
-+
-+	if (!(out_fp = fopen(fbuf, "w")))
-+		return;
-+
-+	for (i = checksum_flist->low; i <= checksum_flist->high; i++) {
-+		struct file_struct *file = checksum_flist->sorted[i];
-+		const char *cp = F_SUM(file);
-+		const char *end = cp + checksum_len;
-+		time_t ctime;
-+		if (!(file->flags & FLAG_SUM_KEEP))
-+			continue;
-+#if SIZEOF_TIME_T == 4
-+		ctime = OPT_EXTRA(file, LEN64_BUMP(file) + SUM_EXTRA_CNT)->num;
-+#else
-+		memcpy(&ctime, cp - SIZEOF_TIME_T, SIZEOF_TIME_T);
-+#endif
-+		if (protocol_version >= 30) {
-+			fprintf(out_fp, "%s ", 
-+				file->basename + strlen(file->basename) + 1);
-+		}
-+		if (file->flags & FLAG_SUM_MISSING) {
-+			do {
-+				fprintf(out_fp, "==");
-+			} while (++cp != end);
-+		} else {
-+			do {
-+				fprintf(out_fp, "%02x", CVAL(cp, 0));
-+			} while (++cp != end);
-+		}
-+		if (protocol_version < 30) {
-+			fprintf(out_fp, " %s", 
-+				file->basename + strlen(file->basename) + 1);
-+		}
-+		fprintf(out_fp, " %10.0f %10.0f %10.0f %s\n",
-+			(double)F_LENGTH(file), (double)file->modtime,
-+			(double)ctime, file->basename);
-+		if (file->modtime > ctime)
-+			ctime = file->modtime;
-+		if (ctime > latest_time)
-+			latest_time = ctime;
-+	}
-+
-+	fclose(out_fp);
-+
-+	set_modtime(fbuf, latest_time, latest_time);
-+}
-+
  int push_pathname(const char *dir, int len)
  {
  	if (dir == pathname)
-@@ -973,34 +1258,24 @@ static struct file_struct *recv_file_ent
+@@ -973,34 +1280,24 @@ static struct file_struct *recv_file_ent
  	return file;
  }
  
@@ -395,7 +413,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	char *bp;
  
  	if (strlcpy(thisname, fname, sizeof thisname)
-@@ -1077,6 +1352,8 @@ struct file_struct *make_file(const char
+@@ -1077,6 +1374,8 @@ struct file_struct *make_file(const char
  	if (is_excluded(thisname, S_ISDIR(st.st_mode) != 0, filter_level)) {
  		if (ignore_perishable)
  			non_perishable_cnt++;
@@ -404,7 +422,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  		return NULL;
  	}
  
-@@ -1115,9 +1392,16 @@ struct file_struct *make_file(const char
+@@ -1115,9 +1414,16 @@ struct file_struct *make_file(const char
  			memcpy(lastdir, thisname, len);
  			lastdir[len] = '\0';
  			lastdir_len = len;
@@ -416,13 +434,13 @@ we should still update the .rsyncsums file if we compute a new checksum.
  		basename = thisname;
 +		if (always_checksum && am_sender && flist && lastdir_len == -2) {
 +			lastdir_len = -1;
-+			read_checksums(NULL);
++			read_checksums("");
 +		}
 +	}
  	basename_len = strlen(basename) + 1; /* count the '\0' */
  
  #ifdef SUPPORT_LINKS
-@@ -1193,11 +1477,44 @@ struct file_struct *make_file(const char
+@@ -1193,11 +1499,44 @@ struct file_struct *make_file(const char
  	}
  #endif
  
@@ -470,7 +488,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	/* This code is only used by the receiver when it is building
  	 * a list of files for a delete pass. */
  	if (keep_dirlinks && linkname_len && flist) {
-@@ -1241,14 +1558,14 @@ void unmake_file(struct file_struct *fil
+@@ -1241,14 +1580,14 @@ void unmake_file(struct file_struct *fil
  
  static struct file_struct *send_file_name(int f, struct file_list *flist,
  					  char *fname, STRUCT_STAT *stp,
@@ -487,7 +505,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	if (!file)
  		return NULL;
  
-@@ -1442,7 +1759,7 @@ static void send_directory(int f, struct
+@@ -1442,7 +1781,7 @@ static void send_directory(int f, struct
  	DIR *d;
  	int divert_dirs = (flags & FLAG_DIVERT_DIRS) != 0;
  	int start = flist->count;
@@ -496,7 +514,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  
  	assert(flist != NULL);
  
-@@ -1471,7 +1788,7 @@ static void send_directory(int f, struct
+@@ -1471,7 +1810,7 @@ static void send_directory(int f, struct
  			continue;
  		}
  
@@ -505,17 +523,30 @@ we should still update the .rsyncsums file if we compute a new checksum.
  	}
  
  	fbuf[len] = '\0';
-@@ -1483,6 +1800,9 @@ static void send_directory(int f, struct
+@@ -1483,6 +1822,9 @@ static void send_directory(int f, struct
  
  	closedir(d);
  
 +	if (checksum_updating && always_checksum && am_sender && f >= 0)
-+		write_checksums(fbuf);
++		write_checksums(NULL, 1);
 +
  	if (f >= 0 && recurse && !divert_dirs) {
  		int i, end = flist->count - 1;
  		/* send_if_directory() bumps flist->count, so use "end". */
-@@ -2206,7 +2526,7 @@ void flist_free(struct file_list *flist)
+@@ -1916,7 +2258,11 @@ struct file_list *send_file_list(int f, 
+ 			 * file-list to check if this is a 1-file xfer. */
+ 			send_extra_file_list(f, 1);
+ 		}
+-	}
++	} else
++		flist_eof = 1;
++	
++	if (checksum_updating && always_checksum && flist_eof)
++		read_checksums(NULL); /* writes any last updates */
+ 
+ 	return flist;
+ }
+@@ -2206,7 +2552,7 @@ void flist_free(struct file_list *flist)
  
  	if (!flist->prev || !flist_cnt)
  		pool_destroy(flist->file_pool);
@@ -524,7 +555,7 @@ we should still update the .rsyncsums file if we compute a new checksum.
  		pool_free_old(flist->file_pool, flist->pool_boundary);
  
  	if (flist->sorted && flist->sorted != flist->files)
-@@ -2225,6 +2545,7 @@ static void clean_flist(struct file_list
+@@ -2225,6 +2571,7 @@ static void clean_flist(struct file_list
  	if (!flist)
  		return;
  	if (flist->count == 0) {
