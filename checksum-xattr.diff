@@ -1,0 +1,258 @@
+This patch is the start of storing/using checksum information from
+extended attribute values.  The rsync code only reads the values
+at the moment.  There is also a perl script that can create them.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/checksum-xattr.diff
+    ./configure                               (optional if already run)
+    make
+
+--- old/flist.c
++++ new/flist.c
+@@ -1193,7 +1193,8 @@ struct file_struct *make_file(const char
+ 	}
+ #endif
+ 
+-	if (always_checksum && am_sender && S_ISREG(st.st_mode))
++	if (always_checksum && am_sender && S_ISREG(st.st_mode)
++	 && !get_sum_xattr(thisname, &st, tmp_sum))
+ 		file_checksum(thisname, tmp_sum, st.st_size);
+ 
+ 	F_PATHNAME(file) = pathname;
+--- old/generator.c
++++ new/generator.c
+@@ -627,7 +627,8 @@ int unchanged_file(char *fn, struct file
+ 	   of the file time to determine whether to sync */
+ 	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
+ 		char sum[MAX_DIGEST_LEN];
+-		file_checksum(fn, sum, st->st_size);
++		if (!get_sum_xattr(fn, st, sum))
++			file_checksum(fn, sum, st->st_size);
+ 		return memcmp(sum, F_SUM(file), checksum_len) == 0;
+ 	}
+ 
+--- old/rsync.h
++++ new/rsync.h
+@@ -1070,6 +1070,12 @@ isDigit(const char *ptr)
+ }
+ 
+ static inline int
++isXDigit(const char *ptr)
++{
++	return isxdigit(*(unsigned char *)ptr);
++}
++
++static inline int
+ isPrint(const char *ptr)
+ {
+ 	return isprint(*(unsigned char *)ptr);
+--- old/support/xsums
++++ new/support/xsums
+@@ -0,0 +1,113 @@
++#!/usr/bin/perl -w
++use strict;
++
++use Getopt::Long;
++use Cwd qw(abs_path cwd);
++use Digest::MD4;
++use Digest::MD5;
++use File::ExtAttr ':all';
++
++our($recurse_opt, $help_opt);
++our $verbosity = 0;
++
++&Getopt::Long::Configure('bundling');
++&usage if !&GetOptions(
++    'recurse|r' => \$recurse_opt,
++    'verbose|v+' => \$verbosity,
++    'help|h' => \$help_opt,
++) || $help_opt;
++
++my $start_dir = cwd();
++
++my @dirs = @ARGV;
++@dirs = '.' unless @dirs;
++foreach (@dirs) {
++    $_ = abs_path($_);
++}
++
++$| = 1;
++
++my $md4 = Digest::MD4->new;
++my $md5 = Digest::MD5->new;
++
++while (@dirs) {
++    my $dir = shift @dirs;
++
++    if (!chdir($dir)) {
++	warn "Unable to chdir to $dir: $!\n";
++	next;
++    }
++    if (!opendir(DP, '.')) {
++	warn "Unable to opendir $dir: $!\n";
++	next;
++    }
++
++    if ($verbosity) {
++	my $reldir = $dir;
++	$reldir =~ s#^$start_dir(/|$)# $1 ? '' : '.' #eo;
++	print "scanning $reldir\n";
++    }
++
++    my @subdirs;
++    while (defined(my $fn = readdir(DP))) {
++	next if $fn =~ /^\.\.?$/ || -l $fn;
++	if (-d _) {
++	    push(@subdirs, "$dir/$fn");
++	    next;
++	}
++	next unless -f _;
++
++	my($size,$mtime) = (stat(_))[7,9];
++
++	my $sum4 = getfattr($fn, 'rsync.%md4');
++	my $sum5 = getfattr($fn, 'rsync.%md5');
++
++	foreach ($sum4, $sum5) {
++	    if (defined $_) {
++		my($sum, $sz, $mt) = /^([0-9a-f]{32}) (\d+) (\d+)$/;
++		if (!defined($mt) || $sz != $size || $mt != $mtime) {
++		    $_ = undef;
++		} else {
++		    $_ = $sum;
++		}
++	    }
++	}
++	if (!defined($sum4) || !defined($sum5)) {
++	    if (!open(IN, $fn)) {
++		print STDERR "Unable to read $fn: $!\n";
++		next;
++	    }
++
++	    while (sysread(IN, $_, 64*1024)) {
++		$md4->add($_);
++		$md5->add($_);
++	    }
++	    close IN;
++
++	    $sum4 = $md4->hexdigest;
++	    $sum5 = $md5->hexdigest;
++	    print " $sum4 $sum5" if $verbosity > 2;
++	    print " $fn\n" if $verbosity > 1;
++
++	    setfattr($fn, 'rsync.%md4', "$sum4 $size $mtime");
++	    setfattr($fn, 'rsync.%md5', "$sum5 $size $mtime");
++	    #utime $mtime, $mtime, $fn; # Set mtime if it changes.
++	}
++    }
++
++    closedir DP;
++
++    unshift(@dirs, sort @subdirs) if $recurse_opt;
++}
++
++sub usage
++{
++    die <<EOT;
++Usage: rsyncsums [OPTIONS] [DIRS]
++
++Options:
++ -r, --recurse     Update checksums in subdirectories too.
++ -v, --verbose     Mention what we're doing.  Repeat for more info.
++ -h, --help        Display this help message.
++EOT
++}
+--- old/xattrs.c
++++ new/xattrs.c
+@@ -31,6 +31,8 @@ extern int am_generator;
+ extern int read_only;
+ extern int list_only;
+ extern int checksum_seed;
++extern int checksum_len;
++extern int protocol_version;
+ 
+ #define RSYNC_XAL_INITIAL 5
+ #define RSYNC_XAL_LIST_INITIAL 100
+@@ -64,6 +66,9 @@ extern int checksum_seed;
+ #define XSTAT_ATTR RSYNC_PREFIX "%stat"
+ #define XSTAT_LEN ((int)sizeof XSTAT_ATTR - 1)
+ 
++#define MD4_ATTR RSYNC_PREFIX "%md4"
++#define MD5_ATTR RSYNC_PREFIX "%md5"
++
+ typedef struct {
+ 	char *datum, *name;
+ 	size_t datum_len, name_len;
+@@ -795,6 +800,71 @@ int set_xattr(const char *fname, const s
+ 	return rsync_xal_set(fname, lst + ndx, fnamecmp, sxp);
+ }
+ 
++int get_sum_xattr(const char *fname, STRUCT_STAT *stp, char *sum)
++{
++	const char *mdattr = protocol_version >= 30
++			   ? MD5_ATTR : MD4_ATTR;
++	char *cp, buf[256];
++	OFF_T file_length;
++	time_t mtime;
++	int i, len;
++	
++	len = sys_lgetxattr(fname, mdattr, buf, sizeof buf - 1);
++	if (len >= (int)sizeof buf) {
++		len = -1;
++		errno = ERANGE;
++	}
++	if (len < 0) {
++		if (errno == ENOTSUP || errno == ENOATTR)
++			return 0;
++		rsyserr(FERROR, errno, "failed to read xattr %s for %s",
++			mdattr, full_fname(fname));
++		return 0;
++	}
++	buf[len] = '\0';
++
++	for (i = 0, cp = buf; i < checksum_len*2; i++, cp++) {
++		int x;
++		if (isXDigit(cp)) {
++			if (isDigit(cp))
++				x = *cp - '0';
++			else
++				x = (*cp & 0xF) + 9;
++		} else {
++			cp = "";
++			break;
++		}
++		if (i & 1)
++			sum[i/2] |= x;
++		else
++			sum[i/2] = x << 4;
++	}
++	if (*cp++ != ' ')
++		goto parse_error;
++
++	file_length = 0;
++	while (isDigit(cp))
++		file_length = file_length * 10 + *cp++ - '0';
++	if (*cp++ != ' ')
++		goto parse_error;
++
++	mtime = 0;
++	while (isDigit(cp))
++		mtime = mtime * 10 + *cp++ - '0';
++	if (*cp)
++		goto parse_error;
++
++	if (stp->st_size != file_length || stp->st_mtime != mtime)
++		return 0;
++
++	return 1;
++
++  parse_error:
++	rprintf(FERROR, "Corrupt %s xattr attached to %s: \"%s\"\n",
++		mdattr, full_fname(fname), buf);
++	exit_cleanup(RERR_FILEIO);
++}
++
+ int get_stat_xattr(const char *fname, int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
+ {
+ 	int mode, rdev_major, rdev_minor, uid, gid, len;
