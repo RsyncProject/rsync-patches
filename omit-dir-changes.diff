@@ -9,14 +9,14 @@ To use this patch, run these commands for a successful build:
 
 --- old/generator.c
 +++ new/generator.c
-@@ -46,6 +46,7 @@ extern int preserve_uid;
- extern int preserve_gid;
+@@ -44,6 +44,7 @@ extern int preserve_hard_links;
+ extern int preserve_perms;
  extern int preserve_times;
  extern int omit_dir_times;
 +extern int omit_dir_changes;
+ extern int uid_ndx;
+ extern int gid_ndx;
  extern int delete_mode;
- extern int delete_before;
- extern int delete_during;
 @@ -555,6 +556,7 @@ void itemize(const char *fnamecmp, struc
  		int keep_time = !preserve_times ? 0
  		    : S_ISDIR(file->mode) ? !omit_dir_times
@@ -29,13 +29,13 @@ To use this patch, run these commands for a successful build:
  			iflags |= ITEM_REPORT_TIME;
  		if (!BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
--		if (preserve_uid && am_root && (uid_t)F_OWNER(file) != sxp->st.st_uid)
-+		if (preserve_uid && am_root && !omit_changes
+-		if (uid_ndx && am_root && (uid_t)F_OWNER(file) != sxp->st.st_uid)
++		if (uid_ndx && am_root && !omit_changes
 +		 && (uid_t)F_OWNER(file) != sxp->st.st_uid)
  			iflags |= ITEM_REPORT_OWNER;
--		if (preserve_gid && !(file->flags & FLAG_SKIP_GROUP)
+-		if (gid_ndx && !(file->flags & FLAG_SKIP_GROUP)
 -		    && sxp->st.st_gid != (gid_t)F_GROUP(file))
-+		if (preserve_gid && !omit_changes
++		if (gid_ndx && !omit_changes
 +		 && !(file->flags & FLAG_SKIP_GROUP) && sxp->st.st_gid != (gid_t)F_GROUP(file))
  			iflags |= ITEM_REPORT_GROUP;
  #ifdef SUPPORT_ACLS
@@ -59,7 +59,7 @@ To use this patch, run these commands for a successful build:
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -336,6 +337,7 @@ void usage(enum logcode F)
+@@ -337,6 +338,7 @@ void usage(enum logcode F)
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve times\n");
    rprintf(F," -O, --omit-dir-times        omit directories when preserving times\n");
@@ -67,7 +67,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
  #ifdef SUPPORT_XATTRS
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
-@@ -469,6 +471,7 @@ static struct poptOption long_options[] 
+@@ -472,6 +474,7 @@ static struct poptOption long_options[] 
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
@@ -75,7 +75,7 @@ To use this patch, run these commands for a successful build:
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
-@@ -1397,6 +1400,9 @@ int parse_arguments(int *argc, const cha
+@@ -1413,6 +1416,9 @@ int parse_arguments(int *argc, const cha
  			"P *%s", backup_suffix);
   		parse_rule(&filter_list, backup_dir_buf, 0, 0);
  	}
@@ -85,7 +85,7 @@ To use this patch, run these commands for a successful build:
  	if (make_backups && !backup_dir)
  		omit_dir_times = 1;
  
-@@ -1626,6 +1632,8 @@ void server_options(char **args,int *arg
+@@ -1642,6 +1648,8 @@ void server_options(char **args,int *arg
  			argstr[x++] = 'm';
  		if (omit_dir_times == 2)
  			argstr[x++] = 'O';
@@ -104,14 +104,14 @@ To use this patch, run these commands for a successful build:
  extern int am_root;
  extern int am_server;
  extern int am_sender;
-@@ -322,9 +323,11 @@ int set_file_attrs(const char *fname, st
+@@ -326,9 +327,11 @@ int set_file_attrs(const char *fname, st
  			updated = 1;
  	}
  
--	change_uid = am_root && preserve_uid && sxp->st.st_uid != (uid_t)F_OWNER(file);
-+	change_uid = am_root && preserve_uid && sxp->st.st_uid != (uid_t)F_OWNER(file)
+-	change_uid = am_root && uid_ndx && sxp->st.st_uid != (uid_t)F_OWNER(file);
++	change_uid = am_root && uid_ndx && sxp->st.st_uid != (uid_t)F_OWNER(file)
 +		  && !(omit_dir_changes && S_ISDIR(sxp->st.st_mode));
- 	change_gid = preserve_gid && !(file->flags & FLAG_SKIP_GROUP)
+ 	change_gid = gid_ndx && !(file->flags & FLAG_SKIP_GROUP)
 -		  && sxp->st.st_gid != (gid_t)F_GROUP(file);
 +		  && sxp->st.st_gid != (gid_t)F_GROUP(file)
 +		  && !(omit_dir_changes && S_ISDIR(sxp->st.st_mode));
