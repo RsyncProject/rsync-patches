@@ -32,24 +32,9 @@ To use this patch, run these commands for a successful build:
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
  
---- old/rsync.h
-+++ new/rsync.h
-@@ -1070,6 +1070,12 @@ isDigit(const char *ptr)
- }
- 
- static inline int
-+isXDigit(const char *ptr)
-+{
-+	return isxdigit(*(unsigned char *)ptr);
-+}
-+
-+static inline int
- isPrint(const char *ptr)
- {
- 	return isprint(*(unsigned char *)ptr);
 --- old/support/xsums
 +++ new/support/xsums
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,118 @@
 +#!/usr/bin/perl -w
 +use strict;
 +
@@ -116,11 +101,16 @@ To use this patch, run these commands for a successful build:
 +
 +	foreach ($sum4, $sum5) {
 +	    if (defined $_) {
-+		my($sum, $sz, $mt) = /^([0-9a-f]{32}) (\d+) (\d+)$/;
-+		if (!defined($mt) || $sz != $size || $mt != $mtime) {
-+		    $_ = undef;
++		if (length($_) == 24) {
++		    my($sz,$mt,$sum) = unpack('V2a16', $_);
++		    if ($sz != ($size & 0xFFFFFFFF)
++		     || $mt != ($mtime & 0xFFFFFFFF)) {
++			$_ = undef;
++		    } else {
++			$_ = $sum;
++		    }
 +		} else {
-+		    $_ = $sum;
++		    $_ = undef;
 +		}
 +	    }
 +	}
@@ -136,13 +126,13 @@ To use this patch, run these commands for a successful build:
 +	    }
 +	    close IN;
 +
-+	    $sum4 = $md4->hexdigest;
-+	    $sum5 = $md5->hexdigest;
-+	    print " $sum4 $sum5" if $verbosity > 2;
++	    $sum4 = $md4->digest;
++	    $sum5 = $md5->digest;
 +	    print " $fn\n" if $verbosity > 1;
 +
-+	    setfattr($fn, 'rsync.%md4', "$sum4 $size $mtime");
-+	    setfattr($fn, 'rsync.%md5', "$sum5 $size $mtime");
++	    my $szmt = pack('V2', $size, $mtime); # 32-bits, may truncate
++	    setfattr($fn, 'rsync.%md4', $szmt.$sum4);
++	    setfattr($fn, 'rsync.%md5', $szmt.$sum5);
 +	    #utime $mtime, $mtime, $fn; # Set mtime if it changes.
 +	}
 +    }
@@ -174,17 +164,39 @@ To use this patch, run these commands for a successful build:
  
  #define RSYNC_XAL_INITIAL 5
  #define RSYNC_XAL_LIST_INITIAL 100
-@@ -64,6 +66,9 @@ extern int checksum_seed;
- #define XSTAT_ATTR RSYNC_PREFIX "%stat"
- #define XSTAT_LEN ((int)sizeof XSTAT_ATTR - 1)
+@@ -62,7 +64,8 @@ extern int checksum_seed;
+ #define RPRE_LEN ((int)sizeof RSYNC_PREFIX - 1)
  
+ #define XSTAT_ATTR RSYNC_PREFIX "%stat"
+-#define XSTAT_LEN ((int)sizeof XSTAT_ATTR - 1)
 +#define MD4_ATTR RSYNC_PREFIX "%md4"
 +#define MD5_ATTR RSYNC_PREFIX "%md5"
-+
+ 
  typedef struct {
  	char *datum, *name;
- 	size_t datum_len, name_len;
-@@ -795,6 +800,71 @@ int set_xattr(const char *fname, const s
+@@ -223,8 +226,8 @@ static int rsync_xal_get(const char *fna
+ 			continue;
+ #endif
+ 
+-		if (am_root < 0 && name_len == XSTAT_LEN + 1
+-		 && name[RPRE_LEN] == '%' && strcmp(name, XSTAT_ATTR) == 0)
++		if (name_len > RPRE_LEN && name[RPRE_LEN] == '%'
++		 && HAS_PREFIX(name, RSYNC_PREFIX))
+ 			continue;
+ 
+ 		datum_len = name_len; /* Pass extra size to get_xattr_data() */
+@@ -636,8 +639,8 @@ void receive_xattr(struct file_struct *f
+ 			continue;
+ 		}
+ #endif
+-		if (am_root < 0 && name_len == XSTAT_LEN + 1
+-		 && name[RPRE_LEN] == '%' && strcmp(name, XSTAT_ATTR) == 0) {
++		if (name_len > RPRE_LEN && name[RPRE_LEN] == '%'
++		 && HAS_PREFIX(name, RSYNC_PREFIX)) {
+ 			free(ptr);
+ 			continue;
+ 		}
+@@ -795,6 +798,39 @@ int set_xattr(const char *fname, const s
  	return rsync_xal_set(fname, lst + ndx, fnamecmp, sxp);
  }
  
@@ -192,16 +204,11 @@ To use this patch, run these commands for a successful build:
 +{
 +	const char *mdattr = protocol_version >= 30
 +			   ? MD5_ATTR : MD4_ATTR;
-+	char *cp, buf[256];
-+	OFF_T file_length;
-+	time_t mtime;
-+	int i, len;
++	char buf[256];
++	uint32 file_length, mtime;
++	int len;
 +	
-+	len = sys_lgetxattr(fname, mdattr, buf, sizeof buf - 1);
-+	if (len >= (int)sizeof buf) {
-+		len = -1;
-+		errno = ERANGE;
-+	}
++	len = sys_lgetxattr(fname, mdattr, buf, sizeof buf);
 +	if (len < 0) {
 +		if (errno == ENOTSUP || errno == ENOATTR)
 +			return 0;
@@ -209,48 +216,21 @@ To use this patch, run these commands for a successful build:
 +			mdattr, full_fname(fname));
 +		return 0;
 +	}
-+	buf[len] = '\0';
-+
-+	for (i = 0, cp = buf; i < checksum_len*2; i++, cp++) {
-+		int x;
-+		if (isXDigit(cp)) {
-+			if (isDigit(cp))
-+				x = *cp - '0';
-+			else
-+				x = (*cp & 0xF) + 9;
-+		} else {
-+			cp = "";
-+			break;
-+		}
-+		if (i & 1)
-+			sum[i/2] |= x;
-+		else
-+			sum[i/2] = x << 4;
++	if (len != 4 + 4 + checksum_len) {
++		rprintf(FERROR, "Corrupt %s xattr attached to %s -- skipping\n",
++			mdattr, full_fname(fname));
++		return 0;
 +	}
-+	if (*cp++ != ' ')
-+		goto parse_error;
 +
-+	file_length = 0;
-+	while (isDigit(cp))
-+		file_length = file_length * 10 + *cp++ - '0';
-+	if (*cp++ != ' ')
-+		goto parse_error;
++	file_length = IVAL(buf, 0); /* 32-bit values -- trunctions are OK */
++	mtime = IVAL(buf, 4);
 +
-+	mtime = 0;
-+	while (isDigit(cp))
-+		mtime = mtime * 10 + *cp++ - '0';
-+	if (*cp)
-+		goto parse_error;
-+
-+	if (stp->st_size != file_length || stp->st_mtime != mtime)
++	if ((uint32)stp->st_size != file_length || (uint32)stp->st_mtime != mtime)
 +		return 0;
 +
-+	return 1;
++	memcpy(sum, buf + 8, checksum_len);
 +
-+  parse_error:
-+	rprintf(FERROR, "Corrupt %s xattr attached to %s: \"%s\"\n",
-+		mdattr, full_fname(fname), buf);
-+	exit_cleanup(RERR_FILEIO);
++	return 1;
 +}
 +
  int get_stat_xattr(const char *fname, int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
