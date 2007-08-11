@@ -12,7 +12,7 @@ TODO: fix --delete-delay to work with --flags option.
 
 --- old/compat.c
 +++ new/compat.c
-@@ -43,6 +43,7 @@ extern int prune_empty_dirs;
+@@ -44,6 +44,7 @@ extern int prune_empty_dirs;
  extern int protocol_version;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -20,7 +20,7 @@ TODO: fix --delete-delay to work with --flags option.
  extern int preserve_acls;
  extern int preserve_xattrs;
  extern int preserve_hard_links;
-@@ -57,7 +58,7 @@ extern char *dest_option;
+@@ -58,7 +59,7 @@ extern char *dest_option;
  extern struct filter_list_struct filter_list;
  
  /* These index values are for the file-list's extra-attribute array. */
@@ -29,7 +29,7 @@ TODO: fix --delete-delay to work with --flags option.
  
  /* The server makes sure that if either side only supports a pre-release
   * version of a protocol, that both sides must speak a compatible version
-@@ -98,6 +99,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -99,6 +100,8 @@ void setup_protocol(int f_out,int f_in)
  		uid_ndx = ++file_extra_cnt;
  	if (preserve_gid)
  		gid_ndx = ++file_extra_cnt;
@@ -70,30 +70,30 @@ TODO: fix --delete-delay to work with --flags option.
  	static dev_t rdev;
  	static uint32 rdev_major;
 @@ -396,6 +400,12 @@ static void send_file_entry(int f, struc
- 		flags |= XMIT_SAME_MODE;
+ 		xflags |= XMIT_SAME_MODE;
  	else
  		mode = file->mode;
 +#ifdef SUPPORT_FLAGS
 + 	if (F_FFLAGS(file) == fileflags)
-+		flags |= XMIT_SAME_FLAGS;
++		xflags |= XMIT_SAME_FLAGS;
 +	else
 +		fileflags = F_FFLAGS(file);
 +#endif
- 	if ((preserve_devices && IS_DEVICE(mode))
- 	 || (preserve_specials && IS_SPECIAL(mode))) {
- 		if (protocol_version < 28) {
-@@ -513,6 +523,10 @@ static void send_file_entry(int f, struc
+ 
+ 	if (protocol_version >= 30 && S_ISDIR(mode) && !(file->flags & FLAG_XFER_DIR))
+ 		xflags |= XMIT_NON_XFER_DIR;
+@@ -517,6 +527,10 @@ static void send_file_entry(int f, struc
  	}
- 	if (!(flags & XMIT_SAME_MODE))
+ 	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
 +#ifdef SUPPORT_FLAGS
-+ 	if (fileflags_ndx && !(flags & XMIT_SAME_FLAGS))
++ 	if (fileflags_ndx && !(xflags & XMIT_SAME_FLAGS))
 +		write_int(f, (int)fileflags);
 +#endif
- 	if (uid_ndx && !(flags & XMIT_SAME_UID)) {
+ 	if (uid_ndx && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -601,6 +615,9 @@ static struct file_struct *recv_file_ent
+@@ -605,6 +619,9 @@ static struct file_struct *recv_file_ent
  {
  	static int64 modtime;
  	static mode_t mode;
@@ -103,7 +103,7 @@ TODO: fix --delete-delay to work with --flags option.
  	static int64 dev;
  	static dev_t rdev;
  	static uint32 rdev_major;
-@@ -735,9 +752,12 @@ static struct file_struct *recv_file_ent
+@@ -739,9 +756,12 @@ static struct file_struct *recv_file_ent
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -117,7 +117,7 @@ TODO: fix --delete-delay to work with --flags option.
  
  	if (uid_ndx && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
-@@ -857,6 +877,10 @@ static struct file_struct *recv_file_ent
+@@ -861,6 +881,10 @@ static struct file_struct *recv_file_ent
  		OPT_EXTRA(file, 0)->unum = (uint32)(file_length >> 32);
  	}
  	file->mode = mode;
@@ -128,7 +128,7 @@ TODO: fix --delete-delay to work with --flags option.
  	if (uid_ndx)
  		F_OWNER(file) = uid;
  	if (gid_ndx) {
-@@ -1178,6 +1202,10 @@ struct file_struct *make_file(const char
+@@ -1187,6 +1211,10 @@ struct file_struct *make_file(const char
  		OPT_EXTRA(file, 0)->unum = (uint32)(st.st_size >> 32);
  	}
  	file->mode = st.st_mode;
@@ -141,8 +141,8 @@ TODO: fix --delete-delay to work with --flags option.
  	if (gid_ndx)
 --- old/generator.c
 +++ new/generator.c
-@@ -115,6 +115,14 @@ static int dir_tweaking;
- static int need_retouch_dir_times;
+@@ -116,6 +116,14 @@ static int need_retouch_dir_times;
+ static int need_retouch_dir_perms;
  static const char *solo_file = NULL;
  
 +#ifdef SUPPORT_FLAGS
@@ -156,7 +156,7 @@ TODO: fix --delete-delay to work with --flags option.
  /* For calling delete_item() and delete_dir_contents(). */
  #define DEL_RECURSE		(1<<1) /* recurse */
  #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
-@@ -130,7 +138,6 @@ enum delret {
+@@ -131,7 +139,6 @@ enum delret {
  /* Forward declaration for delete_item(). */
  static enum delret delete_dir_contents(char *fname, int flags);
  
@@ -164,7 +164,7 @@ TODO: fix --delete-delay to work with --flags option.
  static int is_backup_file(char *fn)
  {
  	int k = strlen(fn) - backup_suffix_len;
-@@ -143,17 +150,20 @@ static int is_backup_file(char *fn)
+@@ -144,17 +151,20 @@ static int is_backup_file(char *fn)
   * Note that fbuf must point to a MAXPATHLEN buffer if the mode indicates it's
   * a directory! (The buffer is used for recursion, but returned unchanged.)
   */
@@ -188,7 +188,7 @@ TODO: fix --delete-delay to work with --flags option.
  	if (S_ISDIR(mode) && !(flags & DEL_DIR_IS_EMPTY)) {
  		ignore_perishable = 1;
  		/* If DEL_RECURSE is not set, this just reports emptiness. */
-@@ -265,7 +275,7 @@ static enum delret delete_dir_contents(c
+@@ -266,7 +276,7 @@ static enum delret delete_dir_contents(c
  		if (S_ISDIR(fp->mode)
  		 && delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
@@ -197,7 +197,7 @@ TODO: fix --delete-delay to work with --flags option.
  			ret = DR_NOT_EMPTY;
  	}
  
-@@ -321,8 +331,9 @@ static int remember_delete(struct file_s
+@@ -322,8 +332,9 @@ static int remember_delete(struct file_s
  	
  	while (1) {
  		len = snprintf(deldelay_buf + deldelay_cnt,
@@ -209,7 +209,7 @@ TODO: fix --delete-delay to work with --flags option.
  		if ((deldelay_cnt += len) <= deldelay_size)
  			break;
  		if (deldelay_fd < 0 && !start_delete_delay_temp())
-@@ -335,7 +346,7 @@ static int remember_delete(struct file_s
+@@ -336,7 +347,7 @@ static int remember_delete(struct file_s
  	return 1;
  }
  
@@ -218,7 +218,7 @@ TODO: fix --delete-delay to work with --flags option.
  {
  	static int read_pos = 0;
  	int j, len, mode;
-@@ -377,7 +388,7 @@ static int read_delay_line(char *buf)
+@@ -378,7 +389,7 @@ static int read_delay_line(char *buf)
  
  	bp = deldelay_buf + read_pos;
  
@@ -227,7 +227,7 @@ TODO: fix --delete-delay to work with --flags option.
  	  invalid_data:
  		rprintf(FERROR, "ERROR: invalid data in delete-delay file.\n");
  		return -1;
-@@ -400,15 +411,15 @@ static int read_delay_line(char *buf)
+@@ -401,15 +412,15 @@ static int read_delay_line(char *buf)
  
  static void do_delayed_deletions(char *delbuf)
  {
@@ -246,7 +246,7 @@ TODO: fix --delete-delay to work with --flags option.
  	if (deldelay_fd >= 0)
  		close(deldelay_fd);
  }
-@@ -475,7 +486,7 @@ static void delete_in_dir(char *fbuf, st
+@@ -476,7 +487,7 @@ static void delete_in_dir(char *fbuf, st
  				if (!remember_delete(fp, delbuf))
  					break;
  			} else
@@ -255,16 +255,16 @@ TODO: fix --delete-delay to work with --flags option.
  		}
  	}
  
-@@ -1213,7 +1224,7 @@ static void recv_generator(char *fname, 
+@@ -1220,7 +1231,7 @@ static void recv_generator(char *fname, 
  		 * we need to delete it.  If it doesn't exist, then
  		 * (perhaps recursively) create it. */
  		if (statret == 0 && !S_ISDIR(sx.st.st_mode)) {
 -			if (delete_item(fname, sx.st.st_mode, "directory", del_opts) != 0)
 +			if (delete_item(fname, sx.st.st_mode, FF_STAT(sx.st), "directory", del_opts) != 0)
- 				return;
+ 				goto skipping_dir_contents;
  			statret = -1;
  		}
-@@ -1326,7 +1337,7 @@ static void recv_generator(char *fname, 
+@@ -1352,7 +1363,7 @@ static void recv_generator(char *fname, 
  			}
  			/* Not the right symlink (or not a symlink), so
  			 * delete it. */
@@ -273,7 +273,7 @@ TODO: fix --delete-delay to work with --flags option.
  				goto cleanup;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
-@@ -1403,7 +1414,7 @@ static void recv_generator(char *fname, 
+@@ -1429,7 +1440,7 @@ static void recv_generator(char *fname, 
  					goto return_with_success;
  				goto cleanup;
  			}
@@ -282,7 +282,7 @@ TODO: fix --delete-delay to work with --flags option.
  				goto cleanup;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
-@@ -1492,7 +1503,7 @@ static void recv_generator(char *fname, 
+@@ -1518,7 +1529,7 @@ static void recv_generator(char *fname, 
  	fnamecmp_type = FNAMECMP_FNAME;
  
  	if (statret == 0 && !S_ISREG(sx.st.st_mode)) {
@@ -293,7 +293,7 @@ TODO: fix --delete-delay to work with --flags option.
  		stat_errno = ENOENT;
 --- old/options.c
 +++ new/options.c
-@@ -49,6 +49,7 @@ int preserve_hard_links = 0;
+@@ -50,6 +50,7 @@ int preserve_hard_links = 0;
  int preserve_acls = 0;
  int preserve_xattrs = 0;
  int preserve_perms = 0;
@@ -301,7 +301,7 @@ TODO: fix --delete-delay to work with --flags option.
  int preserve_executability = 0;
  int preserve_devices = 0;
  int preserve_specials = 0;
-@@ -213,6 +214,7 @@ static void print_rsync_version(enum log
+@@ -214,6 +215,7 @@ static void print_rsync_version(enum log
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -309,7 +309,7 @@ TODO: fix --delete-delay to work with --flags option.
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -242,6 +244,9 @@ static void print_rsync_version(enum log
+@@ -243,6 +245,9 @@ static void print_rsync_version(enum log
  #ifdef ICONV_OPTION
  	iconv = "";
  #endif
@@ -319,7 +319,7 @@ TODO: fix --delete-delay to work with --flags option.
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -255,8 +260,8 @@ static void print_rsync_version(enum log
+@@ -256,8 +261,8 @@ static void print_rsync_version(enum log
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -330,7 +330,7 @@ TODO: fix --delete-delay to work with --flags option.
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -322,6 +327,7 @@ void usage(enum logcode F)
+@@ -323,6 +328,7 @@ void usage(enum logcode F)
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -H, --hard-links            preserve hard links\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
@@ -338,7 +338,7 @@ TODO: fix --delete-delay to work with --flags option.
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
  #ifdef SUPPORT_ACLS
-@@ -461,6 +467,8 @@ static struct poptOption long_options[] 
+@@ -463,6 +469,8 @@ static struct poptOption long_options[] 
    {"perms",           'p', POPT_ARG_VAL,    &preserve_perms, 1, 0, 0 },
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
@@ -347,7 +347,7 @@ TODO: fix --delete-delay to work with --flags option.
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
-@@ -1252,6 +1260,15 @@ int parse_arguments(int *argc, const cha
+@@ -1254,6 +1262,15 @@ int parse_arguments(int *argc, const cha
  	}
  #endif
  
@@ -363,7 +363,7 @@ TODO: fix --delete-delay to work with --flags option.
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -1731,6 +1748,9 @@ void server_options(char **args,int *arg
+@@ -1738,6 +1755,9 @@ void server_options(char **args,int *arg
  	if (xfer_dirs && !recurse && delete_mode && am_sender)
  		args[ac++] = "--no-r";
  
@@ -400,7 +400,7 @@ TODO: fix --delete-delay to work with --flags option.
  static const char *default_charset(void)
  {
  #if defined HAVE_LIBCHARSET_H && defined HAVE_LOCALE_CHARSET
-@@ -269,6 +280,41 @@ mode_t dest_mode(mode_t flist_mode, mode
+@@ -268,6 +279,41 @@ mode_t dest_mode(mode_t flist_mode, mode
  	return new_mode;
  }
  
@@ -442,7 +442,7 @@ TODO: fix --delete-delay to work with --flags option.
  int set_file_attrs(const char *fname, struct file_struct *file, statx *sxp,
  		   const char *fnamecmp, int flags)
  {
-@@ -397,6 +443,15 @@ int set_file_attrs(const char *fname, st
+@@ -396,6 +442,15 @@ int set_file_attrs(const char *fname, st
  	}
  #endif
  
@@ -458,7 +458,7 @@ TODO: fix --delete-delay to work with --flags option.
  	if (verbose > 1 && flags & ATTRS_REPORT) {
  		if (updated)
  			rprintf(FCLIENT, "%s\n", fname);
-@@ -456,6 +511,9 @@ void finish_transfer(const char *fname, 
+@@ -455,6 +510,9 @@ void finish_transfer(const char *fname, 
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
  		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME);
  
@@ -468,7 +468,7 @@ TODO: fix --delete-delay to work with --flags option.
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
-@@ -470,6 +528,9 @@ void finish_transfer(const char *fname, 
+@@ -469,6 +527,9 @@ void finish_transfer(const char *fname, 
  	}
  	if (ret == 0) {
  		/* The file was moved into place (not copied), so it's done. */
@@ -480,15 +480,15 @@ TODO: fix --delete-delay to work with --flags option.
  	/* The file was copied, so tweak the perms of the copied file.  If it
 --- old/rsync.h
 +++ new/rsync.h
-@@ -56,6 +56,7 @@
+@@ -57,6 +57,7 @@
  #define XMIT_RDEV_MINOR_8_pre30 (1<<11)	/* protocols 28 - 29  */
  #define XMIT_GROUP_NAME_FOLLOWS (1<<11) /* protocols 30 - NOW */
- #define XMIT_HLINK_FIRST (1<<12)	/* protocols 30 - NOW */
+ #define XMIT_HLINK_FIRST (1<<12)	/* protocols 30 - NOW (HLINKED files only) */
 +#define XMIT_SAME_FLAGS (1<<14)		/* protocols ?? - NOW */
  
  /* These flags are used in the live flist data. */
  
-@@ -405,6 +406,10 @@ enum msgcode {
+@@ -406,6 +407,10 @@ enum msgcode {
  #endif
  #endif
  
@@ -499,7 +499,7 @@ TODO: fix --delete-delay to work with --flags option.
  /* Find a variable that is either exactly 32-bits or longer.
   * If some code depends on 32-bit truncation, it will need to
   * take special action in a "#if SIZEOF_INT32 > 4" section. */
-@@ -582,6 +587,7 @@ struct file_struct {
+@@ -583,6 +588,7 @@ struct file_struct {
  extern int file_extra_cnt;
  extern int uid_ndx;
  extern int gid_ndx;
@@ -507,7 +507,7 @@ TODO: fix --delete-delay to work with --flags option.
  extern int acls_ndx;
  extern int xattrs_ndx;
  
-@@ -616,6 +622,7 @@ extern int xattrs_ndx;
+@@ -620,6 +626,7 @@ extern int xattrs_ndx;
  /* When the associated option is on, all entries will have these present: */
  #define F_OWNER(f) REQ_EXTRA(f, uid_ndx)->unum
  #define F_GROUP(f) REQ_EXTRA(f, gid_ndx)->unum
@@ -517,7 +517,7 @@ TODO: fix --delete-delay to work with --flags option.
  #define F_NDX(f) REQ_EXTRA(f, ic_ndx)->num
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -327,6 +327,7 @@ to the detailed description below for a 
+@@ -342,6 +342,7 @@ to the detailed description below for a 
   -K, --keep-dirlinks         treat symlinked dir on receiver as dir
   -H, --hard-links            preserve hard links
   -p, --perms                 preserve permissions
@@ -525,7 +525,7 @@ TODO: fix --delete-delay to work with --flags option.
   -E, --executability         preserve executability
       --chmod=CHMOD           affect file and/or directory permissions
   -A, --acls                  preserve ACLs (implies -p)
-@@ -526,7 +527,9 @@ specified, in which case bf(-r) is not i
+@@ -542,7 +543,9 @@ specified, in which case bf(-r) is not i
  
  Note that bf(-a) bf(does not preserve hardlinks), because
  finding multiply-linked files is expensive.  You must separately
@@ -536,9 +536,9 @@ TODO: fix --delete-delay to work with --flags option.
  
  dit(--no-OPTION) You may turn off one or more implied options by prefixing
  the option name with "no-".  Not all options may be prefixed with a "no-":
-@@ -851,6 +854,13 @@ extended attributes to be the same as th
- only if the remote machine's rsync supports this option also. This is
- a non-standard option.
+@@ -865,6 +868,13 @@ dit(bf(-X, --xattrs)) This option causes
+ extended attributes to be the same as the local ones.  This will work
+ only if the remote machine's rsync also supports this option.
  
 +dit(bf(--flags)) This option causes rsync to update the change file flags
 +to be the same as the source file, if your OS supports the bf(chflags)(2)
