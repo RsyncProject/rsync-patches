@@ -67,27 +67,29 @@ To use this patch, run these commands for a successful build:
  
  static void clean_flist(struct file_list *flist, int strip_root);
  static void output_flist(struct file_list *flist);
-@@ -317,6 +326,304 @@ static void flist_done_allocating(struct
+@@ -317,6 +326,301 @@ static void flist_done_allocating(struct
  		flist->pool_boundary = ptr;
  }
  
 +/* The len count is the length of the basename + 1 for the null. */
-+static void add_checksum(const char *dirname, const char *basename, int len,
-+			 OFF_T file_length, time_t mtime, time_t ctime,
-+			 const char *sum, const char *alt_sum, int flags)
++static int add_checksum(const char *dirname, const char *basename, int len,
++			OFF_T file_length, time_t mtime, int32 ctime, int32 inode,
++			const char *sum, const char *alt_sum, int flags)
 +{
 +	struct file_struct *file;
 +	int alloc_len, extra_len;
 +	char *bp;
 +
 +	if (len == 10+1 && *basename == '.' && strcmp(basename, ".rsyncsums") == 0)
-+		return;
++		return 0;
++	if (file_length == 0)
++		return 0;
 +
 +	if (len < 0)
 +		len = strlen(basename) + 1;
 +
-+	extra_len = (file_extra_cnt + (file_length > 0xFFFFFFFFu)
-+		   + SUM_EXTRA_CNT + TIME_EXTRA_CNT)
++	/* "2" is for a 32-bit ctime num and an 32-bit inode num. */
++	extra_len = (file_extra_cnt + (file_length > 0xFFFFFFFFu) + SUM_EXTRA_CNT + 2)
 +		  * EXTRA_LEN;
 +#if EXTRA_ROUNDING > 0
 +	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
@@ -120,16 +122,15 @@ To use this patch, run these commands for a successful build:
 +	file->dirname = dirname;
 +	bp = F_SUM(file);
 +	memcpy(bp, sum, checksum_len);
-+#if SIZEOF_TIME_T == 4
-+	OPT_EXTRA(file, LEN64_BUMP(file) + SUM_EXTRA_CNT)->num = ctime;
-+#else
-+	memcpy(bp - SIZEOF_TIME_T, &ctime, SIZEOF_TIME_T);
-+#endif
++	F_CTIME(file) = ctime;
++	F_INODE(file) = inode;
 +
 +	flist_expand(checksum_flist, 1);
-+	checksum_flist->files[checksum_flist->count++] = file;
++	checksum_flist->files[checksum_flist->used++] = file;
 +
 +	checksum_flist->sorted = checksum_flist->files;
++
++	return 1;
 +}
 +
 +static void write_checksums(const char *next_dirname, int whole_dir)
@@ -137,8 +138,7 @@ To use this patch, run these commands for a successful build:
 +	static const char *dirname_save;
 +	char fbuf[MAXPATHLEN];
 +	const char *dirname;
-+	int count, new_entries, counts_match, no_skipped;
-+	time_t latest_time = 0;
++	int used, new_entries, counts_match, no_skipped;
 +	FILE *out_fp;
 +	int i;
 +
@@ -148,14 +148,14 @@ To use this patch, run these commands for a successful build:
 +	if (!dirname)
 +		return;
 +
-+	count = checksum_flist->count;
++	used = checksum_flist->used;
 +	new_entries = checksum_updates != 0;
-+	counts_match = count == checksum_matches;
++	counts_match = used == checksum_matches;
 +	no_skipped = whole_dir && regular_skipped == 0;
 +
 +	clean_flist(checksum_flist, 0);
 +
-+	checksum_flist->count = 0;
++	checksum_flist->used = 0;
 +	checksum_matches = 0;
 +	checksum_updates = 0;
 +	regular_skipped = 0;
@@ -186,14 +186,11 @@ To use this patch, run these commands for a successful build:
 +		const char *cp = F_SUM(file);
 +		const char *end = cp + checksum_len;
 +		const char *alt_sum = file->basename + strlen(file->basename) + 1;
-+		time_t ctime;
++		int32 ctime, inode;
 +		if (whole_dir && !(file->flags & FLAG_SUM_KEEP))
 +			continue;
-+#if SIZEOF_TIME_T == 4
-+		ctime = OPT_EXTRA(file, LEN64_BUMP(file) + SUM_EXTRA_CNT)->num;
-+#else
-+		memcpy(&ctime, cp - SIZEOF_TIME_T, SIZEOF_TIME_T);
-+#endif
++		ctime = F_CTIME(file);
++		inode = F_INODE(file);
 +		if (protocol_version >= 30)
 +			fprintf(out_fp, "%s ", alt_sum);
 +		if (file->flags & FLAG_SUM_MISSING) {
@@ -210,21 +207,12 @@ To use this patch, run these commands for a successful build:
 +			fprintf(out_fp, " %s", alt_sum);
 +		if (*alt_sum == '=')
 +			new_entries++;
-+		fprintf(out_fp, " %10.0f %10.0f %10.0f %s\n",
++		fprintf(out_fp, " %10.0f %10.0f %10lu %10lu %s\n",
 +			(double)F_LENGTH(file), (double)file->modtime,
-+			(double)ctime, file->basename);
-+		if (file->modtime > ctime)
-+			ctime = file->modtime;
-+		if (ctime > latest_time)
-+			latest_time = ctime;
++			(long)ctime, (long)inode, file->basename);
 +	}
 +
 +	fclose(out_fp);
-+
-+	if (whole_dir && new_entries == 0)
-+		set_modtime(fbuf, latest_time, latest_time);
-+	else
-+		set_modtime(fbuf, latest_time-1, latest_time-1);
 +}
 +
 +/* The direname value must remain unchanged during the lifespan of the
@@ -234,18 +222,20 @@ To use this patch, run these commands for a successful build:
 +	char line[MAXPATHLEN+1024], fbuf[MAXPATHLEN], sum[MAX_DIGEST_LEN];
 +	const char *alt_sum = NULL;
 +	OFF_T file_length;
-+	time_t mtime, ctime;
++	time_t mtime;
++	int32 ctime, inode;
 +	int len, dlen, i, flags;
 +	char *cp;
 +	FILE *fp;
 +
-+	write_checksums(dirname, 0);
++	if (checksum_updating)
++		write_checksums(dirname, 0);
 +
 +	if (checksum_flist) {
 +		/* Reset the pool memory and empty the file-list array. */
 +		pool_free_old(checksum_flist->file_pool,
 +			      pool_boundary(checksum_flist->file_pool, 0));
-+		checksum_flist->count = 0;
++		checksum_flist->used = 0;
 +	} else
 +		checksum_flist = flist_new(FLIST_TEMP, "read_checksums");
 +
@@ -346,6 +336,13 @@ To use this patch, run these commands for a successful build:
 +			break;
 +		while (*++cp == ' ') {}
 +
++		inode = 0;
++		while (isDigit(cp))
++			inode = inode * 10 + *cp++ - '0';
++		if (*cp != ' ')
++			break;
++		while (*++cp == ' ') {}
++
 +		len = strlen(cp);
 +		while (len && (cp[len-1] == '\n' || cp[len-1] == '\r'))
 +			len--;
@@ -361,7 +358,7 @@ To use this patch, run these commands for a successful build:
 +			checksum_matches++;
 +		}
 +
-+		add_checksum(dirname, cp, len, file_length, mtime, ctime,
++		add_checksum(dirname, cp, len, file_length, mtime, ctime, inode,
 +			     sum, alt_sum, flags);
 +	}
 +	fclose(fp);
@@ -372,48 +369,16 @@ To use this patch, run these commands for a successful build:
  int push_pathname(const char *dir, int len)
  {
  	if (dir == pathname)
-@@ -980,34 +1287,24 @@ static struct file_struct *recv_file_ent
- 	return file;
- }
- 
--/**
-- * Create a file_struct for a named file by reading its stat()
-- * information and performing extensive checks against global
-- * options.
-- *
-- * @return the new file, or NULL if there was an error or this file
-- * should be excluded.
-+/* Create a file_struct for a named file by reading its stat() information
-+ * and performing extensive checks against global options.
-  *
-- * @todo There is a small optimization opportunity here to avoid
-- * stat()ing the file in some circumstances, which has a certain cost.
-- * We are called immediately after doing readdir(), and so we may
-- * already know the d_type of the file.  We could for example avoid
-- * statting directories if we're not recursing, but this is not a very
-- * important case.  Some systems may not have d_type.
-- **/
-+ * Returns a pointer to the new file struct, or NULL if there was an error
-+ * or this file should be excluded. */
- struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -989,7 +1293,7 @@ struct file_struct *make_file(const char
  			      STRUCT_STAT *stp, int flags, int filter_level)
  {
  	static char *lastdir;
 -	static int lastdir_len = -1;
 +	static int lastdir_len = -2;
  	struct file_struct *file;
--	STRUCT_STAT st;
  	char thisname[MAXPATHLEN];
  	char linkname[MAXPATHLEN];
- 	int alloc_len, basename_len, linkname_len;
- 	int extra_len = file_extra_cnt * EXTRA_LEN;
- 	const char *basename;
- 	alloc_pool_t *pool;
-+	STRUCT_STAT st;
- 	char *bp;
- 
- 	if (strlcpy(thisname, fname, sizeof thisname) >= sizeof thisname) {
-@@ -1086,6 +1383,8 @@ struct file_struct *make_file(const char
+@@ -1076,6 +1380,8 @@ struct file_struct *make_file(const char
  	if (is_excluded(thisname, S_ISDIR(st.st_mode) != 0, filter_level)) {
  		if (ignore_perishable)
  			non_perishable_cnt++;
@@ -422,7 +387,7 @@ To use this patch, run these commands for a successful build:
  		return NULL;
  	}
  
-@@ -1124,9 +1423,16 @@ struct file_struct *make_file(const char
+@@ -1114,9 +1420,16 @@ struct file_struct *make_file(const char
  			memcpy(lastdir, thisname, len);
  			lastdir[len] = '\0';
  			lastdir_len = len;
@@ -440,7 +405,7 @@ To use this patch, run these commands for a successful build:
  	basename_len = strlen(basename) + 1; /* count the '\0' */
  
  #ifdef SUPPORT_LINKS
-@@ -1202,11 +1508,44 @@ struct file_struct *make_file(const char
+@@ -1192,11 +1505,44 @@ struct file_struct *make_file(const char
  	}
  #endif
  
@@ -453,16 +418,15 @@ To use this patch, run these commands for a successful build:
 +		int j;
 +		if (flist && (j = flist_find(checksum_flist, file)) >= 0) {
 +			struct file_struct *fp = checksum_flist->sorted[j];
-+			time_t ctime;
-+#if SIZEOF_TIME_T == 4
-+			ctime = OPT_EXTRA(fp, LEN64_BUMP(fp) + SUM_EXTRA_CNT)->num;
-+#else
-+			memcpy(&ctime, F_SUM(fp) - SIZEOF_TIME_T, SIZEOF_TIME_T);
-+#endif
++			int32 ctime = F_CTIME(fp);
++			int32 inode = F_INODE(fp);
 +			if (F_LENGTH(fp) == st.st_size
-+			 && fp->modtime == st.st_mtime && ctime == st.st_ctime) {
++			 && fp->modtime == st.st_mtime
++			 && ctime == (int32)st.st_ctime
++			 && inode == (int32)st.st_ino) {
 +				if (fp->flags & FLAG_SUM_MISSING) {
 +					fp->flags &= ~FLAG_SUM_MISSING;
++					checksum_updates++;
 +					file_checksum(thisname, tmp_sum, st.st_size);
 +					memcpy(F_SUM(fp), tmp_sum, MAX_DIGEST_LEN);
 +				} else {
@@ -478,9 +442,10 @@ To use this patch, run these commands for a successful build:
 +		  compute_new_checksum:
 +			file_checksum(thisname, tmp_sum, st.st_size);
 +			if (checksum_updating && flist) {
-+				add_checksum(file->dirname, basename, basename_len,
-+					     st.st_size, st.st_mtime, st.st_ctime,
-+					     tmp_sum, NULL, FLAG_SUM_KEEP);
++				checksum_updates +=
++				    add_checksum(file->dirname, basename, basename_len,
++						 st.st_size, st.st_mtime, st.st_ctime,
++						 st.st_ino, tmp_sum, NULL, FLAG_SUM_KEEP);
 +			}
 +		}
 +	}
@@ -488,7 +453,7 @@ To use this patch, run these commands for a successful build:
  	/* This code is only used by the receiver when it is building
  	 * a list of files for a delete pass. */
  	if (keep_dirlinks && linkname_len && flist) {
-@@ -1499,6 +1838,9 @@ static void send_directory(int f, struct
+@@ -1489,6 +1835,9 @@ static void send_directory(int f, struct
  
  	closedir(d);
  
@@ -498,7 +463,7 @@ To use this patch, run these commands for a successful build:
  	if (f >= 0 && recurse && !divert_dirs) {
  		int i, end = flist->used - 1;
  		/* send_if_directory() bumps flist->used, so use "end". */
-@@ -1942,7 +2284,11 @@ struct file_list *send_file_list(int f, 
+@@ -1932,7 +2281,11 @@ struct file_list *send_file_list(int f, 
  			 * file-list to check if this is a 1-file xfer. */
  			send_extra_file_list(f, 1);
  		}
@@ -511,7 +476,7 @@ To use this patch, run these commands for a successful build:
  
  	return flist;
  }
-@@ -2235,7 +2581,7 @@ void flist_free(struct file_list *flist)
+@@ -2225,7 +2578,7 @@ void flist_free(struct file_list *flist)
  
  	if (!flist->prev || !flist_cnt)
  		pool_destroy(flist->file_pool);
@@ -564,7 +529,7 @@ To use this patch, run these commands for a successful build:
  int max_delete = INT_MIN;
  OFF_T max_size = 0;
  OFF_T min_size = 0;
-@@ -303,6 +304,7 @@ void usage(enum logcode F)
+@@ -308,6 +309,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -572,7 +537,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -544,6 +546,7 @@ static struct poptOption long_options[] 
+@@ -547,6 +549,7 @@ static struct poptOption long_options[] 
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -580,7 +545,7 @@ To use this patch, run these commands for a successful build:
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1913,7 +1916,9 @@ void server_options(char **args,int *arg
+@@ -1910,7 +1913,9 @@ void server_options(char **args,int *arg
  				args[ac++] = basis_dir[i];
  			}
  		}
@@ -593,15 +558,18 @@ To use this patch, run these commands for a successful build:
  		args[ac++] = "--append";
 --- old/rsync.h
 +++ new/rsync.h
-@@ -592,6 +592,7 @@ extern int xattrs_ndx;
- #define DEV_EXTRA_CNT 2
- #define DIRNODE_EXTRA_CNT 3
- #define SUM_EXTRA_CNT ((MAX_DIGEST_LEN + EXTRA_LEN - 1) / EXTRA_LEN)
-+#define TIME_EXTRA_CNT ((SIZEOF_TIME_T + EXTRA_LEN - 1) / EXTRA_LEN)
+@@ -641,6 +641,10 @@ extern int xattrs_ndx;
+ #define F_SUM(f) ((char*)OPT_EXTRA(f, LEN64_BUMP(f) + HLINK_BUMP(f) \
+ 				    + SUM_EXTRA_CNT - 1))
  
- #define REQ_EXTRA(f,ndx) ((union file_extras*)(f) - (ndx))
- #define OPT_EXTRA(f,bump) ((union file_extras*)(f) - file_extra_cnt - 1 - (bump))
-@@ -1077,6 +1078,12 @@ isDigit(const char *ptr)
++/* These are only valid on an entry read from a checksum file. */
++#define F_CTIME(f) OPT_EXTRA(f, LEN64_BUMP(f) + SUM_EXTRA_CNT)->num
++#define F_INODE(f) OPT_EXTRA(f, LEN64_BUMP(f) + SUM_EXTRA_CNT + 1)->num
++
+ /* Some utility defines: */
+ #define F_IS_ACTIVE(f) (f)->basename[0]
+ #define F_IS_HLINKED(f) ((f)->flags & FLAG_HLINKED)
+@@ -1077,6 +1081,12 @@ isDigit(const char *ptr)
  }
  
  static inline int
@@ -705,7 +673,7 @@ To use this patch, run these commands for a successful build:
  attempted uploads will fail. If "read only" is false then uploads will
 --- old/support/rsyncsums
 +++ new/support/rsyncsums
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,175 @@
 +#!/usr/bin/perl -w
 +use strict;
 +
@@ -716,13 +684,12 @@ To use this patch, run these commands for a successful build:
 +
 +our $SUMS_FILE = '.rsyncsums';
 +
-+our($recurse_opt, $force_reading, $help_opt);
++our($recurse_opt, $help_opt);
 +our $verbosity = 0;
 +
 +&Getopt::Long::Configure('bundling');
 +&usage if !&GetOptions(
 +    'recurse|r' => \$recurse_opt,
-+    'force|f' => \$force_reading,
 +    'verbose|v+' => \$verbosity,
 +    'help|h' => \$help_opt,
 +) || $help_opt;
@@ -762,7 +729,6 @@ To use this patch, run these commands for a successful build:
 +    my %cache;
 +    my @subdirs;
 +    my $cnt = 0;
-+    my $latest_time = 0;
 +    while (defined(my $fn = readdir(DP))) {
 +	next if $fn =~ /^\.\.?$/ || $fn =~ /^\Q$SUMS_FILE\E$/o || -l $fn;
 +	if (-d _) {
@@ -771,13 +737,11 @@ To use this patch, run these commands for a successful build:
 +	}
 +	next unless -f _;
 +
-+	my($size,$mtime,$ctime) = (stat(_))[7,9,10];
++	my($size,$mtime,$ctime,$inode) = (stat(_))[7,9,10,1];
++	next if $size == 0;
 +
-+	$cache{$fn} = [ $size, $mtime, $ctime ];
++	$cache{$fn} = [ $size, $mtime, $ctime & 0xFFFFFFFF, $inode & 0xFFFFFFFF ];
 +	$cnt++;
-+
-+	$latest_time = $mtime if $mtime > $latest_time;
-+	$latest_time = $ctime if $ctime > $latest_time;
 +    }
 +
 +    closedir DP;
@@ -793,25 +757,22 @@ To use this patch, run these commands for a successful build:
 +	next;
 +    }
 +
-+    if (defined($sums_mtime) && $sums_mtime == $latest_time && !$force_reading) {
-+	print "OK\n" if $verbosity;
-+	next;
-+    }
-+
 +    if (open(FP, '+<', $SUMS_FILE)) {
 +	while (<FP>) {
 +	    chomp;
-+	    my($sum4, $sum5, $size, $mtime, $ctime, $fn) = split(' ', $_, 6);
++	    my($sum4, $sum5, $size, $mtime, $ctime, $inode, $fn) = split(' ', $_, 7);
 +	    my $ref = $cache{$fn};
 +	    if (defined $ref) {
 +		if ($$ref[0] == $size
-+		 && $$ref[1] == $mtime && $$ref[2] == $ctime
++		 && $$ref[1] == $mtime
++		 && $$ref[2] == $ctime
++		 && $$ref[3] == $inode
 +		 && $sum4 !~ /=/ && $sum5 !~ /=/) {
-+		    $$ref[3] = $sum4;
-+		    $$ref[4] = $sum5;
++		    $$ref[4] = $sum4;
++		    $$ref[5] = $sum5;
 +		    $cnt--;
 +		} else {
-+		    $$ref[3] = $$ref[4] = undef;
++		    $$ref[4] = $$ref[5] = undef;
 +		}
 +	    } else {
 +		$cnt = -1; # Force rewrite due to removed line.
@@ -823,7 +784,7 @@ To use this patch, run these commands for a successful build:
 +    }
 +
 +    if ($cnt) {
-+	print "updating\n" if $verbosity;
++	print "UPDATING\n" if $verbosity;
 +	while (my($fn, $ref) = each %cache) {
 +	    next if defined $$ref[3] && defined $$ref[4];
 +	    if (!open(IN, $fn)) {
@@ -832,9 +793,13 @@ To use this patch, run these commands for a successful build:
 +		next;
 +	    }
 +
-+	    my($size,$mtime,$ctime) = (stat(IN))[7,9,10];
-+	    my($sum4, $sum5);
++	    my($size,$mtime,$ctime,$inode) = (stat(IN))[7,9,10,1];
++	    if ($size == 0) {
++		close IN;
++		next;
++	    }
 +
++	    my($sum4, $sum5);
 +	    while (1) {
 +		while (sysread(IN, $_, 64*1024)) {
 +		    $md4->add($_);
@@ -844,37 +809,33 @@ To use this patch, run these commands for a successful build:
 +		$sum5 = $md5->hexdigest;
 +		print " $sum4 $sum5" if $verbosity > 2;
 +		print " $fn\n" if $verbosity > 1;
-+		my($size2,$mtime2,$ctime2) = (stat(IN))[7,9,10];
-+		last if $size == $size2 && $mtime == $mtime2 && $ctime == $ctime2;
++		my($size2,$mtime2,$ctime2,$inode2) = (stat(IN))[7,9,10,1];
++		last if $size == $size2 && $mtime == $mtime2
++		     && $ctime == $ctime2 && $inode == $inode2;
 +		$size = $size2;
 +		$mtime = $mtime2;
 +		$ctime = $ctime2;
++		$inode = $inode2;
 +		sysseek(IN, 0, 0);
 +	    }
 +	    
 +	    close IN;
 +
-+	    $cache{$fn} = [ $size, $mtime, $ctime, $sum4, $sum5 ];
++	    $cache{$fn} = [ $size, $mtime, $ctime, $inode, $sum4, $sum5 ];
 +	}
 +
-+	$latest_time = 0;
 +	seek(FP, 0, 0);
 +	foreach my $fn (sort keys %cache) {
 +	    my $ref = $cache{$fn};
-+	    my($size, $mtime, $ctime, $sum4, $sum5) = @$ref;
-+	    printf FP '%s %s %10d %10d %10d %s' . "\n", $sum4, $sum5, $size, $mtime, $ctime, $fn;
-+
-+	    $latest_time = $mtime if $mtime > $latest_time;
-+	    $latest_time = $ctime if $ctime > $latest_time;
++	    my($size, $mtime, $ctime, $inode, $sum4, $sum5) = @$ref;
++	    printf FP '%s %s %10d %10d %10d %10d %s' . "\n", $sum4, $sum5, $size, $mtime, $ctime, $inode, $fn;
 +	}
 +	truncate(FP, tell(FP));
 +    } else {
-+	print "OK.\n" if $verbosity;
++	print "ok\n" if $verbosity;
 +    }
 +
 +    close FP;
-+
-+    utime $latest_time, $latest_time, $SUMS_FILE;
 +}
 +
 +sub usage
@@ -884,8 +845,6 @@ To use this patch, run these commands for a successful build:
 +
 +Options:
 + -r, --recurse     Update $SUMS_FILE files in subdirectories too.
-+ -f, --force       Force the reading of an $SUMS_FILE file that looks to be
-+                   up-to-date.  (Useful for weeding out old entries.)
 + -v, --verbose     Mention what we're doing.  Repeat for more info.
 + -h, --help        Display this help message.
 +EOT
