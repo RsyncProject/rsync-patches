@@ -1,0 +1,173 @@
+This patch to rsync adds a %C log escape that expands to the sender's
+post-transfer checksum of a file for protocol 30 or above.  This way, if
+you need the MD5 checksums of transferred files, you can have rsync log
+them instead of spending extra processor time on a separate command to
+compute them.
+
+-- Matt McCutchen <hashproduct@gmail.com>
+
+--- old/log.c
++++ new/log.c
+@@ -55,6 +55,9 @@ extern char curr_dir[];
+ extern char *module_dir;
+ extern unsigned int module_dirlen;
+ 
++extern char sender_file_sum[MAX_DIGEST_LEN];
++extern int file_sum_len;
++
+ static int log_initialised;
+ static int logfile_was_closed;
+ static FILE *logfile_fp;
+@@ -610,6 +613,19 @@ static void log_formatted(enum logcode c
+ 			snprintf(buf2, sizeof buf2, fmt, (double)b);
+ 			n = buf2;
+ 			break;
++		case 'C':
++			if (iflags & ITEM_TRANSFER && protocol_version >= 30) {
++				int i;
++				for (i = 0; i < file_sum_len; i++)
++					snprintf(buf2 + i*2, 3, "%02x", (int)CVAL(sender_file_sum,i));
++			} else {
++				int i;
++				for (i = 0; i < file_sum_len*2; i++)
++					buf2[i] = '?';
++				buf2[i] = '\0';
++			}
++			n = buf2;
++			break;
+ 		case 'i':
+ 			if (iflags & ITEM_DELETED) {
+ 				n = "*deleting";
+--- old/match.c
++++ new/match.c
+@@ -286,6 +286,10 @@ static void hash_search(int f,struct sum
+ 	map_ptr(buf, len-1, 1);
+ }
+ 
++/* Global variables to make the sender's checksum of a transferred file
++ * available to the code for log escape %C. */
++char sender_file_sum[MAX_DIGEST_LEN];
++int file_sum_len = MD5_DIGEST_LEN;
+ 
+ /**
+  * Scan through a origin file, looking for sections that match
+@@ -303,9 +307,6 @@ static void hash_search(int f,struct sum
+  **/
+ void match_sums(int f, struct sum_struct *s, struct map_struct *buf, OFF_T len)
+ {
+-	char file_sum[MAX_DIGEST_LEN];
+-	int sum_len;
+-
+ 	last_match = 0;
+ 	false_alarms = 0;
+ 	hash_hits = 0;
+@@ -353,14 +354,26 @@ void match_sums(int f, struct sum_struct
+ 		matched(f, s, buf, len, -1);
+ 	}
+ 
+-	sum_len = sum_end(file_sum);
+-	/* If we had a read error, send a bad checksum. */
+-	if (buf && buf->status != 0)
+-		file_sum[0]++;
++	file_sum_len = sum_end(sender_file_sum);
++
++	/* If we had a read error, send a bad checksum.  We use all bits
++	 * off or all bits on so that a user logging checksums with %C
++	 * can recognize a bad checksum. */
++	if (buf && buf->status != 0) {
++		int i;
++		for (i = 0; i < file_sum_len; i++) {
++			if (sender_file_sum[i])
++				break;
++		}
++		if (i < file_sum_len)
++			memset(sender_file_sum, 0, file_sum_len);
++		else
++			memset(sender_file_sum, 0xFF, file_sum_len);
++	}
+ 
+ 	if (verbose > 2)
+ 		rprintf(FINFO,"sending file_sum\n");
+-	write_buf(f, file_sum, sum_len);
++	write_buf(f, sender_file_sum, file_sum_len);
+ 
+ 	if (verbose > 2)
+ 		rprintf(FINFO, "false_alarms=%d hash_hits=%d matches=%d\n",
+--- old/options.c
++++ new/options.c
+@@ -1439,7 +1439,8 @@ int parse_arguments(int *argc, const cha
+ 		else if (log_format_has(stdout_format, 'i'))
+ 			stdout_format_has_i = itemize_changes | 1;
+ 		if (!log_format_has(stdout_format, 'b')
+-		 && !log_format_has(stdout_format, 'c'))
++		 && !log_format_has(stdout_format, 'c')
++		 && !log_format_has(stdout_format, 'C'))
+ 			log_before_transfer = !am_server;
+ 	} else if (itemize_changes) {
+ 		stdout_format = "%i %n%L";
+--- old/receiver.c
++++ new/receiver.c
+@@ -62,6 +62,9 @@ static int phase = 0, redoing = 0;
+ /* We're either updating the basis file or an identical copy: */
+ static int updating_basis;
+ 
++extern char sender_file_sum[MAX_DIGEST_LEN];
++extern int file_sum_len;
++
+ /*
+  * get_tmpname() - create a tmp filename for a given filename
+  *
+@@ -128,10 +131,9 @@ static int receive_data(int f_in, char *
+ 			const char *fname, int fd, OFF_T total_size)
+ {
+ 	static char file_sum1[MAX_DIGEST_LEN];
+-	static char file_sum2[MAX_DIGEST_LEN];
+ 	struct map_struct *mapbuf;
+ 	struct sum_struct sum;
+-	int32 len, sum_len;
++	int32 len;
+ 	OFF_T offset = 0;
+ 	OFF_T offset2;
+ 	char *data;
+@@ -261,15 +263,15 @@ static int receive_data(int f_in, char *
+ 		exit_cleanup(RERR_FILEIO);
+ 	}
+ 
+-	sum_len = sum_end(file_sum1);
++	file_sum_len = sum_end(file_sum1);
+ 
+ 	if (mapbuf)
+ 		unmap_file(mapbuf);
+ 
+-	read_buf(f_in, file_sum2, sum_len);
++	read_buf(f_in, sender_file_sum, file_sum_len);
+ 	if (verbose > 2)
+ 		rprintf(FINFO,"got file_sum\n");
+-	if (fd != -1 && memcmp(file_sum1, file_sum2, sum_len) != 0)
++	if (fd != -1 && memcmp(file_sum1, sender_file_sum, file_sum_len) != 0)
+ 		return 0;
+ 	return 1;
+ }
+--- old/rsync.yo
++++ new/rsync.yo
+@@ -1970,7 +1970,7 @@ by the server and defaults to the curren
+ is used to set a specific checksum seed, which is useful for
+ applications that want repeatable block and file checksums, or
+ in the case where the user wants a more random checksum seed.
+-Note that setting NUM to 0 causes rsync to use the default of code(time())
++Setting NUM to 0 causes rsync to use the default of code(time())
+ for checksum seed.
+ enddit()
+ 
+--- old/rsyncd.conf.yo
++++ new/rsyncd.conf.yo
+@@ -421,7 +421,8 @@ quote(itemization(
+   it() %a the remote IP address
+   it() %b the number of bytes actually transferred
+   it() %B the permission bits of the file (e.g. rwxrwxrwt)
+-  it() %c the checksum bytes received for this file (only when sending)
++  it() %c the total size of the block checksums received for the basis file (only when sending)
++  it() %C the full-file MD5 checksum of a transferred file (only for protocol 30 or above).
+   it() %f the filename (long form on sender; no trailing "/")
+   it() %G the gid of the file (decimal) or "DEFAULT"
+   it() %h the remote host name
