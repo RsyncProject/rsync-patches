@@ -9,7 +9,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
 
 --- old/compat.c
 +++ new/compat.c
-@@ -44,6 +44,7 @@ extern int prune_empty_dirs;
+@@ -45,6 +45,7 @@ extern int prune_empty_dirs;
  extern int protocol_version;
  extern int preserve_uid;
  extern int preserve_gid;
@@ -17,7 +17,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int preserve_acls;
  extern int preserve_xattrs;
  extern int preserve_hard_links;
-@@ -58,7 +59,7 @@ extern char *dest_option;
+@@ -59,7 +60,7 @@ extern char *dest_option;
  extern struct filter_list_struct filter_list;
  
  /* These index values are for the file-list's extra-attribute array. */
@@ -26,7 +26,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  /* The server makes sure that if either side only supports a pre-release
   * version of a protocol, that both sides must speak a compatible version
-@@ -99,6 +100,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -100,6 +101,8 @@ void setup_protocol(int f_out,int f_in)
  		uid_ndx = ++file_extra_cnt;
  	if (preserve_gid)
  		gid_ndx = ++file_extra_cnt;
@@ -138,7 +138,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  #ifdef ICONV_OPTION
  	if (ic_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
-@@ -1191,6 +1217,8 @@ struct file_struct *make_file(const char
+@@ -1181,6 +1207,8 @@ struct file_struct *make_file(const char
  		F_OWNER(file) = st.st_uid;
  	if (gid_ndx)
  		F_GROUP(file) = st.st_gid;
@@ -154,10 +154,10 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int preserve_perms;
  extern int preserve_times;
 +extern int preserve_atimes;
- extern int omit_dir_times;
  extern int uid_ndx;
  extern int gid_ndx;
-@@ -564,6 +565,9 @@ void itemize(const char *fnamecmp, struc
+ extern int delete_mode;
+@@ -563,6 +564,9 @@ void itemize(const char *fnamecmp, struc
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, sxp->st.st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
@@ -167,7 +167,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  		if (!BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
  		if (uid_ndx && am_root && (uid_t)F_OWNER(file) != sxp->st.st_uid)
-@@ -881,6 +885,8 @@ static int try_dests_reg(struct file_str
+@@ -880,6 +884,8 @@ static int try_dests_reg(struct file_str
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
@@ -176,7 +176,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  			if (preserve_hard_links && F_IS_HLINKED(file))
  				finish_hard_link(file, fname, &sxp->st, itemizing, code, j);
  			if (itemizing && (verbose > 1 || stdout_format_has_i > 1)) {
-@@ -1775,7 +1781,7 @@ static void touch_up_dirs(struct file_li
+@@ -1774,7 +1780,7 @@ static void touch_up_dirs(struct file_li
  		if (!(file->mode & S_IWUSR))
  			do_chmod(fname, file->mode);
  		if (need_retouch_dir_times)
@@ -199,15 +199,15 @@ TODO:  need to fix this to handle 64-bit time_t values!
  			c[11] = '\0';
 --- old/options.c
 +++ new/options.c
-@@ -57,6 +57,7 @@ int preserve_uid = 0;
+@@ -56,6 +56,7 @@ int preserve_specials = 0;
+ int preserve_uid = 0;
  int preserve_gid = 0;
  int preserve_times = 0;
- int omit_dir_times = 0;
 +int preserve_atimes = 0;
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -338,6 +339,7 @@ void usage(enum logcode F)
+@@ -344,6 +345,7 @@ void usage(enum logcode F)
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve modification times\n");
    rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
@@ -215,17 +215,17 @@ TODO:  need to fix this to handle 64-bit time_t values!
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
  #ifdef SUPPORT_XATTRS
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
-@@ -473,6 +475,9 @@ static struct poptOption long_options[] 
-   {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
+@@ -477,6 +479,9 @@ static struct poptOption long_options[] 
+   {"times",           't', POPT_ARG_VAL,    &preserve_times, 2, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
 +  {"atimes",          'U', POPT_ARG_VAL,    &preserve_atimes, 1, 0, 0 },
 +  {"no-atimes",        0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
 +  {"no-U",             0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
-   {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 2, 0, 0 },
-   {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
-   {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
-@@ -1675,6 +1680,8 @@ void server_options(char **args,int *arg
+   {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
+   {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
+   {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
+@@ -1691,6 +1696,8 @@ void server_options(char **args,int *arg
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -242,9 +242,9 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int preserve_executability;
 +extern int preserve_atimes;
  extern int preserve_times;
- extern int omit_dir_times;
  extern int am_root;
-@@ -274,6 +275,7 @@ int set_file_attrs(const char *fname, st
+ extern int am_server;
+@@ -273,6 +274,7 @@ int set_file_attrs(const char *fname, st
  	int updated = 0;
  	statx sx2;
  	int change_uid, change_gid;
@@ -252,13 +252,13 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	mode_t new_mode = file->mode;
  
  	if (!sxp) {
-@@ -311,18 +313,36 @@ int set_file_attrs(const char *fname, st
+@@ -310,18 +312,36 @@ int set_file_attrs(const char *fname, st
  		set_stat_xattr(fname, file);
  #endif
  
 +	/* This code must be the first update in the function due to
 +	 * how it uses the "updated" variable. */
- 	if (!preserve_times || (S_ISDIR(sxp->st.st_mode) && omit_dir_times))
+ 	if (!preserve_times || (S_ISDIR(sxp->st.st_mode) && preserve_times == 1))
  		flags |= ATTRS_SKIP_MTIME;
 +	if (!preserve_atimes || S_ISDIR(sxp->st.st_mode))
 +		flags |= ATTRS_SKIP_ATIME;
@@ -328,7 +328,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  #define F_NDX(f) REQ_EXTRA(f, ic_ndx)->num
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -353,6 +353,7 @@ to the detailed description below for a 
+@@ -354,6 +354,7 @@ to the detailed description below for a 
   -D                          same as --devices --specials
   -t, --times                 preserve modification times
   -O, --omit-dir-times        omit directories from --times
@@ -336,7 +336,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
-@@ -930,6 +931,12 @@ it is preserving modification times (see
+@@ -940,6 +941,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -349,7 +349,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1592,8 +1599,10 @@ quote(itemization(
+@@ -1602,8 +1609,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
