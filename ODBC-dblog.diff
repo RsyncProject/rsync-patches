@@ -17,7 +17,7 @@ See the newly-created file "instructions" for more info.
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
 -	util.o main.o checksum.o match.o syscall.o log.o backup.o
 +	util.o main.o checksum.o match.o syscall.o log.o backup.o @EXTRA_OBJECT@
- OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o \
+ OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
  	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
  OBJS3=progress.o pipe.o
 --- old/cleanup.c
@@ -1077,7 +1077,7 @@ See the newly-created file "instructions" for more info.
  		fnametmp[0] = '\0';
  		return 0;
  	}
-@@ -174,6 +178,10 @@ static int receive_data(int f_in, char *
+@@ -176,6 +180,10 @@ static int receive_data(int f_in, char *
  		if (fd != -1 && (j = do_lseek(fd, offset, SEEK_SET)) != offset) {
  			rsyserr(FERROR, errno, "lseek of %s returned %.0f, not %.0f",
  				full_fname(fname), (double)j, (double)offset);
@@ -1088,7 +1088,7 @@ See the newly-created file "instructions" for more info.
  			exit_cleanup(RERR_FILEIO);
  		}
  	}
-@@ -231,6 +239,11 @@ static int receive_data(int f_in, char *
+@@ -233,6 +241,11 @@ static int receive_data(int f_in, char *
  						"lseek of %s returned %.0f, not %.0f",
  						full_fname(fname),
  						(double)pos, (double)offset);
@@ -1100,7 +1100,7 @@ See the newly-created file "instructions" for more info.
  					exit_cleanup(RERR_FILEIO);
  				}
  				continue;
-@@ -256,6 +269,9 @@ static int receive_data(int f_in, char *
+@@ -258,6 +271,9 @@ static int receive_data(int f_in, char *
  	    report_write_error:
  		rsyserr(FERROR, errno, "write failed on %s",
  			full_fname(fname));
@@ -1110,7 +1110,7 @@ See the newly-created file "instructions" for more info.
  		exit_cleanup(RERR_FILEIO);
  	}
  
-@@ -299,6 +315,12 @@ static void handle_delayed_updates(char 
+@@ -301,6 +317,12 @@ static void handle_delayed_updates(char 
  				rsyserr(FERROR, errno,
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
@@ -1123,7 +1123,7 @@ See the newly-created file "instructions" for more info.
  			} else {
  				if (remove_source_files
  				 || (preserve_hard_links && F_IS_HLINKED(file)))
-@@ -450,6 +472,9 @@ int recv_files(int f_in, char *local_nam
+@@ -454,6 +476,9 @@ int recv_files(int f_in, char *local_nam
  		if (server_filter_list.head
  		    && check_filter(&server_filter_list, fname, 0) < 0) {
  			rprintf(FERROR, "attempt to hack rsync failed.\n");
@@ -1133,7 +1133,7 @@ See the newly-created file "instructions" for more info.
  			exit_cleanup(RERR_PROTOCOL);
  		}
  
-@@ -508,6 +533,11 @@ int recv_files(int f_in, char *local_nam
+@@ -512,6 +537,11 @@ int recv_files(int f_in, char *local_nam
  					rprintf(FERROR,
  						"invalid basis_dir index: %d.\n",
  						fnamecmp_type);
@@ -1145,7 +1145,7 @@ See the newly-created file "instructions" for more info.
  					exit_cleanup(RERR_PROTOCOL);
  				}
  				pathjoin(fnamecmpbuf, sizeof fnamecmpbuf,
-@@ -556,6 +586,9 @@ int recv_files(int f_in, char *local_nam
+@@ -560,6 +590,9 @@ int recv_files(int f_in, char *local_nam
  		} else if (do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR, errno, "fstat %s failed",
  				full_fname(fnamecmp));
@@ -1155,7 +1155,7 @@ See the newly-created file "instructions" for more info.
  			discard_receive_data(f_in, F_LENGTH(file));
  			close(fd1);
  			if (inc_recurse)
-@@ -571,6 +604,9 @@ int recv_files(int f_in, char *local_nam
+@@ -575,6 +608,9 @@ int recv_files(int f_in, char *local_nam
  			 */
  			rprintf(FERROR,"recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -1165,7 +1165,7 @@ See the newly-created file "instructions" for more info.
  			discard_receive_data(f_in, F_LENGTH(file));
  			close(fd1);
  			if (inc_recurse)
-@@ -605,6 +641,9 @@ int recv_files(int f_in, char *local_nam
+@@ -609,6 +645,9 @@ int recv_files(int f_in, char *local_nam
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "open %s failed",
  					full_fname(fname));
@@ -1175,7 +1175,7 @@ See the newly-created file "instructions" for more info.
  				discard_receive_data(f_in, F_LENGTH(file));
  				if (fd1 != -1)
  					close(fd1);
-@@ -642,6 +681,10 @@ int recv_files(int f_in, char *local_nam
+@@ -646,6 +685,10 @@ int recv_files(int f_in, char *local_nam
  			if (fd2 == -1) {
  				rsyserr(FERROR, errno, "mkstemp %s failed",
  					full_fname(fnametmp));
@@ -1186,7 +1186,7 @@ See the newly-created file "instructions" for more info.
  				discard_receive_data(f_in, F_LENGTH(file));
  				if (fd1 != -1)
  					close(fd1);
-@@ -664,12 +707,19 @@ int recv_files(int f_in, char *local_nam
+@@ -668,12 +711,19 @@ int recv_files(int f_in, char *local_nam
  				       fname, fd2, F_LENGTH(file));
  
  		log_item(log_code, file, &initial_stats, iflags, NULL);
@@ -1206,7 +1206,7 @@ See the newly-created file "instructions" for more info.
  			exit_cleanup(RERR_FILEIO);
  		}
  
-@@ -726,6 +776,12 @@ int recv_files(int f_in, char *local_nam
+@@ -730,6 +780,12 @@ int recv_files(int f_in, char *local_nam
  				rprintf(msgtype,
  					"%s: %s failed verification -- update %s%s.\n",
  					errstr, fname, keptstr, redostr);
