@@ -22,7 +22,7 @@ and we can't honor that request.
  INSTALLCMD=@INSTALL@
  INSTALLMAN=@INSTALL@
 @@ -36,7 +38,7 @@ OBJS1=flist.o rsync.o generator.o receiv
- OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o \
+ OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
  	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
  OBJS3=progress.o pipe.o
 -DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
@@ -41,7 +41,7 @@ and we can't honor that request.
  
 --- old/clientserver.c
 +++ new/clientserver.c
-@@ -858,6 +858,13 @@ int daemon_main(void)
+@@ -876,6 +876,13 @@ int daemon_main(void)
  	 * address too.  In fact, why not just do inet_ntop on the
  	 * local address??? */
  
@@ -89,7 +89,7 @@ and we can't honor that request.
  #include <sys/types.h>
 --- old/loadparm.c
 +++ new/loadparm.c
-@@ -107,6 +107,9 @@ typedef struct
+@@ -110,6 +110,9 @@ typedef struct
  	char *socket_options;
  
  	int rsync_port;
@@ -99,7 +99,7 @@ and we can't honor that request.
  } global;
  
  static global Globals;
-@@ -292,6 +295,9 @@ static struct parm_struct parm_table[] =
+@@ -295,6 +298,9 @@ static struct parm_struct parm_table[] =
   {"motd file",         P_STRING, P_GLOBAL,&Globals.motd_file,          NULL,0},
   {"pid file",          P_STRING, P_GLOBAL,&Globals.pid_file,           NULL,0},
   {"port",              P_INTEGER,P_GLOBAL,&Globals.rsync_port,         NULL,0},
@@ -109,7 +109,7 @@ and we can't honor that request.
   {"socket options",    P_STRING, P_GLOBAL,&Globals.socket_options,     NULL,0},
  
   {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
-@@ -383,6 +389,9 @@ FN_GLOBAL_STRING(lp_pid_file, &Globals.p
+@@ -386,6 +392,9 @@ FN_GLOBAL_STRING(lp_pid_file, &Globals.p
  FN_GLOBAL_STRING(lp_socket_options, &Globals.socket_options)
  
  FN_GLOBAL_INTEGER(lp_rsync_port, &Globals.rsync_port)
@@ -121,10 +121,10 @@ and we can't honor that request.
  FN_LOCAL_STRING(lp_comment, comment)
 --- old/main.c
 +++ new/main.c
-@@ -1076,6 +1076,18 @@ static int start_client(int argc, char *
+@@ -1099,6 +1099,18 @@ static int start_client(int argc, char *
  
  	if (!read_batch) { /* for read_batch, NO source is specified */
- 		shell_path = check_for_hostspec(argv[0], &shell_machine, &rsync_port);
+ 		char *path = check_for_hostspec(argv[0], &shell_machine, &rsync_port);
 +
 +		if (shell_machine && !shell_machine[0]) {
 +#ifdef HAVE_LIBSLP
@@ -137,12 +137,12 @@ and we can't honor that request.
 +#endif
 +		}
 +
- 		if (shell_path) { /* source is remote */
+ 		if (path) { /* source is remote */
  			char *dummy1;
  			int dummy2;
 --- old/options.c
 +++ new/options.c
-@@ -212,6 +212,7 @@ static void print_rsync_version(enum log
+@@ -220,6 +220,7 @@ static void print_rsync_version(enum log
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -150,7 +150,7 @@ and we can't honor that request.
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -241,6 +242,9 @@ static void print_rsync_version(enum log
+@@ -249,6 +250,9 @@ static void print_rsync_version(enum log
  #ifdef ICONV_OPTION
  	iconv = "";
  #endif
@@ -160,7 +160,7 @@ and we can't honor that request.
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -254,8 +258,8 @@ static void print_rsync_version(enum log
+@@ -262,8 +266,8 @@ static void print_rsync_version(enum log
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -173,7 +173,7 @@ and we can't honor that request.
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
 --- old/rsync.h
 +++ new/rsync.h
-@@ -179,6 +179,9 @@
+@@ -182,6 +182,9 @@
  #define SIGNIFICANT_ITEM_FLAGS (~(\
  	ITEM_BASIS_TYPE_FOLLOWS | ITEM_XNAME_FOLLOWS | ITEM_LOCAL_CHANGE))
  
@@ -185,7 +185,7 @@ and we can't honor that request.
   * but FLOG and FSOCKERR can be sent over the receiver -> generator pipe.
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -139,7 +139,12 @@ particular rsync daemon by leaving off t
+@@ -145,7 +145,12 @@ particular rsync daemon by leaving off t
  
  quote(tt(rsync somehost.mydomain.com::))
  
@@ -223,7 +223,7 @@ and we can't honor that request.
  enddit()
  
  
-@@ -561,6 +570,7 @@ use chroot = no
+@@ -564,6 +573,7 @@ use chroot = no
  max connections = 4
  syslog facility = local5
  pid file = /var/run/rsyncd.pid
@@ -233,7 +233,7 @@ and we can't honor that request.
          path = /var/ftp/pub
 --- old/socket.c
 +++ new/socket.c
-@@ -465,6 +465,16 @@ void start_accept_loop(int port, int (*f
+@@ -501,6 +501,16 @@ void start_accept_loop(int port, int (*f
  {
  	fd_set deffds;
  	int *sp, maxfd, i;
@@ -250,7 +250,7 @@ and we can't honor that request.
  
  #ifdef HAVE_SIGACTION
  	sigact.sa_flags = SA_NOCLDSTOP;
-@@ -493,14 +503,25 @@ void start_accept_loop(int port, int (*f
+@@ -529,14 +539,25 @@ void start_accept_loop(int port, int (*f
  			maxfd = sp[i];
  	}
  
@@ -276,7 +276,7 @@ and we can't honor that request.
  
  		/* close log file before the potentially very long select so
  		 * file can be trimmed by another process instead of growing
-@@ -512,8 +533,18 @@ void start_accept_loop(int port, int (*f
+@@ -548,8 +569,18 @@ void start_accept_loop(int port, int (*f
  #else
  		fds = deffds;
  #endif
