@@ -9,24 +9,24 @@ TODO:  need to fix this to handle 64-bit time_t values!
 
 --- old/compat.c
 +++ new/compat.c
-@@ -45,6 +45,7 @@ extern int prune_empty_dirs;
- extern int protocol_version;
+@@ -44,6 +44,7 @@ extern int protocol_version;
+ extern int protect_args;
  extern int preserve_uid;
  extern int preserve_gid;
 +extern int preserve_atimes;
  extern int preserve_acls;
  extern int preserve_xattrs;
  extern int need_messages_from_generator;
-@@ -58,7 +59,7 @@ extern char *dest_option;
- extern struct filter_list_struct filter_list;
+@@ -63,7 +64,7 @@ extern iconv_t ic_send, ic_recv;
+ #endif
  
  /* These index values are for the file-list's extra-attribute array. */
 -int uid_ndx, gid_ndx, acls_ndx, xattrs_ndx;
 +int uid_ndx, gid_ndx, atimes_ndx, acls_ndx, xattrs_ndx;
+ #ifdef ICONV_OPTION
+ int ic_ndx;
  
- /* The server makes sure that if either side only supports a pre-release
-  * version of a protocol, that both sides must speak a compatible version
-@@ -105,6 +106,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -115,6 +116,8 @@ void setup_protocol(int f_out,int f_in)
  		uid_ndx = ++file_extra_cnt;
  	if (preserve_gid)
  		gid_ndx = ++file_extra_cnt;
@@ -45,7 +45,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int relative_paths;
  extern int implied_dirs;
  extern int file_extra_cnt;
-@@ -172,6 +173,7 @@ void show_flist_stats(void)
+@@ -174,6 +175,7 @@ void show_flist_stats(void)
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -53,7 +53,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -186,14 +188,16 @@ static void list_file_entry(struct file_
+@@ -188,14 +190,16 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -72,7 +72,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  			f_name(f, NULL));
  	}
  }
-@@ -361,6 +365,7 @@ int push_pathname(const char *dir, int l
+@@ -363,6 +367,7 @@ int push_pathname(const char *dir, int l
  static void send_file_entry(int f, struct file_struct *file, int ndx, int first_ndx)
  {
  	static time_t modtime;
@@ -80,7 +80,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -460,6 +465,13 @@ static void send_file_entry(int f, struc
+@@ -461,6 +466,13 @@ static void send_file_entry(int f, struc
  		xflags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -94,7 +94,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != 0) {
-@@ -532,6 +544,8 @@ static void send_file_entry(int f, struc
+@@ -534,6 +546,8 @@ static void send_file_entry(int f, struc
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -103,7 +103,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	if (uid_ndx && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -618,7 +632,7 @@ static void send_file_entry(int f, struc
+@@ -620,7 +634,7 @@ static void send_file_entry(int f, struc
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   int xflags, int f)
  {
@@ -112,7 +112,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	static mode_t mode;
  	static int64 dev;
  	static dev_t rdev;
-@@ -755,6 +769,16 @@ static struct file_struct *recv_file_ent
+@@ -751,6 +765,16 @@ static struct file_struct *recv_file_ent
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -129,7 +129,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -883,6 +907,8 @@ static struct file_struct *recv_file_ent
+@@ -879,6 +903,8 @@ static struct file_struct *recv_file_ent
  		F_GROUP(file) = gid;
  		file->flags |= gid_flags;
  	}
@@ -138,7 +138,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  #ifdef ICONV_OPTION
  	if (ic_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
-@@ -1198,6 +1224,8 @@ struct file_struct *make_file(const char
+@@ -1196,6 +1222,8 @@ struct file_struct *make_file(const char
  		F_OWNER(file) = st.st_uid;
  	if (gid_ndx)
  		F_GROUP(file) = st.st_gid;
@@ -157,7 +157,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int uid_ndx;
  extern int gid_ndx;
  extern int delete_mode;
-@@ -563,6 +564,9 @@ void itemize(const char *fnamecmp, struc
+@@ -562,6 +563,9 @@ void itemize(const char *fnamecmp, struc
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, sxp->st.st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
@@ -167,16 +167,16 @@ TODO:  need to fix this to handle 64-bit time_t values!
  		if (!BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
  		if (uid_ndx && am_root && (uid_t)F_OWNER(file) != sxp->st.st_uid)
-@@ -880,6 +884,8 @@ static int try_dests_reg(struct file_str
+@@ -879,6 +883,8 @@ static int try_dests_reg(struct file_str
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
 +			if (preserve_atimes)
 +				set_file_attrs(fname, file, sxp, NULL, 0);
  			if (preserve_hard_links && F_IS_HLINKED(file))
- 				finish_hard_link(file, fname, &sxp->st, itemizing, code, j);
+ 				finish_hard_link(file, fname, ndx, &sxp->st, itemizing, code, j);
  			if (itemizing && (verbose > 1 || stdout_format_has_i > 1)) {
-@@ -1782,7 +1788,7 @@ static void touch_up_dirs(struct file_li
+@@ -1793,7 +1799,7 @@ static void touch_up_dirs(struct file_li
  		if (!(file->mode & S_IWUSR))
  			do_chmod(fname, file->mode);
  		if (need_retouch_dir_times)
@@ -187,7 +187,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  		else if (!(counter & 0xFF))
 --- old/log.c
 +++ new/log.c
-@@ -631,7 +631,8 @@ static void log_formatted(enum logcode c
+@@ -630,7 +630,8 @@ static void log_formatted(enum logcode c
  			c[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
  			c[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
  			c[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
@@ -215,7 +215,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
  #ifdef SUPPORT_XATTRS
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
-@@ -479,6 +481,9 @@ static struct poptOption long_options[] 
+@@ -480,6 +482,9 @@ static struct poptOption long_options[] 
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 2, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
@@ -225,7 +225,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
    {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
    {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
-@@ -1707,6 +1712,8 @@ void server_options(char **args, int *ar
+@@ -1715,6 +1720,8 @@ void server_options(char **args, int *ar
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -244,15 +244,15 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int preserve_times;
  extern int am_root;
  extern int am_server;
-@@ -273,6 +274,7 @@ int set_file_attrs(const char *fname, st
+@@ -342,6 +343,7 @@ int set_file_attrs(const char *fname, st
  	int updated = 0;
  	statx sx2;
  	int change_uid, change_gid;
 +	time_t atime, mtime;
  	mode_t new_mode = file->mode;
+ 	int inherit;
  
- 	if (!sxp) {
-@@ -310,18 +312,36 @@ int set_file_attrs(const char *fname, st
+@@ -382,18 +384,36 @@ int set_file_attrs(const char *fname, st
  		set_stat_xattr(fname, file);
  #endif
  
