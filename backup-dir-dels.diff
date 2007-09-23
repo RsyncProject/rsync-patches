@@ -69,17 +69,16 @@ To use this patch, run these commands for a successful build:
  
  	if (!fnamebak)
  		return 0;
-@@ -96,7 +120,8 @@ static int make_bak_dir(char *fullpath)
+@@ -96,7 +120,7 @@ int make_bak_dir(const char *fullpath)
  {
- 	statx sx;
+ 	char fbuf[MAXPATHLEN], *rel, *end, *p;
  	struct file_struct *file;
--	char *rel = fullpath + backup_dir_len;
-+	int dir_len = deleting ? backup_dir_dels_len : backup_dir_len;
-+	char *rel = fullpath + dir_len;
- 	char *end = rel + strlen(rel);
- 	char *p = end;
+-	int len = backup_dir_len;
++	int len = deleting ? backup_dir_dels_len : backup_dir_len;
+ 	statx sx;
  
-@@ -212,7 +237,8 @@ static int keep_backup(const char *fname
+ 	while (*fullpath == '.' && fullpath[1] == '/') {
+@@ -211,7 +235,8 @@ static int keep_backup(const char *fname
  	if (!(file = make_file(fname, NULL, NULL, 0, NO_FILTERS)))
  		return 1; /* the file could have disappeared */
  
@@ -89,7 +88,7 @@ To use this patch, run these commands for a successful build:
  		unmake_file(file);
  		return 0;
  	}
-@@ -327,3 +353,13 @@ int make_backup(const char *fname)
+@@ -326,3 +351,13 @@ int make_backup(const char *fname)
  		return keep_backup(fname);
  	return make_simple_backup(fname);
  }
@@ -105,7 +104,7 @@ To use this patch, run these commands for a successful build:
 +}
 --- old/generator.c
 +++ new/generator.c
-@@ -94,6 +94,9 @@ extern mode_t orig_umask;
+@@ -93,6 +93,9 @@ extern mode_t orig_umask;
  extern char *backup_dir;
  extern char *backup_suffix;
  extern int backup_suffix_len;
@@ -115,7 +114,7 @@ To use this patch, run these commands for a successful build:
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct filter_list_struct server_filter_list;
  #ifdef ICONV_OPTION
-@@ -131,10 +134,14 @@ enum delret {
+@@ -130,10 +133,14 @@ enum delret {
  static enum delret delete_dir_contents(char *fname, int flags);
  
  
@@ -131,7 +130,7 @@ To use this patch, run these commands for a successful build:
  }
  
  /* Delete a file or directory.  If DEL_RECURSE is set in the flags, this will
-@@ -170,9 +177,9 @@ static enum delret delete_item(char *fbu
+@@ -169,9 +176,9 @@ static enum delret delete_item(char *fbu
  	if (S_ISDIR(mode)) {
  		what = "rmdir";
  		ok = do_rmdir(fbuf) == 0;
@@ -145,7 +144,7 @@ To use this patch, run these commands for a successful build:
  		ok = robust_unlink(fbuf) == 0;
 --- old/options.c
 +++ new/options.c
-@@ -145,10 +145,14 @@ int no_detach
+@@ -147,10 +147,14 @@ int no_detach
  int write_batch = 0;
  int read_batch = 0;
  int backup_dir_len = 0;
@@ -160,7 +159,7 @@ To use this patch, run these commands for a successful build:
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
-@@ -160,7 +164,9 @@ char *stdout_format = NULL;
+@@ -162,7 +166,9 @@ char *stdout_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
@@ -170,7 +169,7 @@ To use this patch, run these commands for a successful build:
  char *sockopts = NULL;
  int rsync_port = 0;
  int compare_dest = 0;
-@@ -316,6 +322,8 @@ void usage(enum logcode F)
+@@ -318,6 +324,8 @@ void usage(enum logcode F)
    rprintf(F," -b, --backup                make backups (see --suffix & --backup-dir)\n");
    rprintf(F,"     --backup-dir=DIR        make backups into hierarchy based in DIR\n");
    rprintf(F,"     --suffix=SUFFIX         set backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
@@ -179,7 +178,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -u, --update                skip files that are newer on the receiver\n");
    rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
    rprintf(F,"     --append                append data onto shorter files\n");
-@@ -583,7 +591,9 @@ static struct poptOption long_options[] 
+@@ -588,7 +596,9 @@ static struct poptOption long_options[] 
    {"backup",          'b', POPT_ARG_VAL,    &make_backups, 1, 0, 0 },
    {"no-backup",        0,  POPT_ARG_VAL,    &make_backups, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
@@ -189,7 +188,7 @@ To use this patch, run these commands for a successful build:
    {"list-only",        0,  POPT_ARG_VAL,    &list_only, 2, 0, 0 },
    {"read-batch",       0,  POPT_ARG_STRING, &batch_name, OPT_READ_BATCH, 0, 0 },
    {"write-batch",      0,  POPT_ARG_STRING, &batch_name, OPT_WRITE_BATCH, 0, 0 },
-@@ -1378,6 +1388,8 @@ int parse_arguments(int *argc, const cha
+@@ -1400,6 +1410,8 @@ int parse_arguments(int *argc_p, const c
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0, NULL);
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0, NULL);
@@ -198,7 +197,7 @@ To use this patch, run these commands for a successful build:
  	}
  	if (server_filter_list.head && !am_sender) {
  		struct filter_list_struct *elp = &server_filter_list;
-@@ -1395,6 +1407,14 @@ int parse_arguments(int *argc, const cha
+@@ -1417,6 +1429,14 @@ int parse_arguments(int *argc_p, const c
  			if (check_filter(elp, backup_dir, 1) < 0)
  				goto options_rejected;
  		}
@@ -213,7 +212,7 @@ To use this patch, run these commands for a successful build:
  	}
  
  	if (!backup_suffix)
-@@ -1406,6 +1426,16 @@ int parse_arguments(int *argc, const cha
+@@ -1428,6 +1448,16 @@ int parse_arguments(int *argc_p, const c
  			backup_suffix);
  		return 0;
  	}
@@ -230,7 +229,7 @@ To use this patch, run these commands for a successful build:
  	if (backup_dir) {
  		backup_dir_len = strlcpy(backup_dir_buf, backup_dir, sizeof backup_dir_buf);
  		backup_dir_remainder = sizeof backup_dir_buf - backup_dir_len;
-@@ -1429,6 +1459,31 @@ int parse_arguments(int *argc, const cha
+@@ -1451,6 +1481,31 @@ int parse_arguments(int *argc_p, const c
  			"P *%s", backup_suffix);
   		parse_rule(&filter_list, backup_dir_buf, 0, 0);
  	}
@@ -262,7 +261,7 @@ To use this patch, run these commands for a successful build:
  
  	if (make_backups && !backup_dir) {
  		omit_dir_times = 0; /* Implied, so avoid -O to sender. */
-@@ -1816,6 +1871,10 @@ void server_options(char **args,int *arg
+@@ -1845,6 +1900,10 @@ void server_options(char **args, int *ar
  		args[ac++] = "--backup-dir";
  		args[ac++] = backup_dir;
  	}
@@ -273,7 +272,7 @@ To use this patch, run these commands for a successful build:
  
  	/* Only send --suffix if it specifies a non-default value. */
  	if (strcmp(backup_suffix, backup_dir ? "" : BACKUP_SUFFIX) != 0) {
-@@ -1824,7 +1883,13 @@ void server_options(char **args,int *arg
+@@ -1853,7 +1912,13 @@ void server_options(char **args, int *ar
  			goto oom;
  		args[ac++] = arg;
  	}
