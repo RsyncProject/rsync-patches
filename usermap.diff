@@ -9,16 +9,16 @@ To use this patch, run these commands for a successful build:
 
 --- old/flist.c
 +++ new/flist.c
-@@ -61,6 +61,8 @@ extern int copy_links;
+@@ -63,6 +63,8 @@ extern int copy_links;
  extern int copy_unsafe_links;
  extern int protocol_version;
  extern int sanitize_paths;
 +extern char *usermap;
 +extern char *groupmap;
  extern struct stats stats;
+ extern char *filesfrom_host;
  
- extern char curr_dir[MAXPATHLEN];
-@@ -745,7 +747,7 @@ static struct file_struct *recv_file_ent
+@@ -733,7 +735,7 @@ static struct file_struct *recv_file_ent
  			uid = (uid_t)read_varint(f);
  			if (xflags & XMIT_USER_NAME_FOLLOWS)
  				uid = recv_user_name(f, uid);
@@ -27,7 +27,7 @@ To use this patch, run these commands for a successful build:
  				uid = match_uid(uid);
  		}
  	}
-@@ -757,7 +759,7 @@ static struct file_struct *recv_file_ent
+@@ -745,7 +747,7 @@ static struct file_struct *recv_file_ent
  			gid_flags = 0;
  			if (xflags & XMIT_GROUP_NAME_FOLLOWS)
  				gid = recv_group_name(f, gid, &gid_flags);
@@ -36,7 +36,7 @@ To use this patch, run these commands for a successful build:
  				gid = match_gid(gid, &gid_flags);
  		}
  	}
-@@ -1935,8 +1937,13 @@ struct file_list *recv_file_list(int f)
+@@ -2045,8 +2047,13 @@ struct file_list *recv_file_list(int f)
  	int dstart, flags;
  	int64 start_read;
  
@@ -53,7 +53,7 @@ To use this patch, run these commands for a successful build:
  	else if (inc_recurse && verbose && !am_server && !first_flist)
 --- old/options.c
 +++ new/options.c
-@@ -156,6 +156,8 @@ char *rsync_path = RSYNC_PATH;
+@@ -164,6 +164,8 @@ char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
  char backup_dir_buf[MAXPATHLEN];
  char *sockopts = NULL;
@@ -62,7 +62,7 @@ To use this patch, run these commands for a successful build:
  int rsync_port = 0;
  int compare_dest = 0;
  int copy_dest = 0;
-@@ -367,6 +369,8 @@ void usage(enum logcode F)
+@@ -377,6 +379,8 @@ void usage(enum logcode F)
    rprintf(F,"     --delay-updates         put all updated files into place at transfer's end\n");
    rprintf(F," -m, --prune-empty-dirs      prune empty directory chains from the file-list\n");
    rprintf(F,"     --numeric-ids           don't map uid/gid values by user/group name\n");
@@ -71,8 +71,8 @@ To use this patch, run these commands for a successful build:
    rprintf(F,"     --timeout=TIME          set I/O timeout in seconds\n");
    rprintf(F," -I, --ignore-times          don't skip files that match in size and mod-time\n");
    rprintf(F,"     --size-only             skip files that match in size\n");
-@@ -581,6 +585,8 @@ static struct poptOption long_options[] 
-   {"no-from0",         0,  POPT_ARG_VAL,    &eol_nulls, 0, 0, 0},
+@@ -601,6 +605,8 @@ static struct poptOption long_options[] 
+   {"no-s",             0,  POPT_ARG_VAL,    &protect_args, 0, 0, 0},
    {"numeric-ids",      0,  POPT_ARG_VAL,    &numeric_ids, 1, 0, 0 },
    {"no-numeric-ids",   0,  POPT_ARG_VAL,    &numeric_ids, 0, 0, 0 },
 +  {"usermap",          0,  POPT_ARG_STRING, &usermap, 0, 0, 0 },
@@ -80,8 +80,8 @@ To use this patch, run these commands for a successful build:
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, 0, 0, 0 },
    {"no-timeout",       0,  POPT_ARG_VAL,    &io_timeout, 0, 0, 0 },
    {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
-@@ -1875,6 +1881,18 @@ void server_options(char **args,int *arg
- 		args[ac++] = "--numeric-ids";
+@@ -1935,6 +1941,18 @@ void server_options(char **args, int *ar
+ 		args[ac++] = "--no-i-r";
  
  	if (am_sender) {
 +		if (usermap) {
@@ -101,7 +101,7 @@ To use this patch, run these commands for a successful build:
  
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -367,6 +367,8 @@ to the detailed description below for a 
+@@ -379,6 +379,8 @@ to the detailed description below for a 
       --delay-updates         put all updated files into place at end
   -m, --prune-empty-dirs      prune empty directory chains from file-list
       --numeric-ids           don't map uid/gid values by user/group name
@@ -110,7 +110,7 @@ To use this patch, run these commands for a successful build:
       --timeout=TIME          set I/O timeout in seconds
   -I, --ignore-times          don't skip files that match size and time
       --size-only             skip files that match in size
-@@ -1451,6 +1453,46 @@ from the source system is used instead. 
+@@ -1553,6 +1555,46 @@ from the source system is used instead. 
  the chroot setting affects rsync's ability to look up the names of the
  users and groups and what you can do about it.
  
@@ -159,7 +159,7 @@ To use this patch, run these commands for a successful build:
  then rsync will exit. The default is 0, which means no timeout.
 --- old/uidlist.c
 +++ new/uidlist.c
-@@ -31,6 +31,8 @@ extern int preserve_uid;
+@@ -32,6 +32,8 @@ extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_acls;
  extern int numeric_ids;
@@ -168,7 +168,7 @@ To use this patch, run these commands for a successful build:
  
  #ifdef HAVE_GETGROUPS
  # ifndef GETGROUPS_T
-@@ -40,6 +42,9 @@ extern int numeric_ids;
+@@ -41,6 +43,9 @@ extern int numeric_ids;
  
  #define GID_NONE ((gid_t)-1)
  
@@ -178,7 +178,7 @@ To use this patch, run these commands for a successful build:
  struct idlist {
  	struct idlist *next;
  	char *name;
-@@ -47,8 +52,8 @@ struct idlist {
+@@ -48,8 +53,8 @@ struct idlist {
  	uint16 flags;
  };
  
@@ -189,7 +189,7 @@ To use this patch, run these commands for a successful build:
  
  static struct idlist *add_to_list(struct idlist **root, id_t id, char *name,
  				  id_t id2, uint16 flags)
-@@ -83,22 +88,6 @@ static char *gid_to_name(gid_t gid)
+@@ -84,22 +89,6 @@ static char *gid_to_name(gid_t gid)
  	return NULL;
  }
  
@@ -212,7 +212,7 @@ To use this patch, run these commands for a successful build:
  static int is_in_group(gid_t gid)
  {
  #ifdef HAVE_GETGROUPS
-@@ -158,34 +147,49 @@ static int is_in_group(gid_t gid)
+@@ -159,34 +148,49 @@ static int is_in_group(gid_t gid)
  #endif
  }
  
@@ -282,7 +282,7 @@ To use this patch, run these commands for a successful build:
  	}
  
  	return node;
-@@ -194,12 +198,9 @@ static struct idlist *recv_add_gid(gid_t
+@@ -195,12 +199,9 @@ static struct idlist *recv_add_gid(gid_t
  /* this function is a definate candidate for a faster algorithm */
  uid_t match_uid(uid_t uid)
  {
@@ -296,7 +296,7 @@ To use this patch, run these commands for a successful build:
  	if (uid == last_in)
  		return last_out;
  
-@@ -207,10 +208,13 @@ uid_t match_uid(uid_t uid)
+@@ -208,10 +209,13 @@ uid_t match_uid(uid_t uid)
  
  	for (list = uidlist; list; list = list->next) {
  		if (list->id == uid)
@@ -312,7 +312,7 @@ To use this patch, run these commands for a successful build:
  }
  
  gid_t match_gid(gid_t gid, uint16 *flags_ptr)
-@@ -226,7 +230,7 @@ gid_t match_gid(gid_t gid, uint16 *flags
+@@ -227,7 +231,7 @@ gid_t match_gid(gid_t gid, uint16 *flags
  				break;
  		}
  		if (!list)
@@ -321,7 +321,7 @@ To use this patch, run these commands for a successful build:
  		last = list;
  	}
  
-@@ -315,7 +319,7 @@ uid_t recv_user_name(int f, uid_t uid)
+@@ -316,7 +320,7 @@ uid_t recv_user_name(int f, uid_t uid)
  	if (!name)
  		out_of_memory("recv_user_name");
  	read_sbuf(f, name, len);
@@ -330,7 +330,7 @@ To use this patch, run these commands for a successful build:
  	return node->id2;
  }
  
-@@ -327,7 +331,7 @@ gid_t recv_group_name(int f, gid_t gid, 
+@@ -328,7 +332,7 @@ gid_t recv_group_name(int f, gid_t gid, 
  	if (!name)
  		out_of_memory("recv_group_name");
  	read_sbuf(f, name, len);
@@ -339,7 +339,7 @@ To use this patch, run these commands for a successful build:
  	if (flags_ptr && node->flags & FLAG_SKIP_GROUP)
  		*flags_ptr |= FLAG_SKIP_GROUP;
  	return node->id2;
-@@ -354,17 +358,96 @@ void recv_id_list(int f, struct file_lis
+@@ -355,17 +359,96 @@ void recv_id_list(int f, struct file_lis
  
  	/* Now convert all the uids/gids from sender values to our values. */
  #ifdef SUPPORT_ACLS
