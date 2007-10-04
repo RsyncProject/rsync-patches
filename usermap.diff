@@ -159,7 +159,15 @@ To use this patch, run these commands for a successful build:
  then rsync will exit. The default is 0, which means no timeout.
 --- old/uidlist.c
 +++ new/uidlist.c
-@@ -32,6 +32,8 @@ extern int preserve_uid;
+@@ -24,6 +24,7 @@
+  * are special. */
+ 
+ #include "rsync.h"
++#include "ifuncs.h"
+ #include "io.h"
+ 
+ extern int verbose;
+@@ -32,6 +33,8 @@ extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_acls;
  extern int numeric_ids;
@@ -168,7 +176,7 @@ To use this patch, run these commands for a successful build:
  
  #ifdef HAVE_GETGROUPS
  # ifndef GETGROUPS_T
-@@ -41,6 +43,9 @@ extern int numeric_ids;
+@@ -41,6 +44,9 @@ extern int numeric_ids;
  
  #define GID_NONE ((gid_t)-1)
  
@@ -178,7 +186,7 @@ To use this patch, run these commands for a successful build:
  struct idlist {
  	struct idlist *next;
  	char *name;
-@@ -48,8 +53,8 @@ struct idlist {
+@@ -48,8 +54,8 @@ struct idlist {
  	uint16 flags;
  };
  
@@ -189,7 +197,7 @@ To use this patch, run these commands for a successful build:
  
  static struct idlist *add_to_list(struct idlist **root, id_t id, char *name,
  				  id_t id2, uint16 flags)
-@@ -84,22 +89,6 @@ static char *gid_to_name(gid_t gid)
+@@ -84,22 +90,6 @@ static char *gid_to_name(gid_t gid)
  	return NULL;
  }
  
@@ -212,7 +220,7 @@ To use this patch, run these commands for a successful build:
  static int is_in_group(gid_t gid)
  {
  #ifdef HAVE_GETGROUPS
-@@ -159,34 +148,49 @@ static int is_in_group(gid_t gid)
+@@ -159,34 +149,49 @@ static int is_in_group(gid_t gid)
  #endif
  }
  
@@ -282,7 +290,7 @@ To use this patch, run these commands for a successful build:
  	}
  
  	return node;
-@@ -195,12 +199,9 @@ static struct idlist *recv_add_gid(gid_t
+@@ -195,12 +200,9 @@ static struct idlist *recv_add_gid(gid_t
  /* this function is a definate candidate for a faster algorithm */
  uid_t match_uid(uid_t uid)
  {
@@ -296,7 +304,7 @@ To use this patch, run these commands for a successful build:
  	if (uid == last_in)
  		return last_out;
  
-@@ -208,10 +209,13 @@ uid_t match_uid(uid_t uid)
+@@ -208,10 +210,13 @@ uid_t match_uid(uid_t uid)
  
  	for (list = uidlist; list; list = list->next) {
  		if (list->id == uid)
@@ -312,7 +320,7 @@ To use this patch, run these commands for a successful build:
  }
  
  gid_t match_gid(gid_t gid, uint16 *flags_ptr)
-@@ -227,7 +231,7 @@ gid_t match_gid(gid_t gid, uint16 *flags
+@@ -227,7 +232,7 @@ gid_t match_gid(gid_t gid, uint16 *flags
  				break;
  		}
  		if (!list)
@@ -321,7 +329,7 @@ To use this patch, run these commands for a successful build:
  		last = list;
  	}
  
-@@ -316,7 +320,7 @@ uid_t recv_user_name(int f, uid_t uid)
+@@ -316,7 +321,7 @@ uid_t recv_user_name(int f, uid_t uid)
  	if (!name)
  		out_of_memory("recv_user_name");
  	read_sbuf(f, name, len);
@@ -330,7 +338,7 @@ To use this patch, run these commands for a successful build:
  	return node->id2;
  }
  
-@@ -328,7 +332,7 @@ gid_t recv_group_name(int f, gid_t gid, 
+@@ -328,7 +333,7 @@ gid_t recv_group_name(int f, gid_t gid, 
  	if (!name)
  		out_of_memory("recv_group_name");
  	read_sbuf(f, name, len);
@@ -339,7 +347,7 @@ To use this patch, run these commands for a successful build:
  	if (flags_ptr && node->flags & FLAG_SKIP_GROUP)
  		*flags_ptr |= FLAG_SKIP_GROUP;
  	return node->id2;
-@@ -355,17 +359,96 @@ void recv_id_list(int f, struct file_lis
+@@ -355,17 +360,96 @@ void recv_id_list(int f, struct file_lis
  
  	/* Now convert all the uids/gids from sender values to our values. */
  #ifdef SUPPORT_ACLS
