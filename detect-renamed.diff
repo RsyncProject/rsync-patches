@@ -116,9 +116,9 @@ TODO:
  static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len, int flags);
  
-@@ -2034,6 +2076,25 @@ struct file_list *send_file_list(int f, 
- 	if (verbose > 2)
- 		rprintf(FINFO, "send_file_list done\n");
+@@ -2154,6 +2196,25 @@ struct file_list *recv_file_list(int f)
+ 
+ 	clean_flist(flist, relative_paths);
  
 +	if (detect_renamed) {
 +		int j = flist->used;
@@ -139,9 +139,9 @@ TODO:
 +		the_fattr_list.high = j;
 +	}
 +
- 	if (inc_recurse) {
- 		add_dirs_to_tree(-1, flist, dir_count);
- 		flist_done_allocating(flist);
+ 	if (protocol_version < 30) {
+ 		/* Recv the io_error flag */
+ 		if (ignore_errors)
 --- old/generator.c
 +++ new/generator.c
 @@ -79,6 +79,7 @@ extern char *basis_dir[];
@@ -178,7 +178,7 @@ TODO:
  #define DEL_RECURSE		(1<<1) /* recurse */
  #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
  
-@@ -136,11 +140,120 @@ static int is_backup_file(char *fn)
+@@ -136,11 +140,121 @@ static int is_backup_file(char *fn)
  	return k > 0 && strcmp(fn+k, backup_suffix) == 0;
  }
  
@@ -264,7 +264,7 @@ TODO:
 +	STRUCT_STAT st;
 +	int ndx;
 +
-+	if ((ndx = fattr_find(file, fname)) < 0)
++	if (!partial_dir || (ndx = fattr_find(file, fname)) < 0)
 +		return;
 +
 +	fp = the_fattr_list.files[ndx];
@@ -272,21 +272,22 @@ TODO:
 +	/* We don't provide an alternate-basis file if there is a basis file. */
 +	if (link_stat(fn, &st, 0) == 0)
 +		return;
-+	if ((partialptr = partial_dir_fname(fn)) == NULL
-+	 || !handle_partial_dir(partialptr, PDIR_CREATE))
-+		return;
 +
-+	/* We only use the file if we can hard-link it into our tmp dir. */
-+	if (link(fname, partialptr) == 0) {
-+		if (verbose > 2) {
-+			rprintf(FINFO, "found renamed: %s => %s\n",
-+				fname, partialptr);
++	if (!dry_run) {
++		if ((partialptr = partial_dir_fname(fn)) == NULL
++		 || !handle_partial_dir(partialptr, PDIR_CREATE))
++			return;
++		/* We only use the file if we can hard-link it into our tmp dir. */
++		if (link(fname, partialptr) != 0) {
++			if (errno != EEXIST)
++				handle_partial_dir(partialptr, PDIR_DELETE);
++			return;
 +		}
-+		return;
 +	}
 +
-+	if (errno != EEXIST)
-+		handle_partial_dir(partialptr, PDIR_DELETE);
++	/* I think this falls into the -vv category with "%s is uptodate", etc. */
++	if (verbose > 1)
++		rprintf(FINFO, "found renamed: %s => %s\n", fname, fn);
 +}
 +
  /* Delete a file or directory.  If DEL_RECURSE is set in the flags, this will
@@ -299,7 +300,7 @@ TODO:
   */
  static enum delret delete_item(char *fbuf, int mode, char *replace, int flags)
  {
-@@ -162,6 +275,8 @@ static enum delret delete_item(char *fbu
+@@ -162,6 +276,8 @@ static enum delret delete_item(char *fbu
  			goto check_ret;
  		/* OK: try to delete the directory. */
  	}
@@ -308,7 +309,7 @@ TODO:
  
  	if (!replace && max_delete >= 0 && ++deletion_count > max_delete)
  		return DR_AT_LIMIT;
-@@ -208,6 +323,8 @@ static enum delret delete_item(char *fbu
+@@ -208,6 +324,8 @@ static enum delret delete_item(char *fbu
   * its contents, otherwise just checks for content.  Returns DR_SUCCESS or
   * DR_NOT_EMPTY.  Note that fname must point to a MAXPATHLEN buffer!  (The
   * buffer is used for recursion, but returned unchanged.)
@@ -317,7 +318,7 @@ TODO:
   */
  static enum delret delete_dir_contents(char *fname, int flags)
  {
-@@ -227,7 +344,9 @@ static enum delret delete_dir_contents(c
+@@ -227,7 +345,9 @@ static enum delret delete_dir_contents(c
  	save_filters = push_local_filters(fname, dlen);
  
  	non_perishable_cnt = 0;
@@ -327,7 +328,7 @@ TODO:
  	ret = non_perishable_cnt ? DR_NOT_EMPTY : DR_SUCCESS;
  
  	if (!dirlist->used)
-@@ -264,6 +383,8 @@ static enum delret delete_dir_contents(c
+@@ -264,6 +384,8 @@ static enum delret delete_dir_contents(c
  		if (S_ISDIR(fp->mode)
  		 && delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
@@ -336,7 +337,7 @@ TODO:
  		if (delete_item(fname, fp->mode, NULL, flags) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
  	}
-@@ -416,12 +537,17 @@ static void do_delayed_deletions(char *d
+@@ -416,13 +538,18 @@ static void do_delayed_deletions(char *d
   * all the --delete-WHEN options.  Note that the fbuf pointer must point to a
   * MAXPATHLEN buffer with the name of the directory in it (the functions we
   * call will append names onto the end, but the old dir value will be restored
@@ -352,12 +353,14 @@ TODO:
  	static int already_warned = 0;
  	struct file_list *dirlist;
 -	char delbuf[MAXPATHLEN];
+-	int dlen, i;
 +	char *p, delbuf[MAXPATHLEN];
 +	unsigned remainder;
- 	int dlen, i;
++	int dlen, i, restore_dot = 0;
  
  	if (!fbuf) {
-@@ -432,21 +558,28 @@ static void delete_in_dir(char *fbuf, st
+ 		change_local_filter_dir(NULL, 0, 0);
+@@ -432,21 +559,28 @@ static void delete_in_dir(char *fbuf, st
  	if (verbose > 2)
  		rprintf(FINFO, "delete_in_dir(%s)\n", fbuf);
  
@@ -391,19 +394,22 @@ TODO:
  	if (one_file_system) {
  		if (file->flags & FLAG_TOP_DIR)
  			filesystem_dev = *fs_dev;
-@@ -456,6 +589,11 @@ static void delete_in_dir(char *fbuf, st
+@@ -456,6 +590,14 @@ static void delete_in_dir(char *fbuf, st
  
  	dirlist = get_dirlist(fbuf, dlen, 0);
  
 +	p = fbuf + dlen;
-+	if (dlen != 1 || *fbuf != '/')
++	if (dlen == 1 && *fbuf == '.') {
++		restore_dot = 1;
++		p = fbuf;
++	} else if (dlen != 1 || *fbuf != '/')
 +		*p++ = '/';
 +	remainder = MAXPATHLEN - (p - fbuf);
 +
  	/* If an item in dirlist is not found in flist, delete it
  	 * from the filesystem. */
  	for (i = dirlist->used; i--; ) {
-@@ -468,16 +606,23 @@ static void delete_in_dir(char *fbuf, st
+@@ -468,16 +610,25 @@ static void delete_in_dir(char *fbuf, st
  					f_name(fp, NULL));
  			continue;
  		}
@@ -425,12 +431,14 @@ TODO:
 +			unexplored_dirs++;
  	}
  
++	if (restore_dot)
++		fbuf[0] = '.';
 +	fbuf[dlen] = '\0';
 +
  	flist_free(dirlist);
  }
  
-@@ -507,9 +652,9 @@ static void do_delete_pass(void)
+@@ -507,9 +658,9 @@ static void do_delete_pass(void)
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
@@ -442,7 +450,7 @@ TODO:
  
  	if (do_progress && !am_server)
  		rprintf(FINFO, "                    \r");
-@@ -1101,6 +1246,7 @@ static void list_file_entry(struct file_
+@@ -1101,6 +1252,7 @@ static void list_file_entry(struct file_
  	}
  }
  
@@ -450,7 +458,7 @@ TODO:
  static int phase = 0;
  static int dflt_perms;
  
-@@ -1345,8 +1491,12 @@ static void recv_generator(char *fname, 
+@@ -1345,8 +1497,12 @@ static void recv_generator(char *fname, 
  			}
  		}
  		else if (delete_during && f_out != -1 && !phase && dry_run < 2
@@ -465,7 +473,7 @@ TODO:
  		goto cleanup;
  	}
  
-@@ -1624,8 +1774,14 @@ static void recv_generator(char *fname, 
+@@ -1624,8 +1780,14 @@ static void recv_generator(char *fname, 
  			goto cleanup;
  		}
  #endif
@@ -481,7 +489,7 @@ TODO:
  		rsyserr(FERROR, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		goto cleanup;
-@@ -1961,6 +2117,12 @@ void generate_files(int f_out, const cha
+@@ -1961,6 +2123,12 @@ void generate_files(int f_out, const cha
  	if (verbose > 2)
  		rprintf(FINFO, "generator starting pid=%ld\n", (long)getpid());
  
@@ -494,7 +502,7 @@ TODO:
  	if (delete_before && !solo_file && cur_flist->used > 0)
  		do_delete_pass();
  	if (delete_during == 2) {
-@@ -1971,7 +2133,7 @@ void generate_files(int f_out, const cha
+@@ -1971,7 +2139,7 @@ void generate_files(int f_out, const cha
  	}
  	do_progress = 0;
  
@@ -503,7 +511,7 @@ TODO:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -2009,7 +2171,7 @@ void generate_files(int f_out, const cha
+@@ -2009,7 +2177,7 @@ void generate_files(int f_out, const cha
  						dirdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
  					} else
  						dirdev = MAKEDEV(0, 0);
@@ -512,7 +520,7 @@ TODO:
  				}
  			}
  		}
-@@ -2054,7 +2216,21 @@ void generate_files(int f_out, const cha
+@@ -2054,7 +2222,21 @@ void generate_files(int f_out, const cha
  	} while ((cur_flist = cur_flist->next) != NULL);
  
  	if (delete_during)
@@ -578,18 +586,19 @@ TODO:
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -1883,6 +1887,8 @@ void server_options(char **args, int *ar
- 			args[ac++] = "--super";
- 		if (size_only)
- 			args[ac++] = "--size-only";
-+		if (detect_renamed)
-+			args[ac++] = "--detect-renamed";
- 	} else {
- 		if (skip_compress) {
- 			if (asprintf(&arg, "--skip-compress=%s", skip_compress) < 0)
+@@ -1890,6 +1894,9 @@ void server_options(char **args, int *ar
+ 			args[ac++] = arg;
+ 		}
+ 	}
++	/* Both sides need to know in case this disables incremental recursion. */
++	if (detect_renamed)
++		args[ac++] = "--detect-renamed";
+ 
+ 	if (modify_window_set) {
+ 		if (asprintf(&arg, "--modify-window=%d", modify_window) < 0)
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -385,6 +385,7 @@ to the detailed description below for a 
+@@ -384,6 +384,7 @@ to the detailed description below for a 
       --modify-window=NUM     compare mod-times with reduced accuracy
   -T, --temp-dir=DIR          create temporary files in directory DIR
   -y, --fuzzy                 find similar file for basis if no dest file
@@ -597,13 +606,19 @@ TODO:
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
-@@ -1425,6 +1426,15 @@ Note that the use of the bf(--delete) op
+@@ -1424,6 +1425,21 @@ Note that the use of the bf(--delete) op
  fuzzy-match files, so either use bf(--delete-after) or specify some
  filename exclusions if you need to prevent this.
  
-+dit(bf(--detect-renamed)) This option tells rsync to scan the receiving
-+side for files that have been renamed, and to use any that are found as
-+alternate basis files to help speed up the transfer.
++dit(bf(--detect-renamed)) With this option, for each new source file
++(call it em(src/S)), rsync looks for a file em(dest/D) anywhere in the
++destination that passes the quick check with em(src/S).  If such a em(dest/D)
++is found, rsync uses it as an alternate basis for transferring em(S).  The
++idea is that if em(src/S) was renamed from em(src/D) (as opposed to em(src/S)
++passing the quick check with em(dest/D) by coincidence), the delta-transfer
++algorithm will find that all the data matches between em(src/S) and em(dest/D),
++and the transfer will be really fast.
++
 +By default, alternate-basis files are hard-linked into a directory named
 +".~tmp~" in each file's destination directory, but if you've specified
 +the bf(--partial-dir) option, that directory will be used instead.  These
