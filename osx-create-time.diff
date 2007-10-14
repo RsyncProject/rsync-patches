@@ -1,0 +1,120 @@
+This patch handles the creation time on OS X by putting it into an
+extended attribute.  This is a modified version of a patch that was
+provided by Wesley W. Terpstra.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/osx-create-time.diff
+    ./configure                                 (optional if already run)
+    make
+
+--- old/lib/sysxattrs.c
++++ new/lib/sysxattrs.c
+@@ -52,29 +52,106 @@ ssize_t sys_llistxattr(const char *path,
+ 
+ #elif HAVE_OSX_XATTRS
+ 
++#include <sys/attr.h>
++
++#define CRTIME_XATTR "com.apple.crtime96"
++#define IS_CRTIME(name) (*(name) == *CRTIME_XATTR && strcmp(name, CRTIME_XATTR) == 0)
++#define CRTIME_XATTR_LEN (8+4)
++
++struct CreationTime {
++	unsigned long length;
++	struct timespec date;
++};
++
++static ssize_t getCreationTime(const char *path, char *buf, size_t size)
++{
++	struct attrlist attrList;
++	struct CreationTime attrBuf;
++
++	if (buf == NULL)
++		return CRTIME_XATTR_LEN;
++	if (size < CRTIME_XATTR_LEN)
++		return -1; /* Doesn't happen with rsync code... */
++
++	memset(&attrList, 0, sizeof attrList);
++	attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
++	attrList.commonattr = ATTR_CMN_CRTIME;
++	if (getattrlist(path, &attrList, &attrBuf, sizeof attrBuf, XATTR_NOFOLLOW) < 0)
++		return -1;
++
++	SIVAL(buf, 0, attrBuf.date.tv_sec);
++#if SIZEOF_TIME_T > 4
++	SIVAL(buf, 4, attrBuf.date.tv_sec >> 32);
++#else
++	SIVAL(buf, 4, 0);
++#endif
++	SIVAL(buf, 8, attrBuf.date.tv_nsec);
++
++	return CRTIME_XATTR_LEN;
++}
++
++static int setCreationTime(const char *path, const char *buf, size_t size)
++{
++	struct attrlist attrList;
++	struct timespec date;
++
++	if (size != CRTIME_XATTR_LEN)
++		return -1;
++
++	date.tv_sec = IVAL(buf, 0);
++#if SIZEOF_TIME_T > 4
++	date.tv_sec += (time_t)IVAL(buf, 4) << 32;
++#endif
++	date.tv_nsec = IVAL(buf, 8);
++
++	memset(&attrList, 0, sizeof attrList);
++	attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
++	attrList.commonattr = ATTR_CMN_CRTIME;
++	return setattrlist(path, &attrList, &date, sizeof date, XATTR_NOFOLLOW);
++}
++
+ ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size)
+ {
++	if (IS_CRTIME(name))
++		return getCreationTime(path, value, size);
+ 	return getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
+ }
+ 
+ ssize_t sys_fgetxattr(int filedes, const char *name, void *value, size_t size)
+ {
++	/* XXX Figure out how to get creation date from an open filedes? */
+ 	return fgetxattr(filedes, name, value, size, 0, 0);
+ }
+ 
+ int sys_lsetxattr(const char *path, const char *name, const void *value, size_t size)
+ {
++	if (IS_CRTIME(name))
++		return setCreationTime(path, value, size);
+ 	return setxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
+ }
+ 
+ int sys_lremovexattr(const char *path, const char *name)
+ {
++	/* Every file on hfs+ has this; you can't remove it... */
++	if (IS_CRTIME(name))
++		return 0;
+ 	return removexattr(path, name, XATTR_NOFOLLOW);
+ }
+ 
+ ssize_t sys_llistxattr(const char *path, char *list, size_t size)
+ {
+-	return listxattr(path, list, size, XATTR_NOFOLLOW);
++	ssize_t ret = listxattr(path, list, size, XATTR_NOFOLLOW);
++	if (ret < 0)
++		return ret;
++	ret += sizeof CRTIME_XATTR;
++	if (list) {
++		if ((size_t)ret > size) {
++			errno = ERANGE;
++			return -1;
++		}
++		memcpy(list + ret - sizeof CRTIME_XATTR, CRTIME_XATTR, sizeof CRTIME_XATTR);
++	}
++	return ret;
+ }
+ 
+ #elif HAVE_FREEBSD_XATTRS
