@@ -42,15 +42,15 @@ TODO:
  extern int protect_args;
  extern int preserve_uid;
  extern int preserve_gid;
-@@ -218,7 +219,7 @@ void setup_protocol(int f_out,int f_in)
- 	} else if (protocol_version >= 30) {
- 		if (recurse && allow_inc_recurse
- 		 && !delete_before && !delete_after && !delay_updates
--		 && !use_qsort && !prune_empty_dirs)
-+		 && !use_qsort && !prune_empty_dirs && !detect_renamed)
- 			inc_recurse = 1;
- 		need_messages_from_generator = 1;
- 	}
+@@ -105,7 +106,7 @@ static void check_sub_protocol(void)
+ void set_allow_inc_recurse(void)
+ {
+ 	if (!recurse || delete_before || delete_after || use_qsort
+-	 || (!am_sender && (delay_updates || prune_empty_dirs)))
++	 || (!am_sender && (delay_updates || prune_empty_dirs || detect_renamed)))
+ 		allow_inc_recurse = 0;
+ 	else if (am_server && !local_server
+ 	 && (!shell_cmd || strchr(shell_cmd, 'i') == NULL))
 --- old/flist.c
 +++ new/flist.c
 @@ -61,6 +61,7 @@ extern int non_perishable_cnt;
@@ -450,7 +450,7 @@ TODO:
  
  	if (do_progress && !am_server)
  		rprintf(FINFO, "                    \r");
-@@ -1101,6 +1252,7 @@ static void list_file_entry(struct file_
+@@ -1106,6 +1257,7 @@ static void list_file_entry(struct file_
  	}
  }
  
@@ -458,7 +458,7 @@ TODO:
  static int phase = 0;
  static int dflt_perms;
  
-@@ -1345,8 +1497,12 @@ static void recv_generator(char *fname, 
+@@ -1350,8 +1502,12 @@ static void recv_generator(char *fname, 
  			}
  		}
  		else if (delete_during && f_out != -1 && !phase && dry_run < 2
@@ -473,7 +473,7 @@ TODO:
  		goto cleanup;
  	}
  
-@@ -1624,8 +1780,14 @@ static void recv_generator(char *fname, 
+@@ -1629,8 +1785,14 @@ static void recv_generator(char *fname, 
  			goto cleanup;
  		}
  #endif
@@ -489,7 +489,7 @@ TODO:
  		rsyserr(FERROR, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		goto cleanup;
-@@ -1961,6 +2123,12 @@ void generate_files(int f_out, const cha
+@@ -1966,6 +2128,12 @@ void generate_files(int f_out, const cha
  	if (verbose > 2)
  		rprintf(FINFO, "generator starting pid=%ld\n", (long)getpid());
  
@@ -502,7 +502,7 @@ TODO:
  	if (delete_before && !solo_file && cur_flist->used > 0)
  		do_delete_pass();
  	if (delete_during == 2) {
-@@ -1971,7 +2139,7 @@ void generate_files(int f_out, const cha
+@@ -1976,7 +2144,7 @@ void generate_files(int f_out, const cha
  	}
  	do_progress = 0;
  
@@ -511,7 +511,7 @@ TODO:
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -2009,7 +2177,7 @@ void generate_files(int f_out, const cha
+@@ -2014,7 +2182,7 @@ void generate_files(int f_out, const cha
  						dirdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
  					} else
  						dirdev = MAKEDEV(0, 0);
@@ -520,7 +520,7 @@ TODO:
  				}
  			}
  		}
-@@ -2054,7 +2222,21 @@ void generate_files(int f_out, const cha
+@@ -2059,7 +2227,21 @@ void generate_files(int f_out, const cha
  	} while ((cur_flist = cur_flist->next) != NULL);
  
  	if (delete_during)
@@ -586,16 +586,15 @@ TODO:
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -1890,6 +1894,9 @@ void server_options(char **args, int *ar
- 			args[ac++] = arg;
- 		}
- 	}
-+	/* Both sides need to know in case this disables incremental recursion. */
-+	if (detect_renamed)
-+		args[ac++] = "--detect-renamed";
- 
- 	if (modify_window_set) {
- 		if (asprintf(&arg, "--modify-window=%d", modify_window) < 0)
+@@ -1885,6 +1889,8 @@ void server_options(char **args, int *ar
+ 			args[ac++] = "--super";
+ 		if (size_only)
+ 			args[ac++] = "--size-only";
++		if (detect_renamed)
++			args[ac++] = "--detect-renamed";
+ 	} else {
+ 		if (skip_compress) {
+ 			if (asprintf(&arg, "--skip-compress=%s", skip_compress) < 0)
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -384,6 +384,7 @@ to the detailed description below for a 
@@ -606,7 +605,7 @@ TODO:
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
-@@ -1424,6 +1425,21 @@ Note that the use of the bf(--delete) op
+@@ -1430,6 +1431,21 @@ Note that the use of the bf(--delete) op
  fuzzy-match files, so either use bf(--delete-after) or specify some
  filename exclusions if you need to prevent this.
  
