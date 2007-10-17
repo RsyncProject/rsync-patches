@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
 
 --- old/lib/sysxattrs.c
 +++ new/lib/sysxattrs.c
-@@ -52,29 +52,106 @@ ssize_t sys_llistxattr(const char *path,
+@@ -52,29 +52,118 @@ ssize_t sys_llistxattr(const char *path,
  
  #elif HAVE_OSX_XATTRS
  
@@ -22,73 +22,82 @@ To use this patch, run these commands for a successful build:
 +
 +struct CreationTime {
 +	unsigned long length;
-+	struct timespec date;
++	struct timespec crtime;
 +};
 +
-+static ssize_t getCreationTime(const char *path, char *buf, size_t size)
++static struct timespec *getCreationTime(const char *path)
 +{
++	static struct CreationTime attrBuf;
 +	struct attrlist attrList;
-+	struct CreationTime attrBuf;
++
++	memset(&attrList, 0, sizeof attrList);
++	attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
++	attrList.commonattr = ATTR_CMN_CRTIME;
++	if (getattrlist(path, &attrList, &attrBuf, sizeof attrBuf, FSOPT_NOFOLLOW) < 0)
++		return NULL;
++	return &attrBuf.crtime;
++}
++
++static ssize_t get_crtime_xattr(const char *path, char *buf, size_t size)
++{
++	struct timespec *crtime_p;
 +
 +	if (buf == NULL)
 +		return CRTIME_XATTR_LEN;
 +	if (size < CRTIME_XATTR_LEN)
 +		return -1; /* Doesn't happen with rsync code... */
 +
-+	memset(&attrList, 0, sizeof attrList);
-+	attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
-+	attrList.commonattr = ATTR_CMN_CRTIME;
-+	if (getattrlist(path, &attrList, &attrBuf, sizeof attrBuf, FSOPT_NOFOLLOW) < 0)
++	if ((crtime_p = getCreationTime(path)) == NULL)
 +		return -1;
 +
-+	SIVAL(buf, 0, attrBuf.date.tv_sec);
++	SIVAL(buf, 0, crtime_p->tv_sec);
 +#if SIZEOF_TIME_T > 4
-+	SIVAL(buf, 4, attrBuf.date.tv_sec >> 32);
++	SIVAL(buf, 4, crtime_p->tv_sec >> 32);
 +#else
 +	SIVAL(buf, 4, 0);
 +#endif
-+	SIVAL(buf, 8, attrBuf.date.tv_nsec);
++	SIVAL(buf, 8, crtime_p->tv_nsec);
 +
 +	return CRTIME_XATTR_LEN;
 +}
 +
-+static int setCreationTime(const char *path, const char *buf, size_t size)
++static int set_crtime_xattr(const char *path, const char *buf, size_t size)
 +{
 +	struct attrlist attrList;
-+	struct timespec date;
++	struct timespec crtime;
 +
 +	if (size != CRTIME_XATTR_LEN)
 +		return -1;
 +
-+	date.tv_sec = IVAL(buf, 0);
++	crtime.tv_sec = IVAL(buf, 0);
 +#if SIZEOF_TIME_T > 4
-+	date.tv_sec += (time_t)IVAL(buf, 4) << 32;
++	crtime.tv_sec += (time_t)IVAL(buf, 4) << 32;
 +#endif
-+	date.tv_nsec = IVAL(buf, 8);
++	crtime.tv_nsec = IVAL(buf, 8);
 +
 +	memset(&attrList, 0, sizeof attrList);
 +	attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
 +	attrList.commonattr = ATTR_CMN_CRTIME;
-+	return setattrlist(path, &attrList, &date, sizeof date, FSOPT_NOFOLLOW);
++	return setattrlist(path, &attrList, &crtime, sizeof crtime, FSOPT_NOFOLLOW);
 +}
 +
  ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size)
  {
 +	if (IS_CRTIME(name))
-+		return getCreationTime(path, value, size);
++		return get_crtime_xattr(path, value, size);
  	return getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
  }
  
  ssize_t sys_fgetxattr(int filedes, const char *name, void *value, size_t size)
  {
-+	/* XXX Figure out how to get creation date from an open filedes? */
++	/* XXX Figure out how to get creation time from an open filedes? */
  	return fgetxattr(filedes, name, value, size, 0, 0);
  }
  
  int sys_lsetxattr(const char *path, const char *name, const void *value, size_t size)
  {
 +	if (IS_CRTIME(name))
-+		return setCreationTime(path, value, size);
++		return set_crtime_xattr(path, value, size);
  	return setxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
  }
  
@@ -106,13 +115,16 @@ To use this patch, run these commands for a successful build:
 +	ssize_t ret = listxattr(path, list, size, XATTR_NOFOLLOW);
 +	if (ret < 0)
 +		return ret;
-+	ret += sizeof CRTIME_XATTR;
-+	if (list) {
-+		if ((size_t)ret > size) {
-+			errno = ERANGE;
-+			return -1;
++	if (getCreationTime(path) != NULL) {
++		ret += sizeof CRTIME_XATTR;
++		if (list) {
++			if ((size_t)ret > size) {
++				errno = ERANGE;
++				return -1;
++			}
++			memcpy(list + ret - sizeof CRTIME_XATTR,
++			       CRTIME_XATTR, sizeof CRTIME_XATTR);
 +		}
-+		memcpy(list + ret - sizeof CRTIME_XATTR, CRTIME_XATTR, sizeof CRTIME_XATTR);
 +	}
 +	return ret;
  }
