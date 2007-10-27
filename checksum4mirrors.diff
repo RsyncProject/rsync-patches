@@ -1,0 +1,486 @@
+Optimize the ability of a mirror to send checksums.
+
+This adds a sender optimization feature that allows a cache of checksums
+to be used when the client specifies the --checksum option.  The checksum
+files (.rsyncsums) must be created by some other process (see the perl
+script in the support dir for one way).
+
+This option should be used by mirrors that contain files that get created and
+not changed.  There is a minimal amount of sanity-check information in the
+.rsyncsums file (size and mtime) so that the sum files can be shared with your
+mirror network.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/checksum4mirrors.diff
+    ./configure                               (optional if already run)
+    make
+
+--- old/flist.c
++++ new/flist.c
+@@ -117,6 +117,7 @@ static char empty_sum[MAX_DIGEST_LEN];
+ static int flist_count_offset; /* for --delete --progress */
+ static int dir_count = 0;
+ static int high_hlink_ndx;
++static struct file_list *checksum_flist = NULL;
+ 
+ static void clean_flist(struct file_list *flist, int strip_root);
+ static void output_flist(struct file_list *flist);
+@@ -304,6 +305,186 @@ static void flist_done_allocating(struct
+ 		flist->pool_boundary = ptr;
+ }
+ 
++/* The len count is the length of the basename + 1 for the null. */
++static int add_checksum(const char *dirname, const char *basename, int len,
++			OFF_T file_length, time_t mtime, const char *sum)
++{
++	struct file_struct *file;
++	int alloc_len, extra_len;
++	char *bp;
++
++	if (len == 10+1 && *basename == '.' && strcmp(basename, ".rsyncsums") == 0)
++		return 0;
++	if (file_length == 0)
++		return 0;
++
++	extra_len = (file_extra_cnt + (file_length > 0xFFFFFFFFu) + SUM_EXTRA_CNT)
++		  * EXTRA_LEN;
++#if EXTRA_ROUNDING > 0
++	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
++		extra_len = (extra_len | (EXTRA_ROUNDING * EXTRA_LEN)) + EXTRA_LEN;
++#endif
++	alloc_len = FILE_STRUCT_LEN + extra_len + len;
++	bp = pool_alloc(checksum_flist->file_pool, alloc_len, "add_checksum");
++
++	memset(bp, 0, extra_len + FILE_STRUCT_LEN);
++	bp += extra_len;
++	file = (struct file_struct *)bp;
++	bp += FILE_STRUCT_LEN;
++
++	memcpy(bp, basename, len);
++
++	file->mode = S_IFREG;
++	file->modtime = mtime;
++	file->len32 = (uint32)file_length;
++	if (file_length > 0xFFFFFFFFu) {
++		file->flags |= FLAG_LENGTH64;
++		OPT_EXTRA(file, 0)->unum = (uint32)(file_length >> 32);
++	}
++	file->dirname = dirname;
++	bp = F_SUM(file);
++	memcpy(bp, sum, checksum_len);
++
++	flist_expand(checksum_flist, 1);
++	checksum_flist->files[checksum_flist->used++] = file;
++
++	checksum_flist->sorted = checksum_flist->files;
++
++	return 1;
++}
++
++/* The direname value must remain unchanged during the lifespan of the
++ * created checksum_flist object because we use it directly. */
++static void read_checksums(const char *dirname)
++{
++	char line[MAXPATHLEN+1024], fbuf[MAXPATHLEN], sum[MAX_DIGEST_LEN];
++	OFF_T file_length;
++	time_t mtime;
++	int len, dlen, i;
++	char *cp;
++	FILE *fp;
++
++	if (checksum_flist) {
++		/* Reset the pool memory and empty the file-list array. */
++		pool_free_old(checksum_flist->file_pool,
++			      pool_boundary(checksum_flist->file_pool, 0));
++		checksum_flist->used = 0;
++	} else
++		checksum_flist = flist_new(FLIST_TEMP, "read_checksums");
++
++	checksum_flist->low = 0;
++	checksum_flist->high = -1;
++
++	if (!dirname)
++		return;
++
++	dlen = strlcpy(fbuf, dirname, sizeof fbuf);
++	if (dlen >= (int)sizeof fbuf)
++		return;
++	if (dlen)
++		fbuf[dlen++] = '/';
++	else
++		dirname = NULL;
++	strlcpy(fbuf+dlen, ".rsyncsums", sizeof fbuf - dlen);
++	if (!(fp = fopen(fbuf, "r")))
++		return;
++
++	while (fgets(line, sizeof line, fp)) {
++		cp = line;
++		if (protocol_version >= 30) {
++			char *alt_sum = cp;
++			if (*cp == '=')
++				while (*++cp == '=') {}
++			else
++				while (isXDigit(cp)) cp++;
++			if (cp - alt_sum != MD4_DIGEST_LEN*2 || *cp != ' ')
++				break;
++			while (*++cp == ' ') {}
++		}
++
++		if (*cp == '=') {
++			continue;
++		} else {
++			for (i = 0; i < checksum_len*2; i++, cp++) {
++				int x;
++				if (isXDigit(cp)) {
++					if (isDigit(cp))
++						x = *cp - '0';
++					else
++						x = (*cp & 0xF) + 9;
++				} else {
++					cp = "";
++					break;
++				}
++				if (i & 1)
++					sum[i/2] |= x;
++				else
++					sum[i/2] = x << 4;
++			}
++		}
++		if (*cp != ' ')
++			break;
++		while (*++cp == ' ') {}
++
++		if (protocol_version < 30) {
++			char *alt_sum = cp;
++			if (*cp == '=')
++				while (*++cp == '=') {}
++			else
++				while (isXDigit(cp)) cp++;
++			if (cp - alt_sum != MD5_DIGEST_LEN*2 || *cp != ' ')
++				break;
++			while (*++cp == ' ') {}
++		}
++
++		file_length = 0;
++		while (isDigit(cp))
++			file_length = file_length * 10 + *cp++ - '0';
++		if (*cp != ' ')
++			break;
++		while (*++cp == ' ') {}
++
++		mtime = 0;
++		while (isDigit(cp))
++			mtime = mtime * 10 + *cp++ - '0';
++		if (*cp != ' ')
++			break;
++		while (*++cp == ' ') {}
++
++		/* Ignore ctime. */
++		while (isDigit(cp))
++			cp++;
++		if (*cp != ' ')
++			break;
++		while (*++cp == ' ') {}
++
++		/* Ignore inode. */
++		while (isDigit(cp))
++			cp++;
++		if (*cp != ' ')
++			break;
++		while (*++cp == ' ') {}
++
++		len = strlen(cp);
++		while (len && (cp[len-1] == '\n' || cp[len-1] == '\r'))
++			len--;
++		if (!len)
++			break;
++		cp[len++] = '\0'; /* len now counts the null */
++		if (strchr(cp, '/'))
++			break;
++		if (len > MAXPATHLEN)
++			continue;
++
++		strlcpy(fbuf+dlen, cp, sizeof fbuf - dlen);
++
++		add_checksum(dirname, cp, len, file_length, mtime, sum);
++	}
++	fclose(fp);
++
++	clean_flist(checksum_flist, 0);
++}
++
+ int push_pathname(const char *dir, int len)
+ {
+ 	if (dir == pathname)
+@@ -989,7 +1170,7 @@ struct file_struct *make_file(const char
+ 			      STRUCT_STAT *stp, int flags, int filter_level)
+ {
+ 	static char *lastdir;
+-	static int lastdir_len = -1;
++	static int lastdir_len = -2;
+ 	struct file_struct *file;
+ 	char thisname[MAXPATHLEN];
+ 	char linkname[MAXPATHLEN];
+@@ -1119,9 +1300,16 @@ struct file_struct *make_file(const char
+ 			memcpy(lastdir, thisname, len);
+ 			lastdir[len] = '\0';
+ 			lastdir_len = len;
++			if (always_checksum && am_sender && flist)
++				read_checksums(lastdir);
+ 		}
+-	} else
++	} else {
+ 		basename = thisname;
++		if (always_checksum && am_sender && flist && lastdir_len == -2) {
++			lastdir_len = -1;
++			read_checksums("");
++		}
++	}
+ 	basename_len = strlen(basename) + 1; /* count the '\0' */
+ 
+ #ifdef SUPPORT_LINKS
+@@ -1197,11 +1385,21 @@ struct file_struct *make_file(const char
+ 	}
+ #endif
+ 
+-	if (always_checksum && am_sender && S_ISREG(st.st_mode))
+-		file_checksum(thisname, tmp_sum, st.st_size);
+-
+ 	F_PATHNAME(file) = pathname;
+ 
++	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
++		int j;
++		if (flist && (j = flist_find(checksum_flist, file)) >= 0) {
++			struct file_struct *fp = checksum_flist->sorted[j];
++			if (F_LENGTH(fp) == st.st_size
++			 && fp->modtime == st.st_mtime)
++				memcpy(tmp_sum, F_SUM(fp), MAX_DIGEST_LEN);
++			else
++				file_checksum(thisname, tmp_sum, st.st_size);
++		} else
++			file_checksum(thisname, tmp_sum, st.st_size);
++	}
++
+ 	/* This code is only used by the receiver when it is building
+ 	 * a list of files for a delete pass. */
+ 	if (keep_dirlinks && linkname_len && flist) {
+--- old/ifuncs.h
++++ new/ifuncs.h
+@@ -64,6 +64,12 @@ isDigit(const char *ptr)
+ }
+ 
+ static inline int
++isXDigit(const char *ptr)
++{
++	return isxdigit(*(unsigned char *)ptr);
++}
++
++static inline int
+ isPrint(const char *ptr)
+ {
+ 	return isprint(*(unsigned char *)ptr);
+--- old/patches/checksum-updating.diff
++++ new/patches/checksum-updating.diff
+@@ -476,15 +476,6 @@ To use this patch, run these commands fo
+  
+  	return flist;
+  }
+-@@ -2320,7 +2673,7 @@ void flist_free(struct file_list *flist)
+- 
+- 	if (!flist->prev || !flist_cnt)
+- 		pool_destroy(flist->file_pool);
+--	else
+-+	else if (flist->pool_boundary)
+- 		pool_free_old(flist->file_pool, flist->pool_boundary);
+- 
+- 	if (flist->sorted && flist->sorted != flist->files)
+ --- old/ifuncs.h
+ +++ new/ifuncs.h
+ @@ -64,6 +64,12 @@ isDigit(const char *ptr)
+--- old/support/rsyncsums
++++ new/support/rsyncsums
+@@ -0,0 +1,183 @@
++#!/usr/bin/perl -w
++use strict;
++
++use Getopt::Long;
++use Cwd qw(abs_path cwd);
++use Digest::MD4;
++use Digest::MD5;
++
++our $SUMS_FILE = '.rsyncsums';
++
++&Getopt::Long::Configure('bundling');
++&usage if !&GetOptions(
++    'simple-cmp|s' => \( my $ignore_ctime_and_inode ),
++    'recurse|r' => \( my $recurse_opt ),
++    'verbose|v+' => \( my $verbosity = 0 ),
++    'help|h' => \( my $help_opt ),
++);
++&usage if $help_opt;
++
++my $start_dir = cwd();
++
++my @dirs = @ARGV;
++@dirs = '.' unless @dirs;
++foreach (@dirs) {
++    $_ = abs_path($_);
++}
++
++$| = 1;
++
++my $md4 = Digest::MD4->new;
++my $md5 = Digest::MD5->new;
++
++while (@dirs) {
++    my $dir = shift @dirs;
++
++    if (!chdir($dir)) {
++	warn "Unable to chdir to $dir: $!\n";
++	next;
++    }
++    if (!opendir(DP, '.')) {
++	warn "Unable to opendir $dir: $!\n";
++	next;
++    }
++
++    if ($verbosity) {
++	my $reldir = $dir;
++	$reldir =~ s#^$start_dir(/|$)# $1 ? '' : '.' #eo;
++	print "$reldir ... ";
++    }
++
++    my $sums_file_exists = -e $SUMS_FILE;
++    my %cache;
++    my @subdirs;
++    my $cnt = 0;
++    while (defined(my $fn = readdir(DP))) {
++	next if $fn =~ /^\.\.?$/ || $fn =~ /^\Q$SUMS_FILE\E$/o || -l $fn;
++	if (-d _) {
++	    push(@subdirs, "$dir/$fn") unless $fn =~ /^(CVS|\.svn|\.git|\.bzr)$/;
++	    next;
++	}
++	next unless -f _;
++
++	my($size,$mtime,$ctime,$inode) = (stat(_))[7,9,10,1];
++	next if $size == 0;
++
++	$cache{$fn} = [ $size, $mtime, $ctime & 0xFFFFFFFF, $inode & 0xFFFFFFFF ];
++	$cnt++;
++    }
++
++    closedir DP;
++
++    unshift(@dirs, sort @subdirs) if $recurse_opt;
++
++    if (!$cnt) {
++	if ($sums_file_exists) {
++	    print "(removed $SUMS_FILE) " if $verbosity;
++	    unlink($SUMS_FILE);
++	}
++	print "empty\n" if $verbosity;
++	next;
++    }
++
++    if (open(FP, '+<', $SUMS_FILE)) {
++	while (<FP>) {
++	    chomp;
++	    my($sum4, $sum5, $size, $mtime, $ctime, $inode, $fn) = split(' ', $_, 7);
++	    my $ref = $cache{$fn};
++	    if (defined $ref) {
++		if ($ignore_ctime_and_inode) {
++		    $ctime = $$ref[2];
++		    $inode = $$ref[3];
++		}
++		if ($$ref[0] == $size
++		 && $$ref[1] == $mtime
++		 && $$ref[2] == $ctime
++		 && $$ref[3] == $inode
++		 && $sum4 !~ /=/ && $sum5 !~ /=/) {
++		    $$ref[4] = $sum4;
++		    $$ref[5] = $sum5;
++		    $cnt--;
++		} else {
++		    $$ref[4] = $$ref[5] = undef;
++		}
++	    } else {
++		$cnt = -1; # Force rewrite due to removed line.
++	    }
++	}
++    } else {
++	open(FP, '>', $SUMS_FILE) or die "Unable to write $dir/$SUMS_FILE: $!\n";
++	$cnt = -1;
++    }
++
++    if ($cnt) {
++	print "UPDATING\n" if $verbosity;
++	while (my($fn, $ref) = each %cache) {
++	    next if defined $$ref[3] && defined $$ref[4];
++	    if (!open(IN, $fn)) {
++		print STDERR "Unable to read $fn: $!\n";
++		delete $cache{$fn};
++		next;
++	    }
++
++	    my($size,$mtime,$ctime,$inode) = (stat(IN))[7,9,10,1];
++	    if ($size == 0) {
++		close IN;
++		next;
++	    }
++
++	    my($sum4, $sum5);
++	    while (1) {
++		while (sysread(IN, $_, 64*1024)) {
++		    $md4->add($_);
++		    $md5->add($_);
++		}
++		$sum4 = $md4->hexdigest;
++		$sum5 = $md5->hexdigest;
++		print " $sum4 $sum5" if $verbosity > 2;
++		print " $fn\n" if $verbosity > 1;
++		my($size2,$mtime2,$ctime2,$inode2) = (stat(IN))[7,9,10,1];
++		if ($ignore_ctime_and_inode) {
++		    $ctime = $ctime2;
++		    $inode = $inode2;
++		}
++		last if $size == $size2 && $mtime == $mtime2
++		     && $ctime == $ctime2 && $inode == $inode2;
++		$size = $size2;
++		$mtime = $mtime2;
++		$ctime = $ctime2;
++		$inode = $inode2;
++		sysseek(IN, 0, 0);
++	    }
++	    
++	    close IN;
++
++	    $cache{$fn} = [ $size, $mtime, $ctime, $inode, $sum4, $sum5 ];
++	}
++
++	seek(FP, 0, 0);
++	foreach my $fn (sort keys %cache) {
++	    my $ref = $cache{$fn};
++	    my($size, $mtime, $ctime, $inode, $sum4, $sum5) = @$ref;
++	    printf FP '%s %s %10d %10d %10d %10d %s' . "\n", $sum4, $sum5, $size, $mtime, $ctime, $inode, $fn;
++	}
++	truncate(FP, tell(FP));
++    } else {
++	print "ok\n" if $verbosity;
++    }
++
++    close FP;
++}
++
++sub usage
++{
++    die <<EOT;
++Usage: rsyncsums [OPTIONS] [DIRS]
++
++Options:
++ -r, --recurse     Update $SUMS_FILE files in subdirectories too.
++ -s, --simple-cmp  Ignore ctime and inode values when comparing identicality.
++ -v, --verbose     Mention what we're doing.  Repeat for more info.
++ -h, --help        Display this help message.
++EOT
++}
