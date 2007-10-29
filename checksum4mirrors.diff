@@ -295,7 +295,7 @@ To use this patch, run these commands for a successful build:
  	return isprint(*(unsigned char *)ptr);
 --- old/support/rsyncsums
 +++ new/support/rsyncsums
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,203 @@
 +#!/usr/bin/perl -w
 +use strict;
 +
@@ -308,8 +308,9 @@ To use this patch, run these commands for a successful build:
 +
 +&Getopt::Long::Configure('bundling');
 +&usage if !&GetOptions(
-+    'simple-cmp|s' => \( my $ignore_ctime_and_inode ),
 +    'recurse|r' => \( my $recurse_opt ),
++    'simple-cmp|s' => \( my $ignore_ctime_and_inode ),
++    'check|c' => \( my $check_opt ),
 +    'verbose|v+' => \( my $verbosity = 0 ),
 +    'help|h' => \( my $help_opt ),
 +);
@@ -324,6 +325,8 @@ To use this patch, run these commands for a successful build:
 +}
 +
 +$| = 1;
++
++my $exit_code = 0;
 +
 +my $md4 = Digest::MD4->new;
 +my $md5 = Digest::MD5->new;
@@ -340,16 +343,28 @@ To use this patch, run these commands for a successful build:
 +	next;
 +    }
 +
++    my $reldir = $dir;
++    $reldir =~ s#^$start_dir(/|$)# $1 ? '' : '.' #eo;
 +    if ($verbosity) {
-+	my $reldir = $dir;
-+	$reldir =~ s#^$start_dir(/|$)# $1 ? '' : '.' #eo;
 +	print "$reldir ... ";
++	print "\n" if $check_opt;
 +    }
 +
-+    my $sums_file_exists = -e $SUMS_FILE;
 +    my %cache;
++    my $f_cnt = 0;
++    if (open(FP, '<', $SUMS_FILE)) {
++	while (<FP>) {
++	    chomp;
++	    my($sum4, $sum5, $size, $mtime, $ctime, $inode, $fn) = split(' ', $_, 7);
++	    $cache{$fn} = [ 0, $sum4, $sum5, $size, $mtime, $ctime & 0xFFFFFFFF, $inode & 0xFFFFFFFF ];
++	    $f_cnt++;
++	}
++	close FP;
++    }
++
 +    my @subdirs;
-+    my $cnt = 0;
++    my $d_cnt = 0;
++    my $update_cnt = 0;
 +    while (defined(my $fn = readdir(DP))) {
 +	next if $fn =~ /^\.\.?$/ || $fn =~ /^\Q$SUMS_FILE\E$/o || -l $fn;
 +	if (-d _) {
@@ -359,113 +374,117 @@ To use this patch, run these commands for a successful build:
 +	next unless -f _;
 +
 +	my($size,$mtime,$ctime,$inode) = (stat(_))[7,9,10,1];
-+	next if $size == 0;
++	my $ref = $cache{$fn};
++	if ($size == 0) {
++	    if (defined $ref) {
++		delete $cache{$fn};
++		$f_cnt--;
++		if (!$check_opt && !$update_cnt++) {
++		    print "UPDATING\n" if $verbosity;
++		}
++	    }
++	    next;
++	}
++	$d_cnt++;
 +
-+	$cache{$fn} = [ $size, $mtime, $ctime & 0xFFFFFFFF, $inode & 0xFFFFFFFF ];
-+	$cnt++;
++	if (!$check_opt) {
++	    if (defined $ref) {
++		$$ref[0] = 1;
++		if ($$ref[3] == $size
++		 && $$ref[4] == $mtime
++		 && ($ignore_ctime_and_inode || ($$ref[5] == $ctime && $$ref[6] == $inode))
++		 && $$ref[1] !~ /=/ && $$ref[2] !~ /=/) {
++		    next;
++		}
++	    }
++	    if (!$update_cnt++) {
++		print "UPDATING\n" if $verbosity;
++	    }
++	}
++
++	if (!open(IN, $fn)) {
++	    print STDERR "Unable to read $fn: $!\n";
++	    if (defined $ref) {
++		delete $cache{$fn};
++		$f_cnt--;
++	    }
++	    next;
++	}
++
++	my($sum4, $sum5);
++	while (1) {
++	    while (sysread(IN, $_, 64*1024)) {
++		$md4->add($_);
++		$md5->add($_);
++	    }
++	    $sum4 = $md4->hexdigest;
++	    $sum5 = $md5->hexdigest;
++	    print " $sum4 $sum5" if $verbosity > 2;
++	    print " $fn" if $verbosity > 1;
++	    my($size2,$mtime2,$ctime2,$inode2) = (stat(IN))[7,9,10,1];
++	    last if $size == $size2 && $mtime == $mtime2
++	     && ($ignore_ctime_and_inode || ($ctime == $ctime2 && $inode == $inode2));
++	    $size = $size2;
++	    $mtime = $mtime2;
++	    $ctime = $ctime2;
++	    $inode = $inode2;
++	    sysseek(IN, 0, 0);
++	    print " REREADING\n" if $verbosity > 1;
++	}
++
++	close IN;
++
++	if ($check_opt) {
++	    my $dif;
++	    if (!defined $ref) {
++		$dif = 'MISSING';
++	    } elsif ($sum4 ne $$ref[1] || $sum5 ne $$ref[2]) {
++		$dif = 'FAILED';
++	    } else {
++		print " OK\n" if $verbosity > 1;
++		next;
++	    }
++	    if ($verbosity < 2) {
++		print $verbosity ? ' ' : "$reldir/";
++		print $fn;
++	    }
++	    print " $dif\n";
++	    $exit_code = 1;
++	} else {
++	    print "\n" if $verbosity > 1;
++	    $cache{$fn} = [ 1, $sum4, $sum5, $size, $mtime, $ctime & 0xFFFFFFFF, $inode & 0xFFFFFFFF ];
++	}
 +    }
 +
 +    closedir DP;
 +
 +    unshift(@dirs, sort @subdirs) if $recurse_opt;
 +
-+    if (!$cnt) {
-+	if ($sums_file_exists) {
++    if ($check_opt) {
++	;
++    } elsif ($d_cnt == 0) {
++	if ($f_cnt) {
 +	    print "(removed $SUMS_FILE) " if $verbosity;
 +	    unlink($SUMS_FILE);
 +	}
 +	print "empty\n" if $verbosity;
-+	next;
-+    }
-+
-+    if (open(FP, '+<', $SUMS_FILE)) {
-+	while (<FP>) {
-+	    chomp;
-+	    my($sum4, $sum5, $size, $mtime, $ctime, $inode, $fn) = split(' ', $_, 7);
-+	    my $ref = $cache{$fn};
-+	    if (defined $ref) {
-+		if ($ignore_ctime_and_inode) {
-+		    $ctime = $$ref[2];
-+		    $inode = $$ref[3];
-+		}
-+		if ($$ref[0] == $size
-+		 && $$ref[1] == $mtime
-+		 && $$ref[2] == $ctime
-+		 && $$ref[3] == $inode
-+		 && $sum4 !~ /=/ && $sum5 !~ /=/) {
-+		    $$ref[4] = $sum4;
-+		    $$ref[5] = $sum5;
-+		    $cnt--;
-+		} else {
-+		    $$ref[4] = $$ref[5] = undef;
-+		}
-+	    } else {
-+		$cnt = -1; # Force rewrite due to removed line.
-+	    }
-+	}
-+    } else {
++    } elsif ($update_cnt || $d_cnt != $f_cnt) {
++	print "UPDATING\n" if $verbosity && !$update_cnt;
 +	open(FP, '>', $SUMS_FILE) or die "Unable to write $dir/$SUMS_FILE: $!\n";
-+	$cnt = -1;
-+    }
 +
-+    if ($cnt) {
-+	print "UPDATING\n" if $verbosity;
-+	while (my($fn, $ref) = each %cache) {
-+	    next if defined $$ref[3] && defined $$ref[4];
-+	    if (!open(IN, $fn)) {
-+		print STDERR "Unable to read $fn: $!\n";
-+		delete $cache{$fn};
-+		next;
-+	    }
-+
-+	    my($size,$mtime,$ctime,$inode) = (stat(IN))[7,9,10,1];
-+	    if ($size == 0) {
-+		close IN;
-+		next;
-+	    }
-+
-+	    my($sum4, $sum5);
-+	    while (1) {
-+		while (sysread(IN, $_, 64*1024)) {
-+		    $md4->add($_);
-+		    $md5->add($_);
-+		}
-+		$sum4 = $md4->hexdigest;
-+		$sum5 = $md5->hexdigest;
-+		print " $sum4 $sum5" if $verbosity > 2;
-+		print " $fn\n" if $verbosity > 1;
-+		my($size2,$mtime2,$ctime2,$inode2) = (stat(IN))[7,9,10,1];
-+		if ($ignore_ctime_and_inode) {
-+		    $ctime = $ctime2;
-+		    $inode = $inode2;
-+		}
-+		last if $size == $size2 && $mtime == $mtime2
-+		     && $ctime == $ctime2 && $inode == $inode2;
-+		$size = $size2;
-+		$mtime = $mtime2;
-+		$ctime = $ctime2;
-+		$inode = $inode2;
-+		sysseek(IN, 0, 0);
-+	    }
-+	    
-+	    close IN;
-+
-+	    $cache{$fn} = [ $size, $mtime, $ctime, $inode, $sum4, $sum5 ];
-+	}
-+
-+	seek(FP, 0, 0);
 +	foreach my $fn (sort keys %cache) {
 +	    my $ref = $cache{$fn};
-+	    my($size, $mtime, $ctime, $inode, $sum4, $sum5) = @$ref;
++	    my($found, $sum4, $sum5, $size, $mtime, $ctime, $inode) = @$ref;
++	    next unless $found;
 +	    printf FP '%s %s %10d %10d %10d %10d %s' . "\n", $sum4, $sum5, $size, $mtime, $ctime, $inode, $fn;
 +	}
-+	truncate(FP, tell(FP));
++	close FP;
 +    } else {
 +	print "ok\n" if $verbosity;
 +    }
-+
-+    close FP;
 +}
++
++exit $exit_code;
 +
 +sub usage
 +{
@@ -475,6 +494,7 @@ To use this patch, run these commands for a successful build:
 +Options:
 + -r, --recurse     Update $SUMS_FILE files in subdirectories too.
 + -s, --simple-cmp  Ignore ctime and inode values when comparing identicality.
++ -c, --check       Check if the checksums are right (doesn't update).
 + -v, --verbose     Mention what we're doing.  Repeat for more info.
 + -h, --help        Display this help message.
 +EOT
