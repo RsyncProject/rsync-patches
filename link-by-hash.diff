@@ -30,10 +30,10 @@ To use this patch, run these commands for a successful build:
  extern struct stats stats;
  extern char *filesfrom_host;
 +extern char *link_by_hash_dir;
- 
- extern char curr_dir[MAXPATHLEN];
- 
-@@ -830,7 +831,7 @@ static struct file_struct *recv_file_ent
+ #ifdef ICONV_OPTION
+ extern char *iconv_opt;
+ #endif
+@@ -818,7 +819,7 @@ static struct file_struct *recv_file_ent
  		extra_len += (S_ISDIR(mode) ? 2 : 1) * EXTRA_LEN;
  #endif
  
@@ -383,7 +383,7 @@ To use this patch, run these commands for a successful build:
 +#endif
 --- old/options.c
 +++ new/options.c
-@@ -153,6 +153,7 @@ char *backup_suffix = NULL;
+@@ -154,6 +154,7 @@ char *backup_suffix = NULL;
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
@@ -391,7 +391,7 @@ To use this patch, run these commands for a successful build:
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *logfile_name = NULL;
-@@ -385,6 +386,7 @@ void usage(enum logcode F)
+@@ -386,6 +387,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -399,7 +399,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F,"     --skip-compress=LIST    skip compressing files with a suffix in LIST\n");
-@@ -437,7 +439,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
+@@ -438,7 +440,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OP
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -416,7 +416,7 @@ To use this patch, run these commands for a successful build:
    {"fuzzy",           'y', POPT_ARG_NONE,   &fuzzy_basis, 0, 0, 0 },
    {"compress",        'z', POPT_ARG_NONE,   0, 'z', 0, 0 },
    {"no-compress",      0,  POPT_ARG_VAL,    &do_compression, 0, 0, 0 },
-@@ -1219,6 +1222,21 @@ int parse_arguments(int *argc_p, const c
+@@ -1221,6 +1224,21 @@ int parse_arguments(int *argc_p, const c
  			return 0;
  #endif
  
@@ -438,7 +438,7 @@ To use this patch, run these commands for a successful build:
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -1965,6 +1983,11 @@ void server_options(char **args, int *ar
+@@ -1963,6 +1981,11 @@ void server_options(char **args, int *ar
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -452,8 +452,8 @@ To use this patch, run these commands for a successful build:
  			args[ac++] = "--files-from";
 --- old/receiver.c
 +++ new/receiver.c
-@@ -125,12 +125,14 @@ int get_tmpname(char *fnametmp, char *fn
- 
+@@ -162,12 +162,14 @@ int open_tmpfile(char *fnametmp, const c
+ }
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
 -			const char *fname, int fd, OFF_T total_size)
@@ -468,7 +468,7 @@ To use this patch, run these commands for a successful build:
  	int32 len, sum_len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -150,6 +152,9 @@ static int receive_data(int f_in, char *
+@@ -187,6 +189,9 @@ static int receive_data(int f_in, char *
  	} else
  		mapbuf = NULL;
  
@@ -478,7 +478,7 @@ To use this patch, run these commands for a successful build:
  	sum_init(checksum_seed);
  
  	if (append_mode > 0) {
-@@ -194,6 +199,8 @@ static int receive_data(int f_in, char *
+@@ -231,6 +236,8 @@ static int receive_data(int f_in, char *
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -487,7 +487,7 @@ To use this patch, run these commands for a successful build:
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -220,6 +227,8 @@ static int receive_data(int f_in, char *
+@@ -257,6 +264,8 @@ static int receive_data(int f_in, char *
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -496,7 +496,7 @@ To use this patch, run these commands for a successful build:
  		}
  
  		if (updating_basis) {
-@@ -262,6 +271,8 @@ static int receive_data(int f_in, char *
+@@ -299,6 +308,8 @@ static int receive_data(int f_in, char *
  	}
  
  	sum_len = sum_end(file_sum1);
@@ -505,7 +505,7 @@ To use this patch, run these commands for a successful build:
  
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -277,7 +288,7 @@ static int receive_data(int f_in, char *
+@@ -314,7 +325,7 @@ static int receive_data(int f_in, char *
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -514,7 +514,7 @@ To use this patch, run these commands for a successful build:
  }
  
  static void handle_delayed_updates(char *local_name)
-@@ -665,7 +676,7 @@ int recv_files(int f_in, char *local_nam
+@@ -667,7 +678,7 @@ int recv_files(int f_in, char *local_nam
  
  		/* recv file data */
  		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
@@ -525,7 +525,7 @@ To use this patch, run these commands for a successful build:
  
 --- old/rsync.c
 +++ new/rsync.c
-@@ -47,6 +47,7 @@ extern int inplace;
+@@ -48,6 +48,7 @@ extern int inplace;
  extern int flist_eof;
  extern int keep_dirlinks;
  extern int make_backups;
@@ -533,7 +533,7 @@ To use this patch, run these commands for a successful build:
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct chmod_mode_struct *daemon_chmod_modes;
  #ifdef ICONV_OPTION
-@@ -529,8 +530,15 @@ void finish_transfer(const char *fname, 
+@@ -530,8 +531,15 @@ void finish_transfer(const char *fname, 
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
@@ -553,7 +553,7 @@ To use this patch, run these commands for a successful build:
  			ret == -2 ? "copy" : "rename",
 --- old/rsync.h
 +++ new/rsync.h
-@@ -768,6 +768,14 @@ struct stats {
+@@ -807,6 +807,14 @@ struct stats {
  	int current_file_index;
  };
  
@@ -570,7 +570,7 @@ To use this patch, run these commands for a successful build:
  #define EMPTY_ITEM_LIST {NULL, 0, 0}
 --- old/rsync.yo
 +++ new/rsync.yo
-@@ -392,6 +392,7 @@ to the detailed description below for a 
+@@ -387,6 +387,7 @@ to the detailed description below for a 
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
