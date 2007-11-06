@@ -21,12 +21,12 @@ TODO:  need to fix this to handle 64-bit time_t values!
  #endif
  
  /* These index values are for the file-list's extra-attribute array. */
--int uid_ndx, gid_ndx, acls_ndx, xattrs_ndx;
-+int uid_ndx, gid_ndx, atimes_ndx, acls_ndx, xattrs_ndx;
- #ifdef ICONV_OPTION
- int ic_ndx;
+-int uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
++int uid_ndx, gid_ndx, atimes_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
  
-@@ -125,6 +126,8 @@ void setup_protocol(int f_out,int f_in)
+ #ifdef ICONV_OPTION
+ int filesfrom_convert = 0;
+@@ -124,6 +125,8 @@ void setup_protocol(int f_out,int f_in)
  		uid_ndx = ++file_extra_cnt;
  	if (preserve_gid)
  		gid_ndx = ++file_extra_cnt;
@@ -45,7 +45,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int relative_paths;
  extern int implied_dirs;
  extern int file_extra_cnt;
-@@ -334,6 +335,7 @@ int push_pathname(const char *dir, int l
+@@ -338,6 +339,7 @@ int push_pathname(const char *dir, int l
  static void send_file_entry(int f, struct file_struct *file, int ndx, int first_ndx)
  {
  	static time_t modtime;
@@ -53,7 +53,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	static mode_t mode;
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
-@@ -440,6 +442,13 @@ static void send_file_entry(int f, struc
+@@ -444,6 +446,13 @@ static void send_file_entry(int f, struc
  		xflags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -67,7 +67,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != 0) {
-@@ -513,6 +522,8 @@ static void send_file_entry(int f, struc
+@@ -517,6 +526,8 @@ static void send_file_entry(int f, struc
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -76,7 +76,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	if (uid_ndx && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -599,7 +610,7 @@ static void send_file_entry(int f, struc
+@@ -603,7 +614,7 @@ static void send_file_entry(int f, struc
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   int xflags, int f)
  {
@@ -85,7 +85,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	static mode_t mode;
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
-@@ -732,6 +743,16 @@ static struct file_struct *recv_file_ent
+@@ -736,6 +747,16 @@ static struct file_struct *recv_file_ent
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -102,21 +102,21 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -860,6 +881,8 @@ static struct file_struct *recv_file_ent
+@@ -864,6 +885,8 @@ static struct file_struct *recv_file_ent
  		F_GROUP(file) = gid;
  		file->flags |= gid_flags;
  	}
 +	if (atimes_ndx)
-+		F_ATIME(file) = (time_t)atime;
- #ifdef ICONV_OPTION
- 	if (ic_ndx)
++		F_ATIME(file) = (uint32)atime;
+ 	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
+ 
 @@ -1186,6 +1209,8 @@ struct file_struct *make_file(const char
  		F_OWNER(file) = st.st_uid;
  	if (gid_ndx)
  		F_GROUP(file) = st.st_gid;
 +	if (atimes_ndx)
-+		F_ATIME(file) = st.st_atime;
++		F_ATIME(file) = (uint32)st.st_atime;
  
  	if (basename != thisname)
  		file->dirname = lastdir;
@@ -130,7 +130,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int uid_ndx;
  extern int gid_ndx;
  extern int delete_mode;
-@@ -562,6 +563,9 @@ void itemize(const char *fnamecmp, struc
+@@ -568,6 +569,9 @@ void itemize(const char *fnamecmp, struc
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, sxp->st.st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
@@ -140,7 +140,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -884,6 +888,8 @@ static int try_dests_reg(struct file_str
+@@ -923,6 +927,8 @@ static int try_dests_reg(struct file_str
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
@@ -149,7 +149,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  			if (preserve_hard_links && F_IS_HLINKED(file))
  				finish_hard_link(file, fname, ndx, &sxp->st, itemizing, code, j);
  			if (itemizing && (verbose > 1 || stdout_format_has_i > 1)) {
-@@ -1080,6 +1086,7 @@ static int try_dests_non(struct file_str
+@@ -1113,6 +1119,7 @@ static int try_dests_non(struct file_str
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -157,7 +157,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -1094,14 +1101,16 @@ static void list_file_entry(struct file_
+@@ -1127,14 +1134,16 @@ static void list_file_entry(struct file_
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -176,7 +176,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  			f_name(f, NULL));
  	}
  }
-@@ -1851,7 +1860,7 @@ static void touch_up_dirs(struct file_li
+@@ -1884,7 +1893,7 @@ static void touch_up_dirs(struct file_li
  		if (!(file->mode & S_IWUSR))
  			do_chmod(fname, file->mode);
  		if (need_retouch_dir_times)
@@ -244,7 +244,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int preserve_times;
  extern int am_root;
  extern int am_server;
-@@ -340,6 +341,7 @@ int set_file_attrs(const char *fname, st
+@@ -343,6 +344,7 @@ int set_file_attrs(const char *fname, st
  	int updated = 0;
  	stat_x sx2;
  	int change_uid, change_gid;
@@ -252,7 +252,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  	mode_t new_mode = file->mode;
  	int inherit;
  
-@@ -380,18 +382,36 @@ int set_file_attrs(const char *fname, st
+@@ -383,18 +385,36 @@ int set_file_attrs(const char *fname, st
  		set_stat_xattr(fname, file);
  #endif
  
@@ -310,7 +310,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -602,6 +604,7 @@ extern int file_extra_cnt;
+@@ -608,6 +610,7 @@ extern int file_extra_cnt;
  extern int inc_recurse;
  extern int uid_ndx;
  extern int gid_ndx;
@@ -318,14 +318,14 @@ TODO:  need to fix this to handle 64-bit time_t values!
  extern int acls_ndx;
  extern int xattrs_ndx;
  
-@@ -639,6 +642,7 @@ extern int xattrs_ndx;
+@@ -645,6 +648,7 @@ extern int xattrs_ndx;
  /* When the associated option is on, all entries will have these present: */
  #define F_OWNER(f) REQ_EXTRA(f, uid_ndx)->unum
  #define F_GROUP(f) REQ_EXTRA(f, gid_ndx)->unum
 +#define F_ATIME(f) REQ_EXTRA(f, atimes_ndx)->unum
  #define F_ACL(f) REQ_EXTRA(f, acls_ndx)->num
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
- #define F_NDX(f) REQ_EXTRA(f, ic_ndx)->num
+ #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -349,6 +349,7 @@ to the detailed description below for a 
@@ -336,7 +336,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
-@@ -965,6 +966,12 @@ it is preserving modification times (see
+@@ -973,6 +974,12 @@ it is preserving modification times (see
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -349,7 +349,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1646,8 +1653,10 @@ quote(itemization(
+@@ -1654,8 +1661,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
@@ -551,7 +551,7 @@ TODO:  need to fix this to handle 64-bit time_t values!
  		t[1].tv_usec = 0;
 @@ -154,12 +158,12 @@ int set_modtime(const char *fname, time_
  		return utimes(fname, t);
- #elif defined HAVE_UTIMBUF
+ #elif defined HAVE_STRUCT_UTIMBUF
  		struct utimbuf tbuf;
 -		tbuf.actime = time(NULL);
 +		tbuf.actime = atime;

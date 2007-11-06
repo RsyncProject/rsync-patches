@@ -22,12 +22,12 @@ To use this patch, run these commands for a successful build:
  #endif
  
  /* These index values are for the file-list's extra-attribute array. */
--int uid_ndx, gid_ndx, acls_ndx, xattrs_ndx;
-+int uid_ndx, gid_ndx, fileflags_ndx, acls_ndx, xattrs_ndx;
- #ifdef ICONV_OPTION
- int ic_ndx;
+-int uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
++int uid_ndx, gid_ndx, fileflags_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
  
-@@ -125,6 +126,8 @@ void setup_protocol(int f_out,int f_in)
+ #ifdef ICONV_OPTION
+ int filesfrom_convert = 0;
+@@ -124,6 +125,8 @@ void setup_protocol(int f_out,int f_in)
  		uid_ndx = ++file_extra_cnt;
  	if (preserve_gid)
  		gid_ndx = ++file_extra_cnt;
@@ -38,7 +38,7 @@ To use this patch, run these commands for a successful build:
  	if (preserve_xattrs)
 --- old/configure.in
 +++ new/configure.in
-@@ -557,7 +557,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strd
+@@ -544,7 +544,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strd
      memmove lchown vsnprintf snprintf vasprintf asprintf setsid glob strpbrk \
      strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
@@ -57,7 +57,7 @@ To use this patch, run these commands for a successful build:
  extern int uid_ndx;
  extern int gid_ndx;
  extern int eol_nulls;
-@@ -335,6 +336,9 @@ static void send_file_entry(int f, struc
+@@ -339,6 +340,9 @@ static void send_file_entry(int f, struc
  {
  	static time_t modtime;
  	static mode_t mode;
@@ -67,7 +67,7 @@ To use this patch, run these commands for a successful build:
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
  #endif
-@@ -393,6 +397,12 @@ static void send_file_entry(int f, struc
+@@ -397,6 +401,12 @@ static void send_file_entry(int f, struc
  		xflags |= XMIT_SAME_MODE;
  	else
  		mode = file->mode;
@@ -80,7 +80,7 @@ To use this patch, run these commands for a successful build:
  
  	if ((preserve_devices && IS_DEVICE(mode))
  	 || (preserve_specials && IS_SPECIAL(mode))) {
-@@ -513,6 +523,10 @@ static void send_file_entry(int f, struc
+@@ -517,6 +527,10 @@ static void send_file_entry(int f, struc
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -91,7 +91,7 @@ To use this patch, run these commands for a successful build:
  	if (uid_ndx && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -601,6 +615,9 @@ static struct file_struct *recv_file_ent
+@@ -605,6 +619,9 @@ static struct file_struct *recv_file_ent
  {
  	static int64 modtime;
  	static mode_t mode;
@@ -101,7 +101,7 @@ To use this patch, run these commands for a successful build:
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
  #endif
-@@ -732,9 +749,12 @@ static struct file_struct *recv_file_ent
+@@ -736,9 +753,12 @@ static struct file_struct *recv_file_ent
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -115,7 +115,7 @@ To use this patch, run these commands for a successful build:
  
  	if (uid_ndx && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
-@@ -854,6 +874,10 @@ static struct file_struct *recv_file_ent
+@@ -858,6 +878,10 @@ static struct file_struct *recv_file_ent
  		OPT_EXTRA(file, 0)->unum = (uint32)(file_length >> 32);
  	}
  	file->mode = mode;
@@ -139,7 +139,7 @@ To use this patch, run these commands for a successful build:
  	if (gid_ndx)
 --- old/generator.c
 +++ new/generator.c
-@@ -114,6 +114,14 @@ static int need_retouch_dir_times;
+@@ -112,6 +112,14 @@ static int need_retouch_dir_times;
  static int need_retouch_dir_perms;
  static const char *solo_file = NULL;
  
@@ -154,7 +154,7 @@ To use this patch, run these commands for a successful build:
  /* For calling delete_item() and delete_dir_contents(). */
  #define DEL_RECURSE		(1<<1) /* recurse */
  #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
-@@ -129,7 +137,6 @@ enum delret {
+@@ -127,7 +135,6 @@ enum delret {
  /* Forward declaration for delete_item(). */
  static enum delret delete_dir_contents(char *fname, int flags);
  
@@ -162,7 +162,7 @@ To use this patch, run these commands for a successful build:
  static int is_backup_file(char *fn)
  {
  	int k = strlen(fn) - backup_suffix_len;
-@@ -142,17 +149,20 @@ static int is_backup_file(char *fn)
+@@ -140,17 +147,20 @@ static int is_backup_file(char *fn)
   * Note that fbuf must point to a MAXPATHLEN buffer if the mode indicates it's
   * a directory! (The buffer is used for recursion, but returned unchanged.)
   */
@@ -186,7 +186,7 @@ To use this patch, run these commands for a successful build:
  	if (S_ISDIR(mode) && !(flags & DEL_DIR_IS_EMPTY)) {
  		ignore_perishable = 1;
  		/* If DEL_RECURSE is not set, this just reports emptiness. */
-@@ -264,7 +274,7 @@ static enum delret delete_dir_contents(c
+@@ -262,7 +272,7 @@ static enum delret delete_dir_contents(c
  		if (S_ISDIR(fp->mode)
  		 && delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
@@ -195,8 +195,8 @@ To use this patch, run these commands for a successful build:
  			ret = DR_NOT_EMPTY;
  	}
  
-@@ -320,8 +330,9 @@ static int remember_delete(struct file_s
- 	
+@@ -318,8 +328,9 @@ static int remember_delete(struct file_s
+ 
  	while (1) {
  		len = snprintf(deldelay_buf + deldelay_cnt,
 -			       deldelay_size - deldelay_cnt,
@@ -207,7 +207,7 @@ To use this patch, run these commands for a successful build:
  		if ((deldelay_cnt += len) <= deldelay_size)
  			break;
  		if (deldelay_fd < 0 && !start_delete_delay_temp())
-@@ -334,7 +345,7 @@ static int remember_delete(struct file_s
+@@ -332,7 +343,7 @@ static int remember_delete(struct file_s
  	return 1;
  }
  
@@ -216,7 +216,7 @@ To use this patch, run these commands for a successful build:
  {
  	static int read_pos = 0;
  	int j, len, mode;
-@@ -376,12 +387,12 @@ static int read_delay_line(char *buf)
+@@ -374,12 +385,12 @@ static int read_delay_line(char *buf)
  
  	bp = deldelay_buf + read_pos;
  
@@ -231,7 +231,7 @@ To use this patch, run these commands for a successful build:
  	len = j - read_pos - (past_space - bp) + 1; /* count the '\0' */
  	read_pos = j + 1;
  
-@@ -399,15 +410,15 @@ static int read_delay_line(char *buf)
+@@ -397,15 +408,15 @@ static int read_delay_line(char *buf)
  
  static void do_delayed_deletions(char *delbuf)
  {
@@ -250,7 +250,7 @@ To use this patch, run these commands for a successful build:
  	if (deldelay_fd >= 0)
  		close(deldelay_fd);
  }
-@@ -474,7 +485,7 @@ static void delete_in_dir(char *fbuf, st
+@@ -472,7 +483,7 @@ static void delete_in_dir(char *fbuf, st
  				if (!remember_delete(fp, delbuf))
  					break;
  			} else
@@ -259,7 +259,7 @@ To use this patch, run these commands for a successful build:
  		}
  	}
  
-@@ -1263,7 +1274,7 @@ static void recv_generator(char *fname, 
+@@ -1296,7 +1307,7 @@ static void recv_generator(char *fname, 
  			 * full later (right before we handle its contents). */
  			if (statret == 0
  			 && (S_ISDIR(sx.st.st_mode)
@@ -268,7 +268,7 @@ To use this patch, run these commands for a successful build:
  				goto cleanup; /* Any errors get reported later. */
  			if (do_mkdir(fname, file->mode & 0700) == 0)
  				file->flags |= FLAG_DIR_CREATED;
-@@ -1275,7 +1286,7 @@ static void recv_generator(char *fname, 
+@@ -1308,7 +1319,7 @@ static void recv_generator(char *fname, 
  		 * we need to delete it.  If it doesn't exist, then
  		 * (perhaps recursively) create it. */
  		if (statret == 0 && !S_ISDIR(sx.st.st_mode)) {
@@ -277,7 +277,7 @@ To use this patch, run these commands for a successful build:
  				goto skipping_dir_contents;
  			statret = -1;
  		}
-@@ -1404,7 +1415,7 @@ static void recv_generator(char *fname, 
+@@ -1437,7 +1448,7 @@ static void recv_generator(char *fname, 
  			}
  			/* Not the right symlink (or not a symlink), so
  			 * delete it. */
@@ -286,7 +286,7 @@ To use this patch, run these commands for a successful build:
  				goto cleanup;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
-@@ -1483,7 +1494,7 @@ static void recv_generator(char *fname, 
+@@ -1516,7 +1527,7 @@ static void recv_generator(char *fname, 
  					goto return_with_success;
  				goto cleanup;
  			}
@@ -295,7 +295,7 @@ To use this patch, run these commands for a successful build:
  				goto cleanup;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
-@@ -1574,7 +1585,7 @@ static void recv_generator(char *fname, 
+@@ -1607,7 +1618,7 @@ static void recv_generator(char *fname, 
  	fnamecmp_type = FNAMECMP_FNAME;
  
  	if (statret == 0 && !S_ISREG(sx.st.st_mode)) {
@@ -501,7 +501,7 @@ To use this patch, run these commands for a successful build:
  
  /* These flags are used in the live flist data. */
  
-@@ -435,6 +436,10 @@ typedef unsigned int size_t;
+@@ -441,6 +442,10 @@ typedef unsigned int size_t;
  #endif
  #endif
  
@@ -512,7 +512,7 @@ To use this patch, run these commands for a successful build:
  /* Find a variable that is either exactly 32-bits or longer.
   * If some code depends on 32-bit truncation, it will need to
   * take special action in a "#if SIZEOF_INT32 > 4" section. */
-@@ -602,6 +607,7 @@ extern int file_extra_cnt;
+@@ -608,6 +613,7 @@ extern int file_extra_cnt;
  extern int inc_recurse;
  extern int uid_ndx;
  extern int gid_ndx;
@@ -520,14 +520,14 @@ To use this patch, run these commands for a successful build:
  extern int acls_ndx;
  extern int xattrs_ndx;
  
-@@ -639,6 +645,7 @@ extern int xattrs_ndx;
+@@ -645,6 +651,7 @@ extern int xattrs_ndx;
  /* When the associated option is on, all entries will have these present: */
  #define F_OWNER(f) REQ_EXTRA(f, uid_ndx)->unum
  #define F_GROUP(f) REQ_EXTRA(f, gid_ndx)->unum
 +#define F_FFLAGS(f) REQ_EXTRA(f, fileflags_ndx)->unum
  #define F_ACL(f) REQ_EXTRA(f, acls_ndx)->num
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
- #define F_NDX(f) REQ_EXTRA(f, ic_ndx)->num
+ #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
 --- old/rsync.yo
 +++ new/rsync.yo
 @@ -338,6 +338,7 @@ to the detailed description below for a 
@@ -549,7 +549,7 @@ To use this patch, run these commands for a successful build:
  
  dit(--no-OPTION) You may turn off one or more implied options by prefixing
  the option name with "no-".  Not all options may be prefixed with a "no-":
-@@ -900,6 +903,13 @@ super-user copies all namespaces except 
+@@ -908,6 +911,13 @@ super-user copies all namespaces except 
  the user.* namespace.  To be able to backup and restore non-user namespaces as
  a normal user, see the bf(--fake-super) option.
  
