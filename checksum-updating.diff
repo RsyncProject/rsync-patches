@@ -1,25 +1,26 @@
-This builds on the sender optimization feature of the checksum4mirrors
+This builds on the sender optimization feature of the checksum-reading
 patch and adds the ability to create and/or updates the .rsyncsums files
 when --checksum-updating (or "checksum updating = true") is specified.
 
 To use this patch, run these commands for a successful build:
 
-    patch -p1 <patches/checksum4mirrors.diff
+    patch -p1 <patches/checksum-reading.diff
     patch -p1 <patches/checksum-updating.diff
     ./configure                               (optional if already run)
     make
 
---- old/clientserver.c
-+++ new/clientserver.c
-@@ -37,6 +37,7 @@ extern int sanitize_paths;
+diff --git a/clientserver.c b/clientserver.c
+--- a/clientserver.c
++++ b/clientserver.c
+@@ -38,6 +38,7 @@ extern int sanitize_paths;
  extern int filesfrom_fd;
  extern int remote_protocol;
  extern int protocol_version;
 +extern int checksum_updating;
  extern int io_timeout;
  extern int no_detach;
- extern int default_af_hint;
-@@ -687,6 +688,8 @@ static int rsync_module(int f_in, int f_
+ extern int write_batch;
+@@ -704,6 +705,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  	else if (am_root < 0) /* Treat --fake-super from client as --super. */
  		am_root = 2;
  
@@ -28,8 +29,9 @@ To use this patch, run these commands for a successful build:
  	if (filesfrom_fd == 0)
  		filesfrom_fd = f_in;
  
---- old/flist.c
-+++ new/flist.c
+diff --git a/flist.c b/flist.c
+--- a/flist.c
++++ b/flist.c
 @@ -26,6 +26,7 @@
  #include "io.h"
  
@@ -46,7 +48,7 @@ To use this patch, run these commands for a successful build:
  extern int prune_empty_dirs;
  extern int copy_links;
  extern int copy_unsafe_links;
-@@ -82,6 +84,9 @@ extern iconv_t ic_send, ic_recv;
+@@ -83,6 +85,9 @@ extern iconv_t ic_send, ic_recv;
  
  #define PTR_SIZE (sizeof (struct file_struct *))
  
@@ -56,7 +58,7 @@ To use this patch, run these commands for a successful build:
  int io_error;
  int checksum_len;
  dev_t filesystem_dev; /* used to implement -x */
-@@ -117,6 +122,9 @@ static char empty_sum[MAX_DIGEST_LEN];
+@@ -122,6 +127,9 @@ static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
  static int dir_count = 0;
  static int high_hlink_ndx;
@@ -66,7 +68,7 @@ To use this patch, run these commands for a successful build:
  static struct file_list *checksum_flist = NULL;
  
  static void clean_flist(struct file_list *flist, int strip_root);
-@@ -307,7 +315,8 @@ static void flist_done_allocating(struct
+@@ -317,7 +325,8 @@ static void flist_done_allocating(struct file_list *flist)
  
  /* The len count is the length of the basename + 1 for the null. */
  static int add_checksum(const char *dirname, const char *basename, int len,
@@ -76,7 +78,7 @@ To use this patch, run these commands for a successful build:
  {
  	struct file_struct *file;
  	int alloc_len, extra_len;
-@@ -318,13 +327,14 @@ static int add_checksum(const char *dirn
+@@ -328,13 +337,14 @@ static int add_checksum(const char *dirname, const char *basename, int len,
  	if (file_length == 0)
  		return 0;
  
@@ -93,7 +95,7 @@ To use this patch, run these commands for a successful build:
  	bp = pool_alloc(checksum_flist->file_pool, alloc_len, "add_checksum");
  
  	memset(bp, 0, extra_len + FILE_STRUCT_LEN);
-@@ -333,7 +343,14 @@ static int add_checksum(const char *dirn
+@@ -343,7 +353,14 @@ static int add_checksum(const char *dirname, const char *basename, int len,
  	bp += FILE_STRUCT_LEN;
  
  	memcpy(bp, basename, len);
@@ -108,7 +110,7 @@ To use this patch, run these commands for a successful build:
  	file->mode = S_IFREG;
  	file->modtime = mtime;
  	file->len32 = (uint32)file_length;
-@@ -344,6 +361,8 @@ static int add_checksum(const char *dirn
+@@ -354,6 +371,8 @@ static int add_checksum(const char *dirname, const char *basename, int len,
  	file->dirname = dirname;
  	bp = F_SUM(file);
  	memcpy(bp, sum, checksum_len);
@@ -117,7 +119,7 @@ To use this patch, run these commands for a successful build:
  
  	flist_expand(checksum_flist, 1);
  	checksum_flist->files[checksum_flist->used++] = file;
-@@ -353,17 +372,104 @@ static int add_checksum(const char *dirn
+@@ -363,17 +382,104 @@ static int add_checksum(const char *dirname, const char *basename, int len,
  	return 1;
  }
  
@@ -223,7 +225,7 @@ To use this patch, run these commands for a successful build:
  	if (checksum_flist) {
  		/* Reset the pool memory and empty the file-list array. */
  		pool_free_old(checksum_flist->file_pool,
-@@ -374,6 +480,9 @@ static void read_checksums(const char *d
+@@ -384,6 +490,9 @@ static void read_checksums(const char *dirname)
  
  	checksum_flist->low = 0;
  	checksum_flist->high = -1;
@@ -233,7 +235,7 @@ To use this patch, run these commands for a successful build:
  
  	if (!dirname)
  		return;
-@@ -392,7 +501,7 @@ static void read_checksums(const char *d
+@@ -402,7 +511,7 @@ static void read_checksums(const char *dirname)
  	while (fgets(line, sizeof line, fp)) {
  		cp = line;
  		if (protocol_version >= 30) {
@@ -242,7 +244,7 @@ To use this patch, run these commands for a successful build:
  			if (*cp == '=')
  				while (*++cp == '=') {}
  			else
-@@ -403,7 +512,14 @@ static void read_checksums(const char *d
+@@ -413,7 +522,14 @@ static void read_checksums(const char *dirname)
  		}
  
  		if (*cp == '=') {
@@ -258,7 +260,7 @@ To use this patch, run these commands for a successful build:
  		} else {
  			for (i = 0; i < checksum_len*2; i++, cp++) {
  				int x;
-@@ -421,13 +537,14 @@ static void read_checksums(const char *d
+@@ -431,13 +547,14 @@ static void read_checksums(const char *dirname)
  				else
  					sum[i/2] = x << 4;
  			}
@@ -274,7 +276,7 @@ To use this patch, run these commands for a successful build:
  			if (*cp == '=')
  				while (*++cp == '=') {}
  			else
-@@ -451,16 +568,16 @@ static void read_checksums(const char *d
+@@ -461,16 +578,16 @@ static void read_checksums(const char *dirname)
  			break;
  		while (*++cp == ' ') {}
  
@@ -295,7 +297,7 @@ To use this patch, run these commands for a successful build:
  		if (*cp != ' ')
  			break;
  		while (*++cp == ' ') {}
-@@ -477,8 +594,13 @@ static void read_checksums(const char *d
+@@ -487,8 +604,13 @@ static void read_checksums(const char *dirname)
  			continue;
  
  		strlcpy(fbuf+dlen, cp, sizeof fbuf - dlen);
@@ -310,7 +312,7 @@ To use this patch, run these commands for a successful build:
  	}
  	fclose(fp);
  
-@@ -1260,6 +1382,8 @@ struct file_struct *make_file(const char
+@@ -1274,6 +1396,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	if (is_excluded(thisname, S_ISDIR(st.st_mode) != 0, filter_level)) {
  		if (ignore_perishable)
  			non_perishable_cnt++;
@@ -319,7 +321,7 @@ To use this patch, run these commands for a successful build:
  		return NULL;
  	}
  
-@@ -1391,13 +1515,36 @@ struct file_struct *make_file(const char
+@@ -1405,13 +1529,36 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		int j;
  		if (flist && (j = flist_find(checksum_flist, file)) >= 0) {
  			struct file_struct *fp = checksum_flist->sorted[j];
@@ -361,7 +363,7 @@ To use this patch, run these commands for a successful build:
  	}
  
  	/* This code is only used by the receiver when it is building
-@@ -1688,6 +1835,9 @@ static void send_directory(int f, struct
+@@ -1703,6 +1850,9 @@ static void send_directory(int f, struct file_list *flist, char *fbuf, int len,
  
  	closedir(d);
  
@@ -371,7 +373,7 @@ To use this patch, run these commands for a successful build:
  	if (f >= 0 && recurse && !divert_dirs) {
  		int i, end = flist->used - 1;
  		/* send_if_directory() bumps flist->used, so use "end". */
-@@ -2253,7 +2403,7 @@ struct file_list *send_file_list(int f, 
+@@ -2281,7 +2431,7 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		flist_eof = 1;
  	
  	if (checksum_updating && always_checksum && flist_eof)
@@ -380,8 +382,9 @@ To use this patch, run these commands for a successful build:
  
  	return flist;
  }
---- old/loadparm.c
-+++ new/loadparm.c
+diff --git a/loadparm.c b/loadparm.c
+--- a/loadparm.c
++++ b/loadparm.c
 @@ -153,6 +153,7 @@ typedef struct
  	int syslog_facility;
  	int timeout;
@@ -390,7 +393,7 @@ To use this patch, run these commands for a successful build:
  	BOOL fake_super;
  	BOOL ignore_errors;
  	BOOL ignore_nonreadable;
-@@ -201,6 +202,7 @@ static service sDefault =
+@@ -202,6 +203,7 @@ static service sDefault =
   /* syslog_facility; */		LOG_DAEMON,
   /* timeout; */			0,
  
@@ -398,25 +401,26 @@ To use this patch, run these commands for a successful build:
   /* fake_super; */		False,
   /* ignore_errors; */		False,
   /* ignore_nonreadable; */	False,
-@@ -317,6 +319,7 @@ static struct parm_struct parm_table[] =
-  {"lock file",         P_STRING, P_LOCAL, &sDefault.lock_file,         NULL,0},
-  {"log file",          P_STRING, P_LOCAL, &sDefault.log_file,          NULL,0},
-  {"log format",        P_STRING, P_LOCAL, &sDefault.log_format,        NULL,0},
+@@ -301,6 +303,7 @@ static struct parm_struct parm_table[] =
+  {"socket options",    P_STRING, P_GLOBAL,&Globals.socket_options,     NULL,0},
+ 
+  {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
 + {"checksum updating", P_BOOL,   P_LOCAL, &sDefault.checksum_updating, NULL,0},
-  {"max connections",   P_INTEGER,P_LOCAL, &sDefault.max_connections,   NULL,0},
-  {"max verbosity",     P_INTEGER,P_LOCAL, &sDefault.max_verbosity,     NULL,0},
-  {"name",              P_STRING, P_LOCAL, &sDefault.name,              NULL,0},
-@@ -422,6 +425,7 @@ FN_LOCAL_BOOL(lp_fake_super, fake_super)
+  {"comment",           P_STRING, P_LOCAL, &sDefault.comment,           NULL,0},
+  {"dont compress",     P_STRING, P_LOCAL, &sDefault.dont_compress,     NULL,0},
+  {"exclude from",      P_STRING, P_LOCAL, &sDefault.exclude_from,      NULL,0},
+@@ -421,6 +424,7 @@ FN_LOCAL_INTEGER(lp_max_connections, max_connections)
+ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+ FN_LOCAL_INTEGER(lp_timeout, timeout)
+ 
++FN_LOCAL_BOOL(lp_checksum_updating, checksum_updating)
+ FN_LOCAL_BOOL(lp_fake_super, fake_super)
  FN_LOCAL_BOOL(lp_ignore_errors, ignore_errors)
  FN_LOCAL_BOOL(lp_ignore_nonreadable, ignore_nonreadable)
- FN_LOCAL_BOOL(lp_list, list)
-+FN_LOCAL_BOOL(lp_checksum_updating, checksum_updating)
- FN_LOCAL_BOOL(lp_read_only, read_only)
- FN_LOCAL_BOOL(lp_strict_modes, strict_modes)
- FN_LOCAL_BOOL(lp_transfer_logging, transfer_logging)
---- old/options.c
-+++ new/options.c
-@@ -110,6 +110,7 @@ size_t bwlimit_writemax = 0;
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -111,6 +111,7 @@ size_t bwlimit_writemax = 0;
  int ignore_existing = 0;
  int ignore_non_existing = 0;
  int need_messages_from_generator = 0;
@@ -424,7 +428,7 @@ To use this patch, run these commands for a successful build:
  int max_delete = INT_MIN;
  OFF_T max_size = 0;
  OFF_T min_size = 0;
-@@ -310,6 +311,7 @@ void usage(enum logcode F)
+@@ -311,6 +312,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -432,7 +436,7 @@ To use this patch, run these commands for a successful build:
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -557,6 +559,7 @@ static struct poptOption long_options[] 
+@@ -559,6 +561,7 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -440,7 +444,7 @@ To use this patch, run these commands for a successful build:
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1954,7 +1957,9 @@ void server_options(char **args, int *ar
+@@ -1957,7 +1960,9 @@ void server_options(char **args, int *argc_p)
  				args[ac++] = basis_dir[i];
  			}
  		}
@@ -451,9 +455,10 @@ To use this patch, run these commands for a successful build:
  
  	if (append_mode) {
  		if (append_mode > 1)
---- old/rsync.h
-+++ new/rsync.h
-@@ -662,6 +662,10 @@ extern int xattrs_ndx;
+diff --git a/rsync.h b/rsync.h
+--- a/rsync.h
++++ b/rsync.h
+@@ -678,6 +678,10 @@ extern int xattrs_ndx;
  #define F_SUM(f) ((char*)OPT_EXTRA(f, LEN64_BUMP(f) + HLINK_BUMP(f) \
  				    + SUM_EXTRA_CNT - 1))
  
@@ -464,9 +469,10 @@ To use this patch, run these commands for a successful build:
  /* Some utility defines: */
  #define F_IS_ACTIVE(f) (f)->basename[0]
  #define F_IS_HLINKED(f) ((f)->flags & FLAG_HLINKED)
---- old/rsync.yo
-+++ new/rsync.yo
-@@ -317,6 +317,7 @@ to the detailed description below for a 
+diff --git a/rsync.yo b/rsync.yo
+--- a/rsync.yo
++++ b/rsync.yo
+@@ -317,6 +317,7 @@ to the detailed description below for a complete description.  verb(
   -q, --quiet                 suppress non-error messages
       --no-motd               suppress daemon-mode MOTD (see caveat)
   -c, --checksum              skip based on checksum, not mod-time & size
@@ -474,7 +480,7 @@ To use this patch, run these commands for a successful build:
   -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
       --no-OPTION             turn off an implied OPTION (e.g. --no-D)
   -r, --recursive             recurse into directories
-@@ -515,9 +516,9 @@ uses a "quick check" that (by default) c
+@@ -516,9 +517,9 @@ uses a "quick check" that (by default) checks if each file's size and time
  of last modification match between the sender and receiver.  This option
  changes this to compare a 128-bit MD4 checksum for each file that has a
  matching size.  Generating the checksums means that both sides will expend
@@ -487,7 +493,7 @@ To use this patch, run these commands for a successful build:
  
  The sending side generates its checksums while it is doing the file-system
  scan that builds the list of the available files.  The receiver generates
-@@ -525,12 +526,42 @@ its checksums when it is scanning for ch
+@@ -526,12 +527,42 @@ its checksums when it is scanning for changed files, and will checksum any
  file that has the same size as the corresponding sender's file:  files with
  either a changed size or a changed checksum are selected for transfer.
  
@@ -530,9 +536,10 @@ To use this patch, run these commands for a successful build:
  dit(bf(-a, --archive)) This is equivalent to bf(-rlptgoD). It is a quick
  way of saying you want recursion and want to preserve almost
  everything (with -H being a notable omission).
---- old/rsyncd.conf.yo
-+++ new/rsyncd.conf.yo
-@@ -200,6 +200,20 @@ locking on this file to ensure that the 
+diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
+--- a/rsyncd.conf.yo
++++ b/rsyncd.conf.yo
+@@ -237,6 +237,20 @@ locking on this file to ensure that the max connections limit is not
  exceeded for the modules sharing the lock file.
  The default is tt(/var/run/rsyncd.lock).
  
