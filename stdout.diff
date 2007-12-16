@@ -1,0 +1,50 @@
+This patch adds a --stdout=line|unbuf option that lets the
+user change the buffering of stdout.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/stdout.diff
+    ./configure                            (optional if already run)
+    make
+
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -203,6 +203,7 @@ static int refused_delete, refused_archive_part, refused_compress;
+ static int refused_partial, refused_progress, refused_delete_before;
+ static int refused_delete_during;
+ static int refused_inplace;
++static char *stdout_buffering;
+ static char *max_size_arg, *min_size_arg;
+ static char tmp_partialdir[] = ".~tmp~";
+ 
+@@ -419,6 +420,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --password-file=FILE    read daemon-access password from FILE\n");
+   rprintf(F,"     --list-only             list the files instead of copying them\n");
+   rprintf(F,"     --bwlimit=KBPS          limit I/O bandwidth; KBytes per second\n");
++  rprintf(F,"     --stdout=line|unbuf     change buffering of stdout\n");
+   rprintf(F,"     --write-batch=FILE      write a batched update to FILE\n");
+   rprintf(F,"     --only-write-batch=FILE like --write-batch but w/o updating destination\n");
+   rprintf(F,"     --read-batch=FILE       read a batched update from FILE\n");
+@@ -623,6 +625,7 @@ static struct poptOption long_options[] = {
+   {"password-file",    0,  POPT_ARG_STRING, &password_file, 0, 0, 0 },
+   {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
+   {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
++  {"stdout",           0,  POPT_ARG_STRING, &stdout_buffering, 0, 0, 0 },
+   {"protocol",         0,  POPT_ARG_INT,    &protocol_version, 0, 0, 0 },
+   {"checksum-seed",    0,  POPT_ARG_INT,    &checksum_seed, 0, 0, 0 },
+   {"server",           0,  POPT_ARG_NONE,   0, OPT_SERVER, 0, 0 },
+@@ -1241,6 +1244,13 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+ 		}
+ 	}
+ 
++	if (stdout_buffering && !am_server) {
++		if (*stdout_buffering == 'u')
++			setvbuf(stdout, NULL, _IONBF, 0);
++		else
++			setvbuf(stdout, NULL, _IOLBF, 0);
++	}
++
+ 	if (human_readable && argc == 2) {
+ 		/* Allow the old meaning of 'h' (--help) on its own. */
+ 		usage(FINFO);

@@ -58,17 +58,17 @@ diff --git a/flist.c b/flist.c
  int io_error;
  int checksum_len;
  dev_t filesystem_dev; /* used to implement -x */
-@@ -122,6 +127,9 @@ static char empty_sum[MAX_DIGEST_LEN];
+@@ -121,6 +126,9 @@ static char tmp_sum[MAX_DIGEST_LEN];
+ static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
  static int dir_count = 0;
- static int high_hlink_ndx;
 +static int checksum_matches = 0;
 +static int checksum_updates = 0;
 +static int regular_skipped = 0;
  static struct file_list *checksum_flist = NULL;
  
- static void clean_flist(struct file_list *flist, int strip_root);
-@@ -317,7 +325,8 @@ static void flist_done_allocating(struct file_list *flist)
+ static void flist_sort_and_clean(struct file_list *flist, int strip_root);
+@@ -316,7 +324,8 @@ static void flist_done_allocating(struct file_list *flist)
  
  /* The len count is the length of the basename + 1 for the null. */
  static int add_checksum(const char *dirname, const char *basename, int len,
@@ -78,7 +78,7 @@ diff --git a/flist.c b/flist.c
  {
  	struct file_struct *file;
  	int alloc_len, extra_len;
-@@ -328,13 +337,14 @@ static int add_checksum(const char *dirname, const char *basename, int len,
+@@ -327,13 +336,14 @@ static int add_checksum(const char *dirname, const char *basename, int len,
  	if (file_length == 0)
  		return 0;
  
@@ -95,7 +95,7 @@ diff --git a/flist.c b/flist.c
  	bp = pool_alloc(checksum_flist->file_pool, alloc_len, "add_checksum");
  
  	memset(bp, 0, extra_len + FILE_STRUCT_LEN);
-@@ -343,7 +353,14 @@ static int add_checksum(const char *dirname, const char *basename, int len,
+@@ -342,7 +352,14 @@ static int add_checksum(const char *dirname, const char *basename, int len,
  	bp += FILE_STRUCT_LEN;
  
  	memcpy(bp, basename, len);
@@ -110,7 +110,7 @@ diff --git a/flist.c b/flist.c
  	file->mode = S_IFREG;
  	file->modtime = mtime;
  	file->len32 = (uint32)file_length;
-@@ -354,6 +371,8 @@ static int add_checksum(const char *dirname, const char *basename, int len,
+@@ -353,6 +370,8 @@ static int add_checksum(const char *dirname, const char *basename, int len,
  	file->dirname = dirname;
  	bp = F_SUM(file);
  	memcpy(bp, sum, checksum_len);
@@ -119,7 +119,7 @@ diff --git a/flist.c b/flist.c
  
  	flist_expand(checksum_flist, 1);
  	checksum_flist->files[checksum_flist->used++] = file;
-@@ -363,17 +382,104 @@ static int add_checksum(const char *dirname, const char *basename, int len,
+@@ -362,17 +381,104 @@ static int add_checksum(const char *dirname, const char *basename, int len,
  	return 1;
  }
  
@@ -225,7 +225,7 @@ diff --git a/flist.c b/flist.c
  	if (checksum_flist) {
  		/* Reset the pool memory and empty the file-list array. */
  		pool_free_old(checksum_flist->file_pool,
-@@ -384,6 +490,9 @@ static void read_checksums(const char *dirname)
+@@ -383,6 +489,9 @@ static void read_checksums(const char *dirname)
  
  	checksum_flist->low = 0;
  	checksum_flist->high = -1;
@@ -235,7 +235,7 @@ diff --git a/flist.c b/flist.c
  
  	if (!dirname)
  		return;
-@@ -402,7 +511,7 @@ static void read_checksums(const char *dirname)
+@@ -401,7 +510,7 @@ static void read_checksums(const char *dirname)
  	while (fgets(line, sizeof line, fp)) {
  		cp = line;
  		if (protocol_version >= 30) {
@@ -244,7 +244,7 @@ diff --git a/flist.c b/flist.c
  			if (*cp == '=')
  				while (*++cp == '=') {}
  			else
-@@ -413,7 +522,14 @@ static void read_checksums(const char *dirname)
+@@ -412,7 +521,14 @@ static void read_checksums(const char *dirname)
  		}
  
  		if (*cp == '=') {
@@ -260,7 +260,7 @@ diff --git a/flist.c b/flist.c
  		} else {
  			for (i = 0; i < checksum_len*2; i++, cp++) {
  				int x;
-@@ -431,13 +547,14 @@ static void read_checksums(const char *dirname)
+@@ -430,13 +546,14 @@ static void read_checksums(const char *dirname)
  				else
  					sum[i/2] = x << 4;
  			}
@@ -276,7 +276,7 @@ diff --git a/flist.c b/flist.c
  			if (*cp == '=')
  				while (*++cp == '=') {}
  			else
-@@ -461,16 +578,16 @@ static void read_checksums(const char *dirname)
+@@ -460,16 +577,16 @@ static void read_checksums(const char *dirname)
  			break;
  		while (*++cp == ' ') {}
  
@@ -297,7 +297,7 @@ diff --git a/flist.c b/flist.c
  		if (*cp != ' ')
  			break;
  		while (*++cp == ' ') {}
-@@ -487,8 +604,13 @@ static void read_checksums(const char *dirname)
+@@ -486,8 +603,13 @@ static void read_checksums(const char *dirname)
  			continue;
  
  		strlcpy(fbuf+dlen, cp, sizeof fbuf - dlen);
@@ -312,7 +312,7 @@ diff --git a/flist.c b/flist.c
  	}
  	fclose(fp);
  
-@@ -1274,6 +1396,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1272,6 +1394,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	if (is_excluded(thisname, S_ISDIR(st.st_mode) != 0, filter_level)) {
  		if (ignore_perishable)
  			non_perishable_cnt++;
@@ -321,7 +321,7 @@ diff --git a/flist.c b/flist.c
  		return NULL;
  	}
  
-@@ -1405,13 +1529,36 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1402,13 +1526,36 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		int j;
  		if (flist && (j = flist_find(checksum_flist, file)) >= 0) {
  			struct file_struct *fp = checksum_flist->sorted[j];
@@ -373,7 +373,7 @@ diff --git a/flist.c b/flist.c
  	if (f >= 0 && recurse && !divert_dirs) {
  		int i, end = flist->used - 1;
  		/* send_if_directory() bumps flist->used, so use "end". */
-@@ -2281,7 +2431,7 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2265,7 +2415,7 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		flist_eof = 1;
  	
  	if (checksum_updating && always_checksum && flist_eof)
@@ -420,7 +420,7 @@ diff --git a/loadparm.c b/loadparm.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -111,6 +111,7 @@ size_t bwlimit_writemax = 0;
+@@ -112,6 +112,7 @@ size_t bwlimit_writemax = 0;
  int ignore_existing = 0;
  int ignore_non_existing = 0;
  int need_messages_from_generator = 0;
@@ -428,7 +428,7 @@ diff --git a/options.c b/options.c
  int max_delete = INT_MIN;
  OFF_T max_size = 0;
  OFF_T min_size = 0;
-@@ -311,6 +312,7 @@ void usage(enum logcode F)
+@@ -312,6 +313,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -436,7 +436,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -559,6 +561,7 @@ static struct poptOption long_options[] = {
+@@ -560,6 +562,7 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -444,7 +444,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1957,7 +1960,9 @@ void server_options(char **args, int *argc_p)
+@@ -1965,7 +1968,9 @@ void server_options(char **args, int *argc_p)
  				args[ac++] = basis_dir[i];
  			}
  		}
