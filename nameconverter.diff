@@ -1,0 +1,397 @@
+This patch adds a "name converter" daemon option that allows you
+to specify a user-/group- name converter program that converts
+between ID numbers and names.  This only works in daemon mode,
+and is useful for both chroot use (since the converter runs
+outside the chroot) or to specify a converter that doesn't use
+the normal passwd/group setup.
+
+The converter must use a null char ('\0') as the line terminator
+for input/output on stdin/stdout.  A sample converter written in
+perl is supplied in the support dir: nameconvert.  To use it,
+specify this daemon option:
+
+    name converter = /path/nameconvert
+
+If /path/ is omitted, the script will be found on the $PATH.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/nameconverter.diff
+    ./configure                         (optional if already run)
+    make
+
+diff --git a/clientserver.c b/clientserver.c
+--- a/clientserver.c
++++ b/clientserver.c
+@@ -59,6 +59,7 @@ char *auth_user;
+ int read_only = 0;
+ int module_id = -1;
+ int munge_symlinks = 0;
++pid_t namecvt_pid = 0;
+ struct chmod_mode_struct *daemon_chmod_modes;
+ 
+ /* module_dirlen is the length of the module_dir string when in daemon
+@@ -67,6 +68,7 @@ char *module_dir = NULL;
+ unsigned int module_dirlen = 0;
+ 
+ static int rl_nulls = 0;
++static int namecvt_fd_req = -1, namecvt_fd_ans = -1;
+ 
+ #ifdef HAVE_SIGACTION
+ static struct sigaction sigact;
+@@ -508,7 +510,7 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 	log_init(1);
+ 
+ #ifdef HAVE_PUTENV
+-	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i)) {
++	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i) || *lp_name_converter(i)) {
+ 		char *modname, *modpath, *hostaddr, *hostname, *username;
+ 		int status;
+ 		if (asprintf(&modname, "RSYNC_MODULE_NAME=%s", name) < 0
+@@ -595,6 +597,44 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 			set_blocking(fds[1]);
+ 			pre_exec_fd = fds[1];
+ 		}
++		if (*lp_name_converter(i)) {
++			int fds_to[2], fds_from[2];
++			if (pipe(fds_to) < 0 || pipe(fds_from) < 0
++			 || (namecvt_pid = fork()) < 0) {
++				rsyserr(FLOG, errno, "name-converter exec preparation failed");
++				io_printf(f_out, "@ERROR: name-converter exec preparation failed\n");
++				return -1;
++			}
++			if (namecvt_pid == 0) {
++				char *args[100], *run = lp_name_converter(i);
++				int cnt = 0;
++				close(fds_to[1]);
++				close(fds_from[0]);
++				set_blocking(fds_to[0]);
++				set_blocking(fds_from[1]);
++				close(STDIN_FILENO);
++				close(STDOUT_FILENO);
++				dup2(fds_to[0], STDIN_FILENO);
++				dup2(fds_from[1], STDOUT_FILENO);
++				while (cnt+1 < (int)(sizeof args / sizeof (char *))) {
++					char *space = strchr(run, ' ');
++					args[cnt++] = run;
++					if (!space)
++						break;
++					*space = '\0';
++					run = space + 1;
++				}
++				args[cnt] = NULL;
++				execvp(args[0], args);
++				_exit(1);
++			}
++			close(fds_to[0]);
++			close(fds_from[1]);
++			set_blocking(fds_to[1]);
++			set_blocking(fds_from[0]);
++			namecvt_fd_req = fds_to[1];
++			namecvt_fd_ans = fds_from[0];
++		}
+ 		umask(0);
+ 	}
+ #endif
+@@ -789,6 +829,44 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 	return 0;
+ }
+ 
++int namecvt_name(const char *cmd, const char *name)
++{
++	char buf[1024];
++	int got, len = snprintf(buf, sizeof buf, "%s %s", cmd, name);
++	if (len >= (int)sizeof buf) {
++		rprintf(FERROR, "namecvt_name() request was too large.\n");
++		exit_cleanup(RERR_UNSUPPORTED);
++	}
++	while ((got = write(namecvt_fd_req, buf, len + 1)) != len + 1) {
++		if (got < 0 && errno == EINTR)
++			continue;
++		rprintf(FERROR, "Connection to name-converter failed.\n");
++		exit_cleanup(RERR_SOCKETIO);
++	}
++	if (!(len = read_arg_from_pipe(namecvt_fd_ans, buf, sizeof buf)))
++		return 0;
++	return atoi(buf);
++}
++
++const char *namecvt_id(const char *cmd, int id)
++{
++	char buf[1024];
++	int got, len = snprintf(buf, sizeof buf, "%s %d", cmd, id);
++	if (len >= (int)sizeof buf) {
++		rprintf(FERROR, "namecvt_id() request was too large.\n");
++		exit_cleanup(RERR_UNSUPPORTED);
++	}
++	while ((got = write(namecvt_fd_req, buf, len + 1)) != len + 1) {
++		if (got < 0 && errno == EINTR)
++			continue;
++		rprintf(FERROR, "Connection to name-converter failed.\n");
++		exit_cleanup(RERR_SOCKETIO);
++	}
++	if (!(len = read_arg_from_pipe(namecvt_fd_ans, buf, sizeof buf)))
++		return NULL;
++	return strdup(buf);
++}
++
+ /* send a list of available modules to the client. Don't list those
+    with "list = False". */
+ static void send_listing(int fd)
+diff --git a/loadparm.c b/loadparm.c
+--- a/loadparm.c
++++ b/loadparm.c
+@@ -139,6 +139,7 @@ typedef struct
+ 	char *log_file;
+ 	char *log_format;
+ 	char *name;
++	char *name_converter;
+ 	char *outgoing_chmod;
+ 	char *path;
+ 	char *postxfer_exec;
+@@ -188,6 +189,7 @@ static service sDefault =
+  /* log_file; */		NULL,
+  /* log_format; */		"%o %h [%a] %m (%u) %f %l",
+  /* name; */			NULL,
++ /* name_converter; */		NULL,
+  /* outgoing_chmod; */		NULL,
+  /* path; */			NULL,
+  /* postxfer_exec; */		NULL,
+@@ -323,6 +325,7 @@ static struct parm_struct parm_table[] =
+  {"max verbosity",     P_INTEGER,P_LOCAL, &sDefault.max_verbosity,     NULL,0},
+  {"munge symlinks",    P_BOOL,   P_LOCAL, &sDefault.munge_symlinks,    NULL,0},
+  {"name",              P_STRING, P_LOCAL, &sDefault.name,              NULL,0},
++ {"name converter",    P_STRING, P_LOCAL, &sDefault.name_converter,    NULL,0},
+  {"outgoing chmod",    P_STRING, P_LOCAL, &sDefault.outgoing_chmod,    NULL,0},
+  {"path",              P_PATH,   P_LOCAL, &sDefault.path,              NULL,0},
+ #ifdef HAVE_PUTENV
+@@ -411,6 +414,7 @@ FN_LOCAL_STRING(lp_outgoing_chmod, outgoing_chmod)
+ FN_LOCAL_STRING(lp_path, path)
+ FN_LOCAL_STRING(lp_postxfer_exec, postxfer_exec)
+ FN_LOCAL_STRING(lp_prexfer_exec, prexfer_exec)
++FN_LOCAL_STRING(lp_name_converter, name_converter)
+ FN_LOCAL_STRING(lp_refuse_options, refuse_options)
+ FN_LOCAL_STRING(lp_secrets_file, secrets_file)
+ FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
+diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
+--- a/rsyncd.conf.yo
++++ b/rsyncd.conf.yo
+@@ -144,7 +144,10 @@ args if rsync believes they would escape the chroot.
+ The default for "use chroot" is true, and is the safer choice (especially
+ if the module is not read-only).
+ 
+-In order to preserve usernames and groupnames, rsync needs to be able to
++In order to preserve usernames and groupnames, you can use the
++bf(name converter) option to specify a name-converting program that the
++rsync daemon will start prior to enabling chroot (see the option for more
++details).  If that option is not specified, the daemon needs to be able to
+ use the standard library functions for looking up names and IDs (i.e.
+ code(getpwuid()), code(getgrgid()), code(getpwname()), and code(getgrnam())).  This means a
+ process in the chroot namespace will need to have access to the resources
+@@ -200,6 +203,27 @@ path elements that rsync believes will allow a symlink to escape the module's
+ hierarchy.  There are tricky ways to work around this, though, so you had
+ better trust your users if you choose this combination of options.
+ 
++dit(bf(name converter))  The "name converter" option lets you specify a
++program that will be run by the rsync daemon (prior to bf(use chroot), if
++that option is enabled) to convert user/group names into numbers or visa
++versa.  There is a sample perl script in the support directory named
++"nameconvert" that you can use to enable the use of the normal passwd/group
++lookup calls in a chroot daemon (which does not require any extra files
++be placed in the chroot area).  This use is configured as follows:
++
++verb(    name converter = /path/nameconvert)
++
++You could alternately specify a program that responds to each request using
++a lookup table to find the names and numbers, this allows you to configure
++per-module name conversion.  See the support/nameconvert script for the
++details of what requests can be sent to the program.
++
++The program will have access to some of the environment variables that are
++described in the section on bf(pre-xfer exec): bf(RSYNC_MODULE_NAME),
++bf(RSYNC_MODULE_PATH), bf(RSYNC_HOST_ADDR), bf(RSYNC_HOST_NAME), and
++bf(RSYNC_USER_NAME).  This is useful if you want to customize the
++conversion using a single program invocation.
++
+ dit(bf(max connections)) The "max connections" option allows you to
+ specify the maximum number of simultaneous connections you will allow.
+ Any clients connecting when the maximum has been reached will receive a
+diff --git a/support/nameconvert b/support/nameconvert
+new file mode 100755
+--- /dev/null
++++ b/support/nameconvert
+@@ -0,0 +1,42 @@
++#!/usr/bin/perl -w
++# This implements a simple protocol to do {user,group}-{name,id}
++# conversions.  All input and output consists of simple strings
++# with a terminating null char (or newline for debugging).  If
++# the conversion fails, an empty string is returned.
++#
++# The requests can be:
++#
++# uid ID_NUM\0  ->  NAME\0
++# gid ID_NUM\0  ->  NAME\0
++# usr NAME\0    ->  ID_NUM\0
++# grp NAME\0    ->  ID_NUM\0
++#
++# An unknown ID_NUM or NAME results in an empty return value.
++#
++# This is used by an rsync daemon when configured with the
++# "name converter" setting.
++
++use strict;
++
++my $eol = grep(/^--debug$/, @ARGV) ? "\n" : "\0";
++$/ = $eol;
++
++$| = 1;
++
++while (<STDIN>) {
++    chomp;
++    my $ans;
++    if (/^uid (\d+)$/) {
++	$ans = getpwuid($1);
++    } elsif (/^gid (\d+)$/) {
++	$ans = getgrgid($1);
++    } elsif (/^usr (\S+)$/) {
++	$ans = getpwnam($1);
++    } elsif (/^grp (\S+)$/) {
++	$ans = getgrnam($1);
++    } else {
++	die "Invalid request: $_";
++    }
++    $ans = '' unless defined $ans;
++    print $ans, $eol;
++}
+diff --git a/t_stub.c b/t_stub.c
+--- a/t_stub.c
++++ b/t_stub.c
+@@ -29,6 +29,7 @@ int module_dirlen = 0;
+ mode_t orig_umask = 002;
+ char *partial_dir;
+ char *module_dir;
++pid_t namecvt_pid;
+ struct filter_list_struct server_filter_list;
+ 
+  void rprintf(UNUSED(enum logcode code), const char *format, ...)
+@@ -69,6 +70,11 @@ struct filter_list_struct server_filter_list;
+ 	return -1;
+ }
+ 
++ int namecvt_name(UNUSED(const char *cmd), UNUSED(const char *name))
++{
++	return 0;
++}
++
+  char *lp_name(UNUSED(int mod))
+ {
+ 	return NULL;
+diff --git a/uidlist.c b/uidlist.c
+--- a/uidlist.c
++++ b/uidlist.c
+@@ -32,6 +32,7 @@ extern int preserve_uid;
+ extern int preserve_gid;
+ extern int preserve_acls;
+ extern int numeric_ids;
++extern pid_t namecvt_pid;
+ 
+ #ifdef HAVE_GETGROUPS
+ # ifndef GETGROUPS_T
+@@ -69,8 +70,12 @@ static struct idlist *add_to_list(struct idlist **root, id_t id, const char *nam
+ /* turn a uid into a user name */
+ static const char *uid_to_name(uid_t uid)
+ {
+-	struct passwd *pass = getpwuid(uid);
+-	if (pass)
++	struct passwd *pass;
++
++	if (namecvt_pid)
++		return namecvt_id("uid", (int)uid);
++
++	if ((pass = getpwuid(uid)) != NULL)
+ 		return strdup(pass->pw_name);
+ 	return NULL;
+ }
+@@ -78,8 +83,12 @@ static const char *uid_to_name(uid_t uid)
+ /* turn a gid into a group name */
+ static const char *gid_to_name(gid_t gid)
+ {
+-	struct group *grp = getgrgid(gid);
+-	if (grp)
++	struct group *grp;
++
++	if (namecvt_pid)
++		return namecvt_id("gid", (int)gid);
++
++	if ((grp = getgrgid(gid)) != NULL)
+ 		return strdup(grp->gr_name);
+ 	return NULL;
+ }
+diff --git a/util.c b/util.c
+--- a/util.c
++++ b/util.c
+@@ -30,9 +30,10 @@ extern int modify_window;
+ extern int relative_paths;
+ extern int human_readable;
+ extern char *module_dir;
+-extern unsigned int module_dirlen;
+ extern mode_t orig_umask;
+ extern char *partial_dir;
++extern pid_t namecvt_pid;
++extern unsigned int module_dirlen;
+ extern struct filter_list_struct server_filter_list;
+ 
+ int sanitize_paths = 0;
+@@ -468,24 +469,44 @@ void kill_all(int sig)
+ /** Turn a user name into a uid */
+ int name_to_uid(const char *name, uid_t *uid_p)
+ {
+-	struct passwd *pass;
++	uid_t uid;
++
+ 	if (!name || !*name)
+ 		return 0;
+-	if (!(pass = getpwnam(name)))
+-		return 0;
+-	*uid_p = pass->pw_uid;
++
++	if (namecvt_pid) {
++		if (!(uid = namecvt_name("usr", name)))
++			return 0;
++	} else {
++		struct passwd *pass;
++		if (!(pass = getpwnam(name)))
++			return 0;
++		uid = pass->pw_uid;
++	}
++
++	*uid_p = uid;
+ 	return 1;
+ }
+ 
+ /** Turn a group name into a gid */
+ int name_to_gid(const char *name, gid_t *gid_p)
+ {
+-	struct group *grp;
++	gid_t gid;
++
+ 	if (!name || !*name)
+ 		return 0;
+-	if (!(grp = getgrnam(name)))
+-		return 0;
+-	*gid_p = grp->gr_gid;
++
++	if (namecvt_pid) {
++		if (!(gid = namecvt_name("grp", name)))
++			return 0;
++	} else {
++		struct group *grp;
++		if (!(grp = getgrnam(name)))
++			return 0;
++		gid = grp->gr_gid;
++	}
++
++	*gid_p = gid;
+ 	return 1;
+ }
+ 

@@ -46,7 +46,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  #define RSYNC_XAL_INITIAL 5
  #define RSYNC_XAL_LIST_INITIAL 100
-@@ -241,7 +243,7 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+@@ -242,7 +244,7 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
  		if (!(ptr = get_xattr_data(fname, name, &datum_len, 0)))
  			return -1;
  
@@ -55,7 +55,7 @@ diff --git a/xattrs.c b/xattrs.c
  			/* For large datums, we store a flag and a checksum. */
  			name_offset = 1 + MAX_DIGEST_LEN;
  			sum_init(checksum_seed);
-@@ -305,7 +307,7 @@ static int find_matching_xattr(item_list *xalp)
+@@ -310,7 +312,7 @@ static int find_matching_xattr(item_list *xalp)
  			 || rxas1[j].datum_len != rxas2[j].datum_len
  			 || strcmp(rxas1[j].name, rxas2[j].name))
  				break;
@@ -64,7 +64,7 @@ diff --git a/xattrs.c b/xattrs.c
  				if (memcmp(rxas1[j].datum + 1,
  					   rxas2[j].datum + 1,
  					   MAX_DIGEST_LEN) != 0)
-@@ -342,34 +344,43 @@ int send_xattr(stat_x *sxp, int f)
+@@ -347,34 +349,43 @@ int send_xattr(stat_x *sxp, int f)
  {
  	int ndx = find_matching_xattr(sxp->xattr);
  
@@ -118,7 +118,7 @@ diff --git a/xattrs.c b/xattrs.c
  				write_buf(f, rxa->datum + 1, MAX_DIGEST_LEN);
  			else
  				write_buf(f, rxa->datum, rxa->datum_len);
-@@ -419,7 +430,7 @@ int xattr_diff(struct file_struct *file, stat_x *sxp, int find_all)
+@@ -424,7 +435,7 @@ int xattr_diff(struct file_struct *file, stat_x *sxp, int find_all)
  		cmp = rec_cnt ? strcmp(snd_rxa->name, rec_rxa->name) : -1;
  		if (cmp > 0)
  			same = 0;
@@ -127,19 +127,19 @@ diff --git a/xattrs.c b/xattrs.c
  			same = cmp == 0 && snd_rxa->datum_len == rec_rxa->datum_len
  			    && memcmp(snd_rxa->datum + 1, rec_rxa->datum + 1,
  				      MAX_DIGEST_LEN) == 0;
-@@ -462,6 +473,9 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
- 	int j, cnt, prior_req = -1;
+@@ -467,6 +478,9 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
+ 	int cnt, prior_req = 0;
  	rsync_xa *rxa;
  
 +	if (protocol_version < 30)
 +		return;
 +
  	lst += F_XATTR(file);
- 	cnt = lst->count;
- 	for (rxa = lst->items, j = 0; j < cnt; rxa++, j++) {
-@@ -536,6 +550,9 @@ int recv_xattr_request(struct file_struct *file, int f_in)
+ 	for (rxa = lst->items, cnt = lst->count; cnt--; rxa++) {
+ 		if (rxa->datum_len <= MAX_FULL_DATUM)
+@@ -540,6 +554,9 @@ int recv_xattr_request(struct file_struct *file, int f_in)
  	rsync_xa *rxa;
- 	int rel_pos, cnt, got_xattr_data = 0;
+ 	int rel_pos, cnt, num, got_xattr_data = 0;
  
 +	if (protocol_version < 30)
 +		return 0;
@@ -147,10 +147,10 @@ diff --git a/xattrs.c b/xattrs.c
  	if (F_XATTR(file) < 0) {
  		rprintf(FERROR, "recv_xattr_request: internal data error!\n");
  		exit_cleanup(RERR_STREAMIO);
-@@ -585,7 +602,22 @@ void receive_xattr(struct file_struct *file, int f)
+@@ -596,7 +613,22 @@ void receive_xattr(struct file_struct *file, int f)
  {
  	static item_list temp_xattr = EMPTY_ITEM_LIST;
- 	int count;
+ 	int count, num;
 -	int ndx = read_varint(f);
 +	int ndx;
 +
@@ -171,7 +171,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  	if (ndx < 0 || (size_t)ndx > rsync_xal_l.count) {
  		rprintf(FERROR, "receive_xattr: xa index %d out of"
-@@ -598,7 +630,7 @@ void receive_xattr(struct file_struct *file, int f)
+@@ -609,7 +641,7 @@ void receive_xattr(struct file_struct *file, int f)
  		return;
  	}
  	
@@ -180,8 +180,8 @@ diff --git a/xattrs.c b/xattrs.c
  		(void)EXPAND_ITEM_LIST(&temp_xattr, rsync_xa, count);
  		temp_xattr.count = 0;
  	}
-@@ -606,9 +638,10 @@ void receive_xattr(struct file_struct *file, int f)
- 	while (count--) {
+@@ -617,9 +649,10 @@ void receive_xattr(struct file_struct *file, int f)
+ 	for (num = 1; num <= count; num++) {
  		char *ptr, *name;
  		rsync_xa *rxa;
 -		size_t name_len = read_varint(f);

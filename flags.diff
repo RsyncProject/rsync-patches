@@ -48,7 +48,7 @@ diff --git a/configure.in b/configure.in
 +    chflags strerror putenv iconv_open locale_charset nl_langinfo getxattr \
      extattr_get_link sigaction sigprocmask setattrlist)
  
- AC_CHECK_FUNCS(getpgrp tcgetpgrp)
+ dnl cygwin iconv.h defines iconv_open as libiconv_open
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
@@ -263,7 +263,7 @@ diff --git a/generator.c b/generator.c
  		}
  	}
  
-@@ -1296,7 +1307,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1294,7 +1305,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			 * full later (right before we handle its contents). */
  			if (statret == 0
  			 && (S_ISDIR(sx.st.st_mode)
@@ -272,7 +272,7 @@ diff --git a/generator.c b/generator.c
  				goto cleanup; /* Any errors get reported later. */
  			if (do_mkdir(fname, file->mode & 0700) == 0)
  				file->flags |= FLAG_DIR_CREATED;
-@@ -1308,7 +1319,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1306,7 +1317,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		 * we need to delete it.  If it doesn't exist, then
  		 * (perhaps recursively) create it. */
  		if (statret == 0 && !S_ISDIR(sx.st.st_mode)) {
@@ -281,7 +281,7 @@ diff --git a/generator.c b/generator.c
  				goto skipping_dir_contents;
  			statret = -1;
  		}
-@@ -1437,7 +1448,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1435,7 +1446,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			}
  			/* Not the right symlink (or not a symlink), so
  			 * delete it. */
@@ -290,7 +290,7 @@ diff --git a/generator.c b/generator.c
  				goto cleanup;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
-@@ -1516,7 +1527,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1514,7 +1525,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  					goto return_with_success;
  				goto cleanup;
  			}
@@ -299,7 +299,7 @@ diff --git a/generator.c b/generator.c
  				goto cleanup;
  		} else if (basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
-@@ -1607,7 +1618,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1605,7 +1616,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  	fnamecmp_type = FNAMECMP_FNAME;
  
  	if (statret == 0 && !S_ISREG(sx.st.st_mode)) {
@@ -477,7 +477,7 @@ diff --git a/rsync.c b/rsync.c
  	if (verbose > 1 && flags & ATTRS_REPORT) {
  		if (updated)
  			rprintf(FCLIENT, "%s\n", fname);
-@@ -528,6 +583,9 @@ void finish_transfer(const char *fname, const char *fnametmp,
+@@ -530,6 +585,9 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
  		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME);
  
@@ -487,14 +487,14 @@ diff --git a/rsync.c b/rsync.c
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
-@@ -542,6 +600,9 @@ void finish_transfer(const char *fname, const char *fnametmp,
+@@ -547,6 +605,9 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	}
  	if (ret == 0) {
  		/* The file was moved into place (not copied), so it's done. */
 +#ifdef SUPPORT_FLAGS
 +		undo_make_mutable(fname, file->mode, F_FFLAGS(file));
 +#endif
- 		return;
+ 		return 1;
  	}
  	/* The file was copied, so tweak the perms of the copied file.  If it
 diff --git a/rsync.h b/rsync.h
