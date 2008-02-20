@@ -26,9 +26,9 @@ diff --git a/compat.c b/compat.c
 -int uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
 +int uid_ndx, gid_ndx, fileflags_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
  
- #ifdef ICONV_OPTION
- int filesfrom_convert = 0;
-@@ -124,6 +125,8 @@ void setup_protocol(int f_out,int f_in)
+ int receiver_symlink_times = 0; /* receiver can set the time on a symlink */
+ 
+@@ -134,6 +135,8 @@ void setup_protocol(int f_out,int f_in)
  		uid_ndx = ++file_extra_cnt;
  	if (preserve_gid)
  		gid_ndx = ++file_extra_cnt;
@@ -142,7 +142,7 @@ diff --git a/flist.c b/flist.c
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -122,6 +122,7 @@ static const char *solo_file = NULL;
+@@ -124,6 +124,7 @@ static const char *solo_file = NULL;
  #define DEL_FOR_SYMLINK 	(1<<5) /* making room for a replacement symlink */
  #define DEL_FOR_DEVICE		(1<<6) /* making room for a replacement device */
  #define DEL_FOR_SPECIAL 	(1<<7) /* making room for a replacement special */
@@ -150,7 +150,7 @@ diff --git a/generator.c b/generator.c
  
  #define DEL_MAKE_ROOM (DEL_FOR_FILE|DEL_FOR_DIR|DEL_FOR_SYMLINK|DEL_FOR_DEVICE|DEL_FOR_SPECIAL)
  
-@@ -161,6 +162,10 @@ static enum delret delete_item(char *fbuf, int mode, int flags)
+@@ -163,6 +164,10 @@ static enum delret delete_item(char *fbuf, int mode, int flags)
  
  	if (!am_root && !(mode & S_IWUSR) && flags & DEL_OWNED_BY_US)
  		do_chmod(fbuf, mode |= S_IWUSR);
@@ -161,7 +161,7 @@ diff --git a/generator.c b/generator.c
  
  	if (S_ISDIR(mode) && !(flags & DEL_DIR_IS_EMPTY)) {
  		ignore_perishable = 1;
-@@ -282,6 +287,14 @@ static enum delret delete_dir_contents(char *fname, int flags)
+@@ -284,6 +289,14 @@ static enum delret delete_dir_contents(char *fname, int flags)
  			flags |= DEL_OWNED_BY_US;
  		else
  			flags &= ~DEL_OWNED_BY_US;
@@ -176,7 +176,7 @@ diff --git a/generator.c b/generator.c
  		/* Save stack by recursing to ourself directly. */
  		if (S_ISDIR(fp->mode)) {
  			if (!am_root && !(fp->mode & S_IWUSR) && flags & DEL_OWNED_BY_US)
-@@ -341,15 +354,22 @@ static int flush_delete_delay(void)
+@@ -343,15 +356,22 @@ static int flush_delete_delay(void)
  
  static int remember_delete(struct file_struct *file, const char *fname, int flags)
  {
@@ -202,7 +202,7 @@ diff --git a/generator.c b/generator.c
  		if ((deldelay_cnt += len) <= deldelay_size)
  			break;
  		if (deldelay_fd < 0 && !start_delete_delay_temp())
-@@ -362,10 +382,10 @@ static int remember_delete(struct file_struct *file, const char *fname, int flag
+@@ -364,10 +384,10 @@ static int remember_delete(struct file_struct *file, const char *fname, int flag
  	return 1;
  }
  
@@ -215,7 +215,7 @@ diff --git a/generator.c b/generator.c
  	char *bp, *past_space;
  
  	while (1) {
-@@ -405,9 +425,15 @@ static int read_delay_line(char *buf, int *own_flag_p)
+@@ -407,9 +427,15 @@ static int read_delay_line(char *buf, int *own_flag_p)
  	bp = deldelay_buf + read_pos;
  	if (*bp == '+') {
  		bp++;
@@ -234,7 +234,7 @@ diff --git a/generator.c b/generator.c
  
  	if (sscanf(bp, "%x ", &mode) != 1) {
  	  invalid_data:
-@@ -432,15 +458,15 @@ static int read_delay_line(char *buf, int *own_flag_p)
+@@ -434,15 +460,15 @@ static int read_delay_line(char *buf, int *own_flag_p)
  
  static void do_delayed_deletions(char *delbuf)
  {
@@ -253,7 +253,7 @@ diff --git a/generator.c b/generator.c
  	if (deldelay_fd >= 0)
  		close(deldelay_fd);
  }
-@@ -503,6 +529,9 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -505,6 +531,9 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
  		}
  		if (flist_find(cur_flist, fp) < 0) {
  			int flags = DEL_RECURSE
@@ -263,7 +263,7 @@ diff --git a/generator.c b/generator.c
  				  | (!uid_ndx || (uid_t)F_OWNER(fp) == our_uid ? DEL_OWNED_BY_US : 0);
  			f_name(fp, delbuf);
  			if (delete_during == 2) {
-@@ -1316,6 +1345,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1329,6 +1358,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  
  	if (statret == 0 && sx.st.st_uid == our_uid)
  		del_opts |= DEL_OWNED_BY_US;
@@ -272,7 +272,7 @@ diff --git a/generator.c b/generator.c
 +		del_opts |= DEL_AN_IMMUTABLE;
 +#endif
  
- 	if (S_ISDIR(file->mode)) {
+ 	if (is_dir) {
  		if (!implied_dirs && file->flags & FLAG_IMPLIED_DIR)
 diff --git a/options.c b/options.c
 --- a/options.c
@@ -285,7 +285,7 @@ diff --git a/options.c b/options.c
  int preserve_executability = 0;
  int preserve_devices = 0;
  int preserve_specials = 0;
-@@ -223,6 +224,7 @@ static void print_rsync_version(enum logcode f)
+@@ -224,6 +225,7 @@ static void print_rsync_version(enum logcode f)
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -293,9 +293,9 @@ diff --git a/options.c b/options.c
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -252,6 +254,9 @@ static void print_rsync_version(enum logcode f)
- #ifdef ICONV_OPTION
- 	iconv = "";
+@@ -256,6 +258,9 @@ static void print_rsync_version(enum logcode f)
+ #if defined HAVE_LUTIMES && defined HAVE_UTIMES
+ 	symtimes = "";
  #endif
 +#ifdef SUPPORT_FLAGS
 +	fileflags = "";
@@ -303,18 +303,18 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -265,8 +270,8 @@ static void print_rsync_version(enum logcode f)
+@@ -269,8 +274,8 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
--	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv\n",
--		have_inplace, acls, xattrs, iconv);
-+	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %sfile-flags\n",
-+		have_inplace, acls, xattrs, iconv, fileflags);
+-	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes\n",
+-		have_inplace, acls, xattrs, iconv, symtimes);
++	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sfile-flags\n",
++		have_inplace, acls, xattrs, iconv, symtimes, fileflags);
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -333,6 +338,7 @@ void usage(enum logcode F)
+@@ -337,6 +342,7 @@ void usage(enum logcode F)
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -H, --hard-links            preserve hard links\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
@@ -322,7 +322,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
  #ifdef SUPPORT_ACLS
-@@ -473,6 +479,8 @@ static struct poptOption long_options[] = {
+@@ -477,6 +483,8 @@ static struct poptOption long_options[] = {
    {"perms",           'p', POPT_ARG_VAL,    &preserve_perms, 1, 0, 0 },
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
@@ -331,7 +331,7 @@ diff --git a/options.c b/options.c
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
-@@ -1289,6 +1297,15 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+@@ -1311,6 +1319,15 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
  	}
  #endif
  
@@ -347,7 +347,7 @@ diff --git a/options.c b/options.c
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -1804,6 +1821,9 @@ void server_options(char **args, int *argc_p)
+@@ -1826,6 +1843,9 @@ void server_options(char **args, int *argc_p)
  	if (xfer_dirs && !recurse && delete_mode && am_sender)
  		args[ac++] = "--no-r";
  
@@ -368,7 +368,7 @@ diff --git a/rsync.c b/rsync.c
  extern int preserve_executability;
  extern int preserve_times;
  extern int am_root;
-@@ -338,6 +339,41 @@ mode_t dest_mode(mode_t flist_mode, mode_t stat_mode, int dflt_perms,
+@@ -339,6 +340,41 @@ mode_t dest_mode(mode_t flist_mode, mode_t stat_mode, int dflt_perms,
  	return new_mode;
  }
  
@@ -410,7 +410,7 @@ diff --git a/rsync.c b/rsync.c
  int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		   const char *fnamecmp, int flags)
  {
-@@ -469,6 +505,15 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -472,6 +508,15 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  	}
  #endif
  
@@ -418,7 +418,7 @@ diff --git a/rsync.c b/rsync.c
 +	if (preserve_fileflags && !S_ISLNK(sxp->st.st_mode)
 +	 && sxp->st.st_flags != F_FFLAGS(file)) {
 +		if (!set_fileflags(fname, F_FFLAGS(file)))
-+			return 0;
++			goto cleanup;
 +		updated = 1;
 +	}
 +#endif
@@ -426,7 +426,7 @@ diff --git a/rsync.c b/rsync.c
  	if (verbose > 1 && flags & ATTRS_REPORT) {
  		if (updated)
  			rprintf(FCLIENT, "%s\n", fname);
-@@ -530,6 +575,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -533,6 +578,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
  		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME);
  
@@ -437,7 +437,7 @@ diff --git a/rsync.c b/rsync.c
  	/* move tmp file over real file */
  	if (verbose > 2)
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
-@@ -547,6 +596,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -550,6 +599,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	}
  	if (ret == 0) {
  		/* The file was moved into place (not copied), so it's done. */
@@ -459,7 +459,7 @@ diff --git a/rsync.h b/rsync.h
  
  /* These flags are used in the live flist data. */
  
-@@ -451,6 +452,21 @@ typedef unsigned int size_t;
+@@ -452,6 +453,21 @@ typedef unsigned int size_t;
  #endif
  #endif
  
@@ -481,7 +481,7 @@ diff --git a/rsync.h b/rsync.h
  /* Find a variable that is either exactly 32-bits or longer.
   * If some code depends on 32-bit truncation, it will need to
   * take special action in a "#if SIZEOF_INT32 > 4" section. */
-@@ -619,6 +635,7 @@ extern int file_extra_cnt;
+@@ -620,6 +636,7 @@ extern int file_extra_cnt;
  extern int inc_recurse;
  extern int uid_ndx;
  extern int gid_ndx;
@@ -489,7 +489,7 @@ diff --git a/rsync.h b/rsync.h
  extern int acls_ndx;
  extern int xattrs_ndx;
  
-@@ -656,6 +673,7 @@ extern int xattrs_ndx;
+@@ -657,6 +674,7 @@ extern int xattrs_ndx;
  /* When the associated option is on, all entries will have these present: */
  #define F_OWNER(f) REQ_EXTRA(f, uid_ndx)->unum
  #define F_GROUP(f) REQ_EXTRA(f, gid_ndx)->unum

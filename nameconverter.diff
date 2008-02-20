@@ -23,7 +23,7 @@ To use this patch, run these commands for a successful build:
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
-@@ -59,6 +59,7 @@ char *auth_user;
+@@ -64,6 +64,7 @@ char *auth_user;
  int read_only = 0;
  int module_id = -1;
  int munge_symlinks = 0;
@@ -31,7 +31,7 @@ diff --git a/clientserver.c b/clientserver.c
  struct chmod_mode_struct *daemon_chmod_modes;
  
  /* module_dirlen is the length of the module_dir string when in daemon
-@@ -67,6 +68,7 @@ char *module_dir = NULL;
+@@ -73,6 +74,7 @@ char *module_dir = NULL;
  unsigned int module_dirlen = 0;
  
  static int rl_nulls = 0;
@@ -39,7 +39,7 @@ diff --git a/clientserver.c b/clientserver.c
  
  #ifdef HAVE_SIGACTION
  static struct sigaction sigact;
-@@ -508,7 +510,7 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -535,7 +537,7 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  	log_init(1);
  
  #ifdef HAVE_PUTENV
@@ -47,8 +47,8 @@ diff --git a/clientserver.c b/clientserver.c
 +	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i) || *lp_name_converter(i)) {
  		char *modname, *modpath, *hostaddr, *hostname, *username;
  		int status;
- 		if (asprintf(&modname, "RSYNC_MODULE_NAME=%s", name) < 0
-@@ -595,6 +597,44 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 
+@@ -631,6 +633,44 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  			set_blocking(fds[1]);
  			pre_exec_fd = fds[1];
  		}
@@ -93,7 +93,7 @@ diff --git a/clientserver.c b/clientserver.c
  		umask(0);
  	}
  #endif
-@@ -793,6 +833,44 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -844,6 +884,44 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  	return 0;
  }
  
@@ -141,7 +141,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -139,6 +139,7 @@ typedef struct
+@@ -140,6 +140,7 @@ typedef struct
  	char *log_file;
  	char *log_format;
  	char *name;
@@ -149,7 +149,7 @@ diff --git a/loadparm.c b/loadparm.c
  	char *outgoing_chmod;
  	char *path;
  	char *postxfer_exec;
-@@ -188,6 +189,7 @@ static service sDefault =
+@@ -191,6 +192,7 @@ static service sDefault =
   /* log_file; */		NULL,
   /* log_format; */		"%o %h [%a] %m (%u) %f %l",
   /* name; */			NULL,
@@ -157,38 +157,40 @@ diff --git a/loadparm.c b/loadparm.c
   /* outgoing_chmod; */		NULL,
   /* path; */			NULL,
   /* postxfer_exec; */		NULL,
-@@ -323,6 +325,7 @@ static struct parm_struct parm_table[] =
+@@ -328,6 +330,7 @@ static struct parm_struct parm_table[] =
   {"max verbosity",     P_INTEGER,P_LOCAL, &sDefault.max_verbosity,     NULL,0},
   {"munge symlinks",    P_BOOL,   P_LOCAL, &sDefault.munge_symlinks,    NULL,0},
   {"name",              P_STRING, P_LOCAL, &sDefault.name,              NULL,0},
 + {"name converter",    P_STRING, P_LOCAL, &sDefault.name_converter,    NULL,0},
+  {"numeric ids",       P_BOOL,   P_LOCAL, &sDefault.numeric_ids,       NULL,0},
   {"outgoing chmod",    P_STRING, P_LOCAL, &sDefault.outgoing_chmod,    NULL,0},
   {"path",              P_PATH,   P_LOCAL, &sDefault.path,              NULL,0},
- #ifdef HAVE_PUTENV
-@@ -411,6 +414,7 @@ FN_LOCAL_STRING(lp_outgoing_chmod, outgoing_chmod)
+@@ -418,6 +421,7 @@ FN_LOCAL_STRING(lp_outgoing_chmod, outgoing_chmod)
  FN_LOCAL_STRING(lp_path, path)
  FN_LOCAL_STRING(lp_postxfer_exec, postxfer_exec)
  FN_LOCAL_STRING(lp_prexfer_exec, prexfer_exec)
 +FN_LOCAL_STRING(lp_name_converter, name_converter)
  FN_LOCAL_STRING(lp_refuse_options, refuse_options)
  FN_LOCAL_STRING(lp_secrets_file, secrets_file)
- FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
+ FN_LOCAL_STRING(lp_temp_dir, temp_dir)
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -144,7 +144,10 @@ args if rsync believes they would escape the chroot.
- The default for "use chroot" is true, and is the safer choice (especially
- if the module is not read-only).
+@@ -160,10 +160,11 @@ if the module is not read-only).
  
--In order to preserve usernames and groupnames, rsync needs to be able to
-+In order to preserve usernames and groupnames, you can use the
-+bf(name converter) option to specify a name-converting program that the
-+rsync daemon will start prior to enabling chroot (see the option for more
-+details).  If that option is not specified, the daemon needs to be able to
+ When this option is enabled, rsync will not attempt to map users and groups
+ by name (by default), but instead copy IDs as though bf(--numeric-ids) had
+-been specified.  In order to enable name-mapping, rsync needs to be able to
++been specified.  In order to enable name-mapping, rsync needs either the
++bf(name converter) parameter to specify a conversion program, or it needs to
  use the standard library functions for looking up names and IDs (i.e.
- code(getpwuid()), code(getgrgid()), code(getpwname()), and code(getgrnam())).  This means a
- process in the chroot namespace will need to have access to the resources
-@@ -200,6 +203,27 @@ path elements that rsync believes will allow a symlink to escape the module's
+ code(getpwuid()), code(getgrgid()), code(getpwname()), and code(getgrnam())).
+-This means the rsync
++The latter choice means the rsync
+ process in the chroot hierarchy will need to have access to the resources
+ used by these library functions (traditionally /etc/passwd and
+ /etc/group, but perhaps additional dynamic libraries as well).
+@@ -227,6 +228,27 @@ path elements that rsync believes will allow a symlink to escape the module's
  hierarchy.  There are tricky ways to work around this, though, so you had
  better trust your users if you choose this combination of options.
  
@@ -213,9 +215,9 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 +bf(RSYNC_USER_NAME).  This is useful if you want to customize the
 +conversion using a single program invocation.
 +
- dit(bf(max connections)) The "max connections" option allows you to
- specify the maximum number of simultaneous connections you will allow.
- Any clients connecting when the maximum has been reached will receive a
+ dit(bf(charset)) This specifies the name of the character set in which the
+ module's filenames are stored.  If the client uses an bf(--iconv) option,
+ the daemon will use the value of the "charset" parameter regardless of the
 diff --git a/support/nameconvert b/support/nameconvert
 new file mode 100755
 --- /dev/null

@@ -63,7 +63,7 @@ diff --git a/options.c b/options.c
  int rsync_port = 0;
  int compare_dest = 0;
  int copy_dest = 0;
-@@ -379,6 +381,8 @@ void usage(enum logcode F)
+@@ -383,6 +385,8 @@ void usage(enum logcode F)
    rprintf(F,"     --delay-updates         put all updated files into place at transfer's end\n");
    rprintf(F," -m, --prune-empty-dirs      prune empty directory chains from the file-list\n");
    rprintf(F,"     --numeric-ids           don't map uid/gid values by user/group name\n");
@@ -72,7 +72,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --timeout=SECONDS       set I/O timeout in seconds\n");
    rprintf(F,"     --contimeout=SECONDS    set daemon connection timeout in seconds\n");
    rprintf(F," -I, --ignore-times          don't skip files that match in size and mod-time\n");
-@@ -604,6 +608,8 @@ static struct poptOption long_options[] = {
+@@ -610,6 +614,8 @@ static struct poptOption long_options[] = {
    {"no-s",             0,  POPT_ARG_VAL,    &protect_args, 0, 0, 0},
    {"numeric-ids",      0,  POPT_ARG_VAL,    &numeric_ids, 1, 0, 0 },
    {"no-numeric-ids",   0,  POPT_ARG_VAL,    &numeric_ids, 0, 0, 0 },
@@ -81,7 +81,7 @@ diff --git a/options.c b/options.c
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, 0, 0, 0 },
    {"no-timeout",       0,  POPT_ARG_VAL,    &io_timeout, 0, 0, 0 },
    {"contimeout",       0,  POPT_ARG_INT,    &connect_timeout, 0, 0, 0 },
-@@ -1943,6 +1949,18 @@ void server_options(char **args, int *argc_p)
+@@ -1965,6 +1971,18 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = "--use-qsort";
  
  	if (am_sender) {
@@ -204,7 +204,7 @@ diff --git a/uidlist.c b/uidlist.c
  	return NULL;
  }
  
--static uid_t map_uid(uid_t id, char *name)
+-static uid_t map_uid(uid_t id, const char *name)
 -{
 -	uid_t uid;
 -	if (id != 0 && name_to_uid(name, &uid))
@@ -212,7 +212,7 @@ diff --git a/uidlist.c b/uidlist.c
 -	return id;
 -}
 -
--static gid_t map_gid(gid_t id, char *name)
+-static gid_t map_gid(gid_t id, const char *name)
 -{
 -	gid_t gid;
 -	if (id != 0 && name_to_gid(name, &gid))
@@ -228,9 +228,9 @@ diff --git a/uidlist.c b/uidlist.c
  }
  
 -/* Add a uid to the list of uids.  Only called on receiving side. */
--static struct idlist *recv_add_uid(uid_t id, char *name)
+-static struct idlist *recv_add_uid(uid_t id, const char *name)
 +/* Add a uid/gid to its list of ids.  Only called on receiving side. */
-+static struct idlist *recv_add_id(struct idlist **idmap_ptr, id_t id, char *name)
++static struct idlist *recv_add_id(struct idlist **idmap_ptr, id_t id, const char *name)
  {
 -	uid_t id2 = name ? map_uid(id, name) : id;
  	struct idlist *node;
@@ -273,7 +273,7 @@ diff --git a/uidlist.c b/uidlist.c
 -}
 -
 -/* Add a gid to the list of gids.  Only called on receiving side. */
--static struct idlist *recv_add_gid(gid_t id, char *name)
+-static struct idlist *recv_add_gid(gid_t id, const char *name)
 -{
 -	gid_t id2 = name ? map_gid(id, name) : id;
 -	struct idlist *node;
@@ -293,7 +293,7 @@ diff --git a/uidlist.c b/uidlist.c
  	}
  
  	return node;
-@@ -195,12 +200,9 @@ static struct idlist *recv_add_gid(gid_t id, char *name)
+@@ -195,12 +200,9 @@ static struct idlist *recv_add_gid(gid_t id, const char *name)
  /* this function is a definate candidate for a faster algorithm */
  uid_t match_uid(uid_t uid)
  {
@@ -332,25 +332,25 @@ diff --git a/uidlist.c b/uidlist.c
  		last = list;
  	}
  
-@@ -316,7 +321,7 @@ uid_t recv_user_name(int f, uid_t uid)
- 	if (!name)
- 		out_of_memory("recv_user_name");
- 	read_sbuf(f, name, len);
+@@ -320,7 +325,7 @@ uid_t recv_user_name(int f, uid_t uid)
+ 		free(name);
+ 		name = NULL;
+ 	}
 -	node = recv_add_uid(uid, name); /* node keeps name's memory */
 +	node = recv_add_id(&uidmap, uid, name); /* node keeps name's memory */
  	return node->id2;
  }
  
-@@ -328,7 +333,7 @@ gid_t recv_group_name(int f, gid_t gid, uint16 *flags_ptr)
- 	if (!name)
- 		out_of_memory("recv_group_name");
- 	read_sbuf(f, name, len);
+@@ -336,7 +341,7 @@ gid_t recv_group_name(int f, gid_t gid, uint16 *flags_ptr)
+ 		free(name);
+ 		name = NULL;
+ 	}
 -	node = recv_add_gid(gid, name); /* node keeps name's memory */
 +	node = recv_add_id(&gidmap, gid, name); /* node keeps name's memory */
  	if (flags_ptr && node->flags & FLAG_SKIP_GROUP)
  		*flags_ptr |= FLAG_SKIP_GROUP;
  	return node->id2;
-@@ -355,17 +360,96 @@ void recv_id_list(int f, struct file_list *flist)
+@@ -363,17 +368,93 @@ void recv_id_list(int f, struct file_list *flist)
  
  	/* Now convert all the uids/gids from sender values to our values. */
  #ifdef SUPPORT_ACLS
@@ -443,10 +443,7 @@ diff --git a/uidlist.c b/uidlist.c
 +		*--cp = '\0'; /* replace comma */
 +	}
 +
-+	/* The 0 user/group doesn't get its name sent, or add it explicitly. */
-+	if (numeric_ids)
-+		cp = NULL;
-+	else
-+		cp = usernames ? uid_to_name(0) : gid_to_name(0);
-+	recv_add_id(idmap_ptr, 0, cp);
++	/* The 0 user/group doesn't get its name sent, so add it explicitly. */
++	recv_add_id(idmap_ptr, 0,
++		    numeric_ids ? NULL : usernames ? uid_to_name(0) : gid_to_name(0));
 +}

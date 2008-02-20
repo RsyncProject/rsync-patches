@@ -11,15 +11,14 @@ To use this patch, run these commands for a successful build:
 diff --git a/access.c b/access.c
 --- a/access.c
 +++ b/access.c
-@@ -210,6 +210,43 @@ static int match_address(char *addr, char *tok)
+@@ -210,6 +210,42 @@ static int match_address(char *addr, char *tok)
  	return ret;
  }
  
 +static int match_hostlookup(char *addr, char *tok)
 +{
-+	struct hostent *hp;
++	struct hostent *hp = NULL;
 +	unsigned int i, len;
-+	int failed;
 +	char *p;
 +
 +	if ((p = strchr(tok,'/')) != NULL) {
@@ -28,19 +27,19 @@ diff --git a/access.c b/access.c
 +	} else
 +		len = strlen(tok);
 +
-+	/* Fail quietly if tok is an address (not a hostname) */
-+	failed = strspn(tok, ".0123456789") == len;
++	/* Fail quietly (hp left NULL) if tok is an address, not a hostname. */
 +#ifdef INET6
-+	failed ||= strchr(tok, ':') != NULL;
++	if (strchr(tok, ':') != NULL) {
++		;
++	} else
 +#endif
-+
-+	if (!failed && (hp = gethostbyname(tok)) == NULL)
-+		failed = 1;
++	if (strspn(tok, ".0123456789") != len)
++		hp = gethostbyname(tok);
 +
 +	if (p)
 +		*p = '/';
 +
-+	if (failed)
++	if (!hp)
 +		return 0;
 +
 +	for (i = 0; hp->h_addr_list[i] != NULL; i++) {
@@ -55,7 +54,7 @@ diff --git a/access.c b/access.c
  static int access_match(char *list, char *addr, char *host)
  {
  	char *tok;
-@@ -223,7 +260,7 @@ static int access_match(char *list, char *addr, char *host)
+@@ -223,7 +259,7 @@ static int access_match(char *list, char *addr, char *host)
  		strlower(host);
  
  	for (tok = strtok(list2, " ,\t"); tok; tok = strtok(NULL, " ,\t")) {

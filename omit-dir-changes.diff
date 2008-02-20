@@ -10,25 +10,25 @@ To use this patch, run these commands for a successful build:
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -43,6 +43,7 @@ extern int preserve_specials;
- extern int preserve_hard_links;
+@@ -45,6 +45,7 @@ extern int preserve_hard_links;
+ extern int preserve_executability;
  extern int preserve_perms;
  extern int preserve_times;
 +extern int omit_dir_changes;
  extern int uid_ndx;
  extern int gid_ndx;
  extern int delete_mode;
-@@ -597,6 +598,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
- 		int keep_time = !preserve_times ? 0
- 		    : S_ISDIR(file->mode) ? preserve_times > 1
- 		    : !S_ISLNK(file->mode);
+@@ -605,6 +606,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+ 		    (receiver_symlink_times && !(file->flags & FLAG_TIME_FAILED)) ||
+ #endif
+ 		    !S_ISLNK(file->mode);
 +		int omit_changes = omit_dir_changes && S_ISDIR(sxp->st.st_mode);
  
  		if (S_ISREG(file->mode) && F_LENGTH(file) != sxp->st.st_size)
  			iflags |= ITEM_REPORT_SIZE;
-@@ -612,10 +614,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
- #endif
- 		if (!BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
+@@ -621,10 +623,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+ 		if ((preserve_perms || preserve_executability)
+ 		 && !BITS_EQUAL(sxp->st.st_mode, file->mode, CHMOD_BITS))
  			iflags |= ITEM_REPORT_PERMS;
 -		if (uid_ndx && am_root && (uid_t)F_OWNER(file) != sxp->st.st_uid)
 +		if (uid_ndx && am_root && !omit_changes
@@ -41,7 +41,7 @@ diff --git a/generator.c b/generator.c
  			iflags |= ITEM_REPORT_GROUP;
  #ifdef SUPPORT_ACLS
  		if (preserve_acls && !S_ISLNK(file->mode)) {
-@@ -1353,7 +1356,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1366,7 +1369,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		real_sx = sx;
  		if (file->flags & FLAG_DIR_CREATED)
  			statret = -1;
@@ -61,7 +61,7 @@ diff --git a/options.c b/options.c
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -348,6 +349,7 @@ void usage(enum logcode F)
+@@ -352,6 +353,7 @@ void usage(enum logcode F)
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve modification times\n");
    rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
@@ -69,7 +69,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
  #ifdef SUPPORT_XATTRS
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
-@@ -486,6 +488,7 @@ static struct poptOption long_options[] = {
+@@ -490,6 +492,7 @@ static struct poptOption long_options[] = {
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
    {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
    {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
@@ -77,7 +77,7 @@ diff --git a/options.c b/options.c
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
-@@ -1461,6 +1464,8 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+@@ -1483,6 +1486,8 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
  		parse_rule(&filter_list, backup_dir_buf, 0, 0);
  	}
  
@@ -86,7 +86,7 @@ diff --git a/options.c b/options.c
  	if (make_backups && !backup_dir) {
  		omit_dir_times = 0; /* Implied, so avoid -O to sender. */
  		if (preserve_times > 1)
-@@ -1699,6 +1704,8 @@ void server_options(char **args, int *argc_p)
+@@ -1721,6 +1726,8 @@ void server_options(char **args, int *argc_p)
  			argstr[x++] = 'm';
  		if (omit_dir_times)
  			argstr[x++] = 'O';
@@ -106,8 +106,8 @@ diff --git a/rsync.c b/rsync.c
  extern int am_root;
  extern int am_server;
  extern int am_sender;
-@@ -401,9 +402,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
- 			updated = 1;
+@@ -404,9 +405,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ 			file->flags |= FLAG_TIME_FAILED;
  	}
  
 -	change_uid = am_root && uid_ndx && sxp->st.st_uid != (uid_t)F_OWNER(file);

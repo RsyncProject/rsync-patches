@@ -12,7 +12,7 @@ To use this patch, run these commands for a successful build:
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
-@@ -38,6 +38,7 @@ extern int sanitize_paths;
+@@ -39,6 +39,7 @@ extern int numeric_ids;
  extern int filesfrom_fd;
  extern int remote_protocol;
  extern int protocol_version;
@@ -20,7 +20,7 @@ diff --git a/clientserver.c b/clientserver.c
  extern int io_timeout;
  extern int no_detach;
  extern int write_batch;
-@@ -712,6 +713,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -746,6 +747,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  	else if (am_root < 0) /* Treat --fake-super from client as --super. */
  		am_root = 2;
  
@@ -143,7 +143,7 @@ diff --git a/flist.c b/flist.c
 +	counts_match = used == checksum_matches;
 +	no_skipped = whole_dir && regular_skipped == 0;
 +
-+	clean_flist(checksum_flist, 0);
++	flist_sort_and_clean(checksum_flist, 0);
 +
 +	checksum_flist->used = 0;
 +	checksum_matches = 0;
@@ -373,11 +373,12 @@ diff --git a/flist.c b/flist.c
  	if (f >= 0 && recurse && !divert_dirs) {
  		int i, end = flist->used - 1;
  		/* send_if_directory() bumps flist->used, so use "end". */
-@@ -2276,7 +2426,7 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2274,6 +2424,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+ 		}
+ 	} else
  		flist_eof = 1;
- 	
- 	if (checksum_updating && always_checksum && flist_eof)
--		read_checksums(NULL);
++	
++	if (checksum_updating && always_checksum && flist_eof)
 +		read_checksums(NULL); /* writes any last updates */
  
  	return flist;
@@ -385,7 +386,7 @@ diff --git a/flist.c b/flist.c
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -153,6 +153,7 @@ typedef struct
+@@ -154,6 +154,7 @@ typedef struct
  	int syslog_facility;
  	int timeout;
  
@@ -393,7 +394,7 @@ diff --git a/loadparm.c b/loadparm.c
  	BOOL fake_super;
  	BOOL ignore_errors;
  	BOOL ignore_nonreadable;
-@@ -202,6 +203,7 @@ static service sDefault =
+@@ -205,6 +206,7 @@ static service sDefault =
   /* syslog_facility; */		LOG_DAEMON,
   /* timeout; */			0,
  
@@ -401,16 +402,16 @@ diff --git a/loadparm.c b/loadparm.c
   /* fake_super; */		False,
   /* ignore_errors; */		False,
   /* ignore_nonreadable; */	False,
-@@ -301,6 +303,7 @@ static struct parm_struct parm_table[] =
-  {"socket options",    P_STRING, P_GLOBAL,&Globals.socket_options,     NULL,0},
+@@ -306,6 +308,7 @@ static struct parm_struct parm_table[] =
  
   {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
+  {"charset",           P_STRING, P_LOCAL, &sDefault.charset,           NULL,0},
 + {"checksum updating", P_BOOL,   P_LOCAL, &sDefault.checksum_updating, NULL,0},
   {"comment",           P_STRING, P_LOCAL, &sDefault.comment,           NULL,0},
   {"dont compress",     P_STRING, P_LOCAL, &sDefault.dont_compress,     NULL,0},
   {"exclude from",      P_STRING, P_LOCAL, &sDefault.exclude_from,      NULL,0},
-@@ -421,6 +424,7 @@ FN_LOCAL_INTEGER(lp_max_connections, max_connections)
- FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+@@ -428,6 +431,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+ FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
  FN_LOCAL_INTEGER(lp_timeout, timeout)
  
 +FN_LOCAL_BOOL(lp_checksum_updating, checksum_updating)
@@ -428,7 +429,7 @@ diff --git a/options.c b/options.c
  int max_delete = INT_MIN;
  OFF_T max_size = 0;
  OFF_T min_size = 0;
-@@ -312,6 +313,7 @@ void usage(enum logcode F)
+@@ -316,6 +317,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -436,7 +437,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -560,6 +562,7 @@ static struct poptOption long_options[] = {
+@@ -566,6 +568,7 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -444,7 +445,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1966,7 +1969,9 @@ void server_options(char **args, int *argc_p)
+@@ -1988,7 +1991,9 @@ void server_options(char **args, int *argc_p)
  				args[ac++] = basis_dir[i];
  			}
  		}
@@ -458,7 +459,7 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -679,6 +679,10 @@ extern int xattrs_ndx;
+@@ -680,6 +680,10 @@ extern int xattrs_ndx;
  #define F_SUM(f) ((char*)OPT_EXTRA(f, LEN64_BUMP(f) + HLINK_BUMP(f) \
  				    + SUM_EXTRA_CNT - 1))
  
@@ -506,7 +507,7 @@ diff --git a/rsync.yo b/rsync.yo
 +
  Note that rsync always verifies that each em(transferred) file was
  correctly reconstructed on the receiving side by checking a whole-file
- checksum that is generated when as the file is transferred, but that
+ checksum that is generated as the file is transferred, but that
  automatic after-the-transfer verification has nothing to do with this
  option's before-the-transfer "Does this file need to be updated?" check.
  
@@ -539,7 +540,7 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -241,6 +241,20 @@ locking on this file to ensure that the max connections limit is not
+@@ -281,6 +281,20 @@ locking on this file to ensure that the max connections limit is not
  exceeded for the modules sharing the lock file.
  The default is tt(/var/run/rsyncd.lock).
  
