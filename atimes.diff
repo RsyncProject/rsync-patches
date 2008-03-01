@@ -36,7 +36,7 @@ diff --git a/compat.c b/compat.c
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -53,6 +53,7 @@ extern int preserve_specials;
+@@ -55,6 +55,7 @@ extern int preserve_specials;
  extern int uid_ndx;
  extern int gid_ndx;
  extern int eol_nulls;
@@ -44,7 +44,7 @@ diff --git a/flist.c b/flist.c
  extern int relative_paths;
  extern int implied_dirs;
  extern int file_extra_cnt;
-@@ -342,7 +343,7 @@ int push_pathname(const char *dir, int len)
+@@ -344,7 +345,7 @@ int push_pathname(const char *dir, int len)
  
  static void send_file_entry(int f, struct file_struct *file, int ndx, int first_ndx)
  {
@@ -53,7 +53,7 @@ diff --git a/flist.c b/flist.c
  	static mode_t mode;
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
-@@ -450,6 +451,13 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -452,6 +453,13 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
  		xflags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -67,16 +67,16 @@ diff --git a/flist.c b/flist.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != 0) {
-@@ -522,6 +530,8 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -524,6 +532,8 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
 +	if (atimes_ndx && !S_ISDIR(mode) && !(xflags & XMIT_SAME_ATIME))
 +		write_varlong(f, atime, 4);
- 	if (uid_ndx && !(xflags & XMIT_SAME_UID)) {
+ 	if (preserve_uid && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -608,7 +618,7 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -610,7 +620,7 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   int xflags, int f)
  {
@@ -85,7 +85,7 @@ diff --git a/flist.c b/flist.c
  	static mode_t mode;
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
-@@ -741,6 +751,16 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -743,6 +753,16 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -102,7 +102,7 @@ diff --git a/flist.c b/flist.c
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -871,6 +891,8 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -873,6 +893,8 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
  		F_GROUP(file) = gid;
  		file->flags |= gid_flags;
  	}
@@ -111,9 +111,9 @@ diff --git a/flist.c b/flist.c
  	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
  
-@@ -1203,6 +1225,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1205,6 +1227,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		F_OWNER(file) = st.st_uid;
- 	if (gid_ndx)
+ 	if (gid_ndx) /* Check gid_ndx instead of preserve_gid for del support */
  		F_GROUP(file) = st.st_gid;
 +	if (atimes_ndx)
 +		f_atime_set(file, st.st_atime);
@@ -131,7 +131,7 @@ diff --git a/generator.c b/generator.c
  
  extern int verbose;
  extern int dry_run;
-@@ -613,6 +614,9 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -633,6 +634,9 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  		 || (keep_time && cmp_time(file->modtime, sxp->st.st_mtime) != 0))
  			iflags |= ITEM_REPORT_TIME;
@@ -141,7 +141,7 @@ diff --git a/generator.c b/generator.c
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -967,6 +971,8 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+@@ -987,6 +991,8 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
@@ -150,7 +150,7 @@ diff --git a/generator.c b/generator.c
  			if (preserve_hard_links && F_IS_HLINKED(file))
  				finish_hard_link(file, fname, ndx, &sxp->st, itemizing, code, j);
  			if (!maybe_ATTRS_REPORT && (verbose > 1 || stdout_format_has_i > 1)) {
-@@ -1153,6 +1159,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+@@ -1173,6 +1179,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -158,7 +158,7 @@ diff --git a/generator.c b/generator.c
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -1167,14 +1174,16 @@ static void list_file_entry(struct file_struct *f)
+@@ -1187,14 +1194,16 @@ static void list_file_entry(struct file_struct *f)
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -177,7 +177,7 @@ diff --git a/generator.c b/generator.c
  			f_name(f, NULL));
  	}
  }
-@@ -1929,7 +1938,7 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -1950,7 +1959,7 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  		if (!(file->mode & S_IWUSR))
  			do_chmod(fname, file->mode);
  		if (need_retouch_dir_times)
@@ -401,19 +401,18 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1689,8 +1696,10 @@ quote(itemization(
+@@ -1689,7 +1696,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
--  it() The bf(u) slot is reserved for reporting update (access) time changes
--  (a feature that is not yet released).
+-  it() The bf(u) slot is reserved for future use.
 +  it() A bf(u) means the access (use) time is different and is being updated to
 +  the sender's value (requires bf(--atimes)).  An alternate value of bf(U)
 +  means that the access time will be set to the transfer time, which happens
 +  when a symlink or directory is updated.
    it() The bf(a) means that the ACL information changed.
-   it() The bf(x) slot is reserved for reporting extended attribute changes
-   (a feature that is not yet released).
+   it() The bf(x) means that the extended attribute information changed.
+ ))
 diff --git a/testsuite/atimes.test b/testsuite/atimes.test
 new file mode 100644
 --- /dev/null
@@ -439,7 +438,7 @@ new file mode 100644
 diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
 --- a/testsuite/rsync.fns
 +++ b/testsuite/rsync.fns
-@@ -187,6 +187,10 @@ checkit() {
+@@ -192,6 +192,10 @@ checkit() {
      # We can just write everything to stdout/stderr, because the
      # wrapper hides it unless there is a problem.
  
@@ -450,7 +449,7 @@ diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
      echo "Running: \"$1\""  
      eval "$1" 
      status=$?
-@@ -194,10 +198,13 @@ checkit() {
+@@ -199,10 +203,13 @@ checkit() {
  	failed="YES";
      fi
  

@@ -54,7 +54,7 @@ diff --git a/compat.c b/compat.c
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -61,6 +61,7 @@ extern int non_perishable_cnt;
+@@ -63,6 +63,7 @@ extern int non_perishable_cnt;
  extern int prune_empty_dirs;
  extern int copy_links;
  extern int copy_unsafe_links;
@@ -62,7 +62,7 @@ diff --git a/flist.c b/flist.c
  extern int protocol_version;
  extern int sanitize_paths;
  extern int munge_symlinks;
-@@ -118,6 +119,8 @@ static int64 tmp_dev, tmp_ino;
+@@ -120,6 +121,8 @@ static int64 tmp_dev, tmp_ino;
  #endif
  static char tmp_sum[MAX_DIGEST_LEN];
  
@@ -71,7 +71,7 @@ diff --git a/flist.c b/flist.c
  static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
  static int dir_count = 0;
-@@ -261,6 +264,45 @@ static int is_excluded(char *fname, int is_dir, int filter_level)
+@@ -263,6 +266,45 @@ static int is_excluded(char *fname, int is_dir, int filter_level)
  	return 0;
  }
  
@@ -117,7 +117,7 @@ diff --git a/flist.c b/flist.c
  static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len, int flags);
  
-@@ -2178,6 +2220,25 @@ struct file_list *recv_file_list(int f)
+@@ -2180,6 +2222,25 @@ struct file_list *recv_file_list(int f)
  
  	flist_sort_and_clean(flist, relative_paths);
  
@@ -176,7 +176,7 @@ diff --git a/generator.c b/generator.c
  
 -/* For calling delete_item() and delete_dir_contents(). */
 +/* For calling delete_item(), delete_dir_contents(), and delete_in_dir(). */
- #define DEL_OWNED_BY_US 	(1<<0) /* file/dir has our uid */
+ #define DEL_NO_UID_WRITE 	(1<<0) /* file/dir has our uid w/o write perm */
  #define DEL_RECURSE		(1<<1) /* if dir, delete all contents */
  #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
 @@ -124,6 +127,7 @@ static const char *solo_file = NULL;
@@ -307,9 +307,9 @@ diff --git a/generator.c b/generator.c
 + *
 + * Also note: --detect-rename may use this routine with DEL_NO_DELETIONS set!
   */
- static enum delret delete_item(char *fbuf, int mode, int flags)
+ static enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
  {
-@@ -173,6 +287,8 @@ static enum delret delete_item(char *fbuf, int mode, int flags)
+@@ -182,6 +296,8 @@ static enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
  			goto check_ret;
  		/* OK: try to delete the directory. */
  	}
@@ -318,16 +318,16 @@ diff --git a/generator.c b/generator.c
  
  	if (!(flags & DEL_MAKE_ROOM) && max_delete >= 0 && ++deletion_count > max_delete)
  		return DR_AT_LIMIT;
-@@ -228,6 +344,8 @@ static enum delret delete_item(char *fbuf, int mode, int flags)
+@@ -237,6 +353,8 @@ static enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
   * its contents, otherwise just checks for content.  Returns DR_SUCCESS or
   * DR_NOT_EMPTY.  Note that fname must point to a MAXPATHLEN buffer!  (The
   * buffer is used for recursion, but returned unchanged.)
 + *
 + * Note: --detect-rename may use this routine with DEL_NO_DELETIONS set!
   */
- static enum delret delete_dir_contents(char *fname, int flags)
+ static enum delret delete_dir_contents(char *fname, uint16 flags)
  {
-@@ -247,7 +365,9 @@ static enum delret delete_dir_contents(char *fname, int flags)
+@@ -256,7 +374,9 @@ static enum delret delete_dir_contents(char *fname, uint16 flags)
  	save_filters = push_local_filters(fname, dlen);
  
  	non_perishable_cnt = 0;
@@ -337,8 +337,8 @@ diff --git a/generator.c b/generator.c
  	ret = non_perishable_cnt ? DR_NOT_EMPTY : DR_SUCCESS;
  
  	if (!dirlist->used)
-@@ -290,7 +410,8 @@ static enum delret delete_dir_contents(char *fname, int flags)
- 				do_chmod(fname, fp->mode |= S_IWUSR);
+@@ -296,7 +416,8 @@ static enum delret delete_dir_contents(char *fname, uint16 flags)
+ 		if (S_ISDIR(fp->mode)) {
  			if (delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
  				ret = DR_NOT_EMPTY;
 -		}
@@ -347,7 +347,7 @@ diff --git a/generator.c b/generator.c
  		if (delete_item(fname, fp->mode, flags) != DR_SUCCESS)
  			ret = DR_NOT_EMPTY;
  	}
-@@ -451,13 +572,18 @@ static void do_delayed_deletions(char *delbuf)
+@@ -461,13 +582,18 @@ static void do_delayed_deletions(char *delbuf)
   * all the --delete-WHEN options.  Note that the fbuf pointer must point to a
   * MAXPATHLEN buffer with the name of the directory in it (the functions we
   * call will append names onto the end, but the old dir value will be restored
@@ -358,7 +358,7 @@ diff --git a/generator.c b/generator.c
 + * Note:  --detect-rename may use this routine with DEL_NO_DELETIONS set!
 + */
 +static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev,
-+			  int flags)
++			  int del_flags)
  {
  	static int already_warned = 0;
  	struct file_list *dirlist;
@@ -367,16 +367,10 @@ diff --git a/generator.c b/generator.c
 +	char *p, delbuf[MAXPATHLEN];
 +	unsigned remainder;
 +	int dlen, i, restore_dot = 0;
+ 	int save_uid_ndx = uid_ndx;
  
  	if (!fbuf) {
- 		change_local_filter_dir(NULL, 0, 0);
-@@ -467,21 +593,28 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
- 	if (verbose > 2)
- 		rprintf(FINFO, "delete_in_dir(%s)\n", fbuf);
- 
-+	flags |= DEL_RECURSE;
-+
- 	if (allowed_lull)
+@@ -482,17 +608,22 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
  		maybe_send_keepalive();
  
  	if (io_error && !ignore_errors) {
@@ -392,7 +386,7 @@ diff --git a/generator.c b/generator.c
 -			"IO error encountered -- skipping file deletion\n");
 -		already_warned = 1;
 -		return;
-+		flags |= DEL_NO_DELETIONS;
++		del_flags |= DEL_NO_DELETIONS;
  	}
  
  	dlen = strlen(fbuf);
@@ -404,7 +398,7 @@ diff --git a/generator.c b/generator.c
  	if (one_file_system) {
  		if (file->flags & FLAG_TOP_DIR)
  			filesystem_dev = *fs_dev;
-@@ -491,6 +624,14 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -505,6 +636,14 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
  
  	dirlist = get_dirlist(fbuf, dlen, 0);
  
@@ -419,7 +413,7 @@ diff --git a/generator.c b/generator.c
  	/* If an item in dirlist is not found in flist, delete it
  	 * from the filesystem. */
  	for (i = dirlist->used; i--; ) {
-@@ -503,18 +644,26 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -517,19 +656,28 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
  					f_name(fp, NULL));
  			continue;
  		}
@@ -428,19 +422,19 @@ diff --git a/generator.c b/generator.c
 +			look_for_rename(fp, fbuf);
 +		}
  		if (flist_find(cur_flist, fp) < 0) {
--			int flags = DEL_RECURSE
--				  | (!uid_ndx || (uid_t)F_OWNER(fp) == our_uid ? DEL_OWNED_BY_US : 0);
-+			int own_flag = (!uid_ndx || (uid_t)F_OWNER(fp) == our_uid ? DEL_OWNED_BY_US : 0);
+ 			int flags = DEL_RECURSE;
+ 			if (!(fp->mode & S_IWUSR) && !am_root && (uid_t)F_OWNER(fp) == our_uid)
+ 				flags |= DEL_NO_UID_WRITE;
  			f_name(fp, delbuf);
 -			if (delete_during == 2) {
 -				if (!remember_delete(fp, delbuf, flags))
-+			if (delete_during == 2 && !(flags & DEL_NO_DELETIONS)) {
-+				if (!remember_delete(fp, delbuf, own_flag | flags))
++			if (delete_during == 2 && !(del_flags & DEL_NO_DELETIONS)) {
++				if (!remember_delete(fp, delbuf, del_flags | flags))
  					break;
  			} else
 -				delete_item(delbuf, fp->mode, flags);
 -		}
-+				delete_item(delbuf, fp->mode, own_flag | flags);
++				delete_item(delbuf, fp->mode, del_flags | flags);
 +		} else if (detect_renamed && S_ISDIR(fp->mode))
 +			unexplored_dirs++;
  	}
@@ -450,9 +444,9 @@ diff --git a/generator.c b/generator.c
 +	fbuf[dlen] = '\0';
 +
  	flist_free(dirlist);
- }
  
-@@ -544,9 +693,9 @@ static void do_delete_pass(void)
+ 	if (!save_uid_ndx) {
+@@ -564,9 +712,9 @@ static void do_delete_pass(void)
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
@@ -464,7 +458,7 @@ diff --git a/generator.c b/generator.c
  
  	if (do_progress && !am_server)
  		rprintf(FINFO, "                    \r");
-@@ -1179,6 +1328,7 @@ static void list_file_entry(struct file_struct *f)
+@@ -1199,6 +1347,7 @@ static void list_file_entry(struct file_struct *f)
  	}
  }
  
@@ -472,7 +466,7 @@ diff --git a/generator.c b/generator.c
  static int phase = 0;
  static int dflt_perms;
  
-@@ -1428,8 +1578,12 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1449,8 +1598,12 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			}
  		}
  		else if (delete_during && f_out != -1 && !phase && dry_run < 2
@@ -487,7 +481,7 @@ diff --git a/generator.c b/generator.c
  		goto cleanup;
  	}
  
-@@ -1707,8 +1861,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1728,8 +1881,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			goto cleanup;
  		}
  #endif
@@ -503,7 +497,7 @@ diff --git a/generator.c b/generator.c
  		rsyserr(FERROR_XFER, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		goto cleanup;
-@@ -2051,6 +2211,12 @@ void generate_files(int f_out, const char *local_name)
+@@ -2072,6 +2231,12 @@ void generate_files(int f_out, const char *local_name)
  	if (verbose > 2)
  		rprintf(FINFO, "generator starting pid=%ld\n", (long)getpid());
  
@@ -516,7 +510,7 @@ diff --git a/generator.c b/generator.c
  	if (delete_before && !solo_file && cur_flist->used > 0)
  		do_delete_pass();
  	if (delete_during == 2) {
-@@ -2061,7 +2227,7 @@ void generate_files(int f_out, const char *local_name)
+@@ -2082,7 +2247,7 @@ void generate_files(int f_out, const char *local_name)
  	}
  	do_progress = 0;
  
@@ -525,7 +519,7 @@ diff --git a/generator.c b/generator.c
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -2099,7 +2265,7 @@ void generate_files(int f_out, const char *local_name)
+@@ -2120,7 +2285,7 @@ void generate_files(int f_out, const char *local_name)
  						dirdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
  					} else
  						dirdev = MAKEDEV(0, 0);
@@ -534,7 +528,7 @@ diff --git a/generator.c b/generator.c
  				}
  			}
  		}
-@@ -2142,7 +2308,21 @@ void generate_files(int f_out, const char *local_name)
+@@ -2163,7 +2328,21 @@ void generate_files(int f_out, const char *local_name)
  	} while ((cur_flist = cur_flist->next) != NULL);
  
  	if (delete_during)

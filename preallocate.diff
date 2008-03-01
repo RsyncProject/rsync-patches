@@ -9,18 +9,78 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
+diff --git a/compat.c b/compat.c
+--- a/compat.c
++++ b/compat.c
+@@ -33,6 +33,7 @@ extern int inplace;
+ extern int recurse;
+ extern int use_qsort;
+ extern int allow_inc_recurse;
++extern int preallocate_files;
+ extern int append_mode;
+ extern int fuzzy_basis;
+ extern int read_batch;
+@@ -184,6 +185,15 @@ void setup_protocol(int f_out,int f_in)
+ 	if (read_batch)
+ 		check_batch_flags();
+ 
++#ifndef SUPPORT_PREALLOCATION
++	if (preallocate_files && !am_sender) {
++		rprintf(FERROR,
++			"preallocation is not supported on this %s\n",
++			am_server ? "server" : "client");
++		exit_cleanup(RERR_SYNTAX);
++	}
++#endif
++
+ 	if (protocol_version < 30) {
+ 		if (append_mode == 1)
+ 			append_mode = 2;
 diff --git a/configure.in b/configure.in
 --- a/configure.in
 +++ b/configure.in
-@@ -552,7 +552,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
+@@ -552,13 +552,40 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
      strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
      strerror putenv iconv_open locale_charset nl_langinfo getxattr \
 -    extattr_get_link sigaction sigprocmask setattrlist)
-+    extattr_get_link sigaction sigprocmask setattrlist posix_fallocate)
++    extattr_get_link sigaction sigprocmask setattrlist fallocate posix_fallocate)
  
  dnl cygwin iconv.h defines iconv_open as libiconv_open
  if test x"$ac_cv_func_iconv_open" != x"yes"; then
+     AC_CHECK_FUNC(libiconv_open, [ac_cv_func_iconv_open=yes; AC_DEFINE(HAVE_ICONV_OPEN, 1)])
+ fi
+ 
++dnl Preallocation stuff (also fallocate, posix_fallocate function tests above):
++
++AC_CACHE_CHECK([for SYS_fallocate],rsync_cv_have_sys_fallocate,[
++AC_TRY_COMPILE([#include <sys/syscall.h>
++#include <sys/types.h>],
++[syscall(SYS_fallocate, 0, 0, (loff_t) 0, (loff_t) 0);],
++rsync_cv_have_sys_fallocate=yes,rsync_cv_have_sys_fallocate=no)])
++if test x"$rsync_cv_have_sys_fallocate" = x"yes"; then
++    AC_DEFINE(HAVE_SYS_FALLOCATE, 1, [Define to 1 if you have the SYS_fallocate syscall number])
++fi
++
++if test x"$ac_cv_func_posix_fallocate" = x"yes"; then
++    AC_MSG_CHECKING([whether posix_fallocate is efficient])
++    case $host_os in
++    *cygwin*)
++	AC_MSG_RESULT(yes)
++	AC_DEFINE(HAVE_EFFICIENT_POSIX_FALLOCATE, 1,
++		  [Define if posix_fallocate is efficient (Cygwin)])
++	;;
++    *)
++	AC_MSG_RESULT(no)
++	;;
++    esac
++fi
++
++dnl End of preallocation stuff
++
+ AC_CHECK_FUNCS(getpgrp tcgetpgrp)
+ if test $ac_cv_func_getpgrp = yes; then
+     AC_FUNC_GETPGRP
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -66,7 +126,7 @@ diff --git a/options.c b/options.c
  #endif
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
 +#ifdef SUPPORT_PREALLOCATION
-+  rprintf(F,"     --preallocate           posix_fallocate dest files before writing them\n");
++  rprintf(F,"     --preallocate           allocate dest files before writing them\n");
 +#endif
    rprintf(F," -n, --dry-run               perform a trial run with no changes made\n");
    rprintf(F," -W, --whole-file            copy files whole (without delta-xfer algorithm)\n");
@@ -79,23 +139,7 @@ diff --git a/options.c b/options.c
    {"inplace",          0,  POPT_ARG_NONE,   &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_NONE,   0, OPT_APPEND, 0, 0 },
    {"append-verify",    0,  POPT_ARG_VAL,    &append_mode, 2, 0, 0 },
-@@ -1311,6 +1320,15 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
- 	}
- #endif
- 
-+#ifndef SUPPORT_PREALLOCATION
-+	if (preallocate_files && !am_sender) {
-+		snprintf(err_buf, sizeof err_buf,
-+			 "preallocation is not supported on this %s\n",
-+			 am_server ? "server" : "client");
-+		return 0;
-+	}
-+#endif
-+
- 	if (write_batch && read_batch) {
- 		snprintf(err_buf, sizeof err_buf,
- 			"--write-batch and --read-batch can not be used together\n");
-@@ -2022,6 +2040,9 @@ void server_options(char **args, int *argc_p)
+@@ -2022,6 +2031,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -116,27 +160,26 @@ diff --git a/receiver.c b/receiver.c
  extern int keep_partial;
  extern int checksum_seed;
  extern int inplace;
-@@ -175,6 +176,19 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -174,6 +175,18 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 	char *data;
  	int32 i;
  	char *map = NULL;
- 
 +#ifdef SUPPORT_PREALLOCATION
 +	OFF_T preallocated_len = 0;
 +
 +	if (preallocate_files && fd != -1 && total_size > 0) {
 +		/* Preallocate enough space for file's eventual length if
 +		 * possible; seems to reduce fragmentation on Windows. */
-+		if (posix_fallocate(fd, 0, total_size) == 0)
++		if (do_fallocate(fd, 0, total_size) == 0)
 +			preallocated_len = total_size;
 +		else
-+			rsyserr(FINFO, errno, "preallocate %s", full_fname(fname));
++			rsyserr(FWARNING, errno, "do_fallocate %s", full_fname(fname));
 +	}
 +#endif
-+
+ 
  	read_sum_head(f_in, &sum);
  
- 	if (fd_r >= 0 && size_r > 0) {
-@@ -284,8 +298,18 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -284,8 +297,18 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  		goto report_write_error;
  
  #ifdef HAVE_FTRUNCATE
@@ -160,11 +203,14 @@ diff --git a/receiver.c b/receiver.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -602,6 +602,10 @@ struct ht_int64_node {
+@@ -602,6 +602,13 @@ struct ht_int64_node {
  #define ACLS_NEED_MASK 1
  #endif
  
-+#if defined HAVE_FTRUNCATE && defined HAVE_POSIX_FALLOCATE
++#if defined HAVE_FTRUNCATE \
++    && (defined HAVE_FALLOCATE \
++     || defined HAVE_SYS_FALLOCATE \
++     || defined HAVE_EFFICIENT_POSIX_FALLOCATE)
 +#define SUPPORT_PREALLOCATION 1
 +#endif
 +
@@ -178,30 +224,65 @@ diff --git a/rsync.yo b/rsync.yo
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
-+     --preallocate           posix_fallocate dest files before writing
++     --preallocate           allocate dest files before writing
   -n, --dry-run               perform a trial run with no changes made
   -W, --whole-file            copy files whole (w/o delta-xfer algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
-@@ -1036,6 +1037,19 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
+@@ -1036,6 +1037,18 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
  filesystem. It doesn't seem to handle seeks over null regions
  correctly and ends up corrupting the files.
  
 +dit(bf(--preallocate)) This tells the receiver to allocate each destination
-+file to its eventual size using bf(posix_fallocate)(3) before writing data
-+to the file.  If the receiver is remote, this nonstandard option only works
-+if the receiver also has the preallocation patch.  Furthermore, this option
-+only works if the receiver found the bf(posix_fallocate)(3) call at
-+configure time.
++file to its eventual size before writing data to the file.  Rsync will only use
++the real filesystem-level preallocation support provided by bf(fallocate)(2) or
++Cygwin's bf(posix_fallocate)(3), not the slow glibc implementation that writes
++a zero byte into each block.  If the receiver is remote, this nonstandard
++option only works if the receiver also has the preallocation patch.
 +
 +Without this option on MS Windows, very large destination files tend to be
 +broken into thousands of fragments; advising Windows ahead of time of the
 +eventual file size using this option usually reduces the number of
-+fragments to one.  However, on Linux, this option appears to just waste
-+disk I/O.
++fragments to one.  The usefulness of this option on Linux is yet to be tested.
 +
  dit(bf(-n, --dry-run)) This makes rsync perform a trial run that doesn't
  make any changes (and produces mostly the same output as a real run).  It
  is most commonly used in combination with the bf(-v, --verbose) and/or
+diff --git a/syscall.c b/syscall.c
+--- a/syscall.c
++++ b/syscall.c
+@@ -29,6 +29,10 @@
+ #include <sys/attr.h>
+ #endif
+ 
++#if defined HAVE_SYS_FALLOCATE && !defined HAVE_FALLOCATE
++#include <sys/syscall.h>
++#endif
++
+ extern int dry_run;
+ extern int am_root;
+ extern int read_only;
+@@ -291,3 +295,21 @@ char *d_name(struct dirent *di)
+ 	return di->d_name;
+ #endif
+ }
++
++#ifdef SUPPORT_PREALLOCATION
++int do_fallocate(int fd, OFF_T offset, OFF_T length)
++{
++	RETURN_ERROR_IF(dry_run, 0);
++	RETURN_ERROR_IF_RO_OR_LO;
++	/* TODO: Use FALLOC_FL_KEEP_SIZE to avoid the need to truncate. */
++#if defined HAVE_FALLOCATE
++	return fallocate(fd, 0, offset, length);
++#elif defined HAVE_SYS_FALLOCATE
++	return syscall(SYS_fallocate, fd, 0, (loff_t) offset, (loff_t) length);
++#elif defined HAVE_EFFICIENT_POSIX_FALLOCATE
++	return posix_fallocate(fd, offset, length);
++#else
++#error coding error in SUPPORT_PREALLOCATION
++#endif
++}
++#endif
 diff --git a/t_stub.c b/t_stub.c
 --- a/t_stub.c
 +++ b/t_stub.c
@@ -246,13 +327,13 @@ diff --git a/util.c b/util.c
 +		STRUCT_STAT srcst;
 +		if (do_fstat(ifd, &srcst) == 0) {
 +			if (srcst.st_size > 0) {
-+				if (posix_fallocate(ofd, 0, srcst.st_size) == 0)
++				if (do_fallocate(ofd, 0, srcst.st_size) == 0)
 +					preallocated_len = srcst.st_size;
 +				else
-+					rsyserr(FINFO, errno, "posix_fallocate %s", full_fname(dest));
++					rsyserr(FWARNING, errno, "do_fallocate %s", full_fname(dest));
 +			}
 +		} else
-+			rsyserr(FINFO, errno, "fstat %s", full_fname(source));
++			rsyserr(FWARNING, errno, "fstat %s", full_fname(source));
 +	}
 +#endif
 +

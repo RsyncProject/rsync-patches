@@ -1,14 +1,14 @@
-Optimize the ability of a mirror to send checksums.
+Optimize the --checksum option using externally created .rsyncsums files.
 
-This adds a sender optimization feature that allows a cache of checksums
-to be used when the client specifies the --checksum option.  The checksum
-files (.rsyncsums) must be created by some other process (see the perl
-script in the support dir for one way).
+This adds a new option, --sumfiles=MODE, that allows you to use a cache of
+checksums when performing a --checksum transfer.  These checksum files
+(.rsyncsums) must be created by some other process -- see the perl script,
+rsyncsums, in the support dir for one way.
 
-This option should be used by mirrors that contain files that get created and
-not changed.  There is a minimal amount of sanity-check information in the
-.rsyncsums file (size and mtime) so that the sum files can be shared with your
-mirror network.
+This option can be particularly helpful to a public mirror that wants to
+pre-compute their .rsyncsums files, set the "checksum files = strict" option
+in their daemon config file, and thus make it quite efficient for a client
+rsync to make use of the --checksum option on their server.
 
 To use this patch, run these commands for a successful build:
 
@@ -16,49 +16,153 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
+diff --git a/checksum.c b/checksum.c
+--- a/checksum.c
++++ b/checksum.c
+@@ -100,7 +100,7 @@ void get_checksum2(char *buf, int32 len, char *sum)
+ 	}
+ }
+ 
+-void file_checksum(char *fname, char *sum, OFF_T size)
++void file_checksum(const char *fname, OFF_T size, char *sum)
+ {
+ 	struct map_struct *buf;
+ 	OFF_T i, len = size;
+diff --git a/clientserver.c b/clientserver.c
+--- a/clientserver.c
++++ b/clientserver.c
+@@ -39,6 +39,8 @@ extern int numeric_ids;
+ extern int filesfrom_fd;
+ extern int remote_protocol;
+ extern int protocol_version;
++extern int always_checksum;
++extern int checksum_files;
+ extern int io_timeout;
+ extern int no_detach;
+ extern int write_batch;
+@@ -750,6 +752,9 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 	else if (am_root < 0) /* Treat --fake-super from client as --super. */
+ 		am_root = 2;
+ 
++	checksum_files = always_checksum ? lp_checksum_files(i)
++					 : CSF_IGNORE_FILES;
++
+ 	if (filesfrom_fd == 0)
+ 		filesfrom_fd = f_in;
+ 
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -121,6 +121,7 @@ static char tmp_sum[MAX_DIGEST_LEN];
- static char empty_sum[MAX_DIGEST_LEN];
+@@ -34,6 +34,7 @@ extern int am_generator;
+ extern int inc_recurse;
+ extern int do_progress;
+ extern int always_checksum;
++extern int basis_dir_cnt;
+ extern int module_id;
+ extern int ignore_errors;
+ extern int numeric_ids;
+@@ -61,6 +62,7 @@ extern int file_extra_cnt;
+ extern int ignore_perishable;
+ extern int non_perishable_cnt;
+ extern int prune_empty_dirs;
++extern int checksum_files;
+ extern int copy_links;
+ extern int copy_unsafe_links;
+ extern int protocol_version;
+@@ -68,6 +70,7 @@ extern int sanitize_paths;
+ extern int munge_symlinks;
+ extern int need_unsorted_flist;
+ extern int unsort_ndx;
++extern char *basis_dir[];
+ extern struct stats stats;
+ extern char *filesfrom_host;
+ 
+@@ -83,6 +86,11 @@ extern int filesfrom_convert;
+ extern iconv_t ic_send, ic_recv;
+ #endif
+ 
++#define RSYNCSUMS_FILE ".rsyncsums"
++
++#define CLEAN_STRIP_ROOT (1<<0)
++#define CLEAN_KEEP_LAST (1<<1)
++
+ #define PTR_SIZE (sizeof (struct file_struct *))
+ 
+ int io_error;
+@@ -124,7 +132,11 @@ static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
  static int dir_count = 0;
-+static struct file_list *checksum_flist = NULL;
  
- static void flist_sort_and_clean(struct file_list *flist, int strip_root);
+-static void flist_sort_and_clean(struct file_list *flist, int strip_root);
++static struct csum_cache {
++	struct file_list *flist;
++} *csum_cache = NULL;
++
++static void flist_sort_and_clean(struct file_list *flist, int flags);
  static void output_flist(struct file_list *flist);
-@@ -313,6 +314,186 @@ static void flist_done_allocating(struct file_list *flist)
+ 
+ void init_flist(void)
+@@ -315,6 +327,238 @@ static void flist_done_allocating(struct file_list *flist)
  		flist->pool_boundary = ptr;
  }
  
-+/* The len count is the length of the basename + 1 for the null. */
-+static int add_checksum(const char *dirname, const char *basename, int len,
-+			OFF_T file_length, time_t mtime, const char *sum)
++void reset_checksum_cache()
++{
++	int slot, slots = am_sender ? 1 : basis_dir_cnt + 1;
++
++	if (!csum_cache) {
++		csum_cache = new_array0(struct csum_cache, slots);
++		if (!csum_cache)
++			out_of_memory("reset_checksum_cache");
++	}
++
++	for (slot = 0; slot < slots; slot++) {
++		struct file_list *flist = csum_cache[slot].flist;
++
++		if (flist) {
++			/* Reset the pool memory and empty the file-list array. */
++			pool_free_old(flist->file_pool,
++				      pool_boundary(flist->file_pool, 0));
++			flist->used = 0;
++		} else
++			flist = csum_cache[slot].flist = flist_new(FLIST_TEMP, "reset_checksum_cache");
++
++		flist->low = 0;
++		flist->high = -1;
++		flist->next = NULL;
++	}
++}
++
++
++/* The basename_len count is the length of the basename + 1 for the null. */
++static int add_checksum(struct file_list *flist, const char *dirname,
++			const char *basename, int basename_len, OFF_T file_length,
++			time_t mtime, uint32 ctime, uint32 inode,
++			const char *sum)
 +{
 +	struct file_struct *file;
 +	int alloc_len, extra_len;
 +	char *bp;
 +
-+	if (len == 10+1 && *basename == '.' && strcmp(basename, ".rsyncsums") == 0)
-+		return 0;
-+	if (file_length == 0)
++	if (basename_len == 10+1 && *basename == '.' && strcmp(basename, RSYNCSUMS_FILE) == 0)
 +		return 0;
 +
-+	extra_len = (file_extra_cnt + (file_length > 0xFFFFFFFFu) + SUM_EXTRA_CNT)
++	/* "2" is for a 32-bit ctime num and an 32-bit inode num. */
++	extra_len = (file_extra_cnt + (file_length > 0xFFFFFFFFu) + SUM_EXTRA_CNT + 2)
 +		  * EXTRA_LEN;
 +#if EXTRA_ROUNDING > 0
 +	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
 +		extra_len = (extra_len | (EXTRA_ROUNDING * EXTRA_LEN)) + EXTRA_LEN;
 +#endif
-+	alloc_len = FILE_STRUCT_LEN + extra_len + len;
-+	bp = pool_alloc(checksum_flist->file_pool, alloc_len, "add_checksum");
++	alloc_len = FILE_STRUCT_LEN + extra_len + basename_len;
++	bp = pool_alloc(flist->file_pool, alloc_len, "add_checksum");
 +
 +	memset(bp, 0, extra_len + FILE_STRUCT_LEN);
 +	bp += extra_len;
 +	file = (struct file_struct *)bp;
 +	bp += FILE_STRUCT_LEN;
 +
-+	memcpy(bp, basename, len);
++	memcpy(bp, basename, basename_len);
 +
 +	file->mode = S_IFREG;
 +	file->modtime = mtime;
@@ -68,51 +172,45 @@ diff --git a/flist.c b/flist.c
 +		OPT_EXTRA(file, 0)->unum = (uint32)(file_length >> 32);
 +	}
 +	file->dirname = dirname;
++	F_CTIME(file) = ctime;
++	F_INODE(file) = inode;
 +	bp = F_SUM(file);
 +	memcpy(bp, sum, checksum_len);
 +
-+	flist_expand(checksum_flist, 1);
-+	checksum_flist->files[checksum_flist->used++] = file;
++	flist_expand(flist, 1);
++	flist->files[flist->used++] = file;
 +
-+	checksum_flist->sorted = checksum_flist->files;
++	flist->sorted = flist->files;
 +
 +	return 1;
 +}
 +
-+/* The direname value must remain unchanged during the lifespan of the
-+ * created checksum_flist object because we use it directly. */
-+static void read_checksums(const char *dirname)
++/* The "dirname" arg's data must remain unchanged during the lifespan of
++ * the created csum_cache[].flist object because we use it directly. */
++static void read_checksums(int slot, struct file_list *flist, const char *dirname)
 +{
 +	char line[MAXPATHLEN+1024], fbuf[MAXPATHLEN], sum[MAX_DIGEST_LEN];
-+	OFF_T file_length;
-+	time_t mtime;
-+	int len, dlen, i;
-+	char *cp;
 +	FILE *fp;
++	char *cp;
++	int len, i;
++	time_t mtime;
++	OFF_T file_length;
++	uint32 ctime, inode;
++	int dlen = dirname ? strlcpy(fbuf, dirname, sizeof fbuf) : 0;
 +
-+	if (checksum_flist) {
-+		/* Reset the pool memory and empty the file-list array. */
-+		pool_free_old(checksum_flist->file_pool,
-+			      pool_boundary(checksum_flist->file_pool, 0));
-+		checksum_flist->used = 0;
-+	} else
-+		checksum_flist = flist_new(FLIST_TEMP, "read_checksums");
-+
-+	checksum_flist->low = 0;
-+	checksum_flist->high = -1;
-+
-+	if (!dirname)
-+		return;
-+
-+	dlen = strlcpy(fbuf, dirname, sizeof fbuf);
-+	if (dlen >= (int)sizeof fbuf)
++	if (dlen >= (int)(sizeof fbuf - sizeof RSYNCSUMS_FILE))
 +		return;
 +	if (dlen)
 +		fbuf[dlen++] = '/';
 +	else
 +		dirname = NULL;
-+	strlcpy(fbuf+dlen, ".rsyncsums", sizeof fbuf - dlen);
-+	if (!(fp = fopen(fbuf, "r")))
++	strlcpy(fbuf+dlen, RSYNCSUMS_FILE, sizeof fbuf - dlen);
++	if (slot) {
++		pathjoin(line, sizeof line, basis_dir[slot-1], fbuf);
++		cp = line;
++	} else
++		cp = fbuf;
++	if (!(fp = fopen(cp, "r")))
 +		return;
 +
 +	while (fgets(line, sizeof line, fp)) {
@@ -177,16 +275,16 @@ diff --git a/flist.c b/flist.c
 +			break;
 +		while (*++cp == ' ') {}
 +
-+		/* Ignore ctime. */
++		ctime = 0;
 +		while (isDigit(cp))
-+			cp++;
++			ctime = ctime * 10 + *cp++ - '0';
 +		if (*cp != ' ')
 +			break;
 +		while (*++cp == ' ') {}
 +
-+		/* Ignore inode. */
++		inode = 0;
 +		while (isDigit(cp))
-+			cp++;
++			inode = inode * 10 + *cp++ - '0';
 +		if (*cp != ' ')
 +			break;
 +		while (*++cp == ' ') {}
@@ -204,17 +302,46 @@ diff --git a/flist.c b/flist.c
 +
 +		strlcpy(fbuf+dlen, cp, sizeof fbuf - dlen);
 +
-+		add_checksum(dirname, cp, len, file_length, mtime, sum);
++		add_checksum(flist, dirname, cp, len, file_length,
++			     mtime, ctime, inode,
++			     sum);
 +	}
 +	fclose(fp);
 +
-+	flist_sort_and_clean(checksum_flist, 0);
++	flist_sort_and_clean(flist, CLEAN_KEEP_LAST);
++}
++
++void get_cached_checksum(int slot, const char *fname, struct file_struct *file,
++			 STRUCT_STAT *stp, char *sum_buf)
++{
++	struct file_list *flist = csum_cache[slot].flist;
++	int j;
++
++	if (!flist->next) {
++		flist->next = cur_flist; /* next points from checksum flist to file flist */
++		read_checksums(slot, flist, file->dirname);
++	}
++
++	if ((j = flist_find(flist, file)) >= 0) {
++		struct file_struct *fp = flist->sorted[j];
++
++		if (F_LENGTH(fp) == stp->st_size
++		 && fp->modtime == stp->st_mtime
++		 && (checksum_files & CSF_LAX
++		  || (F_CTIME(fp) == (uint32)stp->st_ctime
++		   && F_INODE(fp) == (uint32)stp->st_ino))) {
++			memcpy(sum_buf, F_SUM(fp), MAX_DIGEST_LEN);
++			return;
++		}
++	}
++
++	file_checksum(fname, stp->st_size, sum_buf);
 +}
 +
  int push_pathname(const char *dir, int len)
  {
  	if (dir == pathname)
-@@ -1003,7 +1184,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1005,7 +1249,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  			      STRUCT_STAT *stp, int flags, int filter_level)
  {
  	static char *lastdir;
@@ -223,25 +350,25 @@ diff --git a/flist.c b/flist.c
  	struct file_struct *file;
  	char thisname[MAXPATHLEN];
  	char linkname[MAXPATHLEN];
-@@ -1136,9 +1317,16 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1138,9 +1382,16 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  			memcpy(lastdir, thisname, len);
  			lastdir[len] = '\0';
  			lastdir_len = len;
-+			if (always_checksum && am_sender && flist)
-+				read_checksums(lastdir);
++			if (checksum_files && am_sender && flist)
++				reset_checksum_cache();
  		}
 -	} else
 +	} else {
  		basename = thisname;
-+		if (always_checksum && am_sender && flist && lastdir_len == -2) {
++		if (checksum_files && am_sender && flist && lastdir_len == -2) {
 +			lastdir_len = -1;
-+			read_checksums("");
++			reset_checksum_cache();
 +		}
 +	}
  	basename_len = strlen(basename) + 1; /* count the '\0' */
  
  #ifdef SUPPORT_LINKS
-@@ -1214,11 +1402,21 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1216,11 +1467,15 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	}
  #endif
  
@@ -251,22 +378,16 @@ diff --git a/flist.c b/flist.c
  	F_PATHNAME(file) = pathname;
  
 +	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
-+		int j;
-+		if (flist && (j = flist_find(checksum_flist, file)) >= 0) {
-+			struct file_struct *fp = checksum_flist->sorted[j];
-+			if (F_LENGTH(fp) == st.st_size
-+			 && fp->modtime == st.st_mtime)
-+				memcpy(tmp_sum, F_SUM(fp), MAX_DIGEST_LEN);
-+			else
-+				file_checksum(thisname, tmp_sum, st.st_size);
-+		} else
-+			file_checksum(thisname, tmp_sum, st.st_size);
++		if (flist && checksum_files)
++			get_cached_checksum(0, thisname, file, &st, tmp_sum);
++		else
++			file_checksum(thisname, st.st_size, tmp_sum);
 +	}
 +
  	/* This code is only used by the receiver when it is building
  	 * a list of files for a delete pass. */
  	if (keep_dirlinks && linkname_len && flist) {
-@@ -2074,7 +2272,8 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2076,7 +2331,8 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  			 * file-list to check if this is a 1-file xfer. */
  			send_extra_file_list(f, 1);
  		}
@@ -276,6 +397,155 @@ diff --git a/flist.c b/flist.c
  
  	return flist;
  }
+@@ -2178,7 +2434,7 @@ struct file_list *recv_file_list(int f)
+ 	else if (f >= 0)
+ 		recv_id_list(f, flist);
+ 
+-	flist_sort_and_clean(flist, relative_paths);
++	flist_sort_and_clean(flist, relative_paths ? CLEAN_STRIP_ROOT : 0);
+ 
+ 	if (protocol_version < 30) {
+ 		/* Recv the io_error flag */
+@@ -2376,7 +2632,7 @@ void flist_free(struct file_list *flist)
+ 
+ /* This routine ensures we don't have any duplicate names in our file list.
+  * duplicate names can cause corruption because of the pipelining. */
+-static void flist_sort_and_clean(struct file_list *flist, int strip_root)
++static void flist_sort_and_clean(struct file_list *flist, int flags)
+ {
+ 	char fbuf[MAXPATHLEN];
+ 	int i, prev_i;
+@@ -2427,7 +2683,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+ 			/* If one is a dir and the other is not, we want to
+ 			 * keep the dir because it might have contents in the
+ 			 * list.  Otherwise keep the first one. */
+-			if (S_ISDIR(file->mode)) {
++			if (S_ISDIR(file->mode) || flags & CLEAN_KEEP_LAST) {
+ 				struct file_struct *fp = flist->sorted[j];
+ 				if (!S_ISDIR(fp->mode))
+ 					keep = i, drop = j;
+@@ -2443,8 +2699,8 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+ 			} else
+ 				keep = j, drop = i;
+ 
+-			if (!am_sender) {
+-				if (verbose > 1) {
++			if (!am_sender || flags & CLEAN_KEEP_LAST) {
++				if (verbose > 1 && !(flags & CLEAN_KEEP_LAST)) {
+ 					rprintf(FINFO,
+ 					    "removing duplicate name %s from file list (%d)\n",
+ 					    f_name(file, fbuf), drop + flist->ndx_start);
+@@ -2466,7 +2722,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+ 	}
+ 	flist->high = prev_i;
+ 
+-	if (strip_root) {
++	if (flags & CLEAN_STRIP_ROOT) {
+ 		/* We need to strip off the leading slashes for relative
+ 		 * paths, but this must be done _after_ the sorting phase. */
+ 		for (i = flist->low; i <= flist->high; i++) {
+diff --git a/generator.c b/generator.c
+--- a/generator.c
++++ b/generator.c
+@@ -53,6 +53,7 @@ extern int delete_during;
+ extern int delete_after;
+ extern int msgdone_cnt;
+ extern int ignore_errors;
++extern int checksum_files;
+ extern int remove_source_files;
+ extern int delay_updates;
+ extern int update_only;
+@@ -694,7 +695,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+ 
+ 
+ /* Perform our quick-check heuristic for determining if a file is unchanged. */
+-int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
++int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st, int slot)
+ {
+ 	if (st->st_size != F_LENGTH(file))
+ 		return 0;
+@@ -703,7 +704,10 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
+ 	   of the file time to determine whether to sync */
+ 	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
+ 		char sum[MAX_DIGEST_LEN];
+-		file_checksum(fn, sum, st->st_size);
++		if (checksum_files && slot >= 0)
++			get_cached_checksum(slot, fn, file, st, sum);
++		else
++			file_checksum(fn, st->st_size, sum);
+ 		return memcmp(sum, F_SUM(file), checksum_len) == 0;
+ 	}
+ 
+@@ -957,7 +961,7 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+ 			match_level = 1;
+ 			/* FALL THROUGH */
+ 		case 1:
+-			if (!unchanged_file(cmpbuf, file, &sxp->st))
++			if (!unchanged_file(cmpbuf, file, &sxp->st, j+1))
+ 				continue;
+ 			best_match = j;
+ 			match_level = 2;
+@@ -1219,7 +1223,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 	static const char *parent_dirname = "";
+ 	static struct file_struct *missing_dir = NULL, *excluded_dir = NULL;
+ 	static struct file_list *fuzzy_dirlist = NULL;
+-	static int need_fuzzy_dirlist = 0;
++	static int need_new_dirscan = 0;
+ 	struct file_struct *fuzzy_file = NULL;
+ 	int fd = -1, f_copy = -1;
+ 	stat_x sx, real_sx;
+@@ -1309,8 +1313,8 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 				flist_free(fuzzy_dirlist);
+ 				fuzzy_dirlist = NULL;
+ 			}
+-			if (fuzzy_basis)
+-				need_fuzzy_dirlist = 1;
++			if (fuzzy_basis || checksum_files)
++				need_new_dirscan = 1;
+ #ifdef SUPPORT_ACLS
+ 			if (!preserve_perms)
+ 				dflt_perms = default_perms_for_dir(dn);
+@@ -1318,10 +1322,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		}
+ 		parent_dirname = dn;
+ 
+-		if (need_fuzzy_dirlist && S_ISREG(file->mode)) {
+-			strlcpy(fnamecmpbuf, dn, sizeof fnamecmpbuf);
+-			fuzzy_dirlist = get_dirlist(fnamecmpbuf, -1, 1);
+-			need_fuzzy_dirlist = 0;
++		if (need_new_dirscan && S_ISREG(file->mode)) {
++			if (fuzzy_basis) {
++				strlcpy(fnamecmpbuf, dn, sizeof fnamecmpbuf);
++				fuzzy_dirlist = get_dirlist(fnamecmpbuf, -1, 1);
++			}
++			if (checksum_files) {
++				reset_checksum_cache();
++			}
++			need_new_dirscan = 0;
+ 		}
+ 
+ 		statret = link_stat(fname, &sx.st, keep_dirlinks && is_dir);
+@@ -1742,7 +1751,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		;
+ 	else if (fnamecmp_type == FNAMECMP_FUZZY)
+ 		;
+-	else if (unchanged_file(fnamecmp, file, &sx.st)) {
++	else if (unchanged_file(fnamecmp, file, &sx.st, fnamecmp_type == FNAMECMP_FNAME ? 0 : -1)) {
+ 		if (partialptr) {
+ 			do_unlink(partialptr);
+ 			handle_partial_dir(partialptr, PDIR_DELETE);
+diff --git a/hlink.c b/hlink.c
+--- a/hlink.c
++++ b/hlink.c
+@@ -351,7 +351,7 @@ int hard_link_check(struct file_struct *file, int ndx, const char *fname,
+ 				}
+ 				break;
+ 			}
+-			if (!unchanged_file(cmpbuf, file, &alt_sx.st))
++			if (!unchanged_file(cmpbuf, file, &alt_sx.st, j+1))
+ 				continue;
+ 			statret = 1;
+ 			if (unchanged_attrs(cmpbuf, file, &alt_sx))
 diff --git a/ifuncs.h b/ifuncs.h
 --- a/ifuncs.h
 +++ b/ifuncs.h
@@ -292,11 +562,247 @@ diff --git a/ifuncs.h b/ifuncs.h
  isPrint(const char *ptr)
  {
  	return isprint(*(unsigned char *)ptr);
+diff --git a/loadparm.c b/loadparm.c
+--- a/loadparm.c
++++ b/loadparm.c
+@@ -149,6 +149,7 @@ typedef struct
+ 	char *temp_dir;
+ 	char *uid;
+ 
++	int checksum_files;
+ 	int max_connections;
+ 	int max_verbosity;
+ 	int syslog_facility;
+@@ -200,6 +201,7 @@ static service sDefault =
+  /* temp_dir; */ 		NULL,
+  /* uid; */			NOBODY_USER,
+ 
++ /* checksum_files; */		CSF_IGNORE_FILES,
+  /* max_connections; */		0,
+  /* max_verbosity; */		1,
+  /* syslog_facility; */		LOG_DAEMON,
+@@ -294,6 +296,12 @@ static struct enum_list enum_facilities[] = {
+ #endif
+ 	{ -1, NULL }};
+ 
++static struct enum_list enum_csum_modes[] = {
++	{ CSF_IGNORE_FILES, "none" },
++	{ CSF_LAX_MODE, "lax" },
++	{ CSF_STRICT_MODE, "strict" },
++	{ -1, NULL }
++};
+ 
+ /* note that we do not initialise the defaults union - it is not allowed in ANSI C */
+ static struct parm_struct parm_table[] =
+@@ -306,6 +314,7 @@ static struct parm_struct parm_table[] =
+ 
+  {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
+  {"charset",           P_STRING, P_LOCAL, &sDefault.charset,           NULL,0},
++ {"checksum files",    P_ENUM,   P_LOCAL, &sDefault.checksum_files,    enum_csum_modes,0},
+  {"comment",           P_STRING, P_LOCAL, &sDefault.comment,           NULL,0},
+  {"dont compress",     P_STRING, P_LOCAL, &sDefault.dont_compress,     NULL,0},
+  {"exclude from",      P_STRING, P_LOCAL, &sDefault.exclude_from,      NULL,0},
+@@ -423,6 +432,7 @@ FN_LOCAL_STRING(lp_secrets_file, secrets_file)
+ FN_LOCAL_STRING(lp_temp_dir, temp_dir)
+ FN_LOCAL_STRING(lp_uid, uid)
+ 
++FN_LOCAL_INTEGER(lp_checksum_files, checksum_files)
+ FN_LOCAL_INTEGER(lp_max_connections, max_connections)
+ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+ FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -112,6 +112,7 @@ size_t bwlimit_writemax = 0;
+ int ignore_existing = 0;
+ int ignore_non_existing = 0;
+ int need_messages_from_generator = 0;
++int checksum_files = CSF_IGNORE_FILES;
+ int max_delete = INT_MIN;
+ OFF_T max_size = 0;
+ OFF_T min_size = 0;
+@@ -316,6 +317,7 @@ void usage(enum logcode F)
+   rprintf(F," -q, --quiet                 suppress non-error messages\n");
+   rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
+   rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
++  rprintf(F,"     --sumfiles=MODE         use .rsyncsums to speedup --checksum mode\n");
+   rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
+   rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
+   rprintf(F," -r, --recursive             recurse into directories\n");
+@@ -445,7 +447,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+       OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
+       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
+       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
+-      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV,
++      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_SUMFILES,
+       OPT_SERVER, OPT_REFUSED_BASE = 9000};
+ 
+ static struct poptOption long_options[] = {
+@@ -566,6 +568,7 @@ static struct poptOption long_options[] = {
+   {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
+   {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
+   {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
++  {"sumfiles",         0,  POPT_ARG_STRING, 0, OPT_SUMFILES, 0, 0 },
+   {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
+   {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
+   {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
+@@ -1212,6 +1215,23 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+ 			}
+ 			break;
+ 
++		case OPT_SUMFILES:
++			arg = poptGetOptArg(pc);
++			checksum_files = 0;
++			if (strcmp(arg, "lax") == 0)
++				checksum_files |= CSF_LAX_MODE;
++			else if (strcmp(arg, "strict") == 0)
++				checksum_files |= CSF_STRICT_MODE;
++			else if (strcmp(arg, "none") == 0)
++				checksum_files = CSF_IGNORE_FILES;
++			else {
++				snprintf(err_buf, sizeof err_buf,
++				    "Invalid argument passed to --sumfiles (%s)\n",
++				    arg);
++				return 0;
++			}
++			break;
++
+ 		case OPT_HELP:
+ 			usage(FINFO);
+ 			exit_cleanup(0);
+@@ -1311,6 +1331,9 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+ 	}
+ #endif
+ 
++	if (checksum_files && !always_checksum)
++		checksum_files = CSF_IGNORE_FILES;
++
+ 	if (write_batch && read_batch) {
+ 		snprintf(err_buf, sizeof err_buf,
+ 			"--write-batch and --read-batch can not be used together\n");
+diff --git a/rsync.h b/rsync.h
+--- a/rsync.h
++++ b/rsync.h
+@@ -680,6 +680,10 @@ extern int xattrs_ndx;
+ #define F_SUM(f) ((char*)OPT_EXTRA(f, LEN64_BUMP(f) + HLINK_BUMP(f) \
+ 				    + SUM_EXTRA_CNT - 1))
+ 
++/* These are only valid on an entry read from a checksum file. */
++#define F_CTIME(f) OPT_EXTRA(f, LEN64_BUMP(f) + SUM_EXTRA_CNT)->unum
++#define F_INODE(f) OPT_EXTRA(f, LEN64_BUMP(f) + SUM_EXTRA_CNT + 1)->unum
++
+ /* Some utility defines: */
+ #define F_IS_ACTIVE(f) (f)->basename[0]
+ #define F_IS_HLINKED(f) ((f)->flags & FLAG_HLINKED)
+@@ -858,6 +862,13 @@ typedef struct {
+ 	char fname[1]; /* has variable size */
+ } relnamecache;
+ 
++#define CSF_ENABLE (1<<1)
++#define CSF_LAX (1<<2)
++
++#define CSF_IGNORE_FILES 0
++#define CSF_LAX_MODE (CSF_ENABLE|CSF_LAX)
++#define CSF_STRICT_MODE (CSF_ENABLE)
++
+ #include "byteorder.h"
+ #include "lib/mdigest.h"
+ #include "lib/wildmatch.h"
+diff --git a/rsync.yo b/rsync.yo
+--- a/rsync.yo
++++ b/rsync.yo
+@@ -317,6 +317,7 @@ to the detailed description below for a complete description.  verb(
+  -q, --quiet                 suppress non-error messages
+      --no-motd               suppress daemon-mode MOTD (see caveat)
+  -c, --checksum              skip based on checksum, not mod-time & size
++     --sumfiles=MODE         use .rsyncsums to speedup --checksum mode
+  -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
+      --no-OPTION             turn off an implied OPTION (e.g. --no-D)
+  -r, --recursive             recurse into directories
+@@ -516,9 +517,9 @@ uses a "quick check" that (by default) checks if each file's size and time
+ of last modification match between the sender and receiver.  This option
+ changes this to compare a 128-bit MD4 checksum for each file that has a
+ matching size.  Generating the checksums means that both sides will expend
+-a lot of disk I/O reading all the data in the files in the transfer (and
+-this is prior to any reading that will be done to transfer changed files),
+-so this can slow things down significantly.
++a lot of disk I/O reading the data in all the files in the transfer, so
++this can slow things down significantly (and this is prior to any reading
++that will be done to transfer the files that have changed).
+ 
+ The sending side generates its checksums while it is doing the file-system
+ scan that builds the list of the available files.  The receiver generates
+@@ -526,12 +527,44 @@ its checksums when it is scanning for changed files, and will checksum any
+ file that has the same size as the corresponding sender's file:  files with
+ either a changed size or a changed checksum are selected for transfer.
+ 
++See also the bf(--sumfiles) option for a way to use cached checksum data.
++
+ Note that rsync always verifies that each em(transferred) file was
+ correctly reconstructed on the receiving side by checking a whole-file
+ checksum that is generated as the file is transferred, but that
+ automatic after-the-transfer verification has nothing to do with this
+ option's before-the-transfer "Does this file need to be updated?" check.
+ 
++dit(bf(--sumfiles=MODE)) This option tells rsync to make use of any cached
++checksum information it finds in per-directory .rsyncsums files when the
++current transfer is using the bf(--checksum) option.  If the checksum data
++is up-to-date, it is used instead of recomputing it, saving both disk I/O
++and CPU time.  If the checksum data is missing or outdated, the checksum is
++computed just as it would be if bf(--sumfiles) was not specified.
++
++The MODE value is either "lax", for relaxed checking (which compares size
++and mtime), "strict" (which also compares ctime and inode), or "none" to
++ignore any .rsyncsums files ("none" is the default).  Rsync does not create
++or update these files, but there is a perl script in the support directory
++named "rsyncsums" that can be used for that.
++
++This option has no effect unless bf(--checksum, -c) was also specified.  It
++also only affects the current side of the transfer, so if you want the
++remote side to parse its own .rsyncsums files, specify the option via the
++bf(--rsync-path) option (e.g. "--rsync-path="rsync --sumfiles=lax").
++
++To avoid transferring the system's checksum files, you can use an exclude
++(e.g. bf(--exclude=.rsyncsums)).  To make this easier to type, you can use
++a popt alias.  For instance, adding the following line in your ~/.popt file
++defines a bf(--cc) option that enables lax checksum files and excludes the
++checksum files:
++
++verb(  rsync alias --cc -c --sumfiles=lax --exclude=.rsyncsums)
++
++An rsync daemon does not allow the client to control this setting, so see
++the "checksum files" daemon parameter for information on how to make a
++daemon use cached checksum data.
++
+ dit(bf(-a, --archive)) This is equivalent to bf(-rlptgoD). It is a quick
+ way of saying you want recursion and want to preserve almost
+ everything (with -H being a notable omission).
+diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
+--- a/rsyncd.conf.yo
++++ b/rsyncd.conf.yo
+@@ -281,6 +281,17 @@ locking on this file to ensure that the max connections limit is not
+ exceeded for the modules sharing the lock file.
+ The default is tt(/var/run/rsyncd.lock).
+ 
++dit(bf(checksum files)) This option tells rsync to make use of any cached
++checksum information it finds in per-directory .rsyncsums files when the
++current transfer is using the bf(--checksum) option.  The value can be set
++to either "lax", "strict", or "none" -- see the client's bf(--sumfiles)
++option for what these choices do.
++
++Note also that the client's command-line option, bf(--sumfiles), has no
++effect on a daemon.  A daemon will only access checksum files if this
++config option tells it to.  See also the bf(exclude) directive for a way
++to hide the .rsyncsums files from the user.
++
+ dit(bf(read only)) The "read only" option determines whether clients
+ will be able to upload files or not. If "read only" is true then any
+ attempted uploads will fail. If "read only" is false then uploads will
 diff --git a/support/rsyncsums b/support/rsyncsums
-new file mode 100644
+new file mode 100755
 --- /dev/null
 +++ b/support/rsyncsums
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,201 @@
 +#!/usr/bin/perl -w
 +use strict;
 +
@@ -310,12 +816,14 @@ new file mode 100644
 +&Getopt::Long::Configure('bundling');
 +&usage if !&GetOptions(
 +    'recurse|r' => \( my $recurse_opt ),
-+    'simple-cmp|s' => \( my $ignore_ctime_and_inode ),
++    'mode|m=s' => \( my $cmp_mode = 'strict' ),
 +    'check|c' => \( my $check_opt ),
 +    'verbose|v+' => \( my $verbosity = 0 ),
 +    'help|h' => \( my $help_opt ),
 +);
-+&usage if $help_opt;
++&usage if $help_opt || $cmp_mode !~ /^(lax|strict)$/;
++
++my $ignore_ctime_and_inode = $cmp_mode eq 'lax' ? 0 : 1;
 +
 +my $start_dir = cwd();
 +
@@ -375,17 +883,9 @@ new file mode 100644
 +	next unless -f _;
 +
 +	my($size,$mtime,$ctime,$inode) = (stat(_))[7,9,10,1];
++	$ctime &= 0xFFFFFFFF;
++	$inode &= 0xFFFFFFFF;
 +	my $ref = $cache{$fn};
-+	if ($size == 0) {
-+	    if (defined $ref) {
-+		delete $cache{$fn};
-+		$f_cnt--;
-+		if (!$check_opt && !$update_cnt++) {
-+		    print "UPDATING\n" if $verbosity;
-+		}
-+	    }
-+	    next;
-+	}
 +	$d_cnt++;
 +
 +	if (!$check_opt) {
@@ -423,6 +923,8 @@ new file mode 100644
 +	    print " $sum4 $sum5" if $verbosity > 2;
 +	    print " $fn" if $verbosity > 1;
 +	    my($size2,$mtime2,$ctime2,$inode2) = (stat(IN))[7,9,10,1];
++	    $ctime2 &= 0xFFFFFFFF;
++	    $inode2 &= 0xFFFFFFFF;
 +	    last if $size == $size2 && $mtime == $mtime2
 +	     && ($ignore_ctime_and_inode || ($ctime == $ctime2 && $inode == $inode2));
 +	    $size = $size2;
@@ -453,7 +955,7 @@ new file mode 100644
 +	    $exit_code = 1;
 +	} else {
 +	    print "\n" if $verbosity > 1;
-+	    $cache{$fn} = [ 1, $sum4, $sum5, $size, $mtime, $ctime & 0xFFFFFFFF, $inode & 0xFFFFFFFF ];
++	    $cache{$fn} = [ 1, $sum4, $sum5, $size, $mtime, $ctime, $inode ];
 +	}
 +    }
 +
@@ -494,7 +996,9 @@ new file mode 100644
 +
 +Options:
 + -r, --recurse     Update $SUMS_FILE files in subdirectories too.
-+ -s, --simple-cmp  Ignore ctime and inode values when comparing identicality.
++ -m, --mode=MODE   Compare entries in either "lax" or "strict" mode.  Using
++                   "lax" compares size and mtime, while "strict" additionally
++                   compares ctime and inode.  Default:  strict.
 + -c, --check       Check if the checksums are right (doesn't update).
 + -v, --verbose     Mention what we're doing.  Repeat for more info.
 + -h, --help        Display this help message.
