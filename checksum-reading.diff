@@ -31,7 +31,7 @@ diff --git a/checksum.c b/checksum.c
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
-@@ -39,6 +39,8 @@ extern int numeric_ids;
+@@ -42,6 +42,8 @@ extern int numeric_ids;
  extern int filesfrom_fd;
  extern int remote_protocol;
  extern int protocol_version;
@@ -40,8 +40,8 @@ diff --git a/clientserver.c b/clientserver.c
  extern int io_timeout;
  extern int no_detach;
  extern int write_batch;
-@@ -750,6 +752,9 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
- 	else if (am_root < 0) /* Treat --fake-super from client as --super. */
+@@ -782,6 +784,9 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 	} else if (am_root < 0) /* Treat --fake-super from client as --super. */
  		am_root = 2;
  
 +	checksum_files = always_checksum ? lp_checksum_files(i)
@@ -77,11 +77,12 @@ diff --git a/flist.c b/flist.c
  extern struct stats stats;
  extern char *filesfrom_host;
  
-@@ -83,6 +86,11 @@ extern int filesfrom_convert;
+@@ -83,6 +86,12 @@ extern int filesfrom_convert;
  extern iconv_t ic_send, ic_recv;
  #endif
  
 +#define RSYNCSUMS_FILE ".rsyncsums"
++#define RSYNCSUMS_LEN (sizeof RSYNCSUMS_FILE-1)
 +
 +#define CLEAN_STRIP_ROOT (1<<0)
 +#define CLEAN_KEEP_LAST (1<<1)
@@ -89,7 +90,7 @@ diff --git a/flist.c b/flist.c
  #define PTR_SIZE (sizeof (struct file_struct *))
  
  int io_error;
-@@ -124,7 +132,11 @@ static char empty_sum[MAX_DIGEST_LEN];
+@@ -124,7 +133,11 @@ static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
  static int dir_count = 0;
  
@@ -102,7 +103,7 @@ diff --git a/flist.c b/flist.c
  static void output_flist(struct file_list *flist);
  
  void init_flist(void)
-@@ -315,6 +327,238 @@ static void flist_done_allocating(struct file_list *flist)
+@@ -350,6 +363,238 @@ static void flist_done_allocating(struct file_list *flist)
  		flist->pool_boundary = ptr;
  }
  
@@ -133,8 +134,7 @@ diff --git a/flist.c b/flist.c
 +	}
 +}
 +
-+
-+/* The basename_len count is the length of the basename + 1 for the null. */
++/* The basename_len count is the length of the basename + 1 for the '\0'. */
 +static int add_checksum(struct file_list *flist, const char *dirname,
 +			const char *basename, int basename_len, OFF_T file_length,
 +			time_t mtime, uint32 ctime, uint32 inode,
@@ -144,7 +144,8 @@ diff --git a/flist.c b/flist.c
 +	int alloc_len, extra_len;
 +	char *bp;
 +
-+	if (basename_len == 10+1 && *basename == '.' && strcmp(basename, RSYNCSUMS_FILE) == 0)
++	if (basename_len == RSYNCSUMS_LEN+1 && *basename == '.'
++	 && strcmp(basename, RSYNCSUMS_FILE) == 0)
 +		return 0;
 +
 +	/* "2" is for a 32-bit ctime num and an 32-bit inode num. */
@@ -198,7 +199,7 @@ diff --git a/flist.c b/flist.c
 +	uint32 ctime, inode;
 +	int dlen = dirname ? strlcpy(fbuf, dirname, sizeof fbuf) : 0;
 +
-+	if (dlen >= (int)(sizeof fbuf - sizeof RSYNCSUMS_FILE))
++	if (dlen >= (int)(sizeof fbuf - 1 - RSYNCSUMS_LEN))
 +		return;
 +	if (dlen)
 +		fbuf[dlen++] = '/';
@@ -341,7 +342,7 @@ diff --git a/flist.c b/flist.c
  int push_pathname(const char *dir, int len)
  {
  	if (dir == pathname)
-@@ -1005,7 +1249,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1039,7 +1284,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  			      STRUCT_STAT *stp, int flags, int filter_level)
  {
  	static char *lastdir;
@@ -350,7 +351,7 @@ diff --git a/flist.c b/flist.c
  	struct file_struct *file;
  	char thisname[MAXPATHLEN];
  	char linkname[MAXPATHLEN];
-@@ -1138,9 +1382,16 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1178,9 +1423,16 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  			memcpy(lastdir, thisname, len);
  			lastdir[len] = '\0';
  			lastdir_len = len;
@@ -368,14 +369,17 @@ diff --git a/flist.c b/flist.c
  	basename_len = strlen(basename) + 1; /* count the '\0' */
  
  #ifdef SUPPORT_LINKS
-@@ -1216,11 +1467,15 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
- 	}
+@@ -1253,14 +1505,18 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 		memcpy(bp + basename_len, linkname, linkname_len);
  #endif
  
 -	if (always_checksum && am_sender && S_ISREG(st.st_mode))
 -		file_checksum(thisname, tmp_sum, st.st_size);
 -
- 	F_PATHNAME(file) = pathname;
+ 	if (am_sender)
+ 		F_PATHNAME(file) = pathname;
+ 	else if (!pool)
+ 		F_DEPTH(file) = extra_len / EXTRA_LEN;
  
 +	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
 +		if (flist && checksum_files)
@@ -387,7 +391,7 @@ diff --git a/flist.c b/flist.c
  	/* This code is only used by the receiver when it is building
  	 * a list of files for a delete pass. */
  	if (keep_dirlinks && linkname_len && flist) {
-@@ -2076,7 +2331,8 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2131,7 +2387,8 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  			 * file-list to check if this is a 1-file xfer. */
  			send_extra_file_list(f, 1);
  		}
@@ -397,7 +401,7 @@ diff --git a/flist.c b/flist.c
  
  	return flist;
  }
-@@ -2178,7 +2434,7 @@ struct file_list *recv_file_list(int f)
+@@ -2233,7 +2490,7 @@ struct file_list *recv_file_list(int f)
  	else if (f >= 0)
  		recv_id_list(f, flist);
  
@@ -406,7 +410,7 @@ diff --git a/flist.c b/flist.c
  
  	if (protocol_version < 30) {
  		/* Recv the io_error flag */
-@@ -2376,7 +2632,7 @@ void flist_free(struct file_list *flist)
+@@ -2431,7 +2688,7 @@ void flist_free(struct file_list *flist)
  
  /* This routine ensures we don't have any duplicate names in our file list.
   * duplicate names can cause corruption because of the pipelining. */
@@ -415,7 +419,7 @@ diff --git a/flist.c b/flist.c
  {
  	char fbuf[MAXPATHLEN];
  	int i, prev_i;
-@@ -2427,7 +2683,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+@@ -2482,7 +2739,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
  			/* If one is a dir and the other is not, we want to
  			 * keep the dir because it might have contents in the
  			 * list.  Otherwise keep the first one. */
@@ -424,7 +428,7 @@ diff --git a/flist.c b/flist.c
  				struct file_struct *fp = flist->sorted[j];
  				if (!S_ISDIR(fp->mode))
  					keep = i, drop = j;
-@@ -2443,8 +2699,8 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+@@ -2498,8 +2755,8 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
  			} else
  				keep = j, drop = i;
  
@@ -435,7 +439,7 @@ diff --git a/flist.c b/flist.c
  					rprintf(FINFO,
  					    "removing duplicate name %s from file list (%d)\n",
  					    f_name(file, fbuf), drop + flist->ndx_start);
-@@ -2466,7 +2722,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+@@ -2521,7 +2778,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
  	}
  	flist->high = prev_i;
  
@@ -447,7 +451,7 @@ diff --git a/flist.c b/flist.c
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -53,6 +53,7 @@ extern int delete_during;
+@@ -52,6 +52,7 @@ extern int delete_during;
  extern int delete_after;
  extern int msgdone_cnt;
  extern int ignore_errors;
@@ -455,7 +459,7 @@ diff --git a/generator.c b/generator.c
  extern int remove_source_files;
  extern int delay_updates;
  extern int update_only;
-@@ -694,7 +695,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -706,7 +707,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  
  
  /* Perform our quick-check heuristic for determining if a file is unchanged. */
@@ -464,7 +468,7 @@ diff --git a/generator.c b/generator.c
  {
  	if (st->st_size != F_LENGTH(file))
  		return 0;
-@@ -703,7 +704,10 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
+@@ -715,7 +716,10 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
  	   of the file time to determine whether to sync */
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
@@ -476,7 +480,7 @@ diff --git a/generator.c b/generator.c
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
  
-@@ -957,7 +961,7 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+@@ -969,7 +973,7 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
  			match_level = 1;
  			/* FALL THROUGH */
  		case 1:
@@ -485,16 +489,16 @@ diff --git a/generator.c b/generator.c
  				continue;
  			best_match = j;
  			match_level = 2;
-@@ -1219,7 +1223,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 	static const char *parent_dirname = "";
- 	static struct file_struct *missing_dir = NULL, *excluded_dir = NULL;
+@@ -1242,7 +1246,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 	 * --ignore-non-existing, daemon exclude, or mkdir failure. */
+ 	static struct file_struct *skip_dir = NULL;
  	static struct file_list *fuzzy_dirlist = NULL;
 -	static int need_fuzzy_dirlist = 0;
 +	static int need_new_dirscan = 0;
  	struct file_struct *fuzzy_file = NULL;
  	int fd = -1, f_copy = -1;
  	stat_x sx, real_sx;
-@@ -1309,8 +1313,8 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1331,8 +1335,8 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  				flist_free(fuzzy_dirlist);
  				fuzzy_dirlist = NULL;
  			}
@@ -505,7 +509,7 @@ diff --git a/generator.c b/generator.c
  #ifdef SUPPORT_ACLS
  			if (!preserve_perms)
  				dflt_perms = default_perms_for_dir(dn);
-@@ -1318,10 +1322,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1340,10 +1344,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		}
  		parent_dirname = dn;
  
@@ -525,7 +529,7 @@ diff --git a/generator.c b/generator.c
  		}
  
  		statret = link_stat(fname, &sx.st, keep_dirlinks && is_dir);
-@@ -1742,7 +1751,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1768,7 +1777,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		;
  	else if (fnamecmp_type == FNAMECMP_FUZZY)
  		;
@@ -537,7 +541,7 @@ diff --git a/generator.c b/generator.c
 diff --git a/hlink.c b/hlink.c
 --- a/hlink.c
 +++ b/hlink.c
-@@ -351,7 +351,7 @@ int hard_link_check(struct file_struct *file, int ndx, const char *fname,
+@@ -388,7 +388,7 @@ int hard_link_check(struct file_struct *file, int ndx, const char *fname,
  				}
  				break;
  			}
@@ -549,7 +553,7 @@ diff --git a/hlink.c b/hlink.c
 diff --git a/ifuncs.h b/ifuncs.h
 --- a/ifuncs.h
 +++ b/ifuncs.h
-@@ -64,6 +64,12 @@ isDigit(const char *ptr)
+@@ -74,6 +74,12 @@ isDigit(const char *ptr)
  }
  
  static inline int
@@ -613,7 +617,7 @@ diff --git a/loadparm.c b/loadparm.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -112,6 +112,7 @@ size_t bwlimit_writemax = 0;
+@@ -113,6 +113,7 @@ size_t bwlimit_writemax = 0;
  int ignore_existing = 0;
  int ignore_non_existing = 0;
  int need_messages_from_generator = 0;
@@ -621,7 +625,7 @@ diff --git a/options.c b/options.c
  int max_delete = INT_MIN;
  OFF_T max_size = 0;
  OFF_T min_size = 0;
-@@ -316,6 +317,7 @@ void usage(enum logcode F)
+@@ -317,6 +318,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -629,7 +633,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -445,7 +447,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -446,7 +448,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -638,7 +642,7 @@ diff --git a/options.c b/options.c
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -566,6 +568,7 @@ static struct poptOption long_options[] = {
+@@ -574,6 +576,7 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -646,7 +650,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1212,6 +1215,23 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+@@ -1228,6 +1231,23 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			}
  			break;
  
@@ -670,11 +674,11 @@ diff --git a/options.c b/options.c
  		case OPT_HELP:
  			usage(FINFO);
  			exit_cleanup(0);
-@@ -1311,6 +1331,9 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+@@ -1332,6 +1352,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	}
  #endif
  
-+	if (checksum_files && !always_checksum)
++	if (!always_checksum)
 +		checksum_files = CSF_IGNORE_FILES;
 +
  	if (write_batch && read_batch) {
@@ -683,7 +687,7 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -680,6 +680,10 @@ extern int xattrs_ndx;
+@@ -682,6 +682,10 @@ extern int xattrs_ndx;
  #define F_SUM(f) ((char*)OPT_EXTRA(f, LEN64_BUMP(f) + HLINK_BUMP(f) \
  				    + SUM_EXTRA_CNT - 1))
  
@@ -694,7 +698,7 @@ diff --git a/rsync.h b/rsync.h
  /* Some utility defines: */
  #define F_IS_ACTIVE(f) (f)->basename[0]
  #define F_IS_HLINKED(f) ((f)->flags & FLAG_HLINKED)
-@@ -858,6 +862,13 @@ typedef struct {
+@@ -860,6 +864,13 @@ typedef struct {
  	char fname[1]; /* has variable size */
  } relnamecache;
  

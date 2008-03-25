@@ -11,8 +11,8 @@ To use this patch, run these commands for a successful build:
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -1216,7 +1216,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
- 	}
+@@ -1253,7 +1253,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 		memcpy(bp + basename_len, linkname, linkname_len);
  #endif
  
 -	if (always_checksum && am_sender && S_ISREG(st.st_mode))
@@ -20,11 +20,11 @@ diff --git a/flist.c b/flist.c
 +	 && !get_sum_xattr(thisname, &st, tmp_sum))
  		file_checksum(thisname, tmp_sum, st.st_size);
  
- 	F_PATHNAME(file) = pathname;
+ 	if (am_sender)
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -703,7 +703,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
+@@ -715,7 +715,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
  	   of the file time to determine whether to sync */
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
@@ -169,16 +169,29 @@ diff --git a/xattrs.c b/xattrs.c
  
  #define RSYNC_XAL_INITIAL 5
  #define RSYNC_XAL_LIST_INITIAL 100
-@@ -65,6 +67,8 @@ extern int checksum_seed;
- #define XSTAT_ATTR RSYNC_PREFIX "%stat"
- #define XACC_ACL_ATTR RSYNC_PREFIX "%aacl"
- #define XDEF_ACL_ATTR RSYNC_PREFIX "%dacl"
-+#define MD4_ATTR RSYNC_PREFIX "%md4"
-+#define MD5_ATTR RSYNC_PREFIX "%md5"
+@@ -68,6 +70,10 @@ extern int checksum_seed;
+ #define XACC_ACL_ATTR RSYNC_PREFIX "%" XACC_ACL_SUFFIX
+ #define XDEF_ACL_SUFFIX "dacl"
+ #define XDEF_ACL_ATTR RSYNC_PREFIX "%" XDEF_ACL_SUFFIX
++#define MD4_SUFFIX "md4"
++#define MD4_ATTR RSYNC_PREFIX "%" MD4_SUFFIX
++#define MD5_SUFFIX "md5"
++#define MD5_ATTR RSYNC_PREFIX "%" MD5_SUFFIX
  
  typedef struct {
  	char *datum, *name;
-@@ -829,6 +833,39 @@ int del_def_xattr_acl(const char *fname)
+@@ -237,7 +243,9 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+ 			 || (am_root < 0
+ 			  && (strcmp(name+RPRE_LEN+1, XSTAT_SUFFIX) == 0
+ 			   || strcmp(name+RPRE_LEN+1, XACC_ACL_SUFFIX) == 0
+-			   || strcmp(name+RPRE_LEN+1, XDEF_ACL_SUFFIX) == 0)))
++			   || strcmp(name+RPRE_LEN+1, XDEF_ACL_SUFFIX) == 0
++			   || strcmp(name+RPRE_LEN+1, MD4_SUFFIX) == 0
++			   || strcmp(name+RPRE_LEN+1, MD5_SUFFIX) == 0)))
+ 				continue;
+ 		}
+ 
+@@ -844,6 +852,39 @@ int del_def_xattr_acl(const char *fname)
  }
  #endif
  

@@ -89,7 +89,12 @@ diff --git a/backup.c b/backup.c
  		unmake_file(file);
  		return 0;
  	}
-@@ -326,3 +351,13 @@ int make_backup(const char *fname)
+@@ -322,7 +347,17 @@ static int keep_backup(const char *fname)
+ /* main backup switch routine */
+ int make_backup(const char *fname)
+ {
+-	if (backup_dir)
++	if (deleting ? backup_dir_dels : backup_dir)
  		return keep_backup(fname);
  	return make_simple_backup(fname);
  }
@@ -106,7 +111,7 @@ diff --git a/backup.c b/backup.c
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -97,6 +97,9 @@ extern uid_t our_uid;
+@@ -96,6 +96,9 @@ extern uid_t our_uid;
  extern char *backup_dir;
  extern char *backup_suffix;
  extern int backup_suffix_len;
@@ -114,11 +119,11 @@ diff --git a/generator.c b/generator.c
 +extern char *backup_suffix_dels;
 +extern int backup_suffix_dels_len;
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
- extern struct filter_list_struct server_filter_list;
+ extern struct filter_list_struct daemon_filter_list;
  
-@@ -138,10 +141,15 @@ enum delret {
- /* Forward declaration for delete_item(). */
- static enum delret delete_dir_contents(char *fname, uint16 flags);
+@@ -142,10 +145,15 @@ static void handle_skipped_hlink(struct file_struct *file, int itemizing,
+ 				 enum logcode code, int f_out);
+ #endif
  
 +
 +/* Function now compares both backup_suffix and backup_suffix_dels. */
@@ -133,7 +138,7 @@ diff --git a/generator.c b/generator.c
  }
  
  /* Delete a file or directory.  If DEL_RECURSE is set in the flags, this will
-@@ -189,9 +197,9 @@ static enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
+@@ -193,9 +201,9 @@ static enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
  	if (S_ISDIR(mode)) {
  		what = "rmdir";
  		ok = do_rmdir(fbuf) == 0;
@@ -148,7 +153,7 @@ diff --git a/generator.c b/generator.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -149,10 +149,14 @@ int no_detach
+@@ -150,10 +150,14 @@ int no_detach
  int write_batch = 0;
  int read_batch = 0;
  int backup_dir_len = 0;
@@ -163,7 +168,7 @@ diff --git a/options.c b/options.c
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
-@@ -164,7 +168,9 @@ char *stdout_format = NULL;
+@@ -165,7 +169,9 @@ char *stdout_format = NULL;
  char *password_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
@@ -173,16 +178,16 @@ diff --git a/options.c b/options.c
  char *sockopts = NULL;
  int rsync_port = 0;
  int compare_dest = 0;
-@@ -324,6 +330,8 @@ void usage(enum logcode F)
+@@ -325,6 +331,8 @@ void usage(enum logcode F)
    rprintf(F," -b, --backup                make backups (see --suffix & --backup-dir)\n");
    rprintf(F,"     --backup-dir=DIR        make backups into hierarchy based in DIR\n");
    rprintf(F,"     --suffix=SUFFIX         set backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
-+  rprintf(F,"     --backup-dir-dels       make backups of removed files into current dir\n");
-+  rprintf(F,"     --suffix-dels=SUFFIX    set removed-files suffix (defaults to --suffix)\n");
++  rprintf(F,"     --backup-dir-dels=DIR   backup removed files into hierarchy based in DIR\n");
++  rprintf(F,"     --suffix-dels=SUFFIX    set removed-files suffix (def. --suffix w/o b-d-d)\n");
    rprintf(F," -u, --update                skip files that are newer on the receiver\n");
    rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
    rprintf(F,"     --append                append data onto shorter files\n");
-@@ -597,7 +605,9 @@ static struct poptOption long_options[] = {
+@@ -609,7 +617,9 @@ static struct poptOption long_options[] = {
    {"backup",          'b', POPT_ARG_VAL,    &make_backups, 1, 0, 0 },
    {"no-backup",        0,  POPT_ARG_VAL,    &make_backups, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
@@ -192,17 +197,17 @@ diff --git a/options.c b/options.c
    {"list-only",        0,  POPT_ARG_VAL,    &list_only, 2, 0, 0 },
    {"read-batch",       0,  POPT_ARG_STRING, &batch_name, OPT_READ_BATCH, 0, 0 },
    {"write-batch",      0,  POPT_ARG_STRING, &batch_name, OPT_WRITE_BATCH, 0, 0 },
-@@ -1427,6 +1437,8 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
- 			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0);
+@@ -1453,6 +1463,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0, SP_DEFAULT);
  		if (backup_dir)
- 			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0);
+ 			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0, SP_DEFAULT);
 +		if (backup_dir_dels)
-+			backup_dir_dels = sanitize_path(NULL, backup_dir_dels, NULL, 0);
++			backup_dir_dels = sanitize_path(NULL, backup_dir_dels, NULL, 0, SP_DEFAULT);
  	}
- 	if (server_filter_list.head && !am_sender) {
- 		struct filter_list_struct *elp = &server_filter_list;
-@@ -1448,6 +1460,14 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
- 			if (check_filter(elp, dir, 1) < 0)
+ 	if (daemon_filter_list.head && !am_sender) {
+ 		struct filter_list_struct *elp = &daemon_filter_list;
+@@ -1474,6 +1486,14 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			if (check_filter(elp, FLOG, dir, 1) < 0)
  				goto options_rejected;
  		}
 +		/* Clean backup_dir_dels same as for backup_dir */
@@ -216,10 +221,15 @@ diff --git a/options.c b/options.c
  	}
  
  	if (!backup_suffix)
-@@ -1459,6 +1479,15 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+@@ -1485,6 +1505,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			backup_suffix);
  		return 0;
  	}
++	/* --suffix-dels defaults to --suffix, or empty for a client given an
++	 * explicit --backup-dir-dels (just as --suffix defaults to empty when
++	 * a --backup-dir is given).  The second case does not apply to the
++	 * server for consistency with server_options, which sends --suffix-dels
++	 * to the server iff it differs from --suffix. */
 +	if (!backup_suffix_dels)
 +		backup_suffix_dels = backup_dir_dels && !am_server ? "" : backup_suffix;
 +	backup_suffix_dels_len = strlen(backup_suffix_dels);
@@ -232,7 +242,7 @@ diff --git a/options.c b/options.c
  	if (backup_dir) {
  		backup_dir_len = strlcpy(backup_dir_buf, backup_dir, sizeof backup_dir_buf);
  		backup_dir_remainder = sizeof backup_dir_buf - backup_dir_len;
-@@ -1482,6 +1511,30 @@ int parse_arguments(int *argc_p, const char ***argv_p, int frommain)
+@@ -1508,6 +1542,34 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			"P *%s", backup_suffix);
  		parse_rule(&filter_list, backup_dir_buf, 0, 0);
  	}
@@ -259,11 +269,15 @@ diff --git a/options.c b/options.c
 +		snprintf(err_buf, sizeof err_buf,
 +			"--suffix-dels cannot be a null string without --backup-dir-dels\n");
 +		return 0;
++	} else if (make_backups && delete_mode && !delete_excluded && !am_server) {
++		snprintf(backup_dir_dels_buf, sizeof backup_dir_dels_buf,
++			"P *%s", backup_suffix_dels);
++		parse_rule(&filter_list, backup_dir_dels_buf, 0, 0);
 +	}
  
  	if (make_backups && !backup_dir) {
  		omit_dir_times = 0; /* Implied, so avoid -O to sender. */
-@@ -1875,6 +1928,10 @@ void server_options(char **args, int *argc_p)
+@@ -1901,6 +1963,10 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = "--backup-dir";
  		args[ac++] = backup_dir;
  	}
@@ -274,7 +288,7 @@ diff --git a/options.c b/options.c
  
  	/* Only send --suffix if it specifies a non-default value. */
  	if (strcmp(backup_suffix, backup_dir ? "" : BACKUP_SUFFIX) != 0) {
-@@ -1883,7 +1940,14 @@ void server_options(char **args, int *argc_p)
+@@ -1909,7 +1975,14 @@ void server_options(char **args, int *argc_p)
  			goto oom;
  		args[ac++] = arg;
  	}

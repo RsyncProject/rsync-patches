@@ -1,0 +1,239 @@
+This patch implements a new --remote-option (-M) option that allows the
+user to override certain settings on the remote system.  For instance, it
+is now easier to pass -M--fake-super or "-M --log-file=/tmp/foo" instead of
+kluging up an --rsync-path setting.  This also solves the case where we
+want local --one-file-system (-x) but not remote ("-x -M--no-x"), or visa
+versa ("-M-x").
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/remote-option.diff
+    ./configure                      (optional if already run)
+    make
+
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -174,6 +174,10 @@ int link_dest = 0;
+ int basis_dir_cnt = 0;
+ char *dest_option = NULL;
+ 
++#define MAX_REMOTE_ARGS (MAX_SERVER_ARGS/2)
++int remote_option_cnt = 0;
++const char *remote_options[MAX_SERVER_ARGS+1] = { "ARG0" };
++
+ int verbose = 0;
+ int quiet = 0;
+ int output_motd = 1;
+@@ -387,6 +391,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --timeout=SECONDS       set I/O timeout in seconds\n");
+   rprintf(F,"     --contimeout=SECONDS    set daemon connection timeout in seconds\n");
+   rprintf(F," -I, --ignore-times          don't skip files that match in size and mod-time\n");
++  rprintf(F," -M, --remote-option=OPTION  send OPTION to the remote side only\n");
+   rprintf(F,"     --size-only             skip files that match in size\n");
+   rprintf(F,"     --modify-window=NUM     compare mod-times with reduced accuracy\n");
+   rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
+@@ -645,6 +650,7 @@ static struct poptOption long_options[] = {
+   {"password-file",    0,  POPT_ARG_STRING, &password_file, 0, 0, 0 },
+   {"blocking-io",      0,  POPT_ARG_VAL,    &blocking_io, 1, 0, 0 },
+   {"no-blocking-io",   0,  POPT_ARG_VAL,    &blocking_io, 0, 0, 0 },
++  {"remote-option",   'M', POPT_ARG_STRING, 0, 'M', 0, 0 },
+   {"protocol",         0,  POPT_ARG_INT,    &protocol_version, 0, 0, 0 },
+   {"checksum-seed",    0,  POPT_ARG_INT,    &checksum_seed, 0, 0, 0 },
+   {"server",           0,  POPT_ARG_NONE,   0, OPT_SERVER, 0, 0 },
+@@ -1140,6 +1146,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			}
+ 			break;
+ 
++		case 'M':
++			arg = poptGetOptArg(pc);
++			if (*arg != '-') {
++				snprintf(err_buf, sizeof err_buf,
++					"Remote option must start with a dash: %s\n", arg);
++				return 0;
++			}
++			if (remote_option_cnt >= MAX_REMOTE_ARGS) {
++				rprintf(FERROR, "too many remote options specified.\n");
++				exit_cleanup(RERR_SYNTAX);
++			}
++			remote_options[++remote_option_cnt] = arg;
++			break;
++
+ 		case OPT_WRITE_BATCH:
+ 			/* batch_name is already set */
+ 			write_batch = 1;
+@@ -1826,6 +1846,11 @@ void server_options(char **args, int *argc_p)
+ #endif
+ 	argstr[x] = '\0';
+ 
++	if (x > (int)sizeof argstr) { /* Not possible... */
++		rprintf(FERROR, "argstr overflow in server_options().\n");
++		exit_cleanup(RERR_MALLOC);
++	}
++
+ 	args[ac++] = argstr;
+ 
+ #ifdef ICONV_OPTION
+@@ -2048,6 +2073,21 @@ void server_options(char **args, int *argc_p)
+ 	else if (remove_source_files)
+ 		args[ac++] = "--remove-sent-files";
+ 
++	if (ac > MAX_SERVER_ARGS) { /* Not possible... */
++		rprintf(FERROR, "argc overflow in server_options().\n");
++		exit_cleanup(RERR_MALLOC);
++	}
++
++	if (remote_option_cnt) {
++		int j;
++		if (ac + remote_option_cnt > MAX_SERVER_ARGS) {
++			rprintf(FERROR, "too many remote options specified.\n");
++			exit_cleanup(RERR_SYNTAX);
++		}
++		for (j = 1; j <= remote_option_cnt; j++)
++			args[ac++] = (char*)remote_options[j];
++	}
++
+ 	*argc_p = ac;
+ 	return;
+ 
+diff --git a/pipe.c b/pipe.c
+--- a/pipe.c
++++ b/pipe.c
+@@ -22,12 +22,15 @@
+ 
+ #include "rsync.h"
+ 
++extern int am_root;
+ extern int am_sender;
+ extern int am_server;
+ extern int blocking_io;
+ extern int filesfrom_fd;
+ extern mode_t orig_umask;
+ extern char *logfile_name;
++extern int remote_option_cnt;
++extern const char *remote_options[];
+ extern struct chmod_mode_struct *chmod_modes;
+ 
+ /**
+@@ -139,6 +142,18 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
+ 			logfile_close();
+ 		}
+ 
++		if (am_root < 0)
++			am_root = 0;
++
++		if (remote_option_cnt) {
++			int rc = remote_option_cnt + 1;
++			const char **rv = remote_options;
++			if (!parse_arguments(&rc, &rv)) {
++				option_error();
++				exit_cleanup(RERR_SYNTAX);
++			}
++		}
++
+ 		if (dup2(to_child_pipe[0], STDIN_FILENO) < 0 ||
+ 		    close(to_child_pipe[1]) < 0 ||
+ 		    close(from_child_pipe[0]) < 0 ||
+diff --git a/rsync.yo b/rsync.yo
+--- a/rsync.yo
++++ b/rsync.yo
+@@ -412,6 +412,7 @@ to the detailed description below for a complete description.  verb(
+      --progress              show progress during transfer
+  -P                          same as --partial --progress
+  -i, --itemize-changes       output a change-summary for all updates
++ -M, --remote-option=OPTION  send OPTION to the remote side only
+      --out-format=FORMAT     output updates using the specified FORMAT
+      --log-file=FILE         log what we're doing to the specified FILE
+      --log-file-format=FMT   log updates using the specified FMT
+@@ -1020,16 +1021,13 @@ This is a good way to backup data without using a super-user, and to store
+ ACLs from incompatible systems.
+ 
+ The bf(--fake-super) option only affects the side where the option is used.
+-To affect the remote side of a remote-shell connection, specify an rsync
+-path:
++To affect the remote side of a remote-shell connection, use the
++bf(--remote-option) (bf(-M)) option:
+ 
+-quote(tt(  rsync -av --rsync-path="rsync --fake-super" /src/ host:/dest/))
++quote(tt(  rsync -av -M--fake-super /src/ host:/dest/))
+ 
+-Since there is only one "side" in a local copy, this option affects both
+-the sending and receiving of files.  You'll need to specify a copy using
+-"localhost" if you need to avoid this, possibly using the "lsh" shell
+-script (from the support directory) as a substitute for an actual remote
+-shell (see bf(--rsh)).
++For a local copy, this option affects only the source.  Specify a
++bf(--remote-option) to affect the destination.
+ 
+ This option is overridden by both bf(--super) and bf(--no-super).
+ 
+@@ -1275,6 +1273,36 @@ machine for use with the bf(--relative) option.  For instance:
+ 
+ quote(tt(    rsync -avR --rsync-path="cd /a/b && rsync" host:c/d /e/))
+ 
++dit(bf(-M, --remote-option=OPTION)) This option is used for more advanced
++situations where you want certain effects to be limited to one side of the
++transfer only.  For instance, if you want to pass bf(--log-file=FILE) and
++bf(--fake-super) to the remote system, specify it like this:
++
++quote(tt(    rsync -av -M --log-file=foo -M--fake-super src/ dest/))
++
++If you want to have an option affect only the local side of a transfer when
++it normally affects both sides, send its negation to the remote side.  Like
++this:
++
++quote(tt(    rsync -av -x -M--no-x src/ dest/))
++
++Be cautious using this, as it is possible to toggle an option that will cause
++rsync to have a different idea about what data to expect next over the socket,
++and that will make it fail in a cryptic fashion.
++
++Note that it is best to use a separate bf(--remote-option) for each option you
++want to pass.  This makes your useage compatible with the bf(--preserve-spaces)
++option.  If that option is off, any spaces in your remote options will be split
++by the remote shell unless you take steps to protect them.
++
++When performing a local transfer, the "local" side is the sender and the
++"remote" side is the receiver.
++
++Note some versions of the popt option-parsing library have a bug in them that
++prevents you from using an adjacent arg with an equal in it next to a short
++option letter (e.g. tt(-M--log-file=/tmp/foo).  If this bug affects your
++version of popt, you can use the version of popt that is included with rsync.
++
+ dit(bf(-C, --cvs-exclude)) This is a useful shorthand for excluding a
+ broad range of files that you often don't want to transfer between
+ systems. It uses a similar algorithm to CVS to determine if
+@@ -1746,7 +1774,7 @@ option if you wish to override this.
+ Here's a example command that requests the remote side to log what is
+ happening:
+ 
+-verb(  rsync -av --rsync-path="rsync --log-file=/tmp/rlog" src/ dest/)
++verb(  rsync -av --remote-option=--log-file=/tmp/rlog src/ dest/)
+ 
+ This is very useful if you need to debug why a connection is closing
+ unexpectedly.
+diff --git a/testsuite/chown.test b/testsuite/chown.test
+--- a/testsuite/chown.test
++++ b/testsuite/chown.test
+@@ -16,7 +16,7 @@
+ case $0 in
+ *fake*)
+     $RSYNC --version | grep ", xattrs" >/dev/null || test_skipped "Rsync needs xattrs for fake device tests"
+-    RSYNC="$RSYNC --fake-super"
++    RSYNC="$RSYNC --fake-super -M--fake-super"
+     TLS_ARGS=--fake-super
+     case "`xattr 2>&1`" in
+     *--list:*)
+diff --git a/testsuite/devices.test b/testsuite/devices.test
+--- a/testsuite/devices.test
++++ b/testsuite/devices.test
+@@ -17,7 +17,7 @@ outfile="$scratchdir/rsync.out"
+ case $0 in
+ *fake*)
+     $RSYNC --version | grep ", xattrs" >/dev/null || test_skipped "Rsync needs xattrs for fake device tests"
+-    RSYNC="$RSYNC --fake-super"
++    RSYNC="$RSYNC --fake-super -M--fake-super"
+     TLS_ARGS=--fake-super
+     case "`xattr 2>&1`" in
+     *--list:*)
