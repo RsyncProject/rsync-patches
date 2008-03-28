@@ -389,7 +389,7 @@ diff --git a/flist.c b/flist.c
  }
  
  int push_pathname(const char *dir, int len)
-@@ -1378,6 +1589,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1349,6 +1560,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	if (is_excluded(thisname, S_ISDIR(st.st_mode) != 0, filter_level)) {
  		if (ignore_perishable)
  			non_perishable_cnt++;
@@ -398,7 +398,7 @@ diff --git a/flist.c b/flist.c
  		return NULL;
  	}
  
-@@ -1424,13 +1637,13 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1395,13 +1608,13 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  			lastdir[len] = '\0';
  			lastdir_len = len;
  			if (checksum_files && am_sender && flist)
@@ -414,7 +414,7 @@ diff --git a/flist.c b/flist.c
  		}
  	}
  	basename_len = strlen(basename) + 1; /* count the '\0' */
-@@ -1512,7 +1725,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1483,7 +1696,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  
  	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
  		if (flist && checksum_files)
@@ -423,7 +423,7 @@ diff --git a/flist.c b/flist.c
  		else
  			file_checksum(thisname, st.st_size, tmp_sum);
  	}
-@@ -1804,6 +2017,9 @@ static void send_directory(int f, struct file_list *flist, char *fbuf, int len,
+@@ -1809,6 +2022,9 @@ static void send_directory(int f, struct file_list *flist, char *fbuf, int len,
  
  	closedir(d);
  
@@ -433,7 +433,7 @@ diff --git a/flist.c b/flist.c
  	if (f >= 0 && recurse && !divert_dirs) {
  		int i, end = flist->used - 1;
  		/* send_if_directory() bumps flist->used, so use "end". */
-@@ -2389,6 +2605,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2405,6 +2621,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		}
  	} else
  		flist_eof = 1;
@@ -454,7 +454,7 @@ diff --git a/generator.c b/generator.c
  static const char *solo_file = NULL;
  
  /* For calling delete_item() and delete_dir_contents(). */
-@@ -717,7 +718,7 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st, int slot
+@@ -720,7 +721,7 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st, int slot
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
  		if (checksum_files && slot >= 0)
@@ -463,7 +463,7 @@ diff --git a/generator.c b/generator.c
  		else
  			file_checksum(fn, st->st_size, sum);
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
-@@ -1350,7 +1351,8 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1353,7 +1354,8 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  				fuzzy_dirlist = get_dirlist(fnamecmpbuf, -1, 1);
  			}
  			if (checksum_files) {
@@ -473,23 +473,15 @@ diff --git a/generator.c b/generator.c
  			}
  			need_new_dirscan = 0;
  		}
-@@ -1488,9 +1490,12 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 				DEV_MINOR(devp) = minor(real_sx.st.st_dev);
- 			}
+@@ -1499,6 +1501,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 				change_local_filter_dir(fname, strlen(fname), F_DEPTH(file));
+ 
  		}
--		else if (delete_during && f_out != -1 && !phase
--		    && BITS_SETnUNSET(file->flags, FLAG_CONTENT_DIR, FLAG_MISSING_DIR))
--			delete_in_dir(fname, file, &real_sx.st.st_dev);
-+		else if (file->flags & FLAG_CONTENT_DIR && f_out != -1) {
-+			if (delete_during && !phase && !(file->flags & FLAG_MISSING_DIR))
-+				delete_in_dir(fname, file, &real_sx.st.st_dev);
-+			upcoming_whole_dir = 1;
-+		} else
-+			upcoming_whole_dir = 0;
++		upcoming_whole_dir = file->flags & FLAG_CONTENT_DIR && f_out != -1 ? 1 : 0;
  		goto cleanup;
  	}
  
-@@ -1783,6 +1788,8 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1791,6 +1794,8 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			handle_partial_dir(partialptr, PDIR_DELETE);
  		}
  		set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
@@ -498,15 +490,15 @@ diff --git a/generator.c b/generator.c
  		if (itemizing)
  			itemize(fnamecmp, file, ndx, statret, &sx, 0, 0, NULL);
  #ifdef SUPPORT_HARD_LINKS
-@@ -2195,6 +2202,7 @@ void generate_files(int f_out, const char *local_name)
- 					delete_in_dir(f_name(fp, fbuf), fp, &dirdev);
- 				}
+@@ -2205,6 +2210,7 @@ void generate_files(int f_out, const char *local_name)
+ 				} else
+ 					change_local_filter_dir(fbuf, strlen(fbuf), F_DEPTH(fp));
  			}
 +			upcoming_whole_dir = fp->flags & FLAG_CONTENT_DIR ? 1 : 0;
  		}
  		for (i = cur_flist->low; i <= cur_flist->high; i++) {
  			struct file_struct *file = cur_flist->sorted[i];
-@@ -2275,6 +2283,9 @@ void generate_files(int f_out, const char *local_name)
+@@ -2285,6 +2291,9 @@ void generate_files(int f_out, const char *local_name)
  			wait_for_receiver();
  	}
  

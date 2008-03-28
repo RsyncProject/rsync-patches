@@ -117,7 +117,7 @@ diff --git a/flist.c b/flist.c
  static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len, int flags);
  
-@@ -2235,6 +2277,25 @@ struct file_list *recv_file_list(int f)
+@@ -2251,6 +2293,25 @@ struct file_list *recv_file_list(int f)
  
  	flist_sort_and_clean(flist, relative_paths);
  
@@ -446,7 +446,7 @@ diff --git a/generator.c b/generator.c
  	flist_free(dirlist);
  
  	if (!save_uid_ndx) {
-@@ -568,9 +716,9 @@ static void do_delete_pass(void)
+@@ -571,9 +719,9 @@ static void do_delete_pass(void)
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
@@ -458,7 +458,7 @@ diff --git a/generator.c b/generator.c
  
  	if (do_progress && !am_server)
  		rprintf(FINFO, "                    \r");
-@@ -1210,6 +1358,7 @@ static void list_file_entry(struct file_struct *f)
+@@ -1213,6 +1361,7 @@ static void list_file_entry(struct file_struct *f)
  	}
  }
  
@@ -466,22 +466,23 @@ diff --git a/generator.c b/generator.c
  static int phase = 0;
  static int dflt_perms;
  
-@@ -1480,8 +1629,12 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 			}
+@@ -1484,9 +1633,12 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		}
  		else if (delete_during && f_out != -1 && !phase
--		    && BITS_SETnUNSET(file->flags, FLAG_CONTENT_DIR, FLAG_MISSING_DIR))
--			delete_in_dir(fname, file, &real_sx.st.st_dev);
-+		    && BITS_SETnUNSET(file->flags, FLAG_CONTENT_DIR, FLAG_MISSING_DIR)) {
-+			if (detect_renamed && real_ret != 0)
-+				unexplored_dirs++;
-+			delete_in_dir(fname, file, &real_sx.st.st_dev,
-+				      delete_during < 0 ? DEL_NO_DELETIONS : 0);
-+		}
- 		goto cleanup;
- 	}
+ 		    && !(file->flags & FLAG_MISSING_DIR)) {
+-			if (file->flags & FLAG_CONTENT_DIR)
+-				delete_in_dir(fname, file, &real_sx.st.st_dev);
+-			else
++			if (file->flags & FLAG_CONTENT_DIR) {
++				if (detect_renamed && real_ret != 0)
++					unexplored_dirs++;
++				delete_in_dir(fname, file, &real_sx.st.st_dev,
++					      delete_during < 0 ? DEL_NO_DELETIONS : 0);
++			} else
+ 				change_local_filter_dir(fname, strlen(fname), F_DEPTH(file));
  
-@@ -1757,8 +1910,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		}
+@@ -1765,8 +1917,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			goto cleanup;
  		}
  #endif
@@ -497,7 +498,7 @@ diff --git a/generator.c b/generator.c
  		rsyserr(FERROR_XFER, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		goto cleanup;
-@@ -2135,6 +2294,12 @@ void generate_files(int f_out, const char *local_name)
+@@ -2143,6 +2301,12 @@ void generate_files(int f_out, const char *local_name)
  	if (verbose > 2)
  		rprintf(FINFO, "generator starting pid=%ld\n", (long)getpid());
  
@@ -510,7 +511,7 @@ diff --git a/generator.c b/generator.c
  	if (delete_before && !solo_file && cur_flist->used > 0)
  		do_delete_pass();
  	if (delete_during == 2) {
-@@ -2145,7 +2310,7 @@ void generate_files(int f_out, const char *local_name)
+@@ -2153,7 +2317,7 @@ void generate_files(int f_out, const char *local_name)
  	}
  	do_progress = 0;
  
@@ -519,16 +520,16 @@ diff --git a/generator.c b/generator.c
  		whole_file = 0;
  	if (verbose >= 2) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -2183,7 +2348,7 @@ void generate_files(int f_out, const char *local_name)
+@@ -2192,7 +2356,7 @@ void generate_files(int f_out, const char *local_name)
  						dirdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
  					} else
  						dirdev = MAKEDEV(0, 0);
--					delete_in_dir(f_name(fp, fbuf), fp, &dirdev);
-+					delete_in_dir(f_name(fp, fbuf), fp, &dirdev, 0);
- 				}
+-					delete_in_dir(fbuf, fp, &dirdev);
++					delete_in_dir(fbuf, fp, &dirdev, 0);
+ 				} else
+ 					change_local_filter_dir(fbuf, strlen(fbuf), F_DEPTH(fp));
  			}
- 		}
-@@ -2226,7 +2391,21 @@ void generate_files(int f_out, const char *local_name)
+@@ -2236,7 +2400,21 @@ void generate_files(int f_out, const char *local_name)
  	} while ((cur_flist = cur_flist->next) != NULL);
  
  	if (delete_during)

@@ -50,14 +50,14 @@ diff --git a/flist.c b/flist.c
  extern int file_extra_cnt;
 @@ -380,7 +381,7 @@ int push_pathname(const char *dir, int len)
  
- static void send_file_entry(int f, struct file_struct *file, int ndx, int first_ndx)
+ static void send_file_entry(int f, const char *fname, struct file_struct *file, int ndx, int first_ndx)
  {
 -	static time_t modtime;
 +	static time_t modtime, crtime;
  	static mode_t mode;
  #ifdef SUPPORT_FILEFLAGS
  	static uint32 fileflags;
-@@ -499,6 +500,13 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -469,6 +470,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  		xflags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -71,7 +71,7 @@ diff --git a/flist.c b/flist.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != 0) {
-@@ -569,6 +577,8 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -539,6 +547,8 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  		else
  			write_int(f, modtime);
  	}
@@ -80,7 +80,7 @@ diff --git a/flist.c b/flist.c
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
  #ifdef SUPPORT_FILEFLAGS
-@@ -661,7 +671,7 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -631,7 +641,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  static struct file_struct *recv_file_entry(struct file_list *flist,
  					   int xflags, int f)
  {
@@ -89,7 +89,7 @@ diff --git a/flist.c b/flist.c
  	static mode_t mode;
  #ifdef SUPPORT_FILEFLAGS
  	static uint32 fileflags;
-@@ -795,6 +805,19 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -766,6 +776,19 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
  		} else
  			modtime = read_int(f);
  	}
@@ -109,7 +109,7 @@ diff --git a/flist.c b/flist.c
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
  
-@@ -934,6 +957,8 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -905,6 +928,8 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
  		F_GROUP(file) = gid;
  		file->flags |= gid_flags;
  	}
@@ -118,7 +118,7 @@ diff --git a/flist.c b/flist.c
  	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
  
-@@ -1275,6 +1300,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1246,6 +1271,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		F_OWNER(file) = st.st_uid;
  	if (gid_ndx) /* Check gid_ndx instead of preserve_gid for del support */
  		F_GROUP(file) = st.st_gid;
@@ -146,7 +146,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_hard_links;
  extern int preserve_executability;
  extern int preserve_fileflags;
-@@ -617,6 +619,13 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -620,6 +622,13 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  	if (gid_ndx && !(file->flags & FLAG_SKIP_GROUP) && sxp->st.st_gid != (gid_t)F_GROUP(file))
  		return 0;
  
@@ -160,7 +160,7 @@ diff --git a/generator.c b/generator.c
  #ifdef SUPPORT_ACLS
  	if (preserve_acls && !S_ISLNK(file->mode)) {
  		if (!ACL_READY(*sxp))
-@@ -660,6 +669,12 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -663,6 +672,12 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		 : iflags & (ITEM_TRANSFER|ITEM_LOCAL_CHANGE) && !(iflags & ITEM_MATCHED)
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  			iflags |= ITEM_REPORT_TIME;
@@ -173,7 +173,7 @@ diff --git a/generator.c b/generator.c
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -1207,6 +1222,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+@@ -1210,6 +1225,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -181,7 +181,7 @@ diff --git a/generator.c b/generator.c
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -1221,14 +1237,16 @@ static void list_file_entry(struct file_struct *f)
+@@ -1224,14 +1240,16 @@ static void list_file_entry(struct file_struct *f)
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -200,7 +200,7 @@ diff --git a/generator.c b/generator.c
  			f_name(f, NULL));
  	}
  }
-@@ -1320,6 +1338,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1323,6 +1341,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			return;
  		}
  	}

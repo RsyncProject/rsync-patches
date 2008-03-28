@@ -85,7 +85,7 @@ diff --git a/flist.c b/flist.c
  extern int uid_ndx;
  extern int gid_ndx;
  extern int eol_nulls;
-@@ -381,6 +382,9 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -381,6 +382,9 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  {
  	static time_t modtime;
  	static mode_t mode;
@@ -95,7 +95,7 @@ diff --git a/flist.c b/flist.c
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
  #endif
-@@ -440,6 +444,14 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -410,6 +414,14 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  		xflags |= XMIT_SAME_MODE;
  	else
  		mode = file->mode;
@@ -110,7 +110,7 @@ diff --git a/flist.c b/flist.c
  
  	if ((preserve_devices && IS_DEVICE(mode))
  	 || (preserve_specials && IS_SPECIAL(mode))) {
-@@ -559,6 +571,10 @@ static void send_file_entry(int f, struct file_struct *file, int ndx, int first_
+@@ -529,6 +541,10 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -121,7 +121,7 @@ diff --git a/flist.c b/flist.c
  	if (preserve_uid && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -647,6 +663,9 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -617,6 +633,9 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
  {
  	static int64 modtime;
  	static mode_t mode;
@@ -131,7 +131,7 @@ diff --git a/flist.c b/flist.c
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
  #endif
-@@ -781,6 +800,10 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -752,6 +771,10 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
@@ -142,7 +142,7 @@ diff --git a/flist.c b/flist.c
  
  	if (preserve_uid && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
-@@ -901,6 +924,10 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -872,6 +895,10 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
  		OPT_EXTRA(file, 0)->unum = (uint32)(file_length >> 32);
  	}
  	file->mode = mode;
@@ -153,7 +153,7 @@ diff --git a/flist.c b/flist.c
  	if (preserve_uid)
  		F_OWNER(file) = uid;
  	if (preserve_gid) {
-@@ -1240,6 +1267,10 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1211,6 +1238,10 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		OPT_EXTRA(file, 0)->unum = (uint32)(st.st_size >> 32);
  	}
  	file->mode = st.st_mode;
@@ -215,7 +215,7 @@ diff --git a/generator.c b/generator.c
  		/* Save stack by recursing to ourself directly. */
  		if (S_ISDIR(fp->mode)) {
  			if (delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
-@@ -593,6 +606,11 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -596,6 +609,11 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  	 && ((sxp->st.st_mode & 0111 ? 1 : 0) ^ (file->mode & 0111 ? 1 : 0)))
  		return 0;
  
@@ -227,7 +227,7 @@ diff --git a/generator.c b/generator.c
  	if (am_root && uid_ndx && sxp->st.st_uid != (uid_t)F_OWNER(file))
  		return 0;
  
-@@ -658,6 +676,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -661,6 +679,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		if (gid_ndx && !(file->flags & FLAG_SKIP_GROUP)
  		    && sxp->st.st_gid != (gid_t)F_GROUP(file))
  			iflags |= ITEM_REPORT_GROUP;
@@ -239,7 +239,7 @@ diff --git a/generator.c b/generator.c
  #ifdef SUPPORT_ACLS
  		if (preserve_acls && !S_ISLNK(file->mode)) {
  			if (!ACL_READY(*sxp))
-@@ -1423,6 +1446,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1426,6 +1449,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			file->mode = dest_mode(file->mode, sx.st.st_mode,
  					       dflt_perms, statret == 0);
  		}
@@ -250,7 +250,7 @@ diff --git a/generator.c b/generator.c
  		if (statret != 0 && basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
  					      itemizing, code);
-@@ -1458,10 +1485,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1461,10 +1488,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		/* We need to ensure that the dirs in the transfer have writable
  		 * permissions during the time we are putting files within them.
  		 * This is then fixed after the transfer is done. */
@@ -267,7 +267,7 @@ diff --git a/generator.c b/generator.c
  				rsyserr(FERROR_XFER, errno,
  					"failed to modify permissions on %s",
  					full_fname(fname));
-@@ -1492,6 +1524,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1500,6 +1532,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		file->mode = dest_mode(file->mode, sx.st.st_mode, dflt_perms,
  				       exists);
  	}
@@ -278,7 +278,7 @@ diff --git a/generator.c b/generator.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (preserve_hard_links && F_HLINK_NOT_FIRST(file)
-@@ -2004,13 +2040,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -2012,13 +2048,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  			continue;
  		fname = f_name(file, NULL);
  		if (!(file->mode & S_IWUSR))
