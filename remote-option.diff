@@ -18,9 +18,9 @@ diff --git a/options.c b/options.c
  int basis_dir_cnt = 0;
  char *dest_option = NULL;
  
-+#define MAX_REMOTE_ARGS (MAX_SERVER_ARGS/2)
++static int remote_option_alloc = 0;
 +int remote_option_cnt = 0;
-+const char *remote_options[MAX_SERVER_ARGS+1] = { "ARG0" };
++const char **remote_options = NULL;
 +
  int verbose = 0;
  int quiet = 0;
@@ -41,7 +41,7 @@ diff --git a/options.c b/options.c
    {"protocol",         0,  POPT_ARG_INT,    &protocol_version, 0, 0, 0 },
    {"checksum-seed",    0,  POPT_ARG_INT,    &checksum_seed, 0, 0, 0 },
    {"server",           0,  POPT_ARG_NONE,   0, OPT_SERVER, 0, 0 },
-@@ -1140,6 +1146,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1140,6 +1146,26 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			}
  			break;
  
@@ -52,17 +52,23 @@ diff --git a/options.c b/options.c
 +					"Remote option must start with a dash: %s\n", arg);
 +				return 0;
 +			}
-+			if (remote_option_cnt >= MAX_REMOTE_ARGS) {
-+				rprintf(FERROR, "too many remote options specified.\n");
-+				exit_cleanup(RERR_SYNTAX);
++			if (remote_option_cnt+3 > remote_option_alloc) {
++				remote_option_alloc += 16;
++				remote_options = realloc_array(remote_options,
++							const char *, remote_option_alloc);
++				if (!remote_options)
++					out_of_memory("parse_arguments");
++				if (!remote_option_cnt)
++					remote_options[0] = "ARG0";
 +			}
 +			remote_options[++remote_option_cnt] = arg;
++			remote_options[remote_option_cnt+1] = NULL;
 +			break;
 +
  		case OPT_WRITE_BATCH:
  			/* batch_name is already set */
  			write_batch = 1;
-@@ -1826,6 +1846,11 @@ void server_options(char **args, int *argc_p)
+@@ -1826,6 +1852,11 @@ void server_options(char **args, int *argc_p)
  #endif
  	argstr[x] = '\0';
  
@@ -74,7 +80,7 @@ diff --git a/options.c b/options.c
  	args[ac++] = argstr;
  
  #ifdef ICONV_OPTION
-@@ -2048,6 +2073,21 @@ void server_options(char **args, int *argc_p)
+@@ -2048,6 +2079,21 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -99,29 +105,19 @@ diff --git a/options.c b/options.c
 diff --git a/pipe.c b/pipe.c
 --- a/pipe.c
 +++ b/pipe.c
-@@ -22,12 +22,15 @@
- 
- #include "rsync.h"
- 
-+extern int am_root;
- extern int am_sender;
- extern int am_server;
- extern int blocking_io;
+@@ -28,6 +28,8 @@ extern int blocking_io;
  extern int filesfrom_fd;
  extern mode_t orig_umask;
  extern char *logfile_name;
 +extern int remote_option_cnt;
-+extern const char *remote_options[];
++extern const char **remote_options;
  extern struct chmod_mode_struct *chmod_modes;
  
  /**
-@@ -139,6 +142,18 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
+@@ -139,6 +141,15 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
  			logfile_close();
  		}
  
-+		if (am_root < 0)
-+			am_root = 0;
-+
 +		if (remote_option_cnt) {
 +			int rc = remote_option_cnt + 1;
 +			const char **rv = remote_options;
@@ -145,7 +141,7 @@ diff --git a/rsync.yo b/rsync.yo
       --out-format=FORMAT     output updates using the specified FORMAT
       --log-file=FILE         log what we're doing to the specified FILE
       --log-file-format=FMT   log updates using the specified FMT
-@@ -1020,16 +1021,13 @@ This is a good way to backup data without using a super-user, and to store
+@@ -1020,16 +1021,16 @@ This is a good way to backup data without using a super-user, and to store
  ACLs from incompatible systems.
  
  The bf(--fake-super) option only affects the side where the option is used.
@@ -162,12 +158,15 @@ diff --git a/rsync.yo b/rsync.yo
 -"localhost" if you need to avoid this, possibly using the "lsh" shell
 -script (from the support directory) as a substitute for an actual remote
 -shell (see bf(--rsh)).
-+For a local copy, this option affects only the source.  Specify a
-+bf(--remote-option) to affect the destination.
++For a local copy, this option affects both the source and the destination.
++If you wish a local copy to enable this option just for the destination
++files, specify bf(-M--fake-super).  If you wish a local copy to enable
++this option just for the source files, combine bf(--fake-super) with
++bf(-M--super).
  
  This option is overridden by both bf(--super) and bf(--no-super).
  
-@@ -1275,6 +1273,36 @@ machine for use with the bf(--relative) option.  For instance:
+@@ -1275,6 +1276,36 @@ machine for use with the bf(--relative) option.  For instance:
  
  quote(tt(    rsync -avR --rsync-path="cd /a/b && rsync" host:c/d /e/))
  
@@ -189,7 +188,7 @@ diff --git a/rsync.yo b/rsync.yo
 +and that will make it fail in a cryptic fashion.
 +
 +Note that it is best to use a separate bf(--remote-option) for each option you
-+want to pass.  This makes your useage compatible with the bf(--preserve-spaces)
++want to pass.  This makes your useage compatible with the bf(--protect-args)
 +option.  If that option is off, any spaces in your remote options will be split
 +by the remote shell unless you take steps to protect them.
 +
@@ -204,7 +203,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(-C, --cvs-exclude)) This is a useful shorthand for excluding a
  broad range of files that you often don't want to transfer between
  systems. It uses a similar algorithm to CVS to determine if
-@@ -1746,7 +1774,7 @@ option if you wish to override this.
+@@ -1746,7 +1777,7 @@ option if you wish to override this.
  Here's a example command that requests the remote side to log what is
  happening:
  
@@ -213,27 +212,3 @@ diff --git a/rsync.yo b/rsync.yo
  
  This is very useful if you need to debug why a connection is closing
  unexpectedly.
-diff --git a/testsuite/chown.test b/testsuite/chown.test
---- a/testsuite/chown.test
-+++ b/testsuite/chown.test
-@@ -16,7 +16,7 @@
- case $0 in
- *fake*)
-     $RSYNC --version | grep ", xattrs" >/dev/null || test_skipped "Rsync needs xattrs for fake device tests"
--    RSYNC="$RSYNC --fake-super"
-+    RSYNC="$RSYNC --fake-super -M--fake-super"
-     TLS_ARGS=--fake-super
-     case "`xattr 2>&1`" in
-     *--list:*)
-diff --git a/testsuite/devices.test b/testsuite/devices.test
---- a/testsuite/devices.test
-+++ b/testsuite/devices.test
-@@ -17,7 +17,7 @@ outfile="$scratchdir/rsync.out"
- case $0 in
- *fake*)
-     $RSYNC --version | grep ", xattrs" >/dev/null || test_skipped "Rsync needs xattrs for fake device tests"
--    RSYNC="$RSYNC --fake-super"
-+    RSYNC="$RSYNC --fake-super -M--fake-super"
-     TLS_ARGS=--fake-super
-     case "`xattr 2>&1`" in
-     *--list:*)
