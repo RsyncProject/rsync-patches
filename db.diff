@@ -3,9 +3,14 @@ about the files it is dealing with.  This adds both the --db=CONFIG_FILE
 option and the "db config" daemon parameter.
 
 For the moment this only adds checksum caching when the --checksum option
-is used.  Future improvments may include:
+is used.  Future improvements may include:
 
  - Updating of MD5 checksums when transferring any file, even w/o -c.
+   We should be able to extend this to work for MD4 checksums too if we
+   make the sender force checksum_seed to 0 when using a DB and having
+   the receiving side check to see if it got a 0 checksum_seed.  (We
+   probably don't want to compute 2 MD4 checksums for the case where
+   the checksum_seed is non-zero.)
 
  - Caching of path info that allows for the finding of files to use for
    moving/linking/copying/alternate-basis-use.
@@ -101,15 +106,16 @@ diff --git a/cleanup.c b/cleanup.c
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
-@@ -42,6 +42,7 @@ extern int numeric_ids;
+@@ -42,13 +42,16 @@ extern int numeric_ids;
  extern int filesfrom_fd;
  extern int remote_protocol;
  extern int protocol_version;
 +extern int always_checksum;
  extern int io_timeout;
  extern int no_detach;
++extern int use_db;
  extern int write_batch;
-@@ -49,6 +50,7 @@ extern int default_af_hint;
+ extern int default_af_hint;
  extern int logfile_format_has_i;
  extern int logfile_format_has_o_or_i;
  extern mode_t orig_umask;
@@ -117,27 +123,65 @@ diff --git a/clientserver.c b/clientserver.c
  extern char *bind_address;
  extern char *sockopts;
  extern char *config_file;
-@@ -782,6 +784,12 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
- 	} else if (am_root < 0) /* Treat --fake-super from client as --super. */
- 		am_root = 2;
+@@ -554,6 +557,9 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  
-+	db_config = lp_db_config(i);
-+	if (!*db_config || (!always_checksum && protocol_version < 30))
-+		db_config = NULL;
-+	else
-+		db_read_config(FLOG, db_config);
+ 	log_init(1);
+ 
++	if (*lp_db_config(i))
++		db_read_config(FLOG, lp_db_config(i));
 +
- 	if (filesfrom_fd == 0)
- 		filesfrom_fd = f_in;
+ #ifdef HAVE_PUTENV
+ 	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i)) {
+ 		char *modname, *modpath, *hostaddr, *hostname, *username;
+@@ -770,6 +776,10 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  
+ 	am_server = 1; /* Don't let someone try to be tricky. */
+ 	quiet = 0;
++	db_config = NULL;
++	if (!always_checksum)
++		use_db = 0;
++
+ 	if (lp_ignore_errors(module_id))
+ 		ignore_errors = 1;
+ 	if (write_batch < 0)
 diff --git a/configure.in b/configure.in
 --- a/configure.in
 +++ b/configure.in
-@@ -969,6 +969,8 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -314,7 +314,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
+     sys/un.h sys/attr.h mcheck.h arpa/inet.h arpa/nameser.h locale.h \
+     netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
+     sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
+-    popt.h popt/popt.h)
++    popt.h popt/popt.h mysql/mysql.h sqlite3.h)
+ AC_HEADER_MAJOR
+ 
+ AC_CACHE_CHECK([if makedev takes 3 args],rsync_cv_MAKEDEV_TAKES_3_ARGS,[
+@@ -969,6 +969,29 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
-+LIBS="$LIBS -lmysqlclient -lsqlite3"
++AC_CHECK_PROG(MYSQL_CONFIG, mysql_config, 1, 0)
++if test x$MYSQL_CONFIG = x1; then
++    AC_MSG_CHECKING(for mysql version >= 4)
++    mysql_version=`mysql_config --version`
++    mysql_major_version=`echo $mysql_version | sed 's/\..*//'`
++    if test $mysql_major_version -lt 4; then
++	AC_MSG_RESULT(no.. skipping MySQL)
++    else
++	AC_MSG_RESULT(yes)
++
++	MYSQL_CFLAGS=`mysql_config --cflags`
++	MYSQL_LIBS=`mysql_config --libs`
++
++	CPPFLAGS="$CPPFLAGS $MYSQL_CFLAGS"
++	LIBS="$MYSQL_LIBS $LIBS"
++
++	AC_CHECK_LIB(mysqlclient, mysql_init)
++   fi
++fi
++
++AC_CHECK_LIB(sqlite3, sqlite3_open)
++AC_CHECK_FUNCS(sqlite3_open_v2 sqlite3_prepare_v2)
 +
  case "$CC" in
  ' checker'*|checker*)
@@ -146,7 +190,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,557 @@
+@@ -0,0 +1,566 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -169,15 +213,22 @@ new file mode 100644
 +#include "rsync.h"
 +#include "ifuncs.h"
 +
++#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
 +#define USE_MYSQL
-+#define USE_SQLITE
-+
-+#ifdef USE_MYSQL
 +#include <mysql/mysql.h>
 +#include <mysql/errmsg.h>
 +#endif
-+#ifdef USE_SQLITE
++
++#if defined HAVE_SQLITE3_H && defined HAVE_LIBSQLITE3
++#define USE_SQLITE
 +#include <sqlite3.h>
++#ifndef HAVE_SQLITE3_OPEN_V2
++#define sqlite3_open_v2(dbname, dbhptr, flags, vfs) \
++	sqlite3_open(dbname, dbhptr)
++#endif
++#ifndef HAVE_SQLITE3_PREPARE_V2
++#define sqlite3_prepare_v2 sqlite3_prepare
++#endif
 +#endif
 +
 +extern int protocol_version;
@@ -220,9 +271,12 @@ new file mode 100644
 +static int md_num;
 +static enum logcode log_code;
 +
++#ifdef USE_MYSQL
 +static unsigned int bind_disk_id;
 +static unsigned long long bind_devno, bind_ino, bind_size, bind_mtime, bind_ctime;
-+static char bind_thishost[256], bind_sum[MAX_DIGEST_LEN];
++static char bind_sum[MAX_DIGEST_LEN];
++#endif
++static char bind_thishost[256];
 +static int bind_thishost_len;
 +
 +static unsigned int prior_disk_id = 0;
@@ -425,13 +479,8 @@ new file mode 100644
 +{
 +	char *sql;
 +
-+#if 0
 +	if (sqlite3_open_v2(dbname, &dbh.sqlite, SQLITE_OPEN_READWRITE, NULL) != 0)
 +		return 0;
-+#else
-+	if (sqlite3_open(dbname, &dbh.sqlite) != 0)
-+		return 0;
-+#endif
 +
 +	sql = "SELECT disk_id"
 +	    " FROM disk"
@@ -527,6 +576,7 @@ new file mode 100644
 +	dbh.all = NULL;
 +}
 +
++#ifdef USE_MYSQL
 +static MYSQL_STMT *exec_mysql(int ndx)
 +{
 +	MYSQL_STMT *stmt = statements[ndx].mysql;
@@ -546,7 +596,9 @@ new file mode 100644
 +
 +	return stmt;
 +}
++#endif
 +
++#ifdef USE_MYSQL
 +static int fetch_mysql(MYSQL_BIND *binds, int bind_cnt, int ndx)
 +{
 +	unsigned long length[32];
@@ -580,6 +632,7 @@ new file mode 100644
 +
 +	return is_null[0] ? 0 : 1;
 +}
++#endif
 +
 +static void get_disk_id(unsigned long long devno)
 +{
@@ -715,7 +768,7 @@ diff --git a/flist.c b/flist.c
  extern int eol_nulls;
  extern int relative_paths;
  extern int implied_dirs;
-@@ -1235,14 +1236,16 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1239,14 +1240,16 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		memcpy(bp + basename_len, linkname, linkname_len);
  #endif
  
@@ -735,7 +788,7 @@ diff --git a/flist.c b/flist.c
  	/* This code is only used by the receiver when it is building
  	 * a list of files for a delete pass. */
  	if (keep_dirlinks && linkname_len && flist) {
-@@ -1858,6 +1861,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -1862,6 +1865,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		     | (eol_nulls || reading_remotely ? RL_EOL_NULLS : 0);
  	int implied_dot_dir = 0;
  
@@ -834,7 +887,7 @@ diff --git a/main.c b/main.c
  		exit_cleanup(RERR_SYNTAX);
  	}
  
-+	if (db_config && (always_checksum || protocol_version >= 30))
++	if (db_config && always_checksum)
 +		db_read_config(FERROR, db_config);
 +
  	if (am_server) {
@@ -851,15 +904,46 @@ diff --git a/options.c b/options.c
  int eol_nulls = 0;
  int protect_args = 0;
  int human_readable = 0;
-@@ -321,6 +322,7 @@ void usage(enum logcode F)
+@@ -229,6 +230,7 @@ static void print_rsync_version(enum logcode f)
+ 	char const *links = "no ";
+ 	char const *iconv = "no ";
+ 	char const *ipv6 = "no ";
++	char const *db = "no ";
+ 	STRUCT_STAT *dumstat;
+ 
+ #if SUBPROTOCOL_VERSION != 0
+@@ -261,6 +263,11 @@ static void print_rsync_version(enum logcode f)
+ #if defined HAVE_LUTIMES && defined HAVE_UTIMES
+ 	symtimes = "";
+ #endif
++#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
++	db = "";
++#elif defined HAVE_SQLITE3_H && defined HAVE_LIBSQLITE3
++	db = "";
++#endif
+ 
+ 	rprintf(f, "%s  version %s  protocol version %d%s\n",
+ 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
+@@ -274,8 +281,8 @@ static void print_rsync_version(enum logcode f)
+ 		(int)(sizeof (int64) * 8));
+ 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
+ 		got_socketpair, hardlinks, links, ipv6, have_inplace);
+-	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes\n",
+-		have_inplace, acls, xattrs, iconv, symtimes);
++	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sdb\n",
++		have_inplace, acls, xattrs, iconv, symtimes, db);
+ 
+ #ifdef MAINTAINER_MODE
+ 	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
+@@ -321,6 +328,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
-+  rprintf(F,"     --db=CONFIG_FILE        specify a config file for FS DB\n");
++  rprintf(F,"     --db=CONFIG_FILE        specify a CONFIG_FILE for DB checksums\n");
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -579,6 +581,7 @@ static struct poptOption long_options[] = {
+@@ -579,6 +587,7 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -870,18 +954,17 @@ diff --git a/options.c b/options.c
 diff --git a/pipe.c b/pipe.c
 --- a/pipe.c
 +++ b/pipe.c
-@@ -26,6 +26,10 @@ extern int am_sender;
+@@ -26,6 +26,9 @@ extern int am_sender;
  extern int am_server;
  extern int blocking_io;
  extern int filesfrom_fd;
 +extern int always_checksum;
-+extern int protocol_version;
 +extern int use_db;
 +extern char *db_config;
  extern mode_t orig_umask;
  extern char *logfile_name;
  extern int remote_option_cnt;
-@@ -141,6 +145,9 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
+@@ -141,6 +144,9 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
  			logfile_close();
  		}
  
@@ -891,47 +974,101 @@ diff --git a/pipe.c b/pipe.c
  		if (remote_option_cnt) {
  			int rc = remote_option_cnt + 1;
  			const char **rv = remote_options;
-@@ -148,6 +155,8 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
+@@ -148,6 +154,8 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
  				option_error();
  				exit_cleanup(RERR_SYNTAX);
  			}
-+			if (db_config && (always_checksum || protocol_version >= 30))
++			if (db_config && always_checksum)
 +				db_read_config(FERROR, db_config);
  		}
  
  		if (dup2(to_child_pipe[0], STDIN_FILENO) < 0 ||
-diff --git a/receiver.c b/receiver.c
---- a/receiver.c
-+++ b/receiver.c
-@@ -43,11 +43,13 @@ extern int basis_dir_cnt;
- extern int make_backups;
- extern int cleanup_got_literal;
- extern int remove_source_files;
-+extern int always_checksum;
- extern int append_mode;
- extern int sparse_files;
- extern int keep_partial;
- extern int checksum_seed;
- extern int inplace;
-+extern int use_db;
- extern int delay_updates;
- extern mode_t orig_umask;
- extern struct stats stats;
-@@ -399,6 +401,9 @@ int recv_files(int f_in, char *local_name)
- 	if (verbose > 2)
- 		rprintf(FINFO, "recv_files(%d) starting\n", cur_flist->used);
+diff --git a/rsync.yo b/rsync.yo
+--- a/rsync.yo
++++ b/rsync.yo
+@@ -317,6 +317,7 @@ to the detailed description below for a complete description.  verb(
+  -q, --quiet                 suppress non-error messages
+      --no-motd               suppress daemon-mode MOTD (see caveat)
+  -c, --checksum              skip based on checksum, not mod-time & size
++     --db=CONFIG_FILE        specify a CONFIG_FILE for DB checksums
+  -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
+      --no-OPTION             turn off an implied OPTION (e.g. --no-D)
+  -r, --recursive             recurse into directories
+@@ -533,6 +534,47 @@ checksum that is generated as the file is transferred, but that
+ automatic after-the-transfer verification has nothing to do with this
+ option's before-the-transfer "Does this file need to be updated?" check.
  
-+	if (use_db && !always_checksum)
-+		db_connect();
++dit(bf(--db=CONFIG_FILE))  This option specifies a CONFIG_FILE to read
++that holds connection details for a database of checksum information.
++When combined with the bf(--checksum) (bf(-c)) option, rsync will try to
++use cached checksum information from the DB, and will update it if it is
++missing.
 +
- 	if (delay_updates)
- 		delayed_bits = bitbag_create(cur_flist->used + 1);
++The currently supported DB choices are MySQL and SQLite.  For example, a
++MySQL configuration might look like this:
++
++verb(    dbtype: mysql
++    dbhost: 127.0.0.1
++    dbname: rsyncdb
++    dbuser: rsyncuser
++    dbpass: somepass
++    port: 3306
++    thishost: hostname )
++
++And a SQLite configuration might look like this:
++
++verb(    dbtype: SQLite
++    dbname: /var/cache/rsync/sum.db )
++
++This option only affects one side of a transfer.  See the
++bf(--remote-option) option for a way to specify the option for both
++sides of the transfer (with each side reading the config file from
++their local filesystem).  For example:
++
++verb(    rsync -avc {-M,}--db=/etc/rsyncdb.conf src/ host:dest/ )
++
++See the perl script "rsyncdb" in the support directory of the source code
++(which may also be installed in /usr/bin) for a way to create the tables,
++populate the mounted-disk information, check files against their checksums,
++and update both the MD4 and MD5 checksums for files at the same time (since
++an rsync copy will only update one or the other).
++
++You can use a single MySQL DB for all your hosts if you give each one
++their own "thishost" name and setup their device-mapping data.  Or feel
++free to use separate databases, separate servers, etc.  See the rsync
++daemon's "db config" parameter for how to configure a daemon to use a DB
++(since a client cannot control this parameter on a daemon).
++
+ dit(bf(-a, --archive)) This is equivalent to bf(-rlptgoD). It is a quick
+ way of saying you want recursion and want to preserve almost
+ everything (with -H being a notable omission).
+diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
+--- a/rsyncd.conf.yo
++++ b/rsyncd.conf.yo
+@@ -270,6 +270,18 @@ is daemon.  This setting has no effect if the "log file" setting is a
+ non-empty string (either set in the per-modules settings, or inherited
+ from the global settings).
  
-diff --git a/support/dbupdate b/support/dbupdate
++dit(bf(db config)) This parameter specifies a config file to read that
++holds connection details for a database of checksum information.
++
++The config file will be read-in prior to any chroot restrictions, but
++the connection occurs from inside the chroot.  This means that you
++should use a socket connection (e.g. 127.0.0.1 rather than localhost)
++for a MySQL config from inside a chroot.  For SQLite, the DB file must
++be placed inside the chroot (though it can be placed outside the
++transfer dir if you configured an inside-chroot path).
++
++See the bf(--db=CONFIG_FILE) option for full details.
++
+ dit(bf(max verbosity)) The "max verbosity" option allows you to control
+ the maximum amount of verbose information that you'll allow the daemon to
+ generate (since the information goes into the log file). The default is 1,
+diff --git a/support/rsyncdb b/support/rsyncdb
 new file mode 100755
 --- /dev/null
-+++ b/support/dbupdate
-@@ -0,0 +1,281 @@
++++ b/support/rsyncdb
+@@ -0,0 +1,331 @@
 +#!/usr/bin/perl -w
 +use strict;
 +
@@ -946,6 +1083,7 @@ new file mode 100755
 +&Getopt::Long::Configure('bundling');
 +&usage if !&GetOptions(
 +    'db=s' => \( my $db_config ),
++    'init' => \( my $init_db ),
 +    'mounts|m' => \( my $update_mounts ),
 +    'recurse|r' => \( my $recurse_opt ),
 +    'check|c' => \( my $check_opt ),
@@ -967,10 +1105,13 @@ new file mode 100755
 +die "You must define at least dbtype and dbname in $db_config\n"
 +    unless defined $config{'dbtype'} && defined $config{'dbname'};
 +
++my $sqlite = $config{'dbtype'} =~ /^sqlite$/i;
++
 +my $thishost = $config{'thishost'} || 'localhost';
 +
-+my $connect = 'DBI:' . $config{'dbtype'} . ':database=' . $config{'dbname'};
-+$connect =~ s/:database=/:dbname=/ if $config{'dbtype'} eq 'SQLite';
++my $connect = 'DBI:' . $config{'dbtype'} . ':';
++$connect .= 'dbname=' . $config{'dbname'} if $sqlite;
++$connect .= 'database=' . $config{'dbname'} if !$sqlite && !$init_db;
 +$connect .= ';host=' . $config{'dbhost'} if defined $config{'dbhost'};
 +$connect .= ';port=' . $config{'dbport'} if defined $config{'dbport'};
 +
@@ -979,6 +1120,45 @@ new file mode 100755
 +
 +END {
 +    $dbh->disconnect if defined $dbh;
++}
++
++if ($init_db) {
++    my $unsigned = $sqlite ? '' : 'unsigned';
++    my $auto_increment = $sqlite ? 'AUTOINCREMENT' : 'AUTO_INCREMENT';
++    my $dbname = $config{'dbname'};
++
++    if (!$sqlite) {
++	$dbh->do("CREATE DATABASE IF NOT EXISTS `$dbname`");
++	$dbh->do("USE `$dbname`");
++    }
++
++    print "Dropping old tables (if they exist) ...\n" if $verbosity;
++    $dbh->do("DROP TABLE IF EXISTS disk") or die $dbh->errstr;
++    $dbh->do("DROP TABLE IF EXISTS inode_map") or die $dbh->errstr;
++
++    print "Creating empty tables ...\n" if $verbosity;
++    $dbh->do("
++	CREATE TABLE disk (
++	  disk_id integer $unsigned NOT NULL PRIMARY KEY $auto_increment,
++	  devno bigint $unsigned NOT NULL,
++	  host varchar(256) NOT NULL default 'localhost',
++	  mounted tinyint NOT NULL default '1',
++	  comment varchar(256) default NULL
++	)") or die $dbh->errstr;
++
++    $dbh->do("
++	CREATE TABLE inode_map (
++	  disk_id integer $unsigned NOT NULL,
++	  ino bigint $unsigned NOT NULL,
++	  size bigint $unsigned NOT NULL,
++	  mtime bigint NOT NULL,
++	  ctime bigint NOT NULL,
++	  sum_type tinyint NOT NULL default '0',
++	  checksum binary(16) NOT NULL,
++	  PRIMARY KEY (disk_id,ino,sum_type)
++	)") or die $dbh->errstr;
++
++    exit unless $update_mounts;
 +}
 +
 +my $sel_disk_H = $dbh->prepare("
@@ -999,7 +1179,7 @@ new file mode 100755
 +    WHERE disk_id = ?
 +    ") or die $dbh->errstr;
 +
-+my $row_id = $config{'dbtype'} eq 'SQLite' ? 'ROWID' : 'ID';
++my $row_id = $sqlite ? 'ROWID' : 'ID';
 +my $sel_lastid_H = $dbh->prepare("
 +    SELECT LAST_INSERT_$row_id()
 +    ") or die $dbh->errstr;
@@ -1039,15 +1219,18 @@ new file mode 100755
 +	if (defined $mounts{$devno}) {
 +	    if ($comment ne $mounts{$devno}) {
 +		if ($mounted) {
++		    print "Umounting $comment ($thishost:$devno)\n" if $verbosity;
 +		    $up_disk_H->execute(0, $disk_id);
 +		}
 +		next;
 +	    }
 +	    if (!$mounted) {
++		print "Mounting $comment ($thishost:$devno)\n" if $verbosity;
 +		$up_disk_H->execute(1, $disk_id);
 +	    }
 +	} else {
 +	    if ($mounted) {
++		print "Umounting $comment ($thishost:$devno)\n" if $verbosity;
 +		$up_disk_H->execute(0, $disk_id);
 +	    }
 +	    next;
@@ -1062,11 +1245,13 @@ new file mode 100755
 +if ($update_mounts) {
 +    while (my($devno, $comment) = each %mounts) {
 +	next if $disk_id{$devno};
++	print "Adding $comment ($thishost:$devno)\n" if $verbosity;
 +	$ins_disk_H->execute($devno, $thishost, 1, $comment);
 +	$sel_lastid_H->execute;
 +	($disk_id{$devno}) = $sel_lastid_H->fetchrow_array;
 +	$sel_lastid_H->finish;
 +    }
++    exit;
 +}
 +
 +my $start_dir = cwd();
@@ -1206,7 +1391,9 @@ new file mode 100755
 +
 +Options:
 +     --db=FILE     Specify the config FILE to read for the DB info.
-+ -m, --mounts      Update mount info.
++     --init        Create (recreate) needed tables (making them empty).
++                   No DIR scanning, but can be combined with --mounts.
++ -m, --mounts      Update mount info.  Does no DIR scanning.
 + -r, --recurse     Scan files in subdirectories too.
 + -c, --check       Check if the checksums are right (doesn't update).
 + -v, --verbose     Mention what we're doing.  Repeat for more info.
