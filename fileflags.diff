@@ -164,14 +164,6 @@ diff --git a/flist.c b/flist.c
  	if (uid_ndx) /* Check uid_ndx instead of preserve_uid for del support */
  		F_OWNER(file) = st.st_uid;
  	if (gid_ndx) /* Check gid_ndx instead of preserve_gid for del support */
-@@ -1342,6 +1373,7 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
- #endif
- #ifdef SUPPORT_XATTRS
- 		if (preserve_xattrs) {
-+			sx.st.st_mode = file->mode;
- 			sx.xattr = NULL;
- 			if (get_xattr(fname, &sx) < 0)
- 				return NULL;
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -1049,29 +1041,6 @@ diff --git a/util.c b/util.c
 diff --git a/xattrs.c b/xattrs.c
 --- a/xattrs.c
 +++ b/xattrs.c
-@@ -281,6 +281,10 @@ int get_xattr(const char *fname, stat_x *sxp)
- {
- 	sxp->xattr = new(item_list);
- 	*sxp->xattr = empty_xattr;
-+
-+	if (IS_SPECIAL(sxp->st.st_mode) || IS_DEVICE(sxp->st.st_mode))
-+		return 0;
-+
- 	if (rsync_xal_get(fname, sxp->xattr) < 0) {
- 		free_xattr(sxp);
- 		return -1;
-@@ -856,6 +860,11 @@ int set_xattr(const char *fname, const struct file_struct *file,
- 		return -1;
- 	}
- 
-+	if (IS_SPECIAL(sxp->st.st_mode) || IS_DEVICE(sxp->st.st_mode)) {
-+		errno = ENOTSUP;
-+		return -1;
-+	}
-+
- 	ndx = F_XATTR(file);
- 	return rsync_xal_set(fname, lst + ndx, fnamecmp, sxp);
- }
 @@ -972,7 +981,7 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
  	mode = (fst.st_mode & _S_IFMT) | (fmode & ACCESSPERMS)
  	     | (S_ISDIR(fst.st_mode) ? 0700 : 0600);
