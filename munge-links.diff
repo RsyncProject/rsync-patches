@@ -1,0 +1,209 @@
+This patch adds the --munge-links option, which works like the daemon's
+"munge symlinks" parameter.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/remote-option.diff
+    patch -p1 <patches/munge-links.diff
+    ./configure                               (optional if already run)
+    make
+
+diff --git a/clientserver.c b/clientserver.c
+--- a/clientserver.c
++++ b/clientserver.c
+@@ -37,6 +37,7 @@ extern int ignore_errors;
+ extern int preserve_xattrs;
+ extern int kluge_around_eof;
+ extern int daemon_over_rsh;
++extern int munge_symlinks;
+ extern int sanitize_paths;
+ extern int numeric_ids;
+ extern int filesfrom_fd;
+@@ -66,7 +67,6 @@ extern iconv_t ic_send, ic_recv;
+ char *auth_user;
+ int read_only = 0;
+ int module_id = -1;
+-int munge_symlinks = 0;
+ struct chmod_mode_struct *daemon_chmod_modes;
+ 
+ /* module_dirlen is the length of the module_dir string when in daemon
+@@ -406,6 +406,7 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 	char *name = lp_name(i);
+ 	int use_chroot = lp_use_chroot(i);
+ 	int ret, pre_exec_fd = -1;
++	int save_munge_symlinks;
+ 	pid_t pre_exec_pid = 0;
+ 	char *request = NULL;
+ 
+@@ -689,9 +690,11 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 		munge_symlinks = !use_chroot || module_dirlen;
+ 	if (munge_symlinks) {
+ 		STRUCT_STAT st;
+-		if (do_stat(SYMLINK_PREFIX, &st) == 0 && S_ISDIR(st.st_mode)) {
+-			rprintf(FLOG, "Symlink munging is unsupported when a %s directory exists.\n",
+-				SYMLINK_PREFIX);
++		char prefix[SYMLINK_PREFIX_LEN]; /* NOT +1 ! */
++		strlcpy(prefix, SYMLINK_PREFIX, sizeof prefix); /* trim the trailing slash */
++		if (do_stat(prefix, &st) == 0 && S_ISDIR(st.st_mode)) {
++			rprintf(FLOG, "Symlink munging is unsafe when a %s directory exists.\n",
++				prefix);
+ 			io_printf(f_out, "@ERROR: daemon security issue -- contact admin\n", name);
+ 			exit_cleanup(RERR_UNSUPPORTED);
+ 		}
+@@ -747,6 +750,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 	read_args(f_in, name, line, sizeof line, rl_nulls, &argv, &argc, &request);
+ 	orig_argv = argv;
+ 
++	save_munge_symlinks = munge_symlinks;
++
+ 	verbose = 0; /* future verbosity is controlled by client options */
+ 	ret = parse_arguments(&argc, (const char ***) &argv);
+ 	if (protect_args && ret) {
+@@ -758,6 +763,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+ 	} else
+ 		orig_early_argv = NULL;
+ 
++	munge_symlinks = save_munge_symlinks; /* The client mustn't control this. */
++
+ 	if (pre_exec_pid) {
+ 		err_msg = finish_pre_exec(pre_exec_pid, pre_exec_fd, request,
+ 					  orig_early_argv, orig_argv);
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -105,6 +105,7 @@ int connect_timeout = 0;
+ int keep_partial = 0;
+ int safe_symlinks = 0;
+ int copy_unsafe_links = 0;
++int munge_symlinks = 0;
+ int size_only = 0;
+ int daemon_bwlimit = 0;
+ int bwlimit = 0;
+@@ -338,6 +339,7 @@ void usage(enum logcode F)
+   rprintf(F," -L, --copy-links            transform symlink into referent file/dir\n");
+   rprintf(F,"     --copy-unsafe-links     only \"unsafe\" symlinks are transformed\n");
+   rprintf(F,"     --safe-links            ignore symlinks that point outside the source tree\n");
++  rprintf(F,"     --munge-links           munge symlinks to make them safer (but unusable)\n");
+   rprintf(F," -k, --copy-dirlinks         transform symlink to a dir into referent dir\n");
+   rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
+   rprintf(F," -H, --hard-links            preserve hard links\n");
+@@ -520,6 +522,8 @@ static struct poptOption long_options[] = {
+   {"copy-links",      'L', POPT_ARG_NONE,   &copy_links, 0, 0, 0 },
+   {"copy-unsafe-links",0,  POPT_ARG_NONE,   &copy_unsafe_links, 0, 0, 0 },
+   {"safe-links",       0,  POPT_ARG_NONE,   &safe_symlinks, 0, 0, 0 },
++  {"munge-links",      0,  POPT_ARG_VAL,    &munge_symlinks, 1, 0, 0 },
++  {"no-munge-links",   0,  POPT_ARG_VAL,    &munge_symlinks, 0, 0, 0 },
+   {"copy-dirlinks",   'k', POPT_ARG_NONE,   &copy_dirlinks, 0, 0, 0 },
+   {"keep-dirlinks",   'K', POPT_ARG_NONE,   &keep_dirlinks, 0, 0, 0 },
+   {"hard-links",      'H', POPT_ARG_NONE,   0, 'H', 0, 0 },
+@@ -1471,6 +1475,17 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 		need_messages_from_generator = 1;
+ 	}
+ 
++	if (munge_symlinks && !am_daemon) {
++		STRUCT_STAT st;
++		char prefix[SYMLINK_PREFIX_LEN]; /* NOT +1 ! */
++		strlcpy(prefix, SYMLINK_PREFIX, sizeof prefix); /* trim the trailing slash */
++		if (do_stat(prefix, &st) == 0 && S_ISDIR(st.st_mode)) {
++			rprintf(FERROR, "Symlink munging is unsafe when a %s directory exists.\n",
++				prefix);
++			exit_cleanup(RERR_UNSUPPORTED);
++		}
++	}
++
+ 	if (sanitize_paths) {
+ 		int i;
+ 		for (i = argc; i-- > 0; )
+diff --git a/pipe.c b/pipe.c
+--- a/pipe.c
++++ b/pipe.c
+@@ -26,6 +26,7 @@ extern int am_sender;
+ extern int am_server;
+ extern int blocking_io;
+ extern int filesfrom_fd;
++extern int munge_symlinks;
+ extern mode_t orig_umask;
+ extern char *logfile_name;
+ extern int remote_option_cnt;
+@@ -133,6 +134,7 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
+ 		am_sender = 0;
+ 		am_server = 1;
+ 		filesfrom_fd = -1;
++		munge_symlinks = 0; /* Each side needs its own option. */
+ 		chmod_modes = NULL; /* Let the sending side handle this. */
+ 
+ 		/* Let the client side handle this. */
+diff --git a/rsync.h b/rsync.h
+--- a/rsync.h
++++ b/rsync.h
+@@ -32,7 +32,7 @@
+ #define DEFAULT_LOCK_FILE "/var/run/rsyncd.lock"
+ #define URL_PREFIX "rsync://"
+ 
+-#define SYMLINK_PREFIX "/rsyncd-munged/"
++#define SYMLINK_PREFIX "/rsyncd-munged/"  /* This MUST have a trailing slash! */
+ #define SYMLINK_PREFIX_LEN ((int)sizeof SYMLINK_PREFIX - 1)
+ 
+ #define BACKUP_SUFFIX "~"
+diff --git a/rsync.yo b/rsync.yo
+--- a/rsync.yo
++++ b/rsync.yo
+@@ -334,6 +334,7 @@ to the detailed description below for a complete description.  verb(
+  -L, --copy-links            transform symlink into referent file/dir
+      --copy-unsafe-links     only "unsafe" symlinks are transformed
+      --safe-links            ignore symlinks that point outside the tree
++     --munge-links           munge symlinks to make them safer
+  -k, --copy-dirlinks         transform symlink to dir into referent dir
+  -K, --keep-dirlinks         treat symlinked dir on receiver as dir
+  -H, --hard-links            preserve hard links
+@@ -791,6 +792,25 @@ which point outside the copied tree. All absolute symlinks are
+ also ignored. Using this option in conjunction with bf(--relative) may
+ give unexpected results.
+ 
++dit(bf(--munge-links)) This option tells rsync to (1) modify all symlinks on
++the receiving side in a way that makes them unusable but recoverable (see
++below), or (2) to unmunge symlinks on the sending side that had been stored in
++a munged state.  This is useful if you don't quite trust the source of the data
++to not try to slip in a symlink to a unexpected place.
++
++The way rsync disables the use of symlinks is to prefix each one with the
++string "/rsyncd-munged/".  This prevents the links from being used as long as
++that directory does not exist.  When this option is enabled, rsync will refuse
++to run if that path is a directory or a symlink to a directory.
++
++The option only affects the client side of the transfer, so if you need it to
++affect the server, specify it via bf(--remote-option).  (Note that in a local
++transfer, the client side is the sender.)
++
++This option has no affect on a daemon, since the daemon configures whether it
++wants munged symlinks via its "munge symlinks" parameter.  See also the
++"munge-symlinks" perl script in the support directory of the source code.
++
+ dit(bf(-k, --copy-dirlinks)) This option causes the sending side to treat
+ a symlink to a directory as though it were a real directory.  This is
+ useful if you don't want symlinks to non-directories to be affected, as
+diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
+--- a/rsyncd.conf.yo
++++ b/rsyncd.conf.yo
+@@ -192,8 +192,9 @@ to translate names, and that it is not possible for a user to change those
+ resources.
+ 
+ dit(bf(munge symlinks)) This parameter tells rsync to modify
+-all incoming symlinks in a way that makes them unusable but recoverable
+-(see below).  This should help protect your files from user trickery when
++all symlinks in the same way as the (non-daemon-affecting)
++bf(--munge-links) command-line option (using a method described below).
++This should help protect your files from user trickery when
+ your daemon module is writable.  The default is disabled when "use chroot"
+ is on and the inside-chroot path is "/", otherwise it is enabled.
+ 
+@@ -213,7 +214,8 @@ to the exclude setting for the module so that
+ a user can't try to create it.
+ 
+ Note:  rsync makes no attempt to verify that any pre-existing symlinks in
+-the hierarchy are as safe as you want them to be.  If you setup an rsync
++the module's hierarchy are as safe as you want them to be (unless, of
++course, it just copied in the whole hierarchy).  If you setup an rsync
+ daemon on a new area or locally add symlinks, you can manually protect your
+ symlinks from being abused by prefixing "/rsyncd-munged/" to the start of
+ every symlink's value.  There is a perl script in the support directory
