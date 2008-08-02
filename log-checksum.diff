@@ -15,15 +15,15 @@ To use this patch, run these commands for a successful build:
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -67,6 +67,7 @@ extern int protocol_version;
- extern int sanitize_paths;
+@@ -68,6 +68,7 @@ extern int sanitize_paths;
  extern int munge_symlinks;
  extern int need_unsorted_flist;
+ extern int sender_symlink_iconv;
 +extern int sender_keeps_checksum;
  extern int unsort_ndx;
  extern struct stats stats;
  extern char *filesfrom_host;
-@@ -1187,6 +1188,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1223,6 +1224,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -36,7 +36,7 @@ diff --git a/flist.c b/flist.c
  #if EXTRA_ROUNDING > 0
  	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
  		extra_len = (extra_len | (EXTRA_ROUNDING * EXTRA_LEN)) + EXTRA_LEN;
-@@ -1250,9 +1257,6 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1286,9 +1293,6 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		memcpy(bp + basename_len, linkname, linkname_len);
  #endif
  
@@ -46,7 +46,7 @@ diff --git a/flist.c b/flist.c
  	if (am_sender)
  		F_PATHNAME(file) = pathname;
  	else if (!pool)
-@@ -1283,6 +1287,9 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1319,6 +1323,9 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		return NULL;
  	}
  
@@ -78,7 +78,7 @@ diff --git a/log.c b/log.c
  
  static int log_initialised;
  static int logfile_was_closed;
-@@ -628,6 +631,28 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
+@@ -632,6 +635,28 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
  			snprintf(buf2, sizeof buf2, fmt, (double)b);
  			n = buf2;
  			break;
@@ -118,7 +118,7 @@ diff --git a/main.c b/main.c
  extern int remove_source_files;
  extern int need_messages_from_generator;
  extern int kluge_around_eof;
-@@ -68,6 +69,8 @@ extern int connect_timeout;
+@@ -71,6 +72,8 @@ extern int check_for_io_err;
  extern pid_t cleanup_child_pid;
  extern unsigned int module_dirlen;
  extern struct stats stats;
@@ -127,7 +127,7 @@ diff --git a/main.c b/main.c
  extern char *filesfrom_host;
  extern char *partial_dir;
  extern char *dest_option;
-@@ -85,6 +88,7 @@ int local_server = 0;
+@@ -88,6 +91,7 @@ int local_server = 0;
  int daemon_over_rsh = 0;
  mode_t orig_umask = 0;
  int batch_gen_fd = -1;
@@ -135,7 +135,7 @@ diff --git a/main.c b/main.c
  
  /* There's probably never more than at most 2 outstanding child processes,
   * but set it higher, just in case. */
-@@ -1003,6 +1007,12 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
+@@ -1008,6 +1012,12 @@ int client_run(int f_in, int f_out, pid_t pid, int argc, char *argv[])
  
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
@@ -271,27 +271,13 @@ diff --git a/receiver.c b/receiver.c
  		return 0;
  	return 1;
  }
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -2093,7 +2093,7 @@ by the server and defaults to the current code(time()).  This option
- is used to set a specific checksum seed, which is useful for
- applications that want repeatable block and file checksums, or
- in the case where the user wants a more random checksum seed.
--Note that setting NUM to 0 causes rsync to use the default of code(time())
-+Setting NUM to 0 causes rsync to use the default of code(time())
- for checksum seed.
- enddit()
- 
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -509,7 +509,8 @@ quote(itemization(
-   it() %a the remote IP address
+@@ -510,6 +510,7 @@ quote(itemization(
    it() %b the number of bytes actually transferred
    it() %B the permission bits of the file (e.g. rwxrwxrwt)
--  it() %c the checksum bytes received for this file (only when sending)
-+  it() %c the total size of the block checksums received for the basis file (only when sending)
+   it() %c the total size of the block checksums received for the basis file (only when sending)
 +  it() %C the full-file MD5 checksum if bf(--checksum) is enabled or a file was transferred (only for protocol 30 or above).
    it() %f the filename (long form on sender; no trailing "/")
    it() %G the gid of the file (decimal) or "DEFAULT"
