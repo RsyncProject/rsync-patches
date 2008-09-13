@@ -63,34 +63,36 @@ diff --git a/options.c b/options.c
  int rsync_port = 0;
  int compare_dest = 0;
  int copy_dest = 0;
-@@ -384,6 +386,8 @@ void usage(enum logcode F)
+@@ -384,6 +386,9 @@ void usage(enum logcode F)
    rprintf(F,"     --delay-updates         put all updated files into place at transfer's end\n");
    rprintf(F," -m, --prune-empty-dirs      prune empty directory chains from the file-list\n");
    rprintf(F,"     --numeric-ids           don't map uid/gid values by user/group name\n");
 +  rprintf(F,"     --usermap=STRING        custom username mapping\n");
 +  rprintf(F,"     --groupmap=STRING       custom groupname mapping\n");
++  rprintf(F,"     --chown=USER:GROUP      simple username/groupname mapping\n");
    rprintf(F,"     --timeout=SECONDS       set I/O timeout in seconds\n");
    rprintf(F,"     --contimeout=SECONDS    set daemon connection timeout in seconds\n");
    rprintf(F," -I, --ignore-times          don't skip files that match in size and mod-time\n");
-@@ -446,7 +450,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -446,7 +451,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
 -      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV,
-+      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_USERMAP, OPT_GROUPMAP,
++      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -622,6 +626,8 @@ static struct poptOption long_options[] = {
+@@ -622,6 +627,9 @@ static struct poptOption long_options[] = {
    {"no-s",             0,  POPT_ARG_VAL,    &protect_args, 0, 0, 0},
    {"numeric-ids",      0,  POPT_ARG_VAL,    &numeric_ids, 1, 0, 0 },
    {"no-numeric-ids",   0,  POPT_ARG_VAL,    &numeric_ids, 0, 0, 0 },
 +  {"usermap",          0,  POPT_ARG_STRING, 0, OPT_USERMAP, 0, 0 },
 +  {"groupmap",         0,  POPT_ARG_STRING, 0, OPT_GROUPMAP, 0, 0 },
++  {"chown",            0,  POPT_ARG_STRING, 0, OPT_CHOWN, 0, 0 },
    {"timeout",          0,  POPT_ARG_INT,    &io_timeout, 0, 0, 0 },
    {"no-timeout",       0,  POPT_ARG_VAL,    &io_timeout, 0, 0, 0 },
    {"contimeout",       0,  POPT_ARG_INT,    &connect_timeout, 0, 0, 0 },
-@@ -1228,6 +1234,24 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1228,6 +1236,43 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			}
  			break;
  
@@ -112,10 +114,29 @@ diff --git a/options.c b/options.c
 +			groupmap = (char *)poptGetOptArg(pc);
 +			break;
 +
++		case OPT_CHOWN:
++			if (usermap || groupmap) {
++				snprintf(err_buf, sizeof err_buf,
++				    "You can only specify --chown once.\n");
++				return 0;
++			} else {
++				const char *chown = poptGetOptArg(pc);
++				int len;
++				if ((arg = strchr(chown, ':')) != NULL) {
++					if (arg[1] && asprintf(&groupmap, "*:%s", arg+1) < 0)
++						out_of_memory("parse_arguments");
++					len = arg - chown;
++				} else
++					len = strlen(chown);
++				if (len && asprintf(&usermap, "*:%.*s", len, chown) < 0)
++					out_of_memory("parse_arguments");
++			}
++			break;
++
  		case OPT_HELP:
  			usage(FINFO);
  			exit_cleanup(0);
-@@ -2005,6 +2029,18 @@ void server_options(char **args, int *argc_p)
+@@ -2005,6 +2050,18 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = "--use-qsort";
  
  	if (am_sender) {
@@ -137,16 +158,17 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -378,6 +378,8 @@ to the detailed description below for a complete description.  verb(
+@@ -378,6 +378,9 @@ to the detailed description below for a complete description.  verb(
       --delay-updates         put all updated files into place at end
   -m, --prune-empty-dirs      prune empty directory chains from file-list
       --numeric-ids           don't map uid/gid values by user/group name
 +     --usermap=STRING        custom username mapping
 +     --groupmap=STRING       custom groupname mapping
++     --chown=USER:GROUP      simple username/groupname mapping
       --timeout=SECONDS       set I/O timeout in seconds
       --contimeout=SECONDS    set daemon connection timeout in seconds
   -I, --ignore-times          don't skip files that match size and time
-@@ -1620,6 +1622,47 @@ from the source system is used instead.  See also the comments on the
+@@ -1620,6 +1623,57 @@ from the source system is used instead.  See also the comments on the
  the chroot setting affects rsync's ability to look up the names of the
  users and groups and what you can do about it.
  
@@ -190,6 +212,16 @@ diff --git a/rsync.yo b/rsync.yo
 +option to have any effect, the bf(-g) (bf(--groups)) option must be used
 +(or implied), and the receiver will need to have permissions to set that
 +group.
++
++dit(bf(--chown=USER:GROUP)) This option forces all files to be owned by USER
++with group GROUP.  This is a simpler interface than using bf(--usermap) and
++bf(--groupmap) directly, but it is implemented using those options internally,
++so you cannot mix them.  If either the USER or GROUP is empty, no mapping for
++the omitted user/group will occur.  If GROUP is empty, the trailing colon may
++be omitted, but if USER is empty, a leading colon must be supplied.
++
++If you specify "--chown=foo:bar, this is exactly the same as specifying
++"--usermap=*:foo --groupmap=*:bar", only easier.
 +
  dit(bf(--timeout=TIMEOUT)) This option allows you to set a maximum I/O
  timeout in seconds. If no data is transferred for the specified time
