@@ -100,7 +100,7 @@ diff --git a/options.c b/options.c
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -257,6 +259,9 @@ static void print_rsync_version(enum logcode f)
+@@ -258,6 +260,9 @@ static void print_rsync_version(enum logcode f)
  #if defined HAVE_LUTIMES && defined HAVE_UTIMES
  	symtimes = "";
  #endif
@@ -110,7 +110,7 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -270,8 +275,8 @@ static void print_rsync_version(enum logcode f)
+@@ -271,8 +276,8 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -121,7 +121,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -358,6 +363,9 @@ void usage(enum logcode F)
+@@ -359,6 +364,9 @@ void usage(enum logcode F)
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
  #endif
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
@@ -131,7 +131,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -n, --dry-run               perform a trial run with no changes made\n");
    rprintf(F," -W, --whole-file            copy files whole (without delta-xfer algorithm)\n");
    rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
-@@ -542,6 +550,7 @@ static struct poptOption long_options[] = {
+@@ -543,6 +551,7 @@ static struct poptOption long_options[] = {
    {"sparse",          'S', POPT_ARG_VAL,    &sparse_files, 1, 0, 0 },
    {"no-sparse",        0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
    {"no-S",             0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
@@ -139,7 +139,7 @@ diff --git a/options.c b/options.c
    {"inplace",          0,  POPT_ARG_VAL,    &inplace, 1, 0, 0 },
    {"no-inplace",       0,  POPT_ARG_VAL,    &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_NONE,   0, OPT_APPEND, 0, 0 },
-@@ -2062,6 +2071,9 @@ void server_options(char **args, int *argc_p)
+@@ -2063,6 +2072,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -179,27 +179,23 @@ diff --git a/receiver.c b/receiver.c
  
  	read_sum_head(f_in, &sum);
  
-@@ -285,8 +298,18 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -285,7 +298,15 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  		goto report_write_error;
  
  #ifdef HAVE_FTRUNCATE
--	if (inplace && fd != -1)
--		ftruncate(fd, offset);
+-	if (inplace && fd != -1
 +	/* inplace: New data could be shorter than old data.
 +	 * preallocate_files: total_size could have been an overestimate.
 +	 *     Cut off any extra preallocated zeros from dest file. */
-+	if ((inplace
++	if (fd != -1
 +#ifdef SUPPORT_PREALLOCATION
-+			|| preallocated_len > offset
++	 && (inplace || preallocated_len > offset)
++#else
++	 && inplace
 +#endif
-+		) && fd != -1)
-+		if (ftruncate(fd, offset) < 0)
-+			/* If we fail to truncate, the dest file may be wrong, so we
-+			 * must trigger the "partial transfer" error. */
-+			rsyserr(FERROR_XFER, errno, "ftruncate %s", full_fname(fname));
- #endif
- 
- 	if (do_progress)
+ 	 && ftruncate(fd, offset) < 0) {
+ 		rsyserr(FERROR_XFER, errno, "ftruncate failed on %s",
+ 			full_fname(fname));
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
@@ -220,7 +216,7 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -352,6 +352,7 @@ to the detailed description below for a complete description.  verb(
+@@ -356,6 +356,7 @@ to the detailed description below for a complete description.  verb(
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
@@ -228,7 +224,7 @@ diff --git a/rsync.yo b/rsync.yo
   -n, --dry-run               perform a trial run with no changes made
   -W, --whole-file            copy files whole (w/o delta-xfer algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
-@@ -1049,6 +1050,18 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
+@@ -1053,6 +1054,18 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
  filesystem. It doesn't seem to handle seeks over null regions
  correctly and ends up corrupting the files.
  
