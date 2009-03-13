@@ -19,26 +19,28 @@ To use this patch, run these commands for a successful build:
     make
 
 diff --git a/fileio.c b/fileio.c
+index 0faa619..b76dc02 100644
 --- a/fileio.c
 +++ b/fileio.c
-@@ -26,6 +26,7 @@
+@@ -27,6 +27,7 @@
  #endif
  
  extern int sparse_files;
-+extern long sparse_files_block_size;
++extern int sparse_files_block_size;
  
  static char last_byte;
  static OFF_T sparse_seek = 0;
-@@ -115,7 +116,7 @@ int write_file(int f, char *buf, int len)
+@@ -116,7 +117,7 @@ int write_file(int f, char *buf, int len)
  	while (len > 0) {
  		int r1;
  		if (sparse_files > 0) {
 -			int len1 = MIN(len, SPARSE_WRITE_SIZE);
-+			int len1 = MIN(len, (size_t)sparse_files_block_size);
++			int len1 = MIN(len, sparse_files_block_size);
  			r1 = write_sparse(f, buf, len1);
  		} else {
  			if (!wf_writeBuf) {
 diff --git a/options.c b/options.c
+index e7c6c61..a0fb2e7 100644
 --- a/options.c
 +++ b/options.c
 @@ -73,6 +73,7 @@ int remove_source_files = 0;
@@ -49,7 +51,7 @@ diff --git a/options.c b/options.c
  int do_compression = 0;
  int def_compress_level = Z_DEFAULT_COMPRESSION;
  int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
-@@ -359,6 +360,7 @@ void usage(enum logcode F)
+@@ -703,6 +704,7 @@ void usage(enum logcode F)
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
  #endif
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
@@ -57,7 +59,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -n, --dry-run               perform a trial run with no changes made\n");
    rprintf(F," -W, --whole-file            copy files whole (without delta-xfer algorithm)\n");
    rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
-@@ -543,6 +545,7 @@ static struct poptOption long_options[] = {
+@@ -899,6 +901,7 @@ static struct poptOption long_options[] = {
    {"sparse",          'S', POPT_ARG_VAL,    &sparse_files, 1, 0, 0 },
    {"no-sparse",        0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
    {"no-S",             0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
@@ -65,7 +67,7 @@ diff --git a/options.c b/options.c
    {"inplace",          0,  POPT_ARG_VAL,    &inplace, 1, 0, 0 },
    {"no-inplace",       0,  POPT_ARG_VAL,    &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_NONE,   0, OPT_APPEND, 0, 0 },
-@@ -1901,6 +1904,12 @@ void server_options(char **args, int *argc_p)
+@@ -2416,6 +2419,12 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = arg;
  	}
  
@@ -79,9 +81,10 @@ diff --git a/options.c b/options.c
  		if (asprintf(&arg, "--timeout=%d", io_timeout) < 0)
  			goto oom;
 diff --git a/rsync.yo b/rsync.yo
+index 941f7a5..5fa8396 100644
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -356,6 +356,7 @@ to the detailed description below for a complete description.  verb(
+@@ -359,6 +359,7 @@ to the detailed description below for a complete description.  verb(
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
@@ -89,7 +92,7 @@ diff --git a/rsync.yo b/rsync.yo
   -n, --dry-run               perform a trial run with no changes made
   -W, --whole-file            copy files whole (w/o delta-xfer algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
-@@ -1053,6 +1054,15 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
+@@ -1120,6 +1121,15 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
  filesystem. It doesn't seem to handle seeks over null regions
  correctly and ends up corrupting the files.
  

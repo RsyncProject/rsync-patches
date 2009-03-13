@@ -21,12 +21,13 @@ To use this patch, run these commands for a successful build:
     make
 
 diff --git a/clientserver.c b/clientserver.c
+index b6afe00..568a121 100644
 --- a/clientserver.c
 +++ b/clientserver.c
-@@ -67,6 +67,7 @@ char *auth_user;
+@@ -67,6 +67,7 @@ extern iconv_t ic_send, ic_recv;
+ char *auth_user;
  int read_only = 0;
  int module_id = -1;
- int munge_symlinks = 0;
 +pid_t namecvt_pid = 0;
  struct chmod_mode_struct *daemon_chmod_modes;
  
@@ -39,7 +40,7 @@ diff --git a/clientserver.c b/clientserver.c
  
  #ifdef HAVE_SIGACTION
  static struct sigaction sigact;
-@@ -565,7 +567,7 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -649,7 +651,7 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  	log_init(1);
  
  #ifdef HAVE_PUTENV
@@ -48,7 +49,7 @@ diff --git a/clientserver.c b/clientserver.c
  		char *modname, *modpath, *hostaddr, *hostname, *username;
  		int status;
  
-@@ -654,6 +656,44 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -738,6 +740,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  			set_blocking(fds[1]);
  			pre_exec_fd = fds[1];
  		}
@@ -93,7 +94,7 @@ diff --git a/clientserver.c b/clientserver.c
  		umask(0);
  	}
  #endif
-@@ -877,6 +917,44 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -965,6 +1005,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  	return 0;
  }
  
@@ -139,9 +140,10 @@ diff --git a/clientserver.c b/clientserver.c
     with "list = False". */
  static void send_listing(int fd)
 diff --git a/loadparm.c b/loadparm.c
+index 8e48e6d..c623689 100644
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -140,6 +140,7 @@ typedef struct
+@@ -121,6 +121,7 @@ typedef struct {
  	char *log_file;
  	char *log_format;
  	char *name;
@@ -149,7 +151,7 @@ diff --git a/loadparm.c b/loadparm.c
  	char *outgoing_chmod;
  	char *path;
  	char *postxfer_exec;
-@@ -191,6 +192,7 @@ static service sDefault =
+@@ -195,6 +196,7 @@ static const all_vars Defaults = {
   /* log_file; */		NULL,
   /* log_format; */		"%o %h [%a] %m (%u) %f %l",
   /* name; */			NULL,
@@ -157,15 +159,15 @@ diff --git a/loadparm.c b/loadparm.c
   /* outgoing_chmod; */		NULL,
   /* path; */			NULL,
   /* postxfer_exec; */		NULL,
-@@ -328,6 +330,7 @@ static struct parm_struct parm_table[] =
-  {"max verbosity",     P_INTEGER,P_LOCAL, &sDefault.max_verbosity,     NULL,0},
-  {"munge symlinks",    P_BOOL,   P_LOCAL, &sDefault.munge_symlinks,    NULL,0},
-  {"name",              P_STRING, P_LOCAL, &sDefault.name,              NULL,0},
-+ {"name converter",    P_STRING, P_LOCAL, &sDefault.name_converter,    NULL,0},
-  {"numeric ids",       P_BOOL,   P_LOCAL, &sDefault.numeric_ids,       NULL,0},
-  {"outgoing chmod",    P_STRING, P_LOCAL, &sDefault.outgoing_chmod,    NULL,0},
-  {"path",              P_PATH,   P_LOCAL, &sDefault.path,              NULL,0},
-@@ -418,6 +421,7 @@ FN_LOCAL_STRING(lp_outgoing_chmod, outgoing_chmod)
+@@ -337,6 +339,7 @@ static struct parm_struct parm_table[] =
+  {"max verbosity",     P_INTEGER,P_LOCAL, &Vars.l.max_verbosity,       NULL,0},
+  {"munge symlinks",    P_BOOL,   P_LOCAL, &Vars.l.munge_symlinks,      NULL,0},
+  {"name",              P_STRING, P_LOCAL, &Vars.l.name,                NULL,0},
++ {"name converter",    P_STRING, P_LOCAL, &Vars.l.name_converter,      NULL,0},
+  {"numeric ids",       P_BOOL,   P_LOCAL, &Vars.l.numeric_ids,         NULL,0},
+  {"outgoing chmod",    P_STRING, P_LOCAL, &Vars.l.outgoing_chmod,      NULL,0},
+  {"path",              P_PATH,   P_LOCAL, &Vars.l.path,                NULL,0},
+@@ -414,6 +417,7 @@ FN_LOCAL_STRING(lp_outgoing_chmod, outgoing_chmod)
  FN_LOCAL_STRING(lp_path, path)
  FN_LOCAL_STRING(lp_postxfer_exec, postxfer_exec)
  FN_LOCAL_STRING(lp_prexfer_exec, prexfer_exec)
@@ -174,9 +176,10 @@ diff --git a/loadparm.c b/loadparm.c
  FN_LOCAL_STRING(lp_secrets_file, secrets_file)
  FN_LOCAL_STRING(lp_temp_dir, temp_dir)
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
+index d4978cd..fd0f7d9 100644
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -159,10 +159,11 @@ if the module is not read-only).
+@@ -163,10 +163,11 @@ if the module is not read-only).
  
  When this parameter is enabled, rsync will not attempt to map users and groups
  by name (by default), but instead copy IDs as though bf(--numeric-ids) had
@@ -190,7 +193,7 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
  process in the chroot hierarchy will need to have access to the resources
  used by these library functions (traditionally /etc/passwd and
  /etc/group, but perhaps additional dynamic libraries as well).
-@@ -227,6 +228,27 @@ path elements that rsync believes will allow a symlink to escape the module's
+@@ -232,6 +233,27 @@ path elements that rsync believes will allow a symlink to escape the module's
  hierarchy.  There are tricky ways to work around this, though, so you had
  better trust your users if you choose this combination of parameters.
  
@@ -220,10 +223,11 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
  the daemon will use the value of the "charset" parameter regardless of the
 diff --git a/support/nameconvert b/support/nameconvert
 new file mode 100755
+index 0000000..d01f593
 --- /dev/null
 +++ b/support/nameconvert
-@@ -0,0 +1,43 @@
-+#!/usr/bin/perl
+@@ -0,0 +1,42 @@
++#!/usr/bin/perl -w
 +# This implements a simple protocol to do {user,group}-{name,id}
 +# conversions.  All input and output consists of simple strings
 +# with a terminating null char (or newline for debugging).  If
@@ -242,7 +246,6 @@ new file mode 100755
 +# "name converter" setting.
 +
 +use strict;
-+use warnings;
 +
 +my $eol = grep(/^--debug$/, @ARGV) ? "\n" : "\0";
 +$/ = $eol;
@@ -267,10 +270,11 @@ new file mode 100755
 +    print $ans, $eol;
 +}
 diff --git a/t_stub.c b/t_stub.c
+index 02cfa69..eaaf8a9 100644
 --- a/t_stub.c
 +++ b/t_stub.c
-@@ -30,6 +30,7 @@ int preserve_xattrs = 0;
- mode_t orig_umask = 002;
+@@ -30,6 +30,7 @@ mode_t orig_umask = 002;
+ char number_separator = ',';
  char *partial_dir;
  char *module_dir;
 +pid_t namecvt_pid;
@@ -290,17 +294,18 @@ diff --git a/t_stub.c b/t_stub.c
  {
  	return NULL;
 diff --git a/uidlist.c b/uidlist.c
+index 7e8cbd7..472aeb9 100644
 --- a/uidlist.c
 +++ b/uidlist.c
-@@ -32,6 +32,7 @@ extern int preserve_uid;
+@@ -33,6 +33,7 @@ extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_acls;
  extern int numeric_ids;
 +extern pid_t namecvt_pid;
+ extern char *usermap;
+ extern char *groupmap;
  
- #ifdef HAVE_GETGROUPS
- # ifndef GETGROUPS_T
-@@ -69,8 +70,12 @@ static struct idlist *add_to_list(struct idlist **root, id_t id, const char *nam
+@@ -75,8 +76,12 @@ static struct idlist *add_to_list(struct idlist **root, id_t id, const char *nam
  /* turn a uid into a user name */
  static const char *uid_to_name(uid_t uid)
  {
@@ -315,7 +320,7 @@ diff --git a/uidlist.c b/uidlist.c
  		return strdup(pass->pw_name);
  	return NULL;
  }
-@@ -78,8 +83,12 @@ static const char *uid_to_name(uid_t uid)
+@@ -84,8 +89,12 @@ static const char *uid_to_name(uid_t uid)
  /* turn a gid into a group name */
  static const char *gid_to_name(gid_t gid)
  {
@@ -331,10 +336,11 @@ diff --git a/uidlist.c b/uidlist.c
  	return NULL;
  }
 diff --git a/util.c b/util.c
+index 0cafed6..dc1647b 100644
 --- a/util.c
 +++ b/util.c
-@@ -31,9 +31,10 @@ extern int relative_paths;
- extern int human_readable;
+@@ -31,9 +31,10 @@ extern int modify_window;
+ extern int relative_paths;
  extern int preserve_xattrs;
  extern char *module_dir;
 -extern unsigned int module_dirlen;

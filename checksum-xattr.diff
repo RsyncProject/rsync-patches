@@ -9,22 +9,24 @@ To use this patch, run these commands for a successful build:
     make
 
 diff --git a/flist.c b/flist.c
+index 09b4fc5..3295724 100644
 --- a/flist.c
 +++ b/flist.c
-@@ -1286,7 +1286,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
- 		memcpy(bp + basename_len, linkname, linkname_len);
+@@ -1268,7 +1268,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  #endif
  
--	if (always_checksum && am_sender && S_ISREG(st.st_mode))
-+	if (always_checksum && am_sender && S_ISREG(st.st_mode)
-+	 && !get_sum_xattr(thisname, &st, tmp_sum))
- 		file_checksum(thisname, tmp_sum, st.st_size);
- 
- 	if (am_sender)
+ 	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
+-		file_checksum(thisname, tmp_sum, st.st_size);
++		if (!get_sum_xattr(thisname, &st, tmp_sum))
++			file_checksum(thisname, tmp_sum, st.st_size);
+ 		if (sender_keeps_checksum)
+ 			extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
+ 	}
 diff --git a/generator.c b/generator.c
+index 12007a1..2587bc9 100644
 --- a/generator.c
 +++ b/generator.c
-@@ -724,7 +724,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
+@@ -531,7 +531,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
  	   of the file time to determine whether to sync */
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
@@ -36,12 +38,12 @@ diff --git a/generator.c b/generator.c
  
 diff --git a/support/xsums b/support/xsums
 new file mode 100644
+index 0000000..31d2537
 --- /dev/null
 +++ b/support/xsums
-@@ -0,0 +1,119 @@
-+#!/usr/bin/perl
+@@ -0,0 +1,118 @@
++#!/usr/bin/perl -w
 +use strict;
-+use warnings;
 +
 +use Getopt::Long;
 +use Cwd qw(abs_path cwd);
@@ -159,9 +161,10 @@ new file mode 100644
 +EOT
 +}
 diff --git a/xattrs.c b/xattrs.c
+index 2d0e050..f364a2a 100644
 --- a/xattrs.c
 +++ b/xattrs.c
-@@ -33,6 +33,8 @@ extern int read_only;
+@@ -34,6 +34,8 @@ extern int read_only;
  extern int list_only;
  extern int preserve_xattrs;
  extern int checksum_seed;
@@ -170,7 +173,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  #define RSYNC_XAL_INITIAL 5
  #define RSYNC_XAL_LIST_INITIAL 100
-@@ -68,6 +70,10 @@ extern int checksum_seed;
+@@ -69,6 +71,10 @@ extern int checksum_seed;
  #define XACC_ACL_ATTR RSYNC_PREFIX "%" XACC_ACL_SUFFIX
  #define XDEF_ACL_SUFFIX "dacl"
  #define XDEF_ACL_ATTR RSYNC_PREFIX "%" XDEF_ACL_SUFFIX
@@ -181,7 +184,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  typedef struct {
  	char *datum, *name;
-@@ -238,7 +244,9 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+@@ -239,7 +245,9 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
  			 || (am_root < 0
  			  && (strcmp(name+RPRE_LEN+1, XSTAT_SUFFIX) == 0
  			   || strcmp(name+RPRE_LEN+1, XACC_ACL_SUFFIX) == 0
@@ -192,7 +195,7 @@ diff --git a/xattrs.c b/xattrs.c
  				continue;
  		}
  
-@@ -894,6 +902,39 @@ int del_def_xattr_acl(const char *fname)
+@@ -895,6 +903,39 @@ int del_def_xattr_acl(const char *fname)
  }
  #endif
  

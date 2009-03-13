@@ -13,10 +13,11 @@ To use this patch, run these commands for a successful build:
     make
 
 diff --git a/Makefile.in b/Makefile.in
+index feacb90..b27b1e7 100644
 --- a/Makefile.in
 +++ b/Makefile.in
-@@ -36,7 +36,7 @@ OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
- 	util.o main.o checksum.o match.o syscall.o log.o backup.o
+@@ -37,7 +37,7 @@ OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
+ 	util.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
  	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
 -OBJS3=progress.o pipe.o
@@ -25,17 +26,18 @@ diff --git a/Makefile.in b/Makefile.in
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
 diff --git a/flist.c b/flist.c
+index 09b4fc5..570bcee 100644
 --- a/flist.c
 +++ b/flist.c
-@@ -71,6 +71,7 @@ extern int sender_symlink_iconv;
+@@ -73,6 +73,7 @@ extern int sender_keeps_checksum;
  extern int unsort_ndx;
  extern struct stats stats;
  extern char *filesfrom_host;
 +extern char *link_by_hash_dir;
+ extern char *usermap, *groupmap;
  
  extern char curr_dir[MAXPATHLEN];
- 
-@@ -844,7 +845,7 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -881,7 +882,7 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -46,9 +48,10 @@ diff --git a/flist.c b/flist.c
  #if SIZEOF_INT64 >= 8
 diff --git a/hashlink.c b/hashlink.c
 new file mode 100644
+index 0000000..15e2a73
 --- /dev/null
 +++ b/hashlink.c
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,339 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
 +
@@ -96,7 +99,8 @@ new file mode 100644
 +	}
 +	*dst = 0;
 +
-+	asprintf(&dst,"%s/%s",link_by_hash_dir,hash);
++	if (asprintf(&dst,"%s/%s",link_by_hash_dir,hash) < 0)
++		out_of_memory("make_hash_name");
 +	return dst;
 +}
 +
@@ -153,8 +157,8 @@ new file mode 100644
 +			*fnbr = this_fnbr;
 +
 +		hashfile = new_array(struct hashfile_struct, 1);
-+		asprintf(&hashfile->name,"%s/%s",hashname,
-+			 di->d_name);
++		if (asprintf(&hashfile->name,"%s/%s",hashname, di->d_name) < 0)
++			out_of_memory("find_hashfiles");
 +		if (do_stat(hashfile->name,&st) == -1) {
 +			rsyserr(FERROR, errno, "stat failed: %s", hashfile->name);
 +			kill_hashfile(hashfile);
@@ -300,7 +304,8 @@ new file mode 100644
 +		}
 +
 +		first = 1;
-+		asprintf(&linkname,"%s/0",hashname);
++		if (asprintf(&linkname,"%s/0",hashname) < 0)
++			out_of_memory("link_by_hash");
 +		rprintf(FINFO, "(1) linkname = %s\n", linkname);
 +	} else {
 +		struct hashfile_struct *hashfiles, *hashfile;
@@ -313,7 +318,8 @@ new file mode 100644
 +
 +		if (hashfiles == NULL) {
 +			first = 1;
-+			asprintf(&linkname,"%s/0",hashname);
++			if (asprintf(&linkname,"%s/0",hashname) < 0)
++				out_of_memory("link_by_hash");
 +			rprintf(FINFO, "(2) linkname = %s\n", linkname);
 +		} else {
 +			int fd;
@@ -334,8 +340,8 @@ new file mode 100644
 +				kill_hashfile(hashfile);
 +			} else {
 +				first = 1;
-+				asprintf(&linkname, "%s/%ld", hashname,
-+					 last_fnbr + 1);
++				if (asprintf(&linkname, "%s/%ld", hashname, last_fnbr + 1) < 0)
++					out_of_memory("link_by_hash");
 +				rprintf(FINFO, "(4) linkname = %s\n", linkname);
 +			}
 +		}
@@ -350,8 +356,8 @@ new file mode 100644
 +			if (errno == EMLINK) {
 +				first = 1;
 +				free(linkname);
-+				asprintf(&linkname,"%s/%ld",hashname,
-+					 last_fnbr + 1);
++				if (asprintf(&linkname,"%s/%ld",hashname, last_fnbr + 1) < 0)
++					out_of_memory("link_by_hash");
 +				rprintf(FINFO, "(5) linkname = %s\n", linkname);
 +				rprintf(FINFO,"link-by-hash: max link count exceeded, starting new file \"%s\".\n", linkname);
 +			} else {
@@ -386,9 +392,10 @@ new file mode 100644
 +}
 +#endif
 diff --git a/options.c b/options.c
+index e7c6c61..73b1aa4 100644
 --- a/options.c
 +++ b/options.c
-@@ -157,6 +157,7 @@ char *backup_suffix = NULL;
+@@ -158,6 +158,7 @@ char *backup_suffix = NULL;
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
@@ -396,7 +403,7 @@ diff --git a/options.c b/options.c
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *logfile_name = NULL;
-@@ -395,6 +396,7 @@ void usage(enum logcode F)
+@@ -745,6 +746,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -404,16 +411,16 @@ diff --git a/options.c b/options.c
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F,"     --skip-compress=LIST    skip compressing files with a suffix in LIST\n");
-@@ -447,7 +449,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
-       OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
+@@ -798,7 +800,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
--      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV,
-+      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_LINK_BY_HASH,
+       OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
+-      OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN,
++      OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_LINK_BY_HASH,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -579,6 +581,7 @@ static struct poptOption long_options[] = {
+@@ -937,6 +939,7 @@ static struct poptOption long_options[] = {
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -421,7 +428,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_VAL,    &fuzzy_basis, 1, 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -1261,6 +1264,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1742,6 +1745,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -443,7 +450,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2038,6 +2056,11 @@ void server_options(char **args, int *argc_p)
+@@ -2584,6 +2602,11 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -456,9 +463,10 @@ diff --git a/options.c b/options.c
  		if (filesfrom_host) {
  			args[ac++] = "--files-from";
 diff --git a/receiver.c b/receiver.c
+index 4325e30..2709d5e 100644
 --- a/receiver.c
 +++ b/receiver.c
-@@ -163,12 +163,14 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
+@@ -164,11 +164,13 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
  }
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -467,11 +475,10 @@ diff --git a/receiver.c b/receiver.c
 +			const char *md4)
  {
  	static char file_sum1[MAX_DIGEST_LEN];
- 	static char file_sum2[MAX_DIGEST_LEN];
  	struct map_struct *mapbuf;
  	struct sum_struct sum;
 +	md_context mdfour_data;
- 	int32 len, sum_len;
+ 	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
 @@ -188,6 +190,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -502,16 +509,17 @@ diff --git a/receiver.c b/receiver.c
  		}
  
  		if (updating_basis_or_equiv) {
-@@ -303,6 +312,8 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 	}
+@@ -305,6 +314,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 	if (sum_end(file_sum1) != checksum_len)
+ 		overflow_exit("checksum_len"); /* Impossible... */
  
- 	sum_len = sum_end(file_sum1);
 +	if (md4)
 +		mdfour_result(&mdfour_data, (uchar*)md4);
- 
++
  	if (mapbuf)
  		unmap_file(mapbuf);
-@@ -318,7 +329,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 
+@@ -319,7 +331,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -520,7 +528,7 @@ diff --git a/receiver.c b/receiver.c
  }
  
  static void handle_delayed_updates(char *local_name)
-@@ -708,7 +719,7 @@ int recv_files(int f_in, char *local_name)
+@@ -744,7 +756,7 @@ int recv_files(int f_in, char *local_name)
  
  		/* recv file data */
  		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
@@ -530,19 +538,20 @@ diff --git a/receiver.c b/receiver.c
  		log_item(log_code, file, &initial_stats, iflags, NULL);
  
 diff --git a/rsync.c b/rsync.c
+index 2c026a2..87f6d54 100644
 --- a/rsync.c
 +++ b/rsync.c
-@@ -48,6 +48,7 @@ extern int inplace;
- extern int flist_eof;
+@@ -48,6 +48,7 @@ extern int flist_eof;
+ extern int msgs2stderr;
  extern int keep_dirlinks;
  extern int make_backups;
 +extern char *link_by_hash_dir;
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct chmod_mode_struct *daemon_chmod_modes;
  #ifdef ICONV_OPTION
-@@ -578,8 +579,15 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -575,8 +576,15 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	/* move tmp file over real file */
- 	if (verbose > 2)
+ 	if (DEBUG_GTE(RECV, 1))
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
 -	ret = robust_rename(fnametmp, fname, temp_copy_name,
 -			    file->mode & INITACCESSPERMS);
@@ -559,10 +568,11 @@ diff --git a/rsync.c b/rsync.c
  		rsyserr(FERROR_XFER, errno, "%s %s -> \"%s\"",
  			ret == -2 ? "copy" : "rename",
 diff --git a/rsync.h b/rsync.h
+index be7cf8a..d4e2aca 100644
 --- a/rsync.h
 +++ b/rsync.h
-@@ -830,6 +830,14 @@ struct stats {
- 	int num_transferred_files;
+@@ -853,6 +853,14 @@ struct stats {
+ 	int xferred_files;
  };
  
 +struct hashfile_struct {
@@ -577,9 +587,10 @@ diff --git a/rsync.h b/rsync.h
  
  struct flist_ndx_item {
 diff --git a/rsync.yo b/rsync.yo
+index 941f7a5..568b481 100644
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -392,6 +392,7 @@ to the detailed description below for a complete description.  verb(
+@@ -400,6 +400,7 @@ to the detailed description below for a complete description.  verb(
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged

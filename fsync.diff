@@ -8,6 +8,7 @@ To use this patch, run these commands for a successful build:
     make
 
 diff --git a/options.c b/options.c
+index e7c6c61..44ad60e 100644
 --- a/options.c
 +++ b/options.c
 @@ -48,6 +48,7 @@ int append_mode = 0;
@@ -18,15 +19,15 @@ diff --git a/options.c b/options.c
  int preserve_links = 0;
  int preserve_hard_links = 0;
  int preserve_acls = 0;
-@@ -384,6 +385,7 @@ void usage(enum logcode F)
+@@ -730,6 +731,7 @@ void usage(enum logcode F)
    rprintf(F,"     --partial-dir=DIR       put a partially transferred file into DIR\n");
    rprintf(F,"     --delay-updates         put all updated files into place at transfer's end\n");
    rprintf(F," -m, --prune-empty-dirs      prune empty directory chains from the file-list\n");
 +  rprintf(F,"     --fsync                 fsync every written file\n");
    rprintf(F,"     --numeric-ids           don't map uid/gid values by user/group name\n");
-   rprintf(F,"     --timeout=SECONDS       set I/O timeout in seconds\n");
-   rprintf(F,"     --contimeout=SECONDS    set daemon connection timeout in seconds\n");
-@@ -627,6 +629,7 @@ static struct poptOption long_options[] = {
+   rprintf(F,"     --usermap=STRING        custom username mapping\n");
+   rprintf(F,"     --groupmap=STRING       custom groupname mapping\n");
+@@ -988,6 +990,7 @@ static struct poptOption long_options[] = {
    {"no-timeout",       0,  POPT_ARG_VAL,    &io_timeout, 0, 0, 0 },
    {"contimeout",       0,  POPT_ARG_INT,    &connect_timeout, 0, 0, 0 },
    {"no-contimeout",    0,  POPT_ARG_VAL,    &connect_timeout, 0, 0, 0 },
@@ -34,7 +35,7 @@ diff --git a/options.c b/options.c
    {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
    {"rsync-path",       0,  POPT_ARG_STRING, &rsync_path, 0, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
-@@ -2019,6 +2022,9 @@ void server_options(char **args, int *argc_p)
+@@ -2555,6 +2558,9 @@ void server_options(char **args, int *argc_p)
  			args[ac++] = tmpdir;
  		}
  
@@ -45,9 +46,10 @@ diff --git a/options.c b/options.c
  			/* the server only needs this option if it is not the sender,
  			 *   and it may be an older version that doesn't know this
 diff --git a/receiver.c b/receiver.c
+index 4325e30..1523977 100644
 --- a/receiver.c
 +++ b/receiver.c
-@@ -39,6 +39,7 @@ extern int relative_paths;
+@@ -38,6 +38,7 @@ extern int relative_paths;
  extern int preserve_hard_links;
  extern int preserve_perms;
  extern int preserve_xattrs;
@@ -55,9 +57,9 @@ diff --git a/receiver.c b/receiver.c
  extern int basis_dir_cnt;
  extern int make_backups;
  extern int cleanup_got_literal;
-@@ -302,6 +303,12 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 		exit_cleanup(RERR_FILEIO);
- 	}
+@@ -305,6 +306,12 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 	if (sum_end(file_sum1) != checksum_len)
+ 		overflow_exit("checksum_len"); /* Impossible... */
  
 +	if (do_fsync && fd != -1 && fsync(fd) != 0) {
 +		rsyserr(FERROR, errno, "fsync failed on %s",
@@ -65,10 +67,11 @@ diff --git a/receiver.c b/receiver.c
 +		exit_cleanup(RERR_FILEIO);
 +	}
 +
- 	sum_len = sum_end(file_sum1);
- 
  	if (mapbuf)
+ 		unmap_file(mapbuf);
+ 
 diff --git a/t_stub.c b/t_stub.c
+index 02cfa69..fb61480 100644
 --- a/t_stub.c
 +++ b/t_stub.c
 @@ -21,6 +21,7 @@
@@ -80,16 +83,17 @@ diff --git a/t_stub.c b/t_stub.c
  int module_id = -1;
  int relative_paths = 0;
 diff --git a/util.c b/util.c
+index 0cafed6..88b3521 100644
 --- a/util.c
 +++ b/util.c
-@@ -26,6 +26,7 @@
- extern int verbose;
+@@ -27,6 +27,7 @@
+ 
  extern int dry_run;
  extern int module_id;
 +extern int do_fsync;
  extern int modify_window;
  extern int relative_paths;
- extern int human_readable;
+ extern int preserve_xattrs;
 @@ -334,6 +335,13 @@ int copy_file(const char *source, const char *dest, int ofd,
  			full_fname(source));
  	}

@@ -9,6 +9,7 @@ To use this patch, run these commands for a successful build:
     make
 
 diff --git a/generator.c b/generator.c
+index 12007a1..a2875fd 100644
 --- a/generator.c
 +++ b/generator.c
 @@ -39,6 +39,7 @@ extern int preserve_acls;
@@ -19,7 +20,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_specials;
  extern int preserve_hard_links;
  extern int preserve_executability;
-@@ -1691,7 +1692,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1507,7 +1508,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		goto cleanup;
  	}
  
@@ -29,6 +30,7 @@ diff --git a/generator.c b/generator.c
  			fname = f_name(file, NULL);
  		rprintf(FINFO, "skipping non-regular file \"%s\"\n", fname);
 diff --git a/options.c b/options.c
+index e7c6c61..b0806e8 100644
 --- a/options.c
 +++ b/options.c
 @@ -48,6 +48,7 @@ int append_mode = 0;
@@ -39,7 +41,7 @@ diff --git a/options.c b/options.c
  int preserve_links = 0;
  int preserve_hard_links = 0;
  int preserve_acls = 0;
-@@ -350,6 +351,7 @@ void usage(enum logcode F)
+@@ -694,6 +695,7 @@ void usage(enum logcode F)
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
@@ -47,7 +49,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve modification times\n");
-@@ -508,6 +510,7 @@ static struct poptOption long_options[] = {
+@@ -862,6 +864,7 @@ static struct poptOption long_options[] = {
    {"no-D",             0,  POPT_ARG_NONE,   0, OPT_NO_D, 0, 0 },
    {"devices",          0,  POPT_ARG_VAL,    &preserve_devices, 1, 0, 0 },
    {"no-devices",       0,  POPT_ARG_VAL,    &preserve_devices, 0, 0, 0 },
@@ -55,7 +57,7 @@ diff --git a/options.c b/options.c
    {"specials",         0,  POPT_ARG_VAL,    &preserve_specials, 1, 0, 0 },
    {"no-specials",      0,  POPT_ARG_VAL,    &preserve_specials, 0, 0, 0 },
    {"links",           'l', POPT_ARG_VAL,    &preserve_links, 1, 0, 0 },
-@@ -2063,6 +2066,9 @@ void server_options(char **args, int *argc_p)
+@@ -2609,6 +2612,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -66,9 +68,10 @@ diff --git a/options.c b/options.c
  		rprintf(FERROR, "argc overflow in server_options().\n");
  		exit_cleanup(RERR_MALLOC);
 diff --git a/rsync.c b/rsync.c
+index 2c026a2..cfc6ffa 100644
 --- a/rsync.c
 +++ b/rsync.c
-@@ -34,6 +34,7 @@ extern int preserve_xattrs;
+@@ -33,6 +33,7 @@ extern int preserve_xattrs;
  extern int preserve_perms;
  extern int preserve_executability;
  extern int preserve_times;
@@ -76,7 +79,7 @@ diff --git a/rsync.c b/rsync.c
  extern int am_root;
  extern int am_server;
  extern int am_sender;
-@@ -329,7 +330,8 @@ int read_ndx_and_attrs(int f_in, int *iflag_ptr, uchar *type_ptr,
+@@ -330,7 +331,8 @@ int read_ndx_and_attrs(int f_in, int *iflag_ptr, uchar *type_ptr,
  
  	if (iflags & ITEM_TRANSFER) {
  		int i = ndx - cur_flist->ndx_start;
@@ -87,14 +90,15 @@ diff --git a/rsync.c b/rsync.c
  				"received request to transfer non-regular file: %d [%s]\n",
  				ndx, who_am_i());
 diff --git a/sender.c b/sender.c
+index bf8221d..f115457 100644
 --- a/sender.c
 +++ b/sender.c
-@@ -309,6 +309,20 @@ void send_files(int f_in, int f_out)
+@@ -329,6 +329,20 @@ void send_files(int f_in, int f_out)
  			exit_cleanup(RERR_PROTOCOL);
  		}
  
-+		/* On Linux systems (at least), st_size is typically 0 for devices.
-+		 * If so, try to determine the actual device size. */
++		/* On Matt's computer, st_size is falsely 0 for most devices.
++		 * If this happens, try harder to determine the actual device size. */
 +		if (IS_DEVICE(st.st_mode) && st.st_size == 0) {
 +			OFF_T off = lseek(fd, 0, SEEK_END);
 +			if (off == (OFF_T) -1)

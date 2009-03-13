@@ -13,6 +13,7 @@ TODO:
    --iconv setting when converting case.
 
 diff --git a/exclude.c b/exclude.c
+index 5fa6e00..5b3b135 100644
 --- a/exclude.c
 +++ b/exclude.c
 @@ -21,6 +21,7 @@
@@ -21,9 +22,9 @@ diff --git a/exclude.c b/exclude.c
  #include "rsync.h"
 +#include "ifuncs.h"
  
- extern int verbose;
  extern int am_server;
-@@ -605,16 +606,15 @@ static int rule_matches(const char *fname, struct filter_struct *ex, int name_is
+ extern int am_sender;
+@@ -697,16 +698,15 @@ static int rule_matches(const char *fname, struct filter_struct *ex, int name_is
  		if (litmatch_array(pattern, strings, slash_handling))
  			return ret_match;
  	} else if (anchored_match) {
@@ -45,17 +46,18 @@ diff --git a/exclude.c b/exclude.c
  
  	return !ret_match;
 diff --git a/flist.c b/flist.c
+index 09b4fc5..ae70300 100644
 --- a/flist.c
 +++ b/flist.c
-@@ -35,6 +35,7 @@ extern int inc_recurse;
- extern int do_progress;
+@@ -34,6 +34,7 @@ extern int am_generator;
+ extern int inc_recurse;
  extern int always_checksum;
  extern int module_id;
 +extern int ignore_case;
  extern int ignore_errors;
  extern int numeric_ids;
  extern int recurse;
-@@ -2803,6 +2804,7 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2)
+@@ -2924,6 +2925,7 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2)
  {
  	int dif;
  	const uchar *c1, *c2;
@@ -63,7 +65,7 @@ diff --git a/flist.c b/flist.c
  	enum fnc_state state1, state2;
  	enum fnc_type type1, type2;
  	enum fnc_type t_path = protocol_version >= 29 ? t_PATH : t_ITEM;
-@@ -2913,7 +2915,15 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2)
+@@ -3034,7 +3036,15 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2)
  			if (type1 != type2)
  				return type1 == t_PATH ? 1 : -1;
  		}
@@ -81,11 +83,12 @@ diff --git a/flist.c b/flist.c
  	return dif;
  }
 diff --git a/ifuncs.h b/ifuncs.h
+index 8c128d5..a4cfd3d 100644
 --- a/ifuncs.h
 +++ b/ifuncs.h
-@@ -108,3 +108,38 @@ toUpper(const char *ptr)
- {
- 	return toupper(*(unsigned char *)ptr);
+@@ -77,3 +77,38 @@ init_stat_x(stat_x *sx_p)
+ 	sx_p->xattr = NULL;
+ #endif
  }
 +
 +static inline int
@@ -123,6 +126,7 @@ diff --git a/ifuncs.h b/ifuncs.h
 +#define ic_strNE(s1,s2) (!ic_strEQ(s1,s2))
 +#define ic_strnNE(s1,s2) (!ic_strnEQ(s1,s2,n))
 diff --git a/lib/wildmatch.c b/lib/wildmatch.c
+index f3a1731..72660ca 100644
 --- a/lib/wildmatch.c
 +++ b/lib/wildmatch.c
 @@ -53,6 +53,8 @@
@@ -209,9 +213,10 @@ diff --git a/lib/wildmatch.c b/lib/wildmatch.c
  }
  
 diff --git a/options.c b/options.c
+index e7c6c61..6e73e9c 100644
 --- a/options.c
 +++ b/options.c
-@@ -118,6 +118,7 @@ OFF_T max_size = 0;
+@@ -117,6 +117,7 @@ OFF_T max_size = 0;
  OFF_T min_size = 0;
  int ignore_errors = 0;
  int modify_window = 0;
@@ -219,7 +224,7 @@ diff --git a/options.c b/options.c
  int blocking_io = -1;
  int checksum_seed = 0;
  int inplace = 0;
-@@ -409,6 +410,7 @@ void usage(enum logcode F)
+@@ -759,6 +760,7 @@ void usage(enum logcode F)
    rprintf(F,"     --files-from=FILE       read list of source-file names from FILE\n");
    rprintf(F," -0, --from0                 all *-from/filter files are delimited by 0s\n");
    rprintf(F," -s, --protect-args          no space-splitting; only wildcard special-chars\n");
@@ -227,7 +232,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --address=ADDRESS       bind address for outgoing socket to daemon\n");
    rprintf(F,"     --port=PORT             specify double-colon alternate port number\n");
    rprintf(F,"     --sockopts=OPTIONS      specify custom TCP options\n");
-@@ -615,6 +617,8 @@ static struct poptOption long_options[] = {
+@@ -973,6 +975,8 @@ static struct poptOption long_options[] = {
    {"read-batch",       0,  POPT_ARG_STRING, &batch_name, OPT_READ_BATCH, 0, 0 },
    {"write-batch",      0,  POPT_ARG_STRING, &batch_name, OPT_WRITE_BATCH, 0, 0 },
    {"only-write-batch", 0,  POPT_ARG_STRING, &batch_name, OPT_ONLY_WRITE_BATCH, 0, 0 },
@@ -236,7 +241,7 @@ diff --git a/options.c b/options.c
    {"files-from",       0,  POPT_ARG_STRING, &files_from, 0, 0, 0 },
    {"from0",           '0', POPT_ARG_VAL,    &eol_nulls, 1, 0, 0},
    {"no-from0",         0,  POPT_ARG_VAL,    &eol_nulls, 0, 0, 0},
-@@ -1981,6 +1985,9 @@ void server_options(char **args, int *argc_p)
+@@ -2505,6 +2509,9 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = arg;
  	}
  
@@ -247,9 +252,10 @@ diff --git a/options.c b/options.c
  		if (partial_dir != tmp_partialdir) {
  			args[ac++] = "--partial-dir";
 diff --git a/rsync.yo b/rsync.yo
+index 941f7a5..339aca8 100644
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -406,6 +406,7 @@ to the detailed description below for a complete description.  verb(
+@@ -414,6 +414,7 @@ to the detailed description below for a complete description.  verb(
       --files-from=FILE       read list of source-file names from FILE
   -0, --from0                 all *from/filter files are delimited by 0s
   -s, --protect-args          no space-splitting; wildcard chars only
@@ -257,7 +263,7 @@ diff --git a/rsync.yo b/rsync.yo
       --address=ADDRESS       bind address for outgoing socket to daemon
       --port=PORT             specify double-colon alternate port number
       --sockopts=OPTIONS      specify custom TCP options
-@@ -1449,6 +1450,10 @@ If you use this option with bf(--iconv), the args will also be translated
+@@ -1563,6 +1564,10 @@ If you use this option with bf(--iconv), the args will also be translated
  from the local to the remote character-set.  The translation happens before
  wild-cards are expanded.  See also the bf(--files-from) option.
  
@@ -269,13 +275,14 @@ diff --git a/rsync.yo b/rsync.yo
  scratch directory when creating temporary copies of the files transferred
  on the receiving side.  The default behavior is to create each temporary
 diff --git a/wildtest.c b/wildtest.c
+index 07351a1..c899eb8 100644
 --- a/wildtest.c
 +++ b/wildtest.c
-@@ -31,6 +31,7 @@ int fnmatch_errors = 0;
+@@ -30,6 +30,7 @@
+ int fnmatch_errors = 0;
  #endif
  
- int wildmatch_errors = 0;
 +int ignore_case = 0;
- 
- typedef char bool;
+ int wildmatch_errors = 0;
+ char number_separator = ',';
  

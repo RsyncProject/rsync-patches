@@ -10,6 +10,7 @@ To use this patch, run these commands for a successful build:
 -- Matt McCutchen <hashproduct@gmail.com>
 
 diff --git a/options.c b/options.c
+index e7c6c61..77fb180 100644
 --- a/options.c
 +++ b/options.c
 @@ -33,6 +33,7 @@ extern struct filter_list_struct filter_list;
@@ -20,7 +21,7 @@ diff --git a/options.c b/options.c
  
  /**
   * If 1, send the whole file as literal data rather than trying to
-@@ -368,6 +369,7 @@ void usage(enum logcode F)
+@@ -712,6 +713,7 @@ void usage(enum logcode F)
    rprintf(F,"     --existing              skip creating new files on receiver\n");
    rprintf(F,"     --ignore-existing       skip updating files that already exist on receiver\n");
    rprintf(F,"     --remove-source-files   sender removes synchronized files (non-dirs)\n");
@@ -28,7 +29,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --del                   an alias for --delete-during\n");
    rprintf(F,"     --delete                delete extraneous files from destination dirs\n");
    rprintf(F,"     --delete-before         receiver deletes before transfer, not during\n");
-@@ -608,6 +610,7 @@ static struct poptOption long_options[] = {
+@@ -966,6 +968,7 @@ static struct poptOption long_options[] = {
    {"bwlimit",          0,  POPT_ARG_INT,    &bwlimit, 0, 0, 0 },
    {"no-bwlimit",       0,  POPT_ARG_VAL,    &bwlimit, 0, 0, 0 },
    {"backup",          'b', POPT_ARG_VAL,    &make_backups, 1, 0, 0 },
@@ -36,7 +37,7 @@ diff --git a/options.c b/options.c
    {"no-backup",        0,  POPT_ARG_VAL,    &make_backups, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
    {"suffix",           0,  POPT_ARG_STRING, &backup_suffix, 0, 0, 0 },
-@@ -1967,6 +1970,8 @@ void server_options(char **args, int *argc_p)
+@@ -2484,6 +2487,8 @@ void server_options(char **args, int *argc_p)
  				goto oom;
  			args[ac++] = arg;
  		}
@@ -44,19 +45,20 @@ diff --git a/options.c b/options.c
 +			args[ac++] = "--source-backup";
  	}
  
- 	if (modify_window_set) {
+ 	/* --delete-missing-args needs the cooperation of both sides, but
 diff --git a/rsync.yo b/rsync.yo
+index 941f7a5..4080af2 100644
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -365,6 +365,7 @@ to the detailed description below for a complete description.  verb(
+@@ -368,6 +368,7 @@ to the detailed description below for a complete description.  verb(
       --existing              skip creating new files on receiver
       --ignore-existing       skip updating files that exist on receiver
       --remove-source-files   sender removes synchronized files (non-dir)
 +     --source-backup         ... and backs up those files
       --del                   an alias for --delete-during
       --delete                delete extraneous files from dest dirs
-      --delete-before         receiver deletes before transfer (default)
-@@ -1115,6 +1116,14 @@ dit(bf(--remove-source-files)) This tells rsync to remove from the sending
+      --delete-before         receiver deletes before xfer, not during
+@@ -1182,6 +1183,14 @@ dit(bf(--remove-source-files)) This tells rsync to remove from the sending
  side the files (meaning non-directories) that are a part of the transfer
  and have been successfully duplicated on the receiving side.
  
@@ -72,6 +74,7 @@ diff --git a/rsync.yo b/rsync.yo
  receiving side (ones that aren't on the sending side), but only for the
  directories that are being synchronized.  You must have asked rsync to
 diff --git a/sender.c b/sender.c
+index bf8221d..102540c 100644
 --- a/sender.c
 +++ b/sender.c
 @@ -39,6 +39,7 @@ extern int protocol_version;
@@ -79,10 +82,10 @@ diff --git a/sender.c b/sender.c
  extern int updating_basis_file;
  extern int make_backups;
 +extern int make_source_backups;
- extern int do_progress;
  extern int inplace;
  extern int batch_fd;
-@@ -123,6 +124,7 @@ void successful_send(int ndx)
+ extern int write_batch;
+@@ -122,6 +123,7 @@ void successful_send(int ndx)
  	char fname[MAXPATHLEN];
  	struct file_struct *file;
  	struct file_list *flist;
@@ -90,16 +93,16 @@ diff --git a/sender.c b/sender.c
  
  	if (!remove_source_files)
  		return;
-@@ -133,7 +135,11 @@ void successful_send(int ndx)
+@@ -132,7 +134,11 @@ void successful_send(int ndx)
  		return;
  	f_name(file, fname);
  
 -	if (do_unlink(fname) == 0) {
 +	if (make_source_backups)
-+		result = !make_backup(fname);
++		result = !make_backup(fname, True);
 +	else
 +		result = do_unlink(fname);
 +	if (result == 0) {
- 		if (verbose > 1)
+ 		if (INFO_GTE(REMOVE, 1))
  			rprintf(FINFO, "sender removed %s\n", fname);
  	} else
