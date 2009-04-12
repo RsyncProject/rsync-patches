@@ -48,7 +48,7 @@ diff --git a/hashlink.c b/hashlink.c
 new file mode 100644
 --- /dev/null
 +++ b/hashlink.c
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,340 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
 +
@@ -96,7 +96,9 @@ new file mode 100644
 +	}
 +	*dst = 0;
 +
-+	asprintf(&dst,"%s/%s",link_by_hash_dir,hash);
++	if (asprintf(&dst,"%s/%s",link_by_hash_dir,hash) < 0)
++		out_of_memory("make_hash_name");
++
 +	return dst;
 +}
 +
@@ -153,8 +155,8 @@ new file mode 100644
 +			*fnbr = this_fnbr;
 +
 +		hashfile = new_array(struct hashfile_struct, 1);
-+		asprintf(&hashfile->name,"%s/%s",hashname,
-+			 di->d_name);
++		if (asprintf(&hashfile->name,"%s/%s",hashname, di->d_name) < 0)
++			out_of_memory("find_hashfiles");
 +		if (do_stat(hashfile->name,&st) == -1) {
 +			rsyserr(FERROR, errno, "stat failed: %s", hashfile->name);
 +			kill_hashfile(hashfile);
@@ -300,7 +302,8 @@ new file mode 100644
 +		}
 +
 +		first = 1;
-+		asprintf(&linkname,"%s/0",hashname);
++		if (asprintf(&linkname,"%s/0",hashname) < 0)
++			out_of_memory("link_by_hash");
 +		rprintf(FINFO, "(1) linkname = %s\n", linkname);
 +	} else {
 +		struct hashfile_struct *hashfiles, *hashfile;
@@ -313,7 +316,8 @@ new file mode 100644
 +
 +		if (hashfiles == NULL) {
 +			first = 1;
-+			asprintf(&linkname,"%s/0",hashname);
++			if (asprintf(&linkname,"%s/0",hashname) < 0)
++				out_of_memory("link_by_hash");
 +			rprintf(FINFO, "(2) linkname = %s\n", linkname);
 +		} else {
 +			int fd;
@@ -334,8 +338,8 @@ new file mode 100644
 +				kill_hashfile(hashfile);
 +			} else {
 +				first = 1;
-+				asprintf(&linkname, "%s/%ld", hashname,
-+					 last_fnbr + 1);
++				if (asprintf(&linkname, "%s/%ld", hashname, last_fnbr + 1) < 0)
++					out_of_memory("link_by_hash");
 +				rprintf(FINFO, "(4) linkname = %s\n", linkname);
 +			}
 +		}
@@ -350,8 +354,8 @@ new file mode 100644
 +			if (errno == EMLINK) {
 +				first = 1;
 +				free(linkname);
-+				asprintf(&linkname,"%s/%ld",hashname,
-+					 last_fnbr + 1);
++				if (asprintf(&linkname,"%s/%ld",hashname, last_fnbr + 1) < 0)
++					out_of_memory("link_by_hash");
 +				rprintf(FINFO, "(5) linkname = %s\n", linkname);
 +				rprintf(FINFO,"link-by-hash: max link count exceeded, starting new file \"%s\".\n", linkname);
 +			} else {
@@ -443,7 +447,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2038,6 +2056,11 @@ void server_options(char **args, int *argc_p)
+@@ -2044,6 +2062,11 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -520,7 +524,7 @@ diff --git a/receiver.c b/receiver.c
  }
  
  static void handle_delayed_updates(char *local_name)
-@@ -708,7 +719,7 @@ int recv_files(int f_in, char *local_name)
+@@ -719,7 +730,7 @@ int recv_files(int f_in, char *local_name)
  
  		/* recv file data */
  		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
