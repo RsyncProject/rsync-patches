@@ -182,34 +182,45 @@ diff --git a/generator.c b/generator.c
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -1226,6 +1241,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+@@ -1225,7 +1240,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+ 
  static void list_file_entry(struct file_struct *f)
  {
- 	char permbuf[PERMSTRING_SIZE];
-+	time_t crtime = crtimes_ndx ? f_crtime(f) : 0;
+-	char permbuf[PERMSTRING_SIZE];
++	char permbuf[PERMSTRING_SIZE], crtime_buf[32];
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -1240,14 +1256,16 @@ static void list_file_entry(struct file_struct *f)
+@@ -1236,19 +1251,24 @@ static void list_file_entry(struct file_struct *f)
+ 	permstring(permbuf, f->mode);
+ 	len = F_LENGTH(f);
+ 
++	if (crtimes_ndx)
++		snprintf(crtime_buf, sizeof crtime_buf, " %s", timestring(f_crtime(f)));
++	else
++		*crtime_buf = '\0';
++
+ 	/* TODO: indicate '+' if the entry has an ACL. */
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
 -		rprintf(FINFO, "%s %11.0f %s %s -> %s\n",
-+		rprintf(FINFO, "%s %11.0f %s %s %s -> %s\n",
++		rprintf(FINFO, "%s %11.0f %s%s %s -> %s\n",
  			permbuf, len, timestring(f->modtime),
-+			crtimes_ndx ? timestring(crtime) : "",
- 			f_name(f, NULL), F_SYMLINK(f));
+-			f_name(f, NULL), F_SYMLINK(f));
++			crtime_buf, f_name(f, NULL), F_SYMLINK(f));
  	} else
  #endif
  	{
 -		rprintf(FINFO, "%s %11.0f %s %s\n",
-+		rprintf(FINFO, "%s %11.0f %s %s %s\n",
++		rprintf(FINFO, "%s %11.0f %s%s %s\n",
  			permbuf, len, timestring(f->modtime),
-+			crtimes_ndx ? timestring(crtime) : "",
- 			f_name(f, NULL));
+-			f_name(f, NULL));
++			crtime_buf, f_name(f, NULL));
  	}
  }
-@@ -1339,6 +1357,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 
+@@ -1339,6 +1359,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			return;
  		}
  	}
