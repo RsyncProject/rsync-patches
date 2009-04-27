@@ -48,7 +48,7 @@ diff --git a/clientserver.c b/clientserver.c
  	 * local address??? */
  
 +#ifdef HAVE_LIBSLP
-+	if (register_services()) {
++	if (lp_use_slp() && register_services() != 0) {
 +		rprintf(FINFO,
 +		    "Couldn't register with service discovery protocol, continuing anyway\n");
 +	}
@@ -93,17 +93,21 @@ diff --git a/configure.in b/configure.in
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -109,6 +109,9 @@ typedef struct
+@@ -109,6 +109,13 @@ typedef struct
  	char *socket_options;
  
  	int rsync_port;
 +#ifdef HAVE_LIBSLP
 +	int slp_refresh;
 +#endif
++
++#ifdef HAVE_LIBSLP
++	BOOL use_slp;
++#endif
  } global;
  
  static global Globals;
-@@ -300,6 +303,9 @@ static struct parm_struct parm_table[] =
+@@ -300,7 +307,13 @@ static struct parm_struct parm_table[] =
   {"motd file",         P_STRING, P_GLOBAL,&Globals.motd_file,          NULL,0},
   {"pid file",          P_STRING, P_GLOBAL,&Globals.pid_file,           NULL,0},
   {"port",              P_INTEGER,P_GLOBAL,&Globals.rsync_port,         NULL,0},
@@ -111,14 +115,30 @@ diff --git a/loadparm.c b/loadparm.c
 + {"slp refresh",       P_INTEGER,P_GLOBAL,&Globals.slp_refresh,        NULL,0},
 +#endif
   {"socket options",    P_STRING, P_GLOBAL,&Globals.socket_options,     NULL,0},
++#ifdef HAVE_LIBSLP
++ {"use slp",           P_BOOL,   P_GLOBAL,&Globals.use_slp,            NULL,0},
++#endif
  
   {"auth users",        P_STRING, P_LOCAL, &sDefault.auth_users,        NULL,0},
-@@ -394,6 +400,9 @@ FN_GLOBAL_STRING(lp_pid_file, &Globals.pid_file)
+  {"charset",           P_STRING, P_LOCAL, &sDefault.charset,           NULL,0},
+@@ -354,6 +367,7 @@ static struct parm_struct parm_table[] =
+ static void init_globals(void)
+ {
+ 	memset(&Globals, 0, sizeof Globals);
++	Globals.use_slp = True;
+ }
+ 
+ /***************************************************************************
+@@ -394,6 +408,13 @@ FN_GLOBAL_STRING(lp_pid_file, &Globals.pid_file)
  FN_GLOBAL_STRING(lp_socket_options, &Globals.socket_options)
  
  FN_GLOBAL_INTEGER(lp_rsync_port, &Globals.rsync_port)
 +#ifdef HAVE_LIBSLP
 +FN_GLOBAL_INTEGER(lp_slp_refresh, &Globals.slp_refresh)
++#endif
++
++#ifdef HAVE_LIBSLP
++FN_GLOBAL_BOOL(lp_use_slp, &Globals.use_slp)
 +#endif
  
  FN_LOCAL_STRING(lp_auth_users, auth_users)
@@ -219,14 +239,18 @@ new file mode 100644
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -104,6 +104,15 @@ details on some of the options you may be able to set. By default no
+@@ -104,6 +104,19 @@ details on some of the options you may be able to set. By default no
  special socket options are set.  These settings can also be specified
  via the bf(--sockopts) command-line option.
  
++dit(bf(use slp)) This parameter is used to determine if the module names are
++advertised via slp.  The default is for this to be enabled, which will
++advertise your public modules.
++
 +dit(bf(slp refresh)) This parameter is used to determine how long service
 +advertisements are valid (measured in seconds), and is only applicable if
 +you have Service Location Protocol support compiled in. If this is
-+not set or is set to zero, then service advertisements never time out. If
++not set or is set to zero, then service advertisements never timeout. If
 +this is set to less than 120 seconds, then 120 seconds is used. If it is
 +set to more than 65535, then 65535 is used (which is a limitation of SLP).
 +Using 3600 (one hour) is a good number if you tend to change your
@@ -235,7 +259,7 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
  enddit()
  
  manpagesection(MODULE PARAMETERS)
-@@ -652,6 +661,7 @@ use chroot = yes
+@@ -652,6 +665,7 @@ use chroot = yes
  max connections = 4
  syslog facility = local5
  pid file = /var/run/rsyncd.pid
@@ -252,7 +276,7 @@ diff --git a/socket.c b/socket.c
  	int *sp, maxfd, i;
 +#ifdef HAVE_LIBSLP
 +	time_t next_slp_refresh;
-+	short slp_timeout = lp_slp_refresh();
++	short slp_timeout = lp_use_slp() ? lp_slp_refresh() : 0;
 +	if (slp_timeout) {
 +		if (slp_timeout < SLP_MIN_TIMEOUT)
 +			slp_timeout = SLP_MIN_TIMEOUT;
