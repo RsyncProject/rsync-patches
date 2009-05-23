@@ -20,8 +20,8 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
+based-on: 181c9faf928faad08ef095f4667afe460ec3bef6
 diff --git a/clientserver.c b/clientserver.c
-index b6afe00..568a121 100644
 --- a/clientserver.c
 +++ b/clientserver.c
 @@ -67,6 +67,7 @@ extern iconv_t ic_send, ic_recv;
@@ -40,7 +40,7 @@ index b6afe00..568a121 100644
  
  #ifdef HAVE_SIGACTION
  static struct sigaction sigact;
-@@ -649,7 +651,7 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -643,7 +645,7 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  	log_init(1);
  
  #ifdef HAVE_PUTENV
@@ -49,7 +49,7 @@ index b6afe00..568a121 100644
  		char *modname, *modpath, *hostaddr, *hostname, *username;
  		int status;
  
-@@ -738,6 +740,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -732,6 +734,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  			set_blocking(fds[1]);
  			pre_exec_fd = fds[1];
  		}
@@ -94,7 +94,7 @@ index b6afe00..568a121 100644
  		umask(0);
  	}
  #endif
-@@ -965,6 +1005,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -959,6 +999,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  	return 0;
  }
  
@@ -140,7 +140,6 @@ index b6afe00..568a121 100644
     with "list = False". */
  static void send_listing(int fd)
 diff --git a/loadparm.c b/loadparm.c
-index 8e48e6d..c623689 100644
 --- a/loadparm.c
 +++ b/loadparm.c
 @@ -121,6 +121,7 @@ typedef struct {
@@ -176,7 +175,6 @@ index 8e48e6d..c623689 100644
  FN_LOCAL_STRING(lp_secrets_file, secrets_file)
  FN_LOCAL_STRING(lp_temp_dir, temp_dir)
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
-index d4978cd..fd0f7d9 100644
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
 @@ -163,10 +163,11 @@ if the module is not read-only).
@@ -223,7 +221,6 @@ index d4978cd..fd0f7d9 100644
  the daemon will use the value of the "charset" parameter regardless of the
 diff --git a/support/nameconvert b/support/nameconvert
 new file mode 100755
-index 0000000..d01f593
 --- /dev/null
 +++ b/support/nameconvert
 @@ -0,0 +1,42 @@
@@ -270,7 +267,6 @@ index 0000000..d01f593
 +    print $ans, $eol;
 +}
 diff --git a/t_stub.c b/t_stub.c
-index 02cfa69..eaaf8a9 100644
 --- a/t_stub.c
 +++ b/t_stub.c
 @@ -30,6 +30,7 @@ mode_t orig_umask = 002;
@@ -278,10 +274,10 @@ index 02cfa69..eaaf8a9 100644
  char *partial_dir;
  char *module_dir;
 +pid_t namecvt_pid;
- struct filter_list_struct daemon_filter_list;
+ filter_rule_list daemon_filter_list;
  
   void rprintf(UNUSED(enum logcode code), const char *format, ...)
-@@ -75,6 +76,11 @@ struct filter_list_struct daemon_filter_list;
+@@ -70,6 +71,11 @@ filter_rule_list daemon_filter_list;
  	return -1;
  }
  
@@ -294,7 +290,6 @@ index 02cfa69..eaaf8a9 100644
  {
  	return NULL;
 diff --git a/uidlist.c b/uidlist.c
-index 7e8cbd7..472aeb9 100644
 --- a/uidlist.c
 +++ b/uidlist.c
 @@ -33,6 +33,7 @@ extern int preserve_uid;
@@ -336,7 +331,6 @@ index 7e8cbd7..472aeb9 100644
  	return NULL;
  }
 diff --git a/util.c b/util.c
-index 0cafed6..dc1647b 100644
 --- a/util.c
 +++ b/util.c
 @@ -31,9 +31,10 @@ extern int modify_window;
@@ -348,18 +342,23 @@ index 0cafed6..dc1647b 100644
  extern char *partial_dir;
 +extern pid_t namecvt_pid;
 +extern unsigned int module_dirlen;
- extern struct filter_list_struct daemon_filter_list;
+ extern filter_rule_list daemon_filter_list;
  
  int sanitize_paths = 0;
-@@ -497,24 +498,44 @@ void kill_all(int sig)
- /** Turn a user name into a uid */
- int name_to_uid(const char *name, uid_t *uid_p)
+@@ -537,32 +538,54 @@ void kill_all(int sig)
+ /* Parse a user name or (optionally) a number into a uid */
+ int user_to_uid(const char *name, uid_t *uid_p, BOOL num_ok)
  {
 -	struct passwd *pass;
 +	uid_t uid;
 +
  	if (!name || !*name)
  		return 0;
++
+ 	if (num_ok && name[strspn(name, "0123456789")] == '\0') {
+ 		*uid_p = atol(name);
+ 		return 1;
+ 	}
 -	if (!(pass = getpwnam(name)))
 -		return 0;
 -	*uid_p = pass->pw_uid;
@@ -378,14 +377,19 @@ index 0cafed6..dc1647b 100644
  	return 1;
  }
  
- /** Turn a group name into a gid */
- int name_to_gid(const char *name, gid_t *gid_p)
+ /* Parse a group name or (optionally) a number into a gid */
+ int group_to_gid(const char *name, gid_t *gid_p, BOOL num_ok)
  {
 -	struct group *grp;
 +	gid_t gid;
 +
  	if (!name || !*name)
  		return 0;
++
+ 	if (num_ok && name[strspn(name, "0123456789")] == '\0') {
+ 		*gid_p = atol(name);
+ 		return 1;
+ 	}
 -	if (!(grp = getgrnam(name)))
 -		return 0;
 -	*gid_p = grp->gr_gid;
