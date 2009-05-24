@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: 181c9faf928faad08ef095f4667afe460ec3bef6
+based-on: 06886d36cfdcfb94f0d67f8964d22ee7c7872018
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
@@ -36,10 +36,10 @@ diff --git a/generator.c b/generator.c
  	}
  
 diff --git a/support/xsums b/support/xsums
-new file mode 100644
+new file mode 100755
 --- /dev/null
 +++ b/support/xsums
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,204 @@
 +#!/usr/bin/perl -w
 +use strict;
 +
@@ -49,15 +49,15 @@ new file mode 100644
 +use Digest::MD5;
 +use File::ExtAttr ':all';
 +
-+our($recurse_opt, $help_opt);
-+our $verbosity = 0;
-+
 +&Getopt::Long::Configure('bundling');
 +&usage if !&GetOptions(
-+    'recurse|r' => \$recurse_opt,
-+    'verbose|v+' => \$verbosity,
-+    'help|h' => \$help_opt,
-+) || $help_opt;
++    'recurse|r' => \( my $recurse_opt ),
++    'list|l' => \( my $list_opt ),
++    'check|c' => \( my $check_opt ),
++    'verbose|v+' => \( my $verbosity = 0 ),
++    'help|h' => \( my $help_opt ),
++);
++&usage if $help_opt;
 +
 +my $start_dir = cwd();
 +
@@ -68,6 +68,8 @@ new file mode 100644
 +}
 +
 +$| = 1;
++
++my $exit_code = 0;
 +
 +my $md4 = Digest::MD4->new;
 +my $md5 = Digest::MD5->new;
@@ -84,13 +86,13 @@ new file mode 100644
 +	next;
 +    }
 +
-+    if ($verbosity) {
-+	my $reldir = $dir;
-+	$reldir =~ s#^$start_dir(/|$)# $1 ? '' : '.' #eo;
-+	print "scanning $reldir\n";
-+    }
++    my $reldir = $dir;
++    $reldir =~ s#^$start_dir(/|$)# $1 ? '' : '.' #eo;
++    print "$reldir ... " if $verbosity;
 +
 +    my @subdirs;
++    my $d_cnt = 0;
++    my $need_newline = $verbosity;
 +    while (defined(my $fn = readdir(DP))) {
 +	next if $fn =~ /^\.\.?$/ || -l $fn;
 +	if (-d _) {
@@ -98,13 +100,15 @@ new file mode 100644
 +	    next;
 +	}
 +	next unless -f _;
++	$d_cnt++;
 +
-+	my($size,$mtime) = (stat(_))[7,9];
++	my($size,$mtime,$ctime) = (stat(_))[7,9,10];
 +
-+	my $sum4 = getfattr($fn, 'rsync.%md4');
-+	my $sum5 = getfattr($fn, 'rsync.%md5');
++	my $xsum4 = getfattr($fn, 'rsync.%md4');
++	my $xsum5 = getfattr($fn, 'rsync.%md5');
 +
-+	foreach ($sum4, $sum5) {
++	my $sum_count = 0;
++	foreach ($xsum4, $xsum5) {
 +	    if (defined $_) {
 +		if (length($_) == 24) {
 +		    my($sz,$mt,$sum) = unpack('V2a16', $_);
@@ -113,32 +117,110 @@ new file mode 100644
 +			$_ = undef;
 +		    } else {
 +			$_ = $sum;
++			$sum_count++;
 +		    }
 +		} else {
 +		    $_ = undef;
 +		}
 +	    }
 +	}
-+	if (!defined($sum4) || !defined($sum5)) {
-+	    if (!open(IN, $fn)) {
-+		print STDERR "Unable to read $fn: $!\n";
++
++	if ($list_opt) {
++	    if ($need_newline) {
++		print "\n";
++		$need_newline = 0;
++	    }
++	    if (defined $xsum4) {
++		print ' ', unpack('H32', $xsum4);
++	    } else {
++		print ' ' x (1 + 32);
++	    }
++	    if (defined $xsum5) {
++		print ' ', unpack('H32', $xsum5);
++	    } else {
++		print ' ' x (1 + 32);
++	    }
++	    print $verbosity ? ' ' : " $reldir/";
++	    print $fn, "\n";
++	    next;
++	}
++
++	if ($check_opt) {
++	    if (!$sum_count) {
++		if ($need_newline) {
++		    print "\n";
++		    $need_newline = 0;
++		}
++		print ' ' x (1 + 32 + 1 + 32) if $verbosity > 2;
++		print $verbosity ? ' ' : "$reldir/";
++		print $fn, " MISSING\n";
 +		next;
 +	    }
++	} else {
++	    next if $sum_count == 2;
++	    print 'UPDATING' if $need_newline && $verbosity == 1;
++	}
 +
++	if ($need_newline && (!$check_opt || $verbosity > 1)) {
++	    print "\n";
++	    $need_newline = 0;
++	}
++
++	if (!open(IN, $fn)) {
++	    print STDERR "Unable to read $fn: $!\n";
++	    next;
++	}
++
++	my($sum4, $sum5);
++	while (1) {
 +	    while (sysread(IN, $_, 64*1024)) {
 +		$md4->add($_);
 +		$md5->add($_);
 +	    }
-+	    close IN;
-+
 +	    $sum4 = $md4->digest;
 +	    $sum5 = $md5->digest;
-+	    print " $fn\n" if $verbosity > 1;
++	    print ' ', unpack('H32', $sum4), ' ', unpack('H32', $sum5) if $verbosity > 2;
++	    print " $fn" if $verbosity > 1;
++	    my($size2,$mtime2,$ctime2) = (stat(IN))[7,9,10];
++	    last if $size == $size2 && $mtime == $mtime2 && $ctime == $ctime2;
++	    $size = $size2;
++	    $mtime = $mtime2;
++	    $ctime = $ctime2;
++	    sysseek(IN, 0, 0);
++	    print " REREADING\n" if $verbosity > 1;
++	}
 +
++	close IN;
++
++	if ($check_opt) {
++	    if ((!defined $xsum4 || $xsum4 eq $sum4) && (!defined $xsum5 || $xsum5 eq $sum5)) {
++		print " OK\n" if $verbosity > 1;
++		next;
++	    }
++	    if ($need_newline) {
++		print "\n";
++		$need_newline = 0;
++	    }
++	    if ($verbosity < 2) {
++		print $verbosity ? ' ' : "$reldir/";
++		print $fn;
++	    }
++	    print " FAILED\n";
++	    $exit_code = 1;
++	} else {
++	    print "\n" if $verbosity > 1;
 +	    my $szmt = pack('V2', $size, $mtime); # 32-bits, may truncate
 +	    setfattr($fn, 'rsync.%md4', $szmt.$sum4);
 +	    setfattr($fn, 'rsync.%md5', $szmt.$sum5);
 +	    #utime $mtime, $mtime, $fn; # Set mtime if it changes.
++	}
++    }
++
++    if ($need_newline) {
++	if ($d_cnt) {
++	    print "ok\n";
++	} else {
++	    print "empty\n";
 +	}
 +    }
 +
@@ -147,6 +229,8 @@ new file mode 100644
 +    unshift(@dirs, sort @subdirs) if $recurse_opt;
 +}
 +
++exit $exit_code;
++
 +sub usage
 +{
 +    die <<EOT;
@@ -154,6 +238,8 @@ new file mode 100644
 +
 +Options:
 + -r, --recurse     Update checksums in subdirectories too.
++ -l, --list        List the checksums for each file (doesn't update).
++ -c, --check       Check if the checksums are right (doesn't update).
 + -v, --verbose     Mention what we're doing.  Repeat for more info.
 + -h, --help        Display this help message.
 +EOT
