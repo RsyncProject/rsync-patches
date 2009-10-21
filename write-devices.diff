@@ -1,0 +1,147 @@
+This patch adds the --write-devices option, which will try to write
+data into a device when used as a destination.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/write-devices.diff
+    ./configure                      (optional if already run)
+    make
+
+This patch has not yet been tested by me (Wayne), but was provided
+Darryl Dixon.  Thanks!
+
+based-on: 3b8f8192227b14e708bf535072485e50f4362270
+diff --git a/generator.c b/generator.c
+--- a/generator.c
++++ b/generator.c
+@@ -39,6 +39,7 @@ extern int preserve_acls;
+ extern int preserve_xattrs;
+ extern int preserve_links;
+ extern int preserve_devices;
++extern int write_devices;
+ extern int preserve_specials;
+ extern int preserve_hard_links;
+ extern int preserve_executability;
+@@ -1534,7 +1535,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 	fnamecmp = fname;
+ 	fnamecmp_type = FNAMECMP_FNAME;
+ 
+-	if (statret == 0 && !S_ISREG(sx.st.st_mode)) {
++	if (statret == 0 && !(S_ISREG(sx.st.st_mode) || (write_devices && IS_DEVICE(sx.st.st_mode)))) {
+ 		if (delete_item(fname, sx.st.st_mode, del_opts | DEL_FOR_FILE) != 0)
+ 			goto cleanup;
+ 		statret = -1;
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -48,6 +48,7 @@ int append_mode = 0;
+ int keep_dirlinks = 0;
+ int copy_dirlinks = 0;
+ int copy_links = 0;
++int write_devices = 0;
+ int preserve_links = 0;
+ int preserve_hard_links = 0;
+ int preserve_acls = 0;
+@@ -695,6 +696,7 @@ void usage(enum logcode F)
+   rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
+   rprintf(F," -g, --group                 preserve group\n");
+   rprintf(F,"     --devices               preserve device files (super-user only)\n");
++  rprintf(F," -w  --write-devices         write to devices as regular files (implies --inplace)\n");
+   rprintf(F,"     --specials              preserve special files\n");
+   rprintf(F," -D                          same as --devices --specials\n");
+   rprintf(F," -t, --times                 preserve modification times\n");
+@@ -863,6 +865,7 @@ static struct poptOption long_options[] = {
+   {"no-D",             0,  POPT_ARG_NONE,   0, OPT_NO_D, 0, 0 },
+   {"devices",          0,  POPT_ARG_VAL,    &preserve_devices, 1, 0, 0 },
+   {"no-devices",       0,  POPT_ARG_VAL,    &preserve_devices, 0, 0, 0 },
++  {"write-devices",   'w', POPT_ARG_NONE,   0, 'w', 0, 0 },
+   {"specials",         0,  POPT_ARG_VAL,    &preserve_specials, 1, 0, 0 },
+   {"no-specials",      0,  POPT_ARG_VAL,    &preserve_specials, 0, 0, 0 },
+   {"links",           'l', POPT_ARG_VAL,    &preserve_links, 1, 0, 0 },
+@@ -1744,6 +1747,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			return 0;
+ #endif
+ 
++		case 'w':
++			write_devices = 1;
++			inplace = 1;
++			break;
++
+ 		default:
+ 			/* A large opt value means that set_refuse_options()
+ 			 * turned this option off. */
+@@ -2627,6 +2635,9 @@ void server_options(char **args, int *argc_p)
+ 	else if (remove_source_files)
+ 		args[ac++] = "--remove-sent-files";
+ 
++	if (write_devices)
++		args[ac++] = "--write-devices";
++
+ 	if (ac > MAX_SERVER_ARGS) { /* Not possible... */
+ 		rprintf(FERROR, "argc overflow in server_options().\n");
+ 		exit_cleanup(RERR_MALLOC);
+diff --git a/receiver.c b/receiver.c
+--- a/receiver.c
++++ b/receiver.c
+@@ -37,6 +37,7 @@ extern int protocol_version;
+ extern int relative_paths;
+ extern int preserve_hard_links;
+ extern int preserve_perms;
++extern int write_devices;
+ extern int preserve_xattrs;
+ extern int basis_dir_cnt;
+ extern int make_backups;
+@@ -198,6 +199,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
+ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 			const char *fname, int fd, OFF_T total_size)
+ {
++	STRUCT_STAT st;
+ 	static char file_sum1[MAX_DIGEST_LEN];
+ 	struct map_struct *mapbuf;
+ 	struct sum_struct sum;
+@@ -317,10 +319,14 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 		goto report_write_error;
+ 
+ #ifdef HAVE_FTRUNCATE
+-	if (inplace && fd != -1
+-	 && ftruncate(fd, offset) < 0) {
+-		rsyserr(FERROR_XFER, errno, "ftruncate failed on %s",
+-			full_fname(fname));
++	(void)do_fstat(fd,&st);
++	/* Makes no sense to attempt to ftruncate() a block device: */
++	if (!(IS_DEVICE(st.st_mode))) {
++		if (inplace && fd != -1
++		 && ftruncate(fd, offset) < 0) {
++			rsyserr(FERROR_XFER, errno, "ftruncate failed on %s",
++				full_fname(fname));
++		}
+ 	}
+ #endif
+ 
+@@ -728,11 +734,25 @@ int recv_files(int f_in, int f_out, char *local_name)
+ 			continue;
+ 		}
+ 
+-		if (fd1 != -1 && !S_ISREG(st.st_mode)) {
++		if (fd1 != -1 && !(S_ISREG(st.st_mode) || (write_devices && IS_DEVICE(st.st_mode)))) {
+ 			close(fd1);
+ 			fd1 = -1;
+ 		}
+ 
++		/* On Linux systems (at least), st_size is typically 0 for devices.
++		 * If so, try to determine the actual device size. */
++		if (fd1 != -1 && IS_DEVICE(st.st_mode) && st.st_size == 0) {
++			OFF_T off = lseek(fd1, 0, SEEK_END);
++			if (off == (OFF_T) -1)
++				rsyserr(FERROR, errno, "failed to seek to end of %s to determine size", fname);
++			else {
++				st.st_size = off;
++				off = lseek(fd1, 0, SEEK_SET);
++				if (off != 0)
++					rsyserr(FERROR, errno, "failed to seek back to beginning of %s to read it", fname);
++			}
++		}
++
+ 		/* If we're not preserving permissions, change the file-list's
+ 		 * mode based on the local permissions and some heuristics. */
+ 		if (!preserve_perms) {
