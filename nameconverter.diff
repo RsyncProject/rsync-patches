@@ -20,7 +20,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 181c9faf928faad08ef095f4667afe460ec3bef6
+based-on: 3b8f8192227b14e708bf535072485e50f4362270
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
@@ -40,16 +40,16 @@ diff --git a/clientserver.c b/clientserver.c
  
  #ifdef HAVE_SIGACTION
  static struct sigaction sigact;
-@@ -643,7 +645,7 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -669,7 +671,7 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  	log_init(1);
  
  #ifdef HAVE_PUTENV
 -	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i)) {
 +	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i) || *lp_name_converter(i)) {
- 		char *modname, *modpath, *hostaddr, *hostname, *username;
  		int status;
  
-@@ -732,6 +734,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+ 		umask(orig_umask);
+@@ -741,6 +743,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  			set_blocking(fds[1]);
  			pre_exec_fd = fds[1];
  		}
@@ -94,7 +94,7 @@ diff --git a/clientserver.c b/clientserver.c
  		umask(0);
  	}
  #endif
-@@ -959,6 +999,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -968,6 +1008,44 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  	return 0;
  }
  
@@ -142,7 +142,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -121,6 +121,7 @@ typedef struct {
+@@ -122,6 +122,7 @@ typedef struct {
  	char *log_file;
  	char *log_format;
  	char *name;
@@ -150,7 +150,7 @@ diff --git a/loadparm.c b/loadparm.c
  	char *outgoing_chmod;
  	char *path;
  	char *postxfer_exec;
-@@ -195,6 +196,7 @@ static const all_vars Defaults = {
+@@ -196,6 +197,7 @@ static const all_vars Defaults = {
   /* log_file; */		NULL,
   /* log_format; */		"%o %h [%a] %m (%u) %f %l",
   /* name; */			NULL,
@@ -158,7 +158,7 @@ diff --git a/loadparm.c b/loadparm.c
   /* outgoing_chmod; */		NULL,
   /* path; */			NULL,
   /* postxfer_exec; */		NULL,
-@@ -337,6 +339,7 @@ static struct parm_struct parm_table[] =
+@@ -338,6 +340,7 @@ static struct parm_struct parm_table[] =
   {"max verbosity",     P_INTEGER,P_LOCAL, &Vars.l.max_verbosity,       NULL,0},
   {"munge symlinks",    P_BOOL,   P_LOCAL, &Vars.l.munge_symlinks,      NULL,0},
   {"name",              P_STRING, P_LOCAL, &Vars.l.name,                NULL,0},
@@ -166,7 +166,7 @@ diff --git a/loadparm.c b/loadparm.c
   {"numeric ids",       P_BOOL,   P_LOCAL, &Vars.l.numeric_ids,         NULL,0},
   {"outgoing chmod",    P_STRING, P_LOCAL, &Vars.l.outgoing_chmod,      NULL,0},
   {"path",              P_PATH,   P_LOCAL, &Vars.l.path,                NULL,0},
-@@ -414,6 +417,7 @@ FN_LOCAL_STRING(lp_outgoing_chmod, outgoing_chmod)
+@@ -465,6 +468,7 @@ FN_LOCAL_STRING(lp_outgoing_chmod, outgoing_chmod)
  FN_LOCAL_STRING(lp_path, path)
  FN_LOCAL_STRING(lp_postxfer_exec, postxfer_exec)
  FN_LOCAL_STRING(lp_prexfer_exec, prexfer_exec)
@@ -177,7 +177,7 @@ diff --git a/loadparm.c b/loadparm.c
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -163,10 +163,11 @@ if the module is not read-only).
+@@ -183,10 +183,11 @@ if the module is not read-only).
  
  When this parameter is enabled, rsync will not attempt to map users and groups
  by name (by default), but instead copy IDs as though bf(--numeric-ids) had
@@ -191,7 +191,7 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
  process in the chroot hierarchy will need to have access to the resources
  used by these library functions (traditionally /etc/passwd and
  /etc/group, but perhaps additional dynamic libraries as well).
-@@ -232,6 +233,27 @@ path elements that rsync believes will allow a symlink to escape the module's
+@@ -252,6 +253,27 @@ path elements that rsync believes will allow a symlink to escape the module's
  hierarchy.  There are tricky ways to work around this, though, so you had
  better trust your users if you choose this combination of parameters.
  
@@ -297,12 +297,12 @@ diff --git a/uidlist.c b/uidlist.c
  extern int preserve_acls;
  extern int numeric_ids;
 +extern pid_t namecvt_pid;
+ extern gid_t our_gid;
  extern char *usermap;
  extern char *groupmap;
- 
-@@ -75,8 +76,12 @@ static struct idlist *add_to_list(struct idlist **root, id_t id, const char *nam
+@@ -76,8 +77,12 @@ static struct idlist *add_to_list(struct idlist **root, id_t id, const char *nam
  /* turn a uid into a user name */
- static const char *uid_to_name(uid_t uid)
+ char *uid_to_user(uid_t uid)
  {
 -	struct passwd *pass = getpwuid(uid);
 -	if (pass)
@@ -315,9 +315,9 @@ diff --git a/uidlist.c b/uidlist.c
  		return strdup(pass->pw_name);
  	return NULL;
  }
-@@ -84,8 +89,12 @@ static const char *uid_to_name(uid_t uid)
+@@ -85,8 +90,12 @@ char *uid_to_user(uid_t uid)
  /* turn a gid into a group name */
- static const char *gid_to_name(gid_t gid)
+ char *gid_to_group(gid_t gid)
  {
 -	struct group *grp = getgrgid(gid);
 -	if (grp)
@@ -330,22 +330,7 @@ diff --git a/uidlist.c b/uidlist.c
  		return strdup(grp->gr_name);
  	return NULL;
  }
-diff --git a/util.c b/util.c
---- a/util.c
-+++ b/util.c
-@@ -31,9 +31,10 @@ extern int modify_window;
- extern int relative_paths;
- extern int preserve_xattrs;
- extern char *module_dir;
--extern unsigned int module_dirlen;
- extern mode_t orig_umask;
- extern char *partial_dir;
-+extern pid_t namecvt_pid;
-+extern unsigned int module_dirlen;
- extern filter_rule_list daemon_filter_list;
- 
- int sanitize_paths = 0;
-@@ -537,32 +538,54 @@ void kill_all(int sig)
+@@ -94,32 +103,54 @@ char *gid_to_group(gid_t gid)
  /* Parse a user name or (optionally) a number into a uid */
  int user_to_uid(const char *name, uid_t *uid_p, BOOL num_ok)
  {
@@ -408,3 +393,18 @@ diff --git a/util.c b/util.c
  	return 1;
  }
  
+diff --git a/util.c b/util.c
+--- a/util.c
++++ b/util.c
+@@ -31,9 +31,10 @@ extern int modify_window;
+ extern int relative_paths;
+ extern int preserve_xattrs;
+ extern char *module_dir;
+-extern unsigned int module_dirlen;
+ extern mode_t orig_umask;
+ extern char *partial_dir;
++extern pid_t namecvt_pid;
++extern unsigned int module_dirlen;
+ extern filter_rule_list daemon_filter_list;
+ 
+ int sanitize_paths = 0;

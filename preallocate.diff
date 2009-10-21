@@ -9,11 +9,11 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 181c9faf928faad08ef095f4667afe460ec3bef6
+based-on: 3b8f8192227b14e708bf535072485e50f4362270
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
-@@ -32,6 +32,7 @@ extern int inplace;
+@@ -34,6 +34,7 @@ extern int inplace;
  extern int recurse;
  extern int use_qsort;
  extern int allow_inc_recurse;
@@ -21,7 +21,7 @@ diff --git a/compat.c b/compat.c
  extern int append_mode;
  extern int fuzzy_basis;
  extern int read_batch;
-@@ -186,6 +187,15 @@ void setup_protocol(int f_out,int f_in)
+@@ -189,6 +190,15 @@ void setup_protocol(int f_out,int f_in)
  	if (read_batch)
  		check_batch_flags();
  
@@ -40,12 +40,12 @@ diff --git a/compat.c b/compat.c
 diff --git a/configure.in b/configure.in
 --- a/configure.in
 +++ b/configure.in
-@@ -553,13 +553,40 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
+@@ -574,13 +574,40 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
      strerror putenv iconv_open locale_charset nl_langinfo getxattr \
      extattr_get_link sigaction sigprocmask setattrlist getgrouplist \
--    initgroups)
-+    initgroups fallocate posix_fallocate)
+-    initgroups utimensat)
++    initgroups utimensat fallocate posix_fallocate)
  
  dnl cygwin iconv.h defines iconv_open as libiconv_open
  if test x"$ac_cv_func_iconv_open" != x"yes"; then
@@ -93,7 +93,7 @@ diff --git a/options.c b/options.c
  int do_compression = 0;
  int def_compress_level = Z_DEFAULT_COMPRESSION;
  int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
-@@ -566,6 +567,7 @@ static void print_rsync_version(enum logcode f)
+@@ -567,6 +568,7 @@ static void print_rsync_version(enum logcode f)
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -101,8 +101,8 @@ diff --git a/options.c b/options.c
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -599,6 +601,9 @@ static void print_rsync_version(enum logcode f)
- #if defined HAVE_LUTIMES && defined HAVE_UTIMES
+@@ -600,6 +602,9 @@ static void print_rsync_version(enum logcode f)
+ #ifdef CAN_SET_SYMLINK_TIMES
  	symtimes = "";
  #endif
 +#ifdef SUPPORT_PREALLOCATION
@@ -111,7 +111,7 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -612,8 +617,8 @@ static void print_rsync_version(enum logcode f)
+@@ -613,8 +618,8 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -122,7 +122,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -703,6 +708,9 @@ void usage(enum logcode F)
+@@ -704,6 +709,9 @@ void usage(enum logcode F)
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
  #endif
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
@@ -132,7 +132,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -n, --dry-run               perform a trial run with no changes made\n");
    rprintf(F," -W, --whole-file            copy files whole (without delta-xfer algorithm)\n");
    rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
-@@ -899,6 +907,7 @@ static struct poptOption long_options[] = {
+@@ -900,6 +908,7 @@ static struct poptOption long_options[] = {
    {"sparse",          'S', POPT_ARG_VAL,    &sparse_files, 1, 0, 0 },
    {"no-sparse",        0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
    {"no-S",             0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
@@ -140,7 +140,7 @@ diff --git a/options.c b/options.c
    {"inplace",          0,  POPT_ARG_VAL,    &inplace, 1, 0, 0 },
    {"no-inplace",       0,  POPT_ARG_VAL,    &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_NONE,   0, OPT_APPEND, 0, 0 },
-@@ -2626,6 +2635,9 @@ void server_options(char **args, int *argc_p)
+@@ -2627,6 +2636,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -161,7 +161,7 @@ diff --git a/receiver.c b/receiver.c
  extern int keep_partial;
  extern int checksum_len;
  extern int checksum_seed;
-@@ -175,6 +176,18 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -207,6 +208,18 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  	char *data;
  	int32 i;
  	char *map = NULL;
@@ -180,7 +180,7 @@ diff --git a/receiver.c b/receiver.c
  
  	read_sum_head(f_in, &sum);
  
-@@ -285,8 +298,14 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -317,8 +330,14 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  		goto report_write_error;
  
  #ifdef HAVE_FTRUNCATE
@@ -200,7 +200,7 @@ diff --git a/receiver.c b/receiver.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -638,6 +638,13 @@ struct ht_int64_node {
+@@ -642,6 +642,13 @@ struct ht_int64_node {
  #define ACLS_NEED_MASK 1
  #endif
  
@@ -226,8 +226,8 @@ diff --git a/rsync.yo b/rsync.yo
   -W, --whole-file            copy files whole (w/o delta-xfer algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
 @@ -1127,6 +1128,18 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
- filesystem. It doesn't seem to handle seeks over null regions
- correctly and ends up corrupting the files.
+ filesystem. It seems to have problems seeking over null regions,
+ and ends up corrupting the files.
  
 +dit(bf(--preallocate)) This tells the receiver to allocate each destination
 +file to its eventual size before writing data to the file.  Rsync will only use
@@ -257,8 +257,8 @@ diff --git a/syscall.c b/syscall.c
 +
  extern int dry_run;
  extern int am_root;
- extern int read_only;
-@@ -282,3 +286,21 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
+ extern int am_sender;
+@@ -325,3 +329,21 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
  	return lseek(fd, offset, whence);
  #endif
  }
@@ -302,7 +302,7 @@ diff --git a/util.c b/util.c
  extern int module_id;
  extern int modify_window;
  extern int relative_paths;
-@@ -324,6 +325,10 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
+@@ -332,6 +333,10 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
  	int ifd;
  	char buf[1024 * 8];
  	int len;   /* Number of bytes read into `buf'. */
@@ -313,7 +313,7 @@ diff --git a/util.c b/util.c
  
  	if ((ifd = do_open(source, O_RDONLY, 0)) < 0) {
  		int save_errno = errno;
-@@ -349,7 +354,27 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
+@@ -357,7 +362,27 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
  		}
  	}
  
@@ -341,7 +341,7 @@ diff --git a/util.c b/util.c
  		if (full_write(ofd, buf, len) < 0) {
  			int save_errno = errno;
  			rsyserr(FERROR_XFER, errno, "write %s", full_fname(dest));
-@@ -374,6 +399,16 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
+@@ -382,6 +407,16 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
  			full_fname(source));
  	}
  

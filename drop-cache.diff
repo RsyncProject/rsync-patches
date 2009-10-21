@@ -69,7 +69,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 181c9faf928faad08ef095f4667afe460ec3bef6
+based-on: 3b8f8192227b14e708bf535072485e50f4362270
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
@@ -104,12 +104,12 @@ diff --git a/cleanup.c b/cleanup.c
 diff --git a/configure.in b/configure.in
 --- a/configure.in
 +++ b/configure.in
-@@ -553,7 +553,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
+@@ -574,7 +574,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
      strerror putenv iconv_open locale_charset nl_langinfo getxattr \
      extattr_get_link sigaction sigprocmask setattrlist getgrouplist \
--    initgroups)
-+    initgroups posix_fadvise64)
+-    initgroups utimensat)
++    initgroups utimensat posix_fadvise64)
  
  dnl cygwin iconv.h defines iconv_open as libiconv_open
  if test x"$ac_cv_func_iconv_open" != x"yes"; then
@@ -132,7 +132,7 @@ diff --git a/fileio.c b/fileio.c
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -112,6 +112,10 @@ static int need_retouch_dir_times;
+@@ -113,6 +113,10 @@ static int need_retouch_dir_times;
  static int need_retouch_dir_perms;
  static const char *solo_file = NULL;
  
@@ -154,7 +154,7 @@ diff --git a/options.c b/options.c
  int cvs_exclude = 0;
  int dry_run = 0;
  int do_xfers = 1;
-@@ -670,6 +671,9 @@ void usage(enum logcode F)
+@@ -671,6 +672,9 @@ void usage(enum logcode F)
    rprintf(F,"     --backup-dir=DIR        make backups into hierarchy based in DIR\n");
    rprintf(F,"     --suffix=SUFFIX         set backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
    rprintf(F," -u, --update                skip files that are newer on the receiver\n");
@@ -164,7 +164,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
    rprintf(F,"     --append                append data onto shorter files\n");
    rprintf(F,"     --append-verify         like --append, but with old data in file checksum\n");
-@@ -891,6 +895,9 @@ static struct poptOption long_options[] = {
+@@ -892,6 +896,9 @@ static struct poptOption long_options[] = {
    {"no-one-file-system",'x',POPT_ARG_VAL,   &one_file_system, 0, 0, 0 },
    {"no-x",            'x', POPT_ARG_VAL,    &one_file_system, 0, 0, 0 },
    {"update",          'u', POPT_ARG_NONE,   &update_only, 0, 0, 0 },
@@ -174,7 +174,7 @@ diff --git a/options.c b/options.c
    {"existing",         0,  POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
    {"ignore-non-existing",0,POPT_ARG_NONE,   &ignore_non_existing, 0, 0, 0 },
    {"ignore-existing",  0,  POPT_ARG_NONE,   &ignore_existing, 0, 0, 0 },
-@@ -2252,6 +2259,11 @@ void server_options(char **args, int *argc_p)
+@@ -2253,6 +2260,11 @@ void server_options(char **args, int *argc_p)
  	if (!am_sender)
  		args[ac++] = "--sender";
  
@@ -197,9 +197,9 @@ diff --git a/receiver.c b/receiver.c
 +#define close(fd) fadv_close(fd)
 +#endif
 +
- /*
-  * get_tmpname() - create a tmp filename for a given filename
-  *
+ #define TMPNAME_SUFFIX ".XXXXXX"
+ #define TMPNAME_SUFFIX_LEN ((int)sizeof TMPNAME_SUFFIX - 1)
+ #define MAX_UNIQUE_NUMBER 999999
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
@@ -212,8 +212,8 @@ diff --git a/rsync.yo b/rsync.yo
   -W, --whole-file            copy files whole (w/o delta-xfer algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
 @@ -1127,6 +1128,10 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
- filesystem. It doesn't seem to handle seeks over null regions
- correctly and ends up corrupting the files.
+ filesystem. It seems to have problems seeking over null regions,
+ and ends up corrupting the files.
  
 +dit(bf(--drop-cache)) Tell the OS to drop the caching of the file data.  This
 +prevents rsync from filling up the filesystem cache.  This can sometimes help
@@ -225,9 +225,9 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/sender.c b/sender.c
 --- a/sender.c
 +++ b/sender.c
-@@ -44,6 +44,10 @@ extern int write_batch;
- extern struct stats stats;
- extern struct file_list *cur_flist, *first_flist, *dir_flist;
+@@ -47,6 +47,10 @@ extern struct file_list *cur_flist, *first_flist, *dir_flist;
+ 
+ BOOL extra_flist_sending_enabled;
  
 +#ifdef HAVE_POSIX_FADVISE64
 +#define close(fd) fadv_close(fd)
@@ -239,8 +239,8 @@ diff --git a/sender.c b/sender.c
 diff --git a/t_unsafe.c b/t_unsafe.c
 --- a/t_unsafe.c
 +++ b/t_unsafe.c
-@@ -27,6 +27,7 @@ int dry_run = 0;
- int am_root = 0;
+@@ -28,6 +28,7 @@ int am_root = 0;
+ int am_sender = 1;
  int read_only = 0;
  int list_only = 0;
 +int drop_cache = 0;
