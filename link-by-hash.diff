@@ -12,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 3b8f8192227b14e708bf535072485e50f4362270
+based-on: 24079e988fc31af4eba56cd2701fdc5a4154980d
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -28,7 +28,7 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -73,6 +73,7 @@ extern int sender_keeps_checksum;
+@@ -72,6 +72,7 @@ extern int sender_keeps_checksum;
  extern int unsort_ndx;
  extern struct stats stats;
  extern char *filesfrom_host;
@@ -36,7 +36,7 @@ diff --git a/flist.c b/flist.c
  extern char *usermap, *groupmap;
  
  extern char curr_dir[MAXPATHLEN];
-@@ -909,7 +910,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -908,7 +909,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -408,15 +408,15 @@ diff --git a/options.c b/options.c
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F,"     --skip-compress=LIST    skip compressing files with a suffix in LIST\n");
-@@ -799,7 +801,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -798,7 +800,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+       OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
-       OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
--      OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN,
-+      OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_LINK_BY_HASH,
+-      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
++      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG, OPT_LINK_BY_HASH,
+       OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
- static struct poptOption long_options[] = {
 @@ -938,6 +940,7 @@ static struct poptOption long_options[] = {
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
@@ -425,7 +425,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_VAL,    &fuzzy_basis, 1, 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -1744,6 +1747,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1763,6 +1766,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -447,7 +447,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2602,6 +2620,11 @@ void server_options(char **args, int *argc_p)
+@@ -2621,6 +2639,11 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -531,20 +531,20 @@ diff --git a/receiver.c b/receiver.c
 -				       fname, fd2, F_LENGTH(file));
 +				       fname, fd2, F_LENGTH(file), F_SUM(file));
  
- 		log_item(log_code, file, &initial_stats, iflags, NULL);
+ 		log_item(log_code, file, iflags, NULL);
  
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -49,6 +49,7 @@ extern int file_old_total;
- extern int msgs2stderr;
+@@ -48,6 +48,7 @@ extern int flist_eof;
+ extern int file_old_total;
  extern int keep_dirlinks;
  extern int make_backups;
 +extern char *link_by_hash_dir;
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct chmod_mode_struct *daemon_chmod_modes;
  #ifdef ICONV_OPTION
-@@ -627,8 +628,15 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -644,8 +645,15 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
@@ -565,7 +565,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -861,6 +861,14 @@ struct stats {
+@@ -865,6 +865,14 @@ struct stats {
  	int xferred_files;
  };
  

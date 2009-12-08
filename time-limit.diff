@@ -9,7 +9,7 @@ To use this patch, run these commands for a successful build:
     ./configure                              (optional if already run)
     make
 
-based-on: 3b8f8192227b14e708bf535072485e50f4362270
+based-on: 24079e988fc31af4eba56cd2701fdc5a4154980d
 diff --git a/io.c b/io.c
 --- a/io.c
 +++ b/io.c
@@ -21,7 +21,7 @@ diff --git a/io.c b/io.c
  extern struct file_list *cur_flist;
  #ifdef ICONV_OPTION
  extern int filesfrom_convert;
-@@ -137,16 +138,24 @@ static void check_timeout(void)
+@@ -154,16 +155,24 @@ static void check_timeout(void)
  {
  	time_t t;
  
@@ -63,22 +63,21 @@ diff --git a/options.c b/options.c
 @@ -776,6 +777,8 @@ void usage(enum logcode F)
    rprintf(F,"     --password-file=FILE    read daemon-access password from FILE\n");
    rprintf(F,"     --list-only             list the files instead of copying them\n");
-   rprintf(F,"     --bwlimit=KBPS          limit I/O bandwidth; KBytes per second\n");
+   rprintf(F,"     --bwlimit=RATE          limit socket I/O bandwidth\n");
 +  rprintf(F,"     --stop-at=y-m-dTh:m     Stop rsync at year-month-dayThour:minute\n");
 +  rprintf(F,"     --time-limit=MINS       Stop rsync after MINS minutes have elapsed\n");
    rprintf(F,"     --write-batch=FILE      write a batched update to FILE\n");
    rprintf(F,"     --only-write-batch=FILE like --write-batch but w/o updating destination\n");
    rprintf(F,"     --read-batch=FILE       read a batched update from FILE\n");
-@@ -799,7 +802,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
-       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
+@@ -800,6 +803,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
--      OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN,
-+      OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_STOP_AT, OPT_TIME_LIMIT,
+       OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
++      OPT_STOP_AT, OPT_TIME_LIMIT,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
  static struct poptOption long_options[] = {
-@@ -989,6 +992,8 @@ static struct poptOption long_options[] = {
+@@ -989,6 +993,8 @@ static struct poptOption long_options[] = {
    {"no-timeout",       0,  POPT_ARG_VAL,    &io_timeout, 0, 0, 0 },
    {"contimeout",       0,  POPT_ARG_INT,    &connect_timeout, 0, 0, 0 },
    {"no-contimeout",    0,  POPT_ARG_VAL,    &connect_timeout, 0, 0, 0 },
@@ -87,7 +86,7 @@ diff --git a/options.c b/options.c
    {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
    {"rsync-path",       0,  POPT_ARG_STRING, &rsync_path, 0, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
-@@ -1744,6 +1749,36 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1763,6 +1769,36 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -124,7 +123,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2446,6 +2481,15 @@ void server_options(char **args, int *argc_p)
+@@ -2465,6 +2501,15 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = arg;
  	}
  
@@ -146,15 +145,15 @@ diff --git a/rsync.yo b/rsync.yo
 @@ -431,6 +431,8 @@ to the detailed description below for a complete description.  verb(
       --password-file=FILE    read daemon-access password from FILE
       --list-only             list the files instead of copying them
-      --bwlimit=KBPS          limit I/O bandwidth; KBytes per second
+      --bwlimit=RATE          limit socket I/O bandwidth
 +     --stop-at=y-m-dTh:m     Stop rsync at year-month-dayThour:minute
 +     --time-limit=MINS       Stop rsync after MINS minutes have elapsed
       --write-batch=FILE      write a batched update to FILE
       --only-write-batch=FILE like --write-batch but w/o updating dest
       --read-batch=FILE       read a batched update from FILE
-@@ -2280,6 +2282,19 @@ transfer was too fast, it will wait before sending the next data block. The
- result is an average transfer rate equaling the specified limit. A value
- of zero specifies no limit.
+@@ -2295,6 +2297,19 @@ files can show up as being rapidly sent when the data is quickly buffered,
+ while other can show up as very slow when the flushing of the output buffer
+ occurs.  This may be fixed in a future version.
  
 +dit(bf(--stop-at=y-m-dTh:m)) This option allows you to specify at what
 +time to stop rsync, in year-month-dayThour:minute numeric format (e.g.
