@@ -8,6 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
+based-on: patch/remote-option
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
@@ -19,7 +20,7 @@ diff --git a/clientserver.c b/clientserver.c
  extern int sanitize_paths;
  extern int numeric_ids;
  extern int filesfrom_fd;
-@@ -66,7 +67,6 @@ extern iconv_t ic_send, ic_recv;
+@@ -64,7 +65,6 @@ extern iconv_t ic_send, ic_recv;
  char *auth_user;
  int read_only = 0;
  int module_id = -1;
@@ -27,7 +28,7 @@ diff --git a/clientserver.c b/clientserver.c
  struct chmod_mode_struct *daemon_chmod_modes;
  
  /* module_dirlen is the length of the module_dir string when in daemon
-@@ -418,6 +418,7 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -416,6 +416,7 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  	char *name = lp_name(i);
  	int use_chroot = lp_use_chroot(i);
  	int ret, pre_exec_fd = -1;
@@ -35,7 +36,7 @@ diff --git a/clientserver.c b/clientserver.c
  	pid_t pre_exec_pid = 0;
  	char *request = NULL;
  
-@@ -688,9 +689,11 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -686,9 +687,11 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  		munge_symlinks = !use_chroot || module_dirlen;
  	if (munge_symlinks) {
  		STRUCT_STAT st;
@@ -50,7 +51,7 @@ diff --git a/clientserver.c b/clientserver.c
  			io_printf(f_out, "@ERROR: daemon security issue -- contact admin\n", name);
  			exit_cleanup(RERR_UNSUPPORTED);
  		}
-@@ -746,6 +749,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -748,6 +751,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  	read_args(f_in, name, line, sizeof line, rl_nulls, &argv, &argc, &request);
  	orig_argv = argv;
  
@@ -59,7 +60,7 @@ diff --git a/clientserver.c b/clientserver.c
  	verbose = 0; /* future verbosity is controlled by client options */
  	ret = parse_arguments(&argc, (const char ***) &argv);
  	if (protect_args && ret) {
-@@ -757,6 +762,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
+@@ -759,6 +764,8 @@ static int rsync_module(int f_in, int f_out, int i, char *addr, char *host)
  	} else
  		orig_early_argv = NULL;
  
@@ -71,7 +72,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -105,6 +105,7 @@ int connect_timeout = 0;
+@@ -104,6 +104,7 @@ int connect_timeout = 0;
  int keep_partial = 0;
  int safe_symlinks = 0;
  int copy_unsafe_links = 0;
@@ -79,7 +80,7 @@ diff --git a/options.c b/options.c
  int size_only = 0;
  int daemon_bwlimit = 0;
  int bwlimit = 0;
-@@ -339,6 +340,7 @@ void usage(enum logcode F)
+@@ -338,6 +339,7 @@ void usage(enum logcode F)
    rprintf(F," -L, --copy-links            transform symlink into referent file/dir\n");
    rprintf(F,"     --copy-unsafe-links     only \"unsafe\" symlinks are transformed\n");
    rprintf(F,"     --safe-links            ignore symlinks that point outside the source tree\n");
@@ -87,7 +88,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -k, --copy-dirlinks         transform symlink to a dir into referent dir\n");
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -H, --hard-links            preserve hard links\n");
-@@ -521,6 +523,8 @@ static struct poptOption long_options[] = {
+@@ -520,6 +522,8 @@ static struct poptOption long_options[] = {
    {"copy-links",      'L', POPT_ARG_NONE,   &copy_links, 0, 0, 0 },
    {"copy-unsafe-links",0,  POPT_ARG_NONE,   &copy_unsafe_links, 0, 0, 0 },
    {"safe-links",       0,  POPT_ARG_NONE,   &safe_symlinks, 0, 0, 0 },
@@ -96,7 +97,7 @@ diff --git a/options.c b/options.c
    {"copy-dirlinks",   'k', POPT_ARG_NONE,   &copy_dirlinks, 0, 0, 0 },
    {"keep-dirlinks",   'K', POPT_ARG_NONE,   &keep_dirlinks, 0, 0, 0 },
    {"hard-links",      'H', POPT_ARG_NONE,   0, 'H', 0, 0 },
-@@ -1478,6 +1482,17 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1477,6 +1481,17 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		need_messages_from_generator = 1;
  	}
  
@@ -133,18 +134,6 @@ diff --git a/pipe.c b/pipe.c
  		chmod_modes = NULL; /* Let the sending side handle this. */
  
  		/* Let the client side handle this. */
-diff --git a/rsync.h b/rsync.h
---- a/rsync.h
-+++ b/rsync.h
-@@ -32,7 +32,7 @@
- #define DEFAULT_LOCK_FILE "/var/run/rsyncd.lock"
- #define URL_PREFIX "rsync://"
- 
--#define SYMLINK_PREFIX "/rsyncd-munged/"
-+#define SYMLINK_PREFIX "/rsyncd-munged/"  /* This MUST have a trailing slash! */
- #define SYMLINK_PREFIX_LEN ((int)sizeof SYMLINK_PREFIX - 1)
- 
- #define BACKUP_SUFFIX "~"
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
