@@ -13,7 +13,7 @@ based-on: 24079e988fc31af4eba56cd2701fdc5a4154980d
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
-@@ -32,6 +32,7 @@ extern int inplace;
+@@ -33,6 +33,7 @@ extern int inplace;
  extern int recurse;
  extern int use_qsort;
  extern int allow_inc_recurse;
@@ -21,15 +21,14 @@ diff --git a/compat.c b/compat.c
  extern int append_mode;
  extern int fuzzy_basis;
  extern int read_batch;
-@@ -186,6 +187,15 @@ void setup_protocol(int f_out,int f_in)
+@@ -188,6 +189,14 @@ void setup_protocol(int f_out,int f_in)
  	if (read_batch)
  		check_batch_flags();
  
 +#ifndef SUPPORT_PREALLOCATION
 +	if (preallocate_files && !am_sender) {
-+		rprintf(FERROR,
-+			"preallocation is not supported on this %s\n",
-+			am_server ? "server" : "client");
++		rprintf(FERROR, "preallocation is not supported on this %s\n",
++			am_server ? "Server" : "Client");
 +		exit_cleanup(RERR_SYNTAX);
 +	}
 +#endif
@@ -40,12 +39,12 @@ diff --git a/compat.c b/compat.c
 diff --git a/configure.in b/configure.in
 --- a/configure.in
 +++ b/configure.in
-@@ -583,13 +583,40 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
+@@ -583,13 +583,49 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
      seteuid strerror putenv iconv_open locale_charset nl_langinfo getxattr \
      extattr_get_link sigaction sigprocmask setattrlist getgrouplist \
 -    initgroups utimensat)
-+    initgroups utimensat fallocate posix_fallocate)
++    initgroups utimensat posix_fallocate)
  
  dnl cygwin iconv.h defines iconv_open as libiconv_open
  if test x"$ac_cv_func_iconv_open" != x"yes"; then
@@ -54,10 +53,19 @@ diff --git a/configure.in b/configure.in
  
 +dnl Preallocation stuff (also fallocate, posix_fallocate function tests above):
 +
++AC_CACHE_CHECK([for useable fallocate],rsync_cv_have_fallocate,[
++AC_TRY_LINK([#include <sys/syscall.h>
++#include <sys/types.h>],
++[syscall(fallocate, 0, 0, 0, 0);],
++rsync_cv_have_fallocate=yes,rsync_cv_have_fallocate=no)])
++if test x"$rsync_cv_have_fallocate" = x"yes"; then
++    AC_DEFINE(HAVE_FALLOCATE, 1, [Define to 1 if you have the fallocate function and it compiles and links without error])
++fi
++
 +AC_CACHE_CHECK([for SYS_fallocate],rsync_cv_have_sys_fallocate,[
 +AC_TRY_COMPILE([#include <sys/syscall.h>
 +#include <sys/types.h>],
-+[syscall(SYS_fallocate, 0, 0, (loff_t) 0, (loff_t) 0);],
++[syscall(SYS_fallocate, 0, 0, 0, 0);],
 +rsync_cv_have_sys_fallocate=yes,rsync_cv_have_sys_fallocate=no)])
 +if test x"$rsync_cv_have_sys_fallocate" = x"yes"; then
 +    AC_DEFINE(HAVE_SYS_FALLOCATE, 1, [Define to 1 if you have the SYS_fallocate syscall number])
@@ -122,17 +130,19 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -704,6 +709,9 @@ void usage(enum logcode F)
+@@ -704,6 +709,11 @@ void usage(enum logcode F)
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
  #endif
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
 +#ifdef SUPPORT_PREALLOCATION
 +  rprintf(F,"     --preallocate           allocate dest files before writing them\n");
++#else
++  rprintf(F,"     --preallocate           pre-allocate dest files on remote receiver\n");
 +#endif
    rprintf(F," -n, --dry-run               perform a trial run with no changes made\n");
    rprintf(F," -W, --whole-file            copy files whole (without delta-xfer algorithm)\n");
    rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
-@@ -900,6 +908,7 @@ static struct poptOption long_options[] = {
+@@ -900,6 +910,7 @@ static struct poptOption long_options[] = {
    {"sparse",          'S', POPT_ARG_VAL,    &sparse_files, 1, 0, 0 },
    {"no-sparse",        0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
    {"no-S",             0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
@@ -140,7 +150,7 @@ diff --git a/options.c b/options.c
    {"inplace",          0,  POPT_ARG_VAL,    &inplace, 1, 0, 0 },
    {"no-inplace",       0,  POPT_ARG_VAL,    &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_NONE,   0, OPT_APPEND, 0, 0 },
-@@ -2646,6 +2655,9 @@ void server_options(char **args, int *argc_p)
+@@ -2646,6 +2657,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -161,26 +171,30 @@ diff --git a/receiver.c b/receiver.c
  extern int keep_partial;
  extern int checksum_len;
  extern int checksum_seed;
-@@ -207,6 +208,18 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -207,6 +208,22 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  	char *data;
  	int32 i;
  	char *map = NULL;
 +#ifdef SUPPORT_PREALLOCATION
++#ifdef PREALLOCATE_NEEDS_TRUNCATE
 +	OFF_T preallocated_len = 0;
++#endif
 +
 +	if (preallocate_files && fd != -1 && total_size > 0) {
-+		/* Preallocate enough space for file's eventual length if
-+		 * possible; seems to reduce fragmentation on Windows. */
-+		if (do_fallocate(fd, 0, total_size) == 0)
++		/* Try to preallocate enough space for file's eventual length.  Can
++		 * reduce fragmentation on filesystems like ext4, xfs, and NTFS. */
++		if (do_fallocate(fd, 0, total_size) == 0) {
++#ifdef PREALLOCATE_NEEDS_TRUNCATE
 +			preallocated_len = total_size;
-+		else
++#endif
++		} else
 +			rsyserr(FWARNING, errno, "do_fallocate %s", full_fname(fname));
 +	}
 +#endif
  
  	read_sum_head(f_in, &sum);
  
-@@ -317,8 +330,14 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -317,8 +334,14 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  		goto report_write_error;
  
  #ifdef HAVE_FTRUNCATE
@@ -190,7 +204,7 @@ diff --git a/receiver.c b/receiver.c
 +	 * preallocate_files: total_size could have been an overestimate.
 +	 *     Cut off any extra preallocated zeros from dest file. */
 +	if ((inplace
-+#ifdef SUPPORT_PREALLOCATION
++#ifdef PREALLOCATE_NEEDS_TRUNCATE
 +	  || preallocated_len > offset
 +#endif
 +	  ) && fd != -1 && ftruncate(fd, offset) < 0) {
@@ -200,15 +214,23 @@ diff --git a/receiver.c b/receiver.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -646,6 +646,13 @@ struct ht_int64_node {
+@@ -646,6 +646,21 @@ struct ht_int64_node {
  #define ACLS_NEED_MASK 1
  #endif
  
-+#if defined HAVE_FTRUNCATE \
-+    && (defined HAVE_FALLOCATE \
-+     || defined HAVE_SYS_FALLOCATE \
-+     || defined HAVE_EFFICIENT_POSIX_FALLOCATE)
++#if defined HAVE_FALLOCATE || HAVE_SYS_FALLOCATE
++#include <linux/falloc.h>
++#ifdef FALLOC_FL_KEEP_SIZE
 +#define SUPPORT_PREALLOCATION 1
++#elif defined HAVE_FTRUNCATE
++#define SUPPORT_PREALLOCATION 1
++#define PREALLOCATE_NEEDS_TRUNCATE 1
++#endif
++#else /* !fallocate */
++#if defined HAVE_EFFICIENT_POSIX_FALLOCATE && defined HAVE_FTRUNCATE
++#define SUPPORT_PREALLOCATION 1
++#define PREALLOCATE_NEEDS_TRUNCATE 1
++#endif
 +#endif
 +
  union file_extras {
@@ -225,21 +247,20 @@ diff --git a/rsync.yo b/rsync.yo
   -n, --dry-run               perform a trial run with no changes made
   -W, --whole-file            copy files whole (w/o delta-xfer algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
-@@ -1127,6 +1128,18 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
+@@ -1127,6 +1128,17 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
  filesystem. It seems to have problems seeking over null regions,
  and ends up corrupting the files.
  
 +dit(bf(--preallocate)) This tells the receiver to allocate each destination
 +file to its eventual size before writing data to the file.  Rsync will only use
-+the real filesystem-level preallocation support provided by bf(fallocate)(2) or
-+Cygwin's bf(posix_fallocate)(3), not the slow glibc implementation that writes
-+a zero byte into each block.  If the receiver is remote, this nonstandard
-+option only works if the receiver also has the preallocation patch.
++the real filesystem-level preallocation support provided by Linux's
++bf(fallocate)(2) system call or Cygwin's bf(posix_fallocate)(3), not the slow
++glibc implementation that writes a zero byte into each block.
 +
-+Without this option on MS Windows, very large destination files tend to be
-+broken into thousands of fragments; advising Windows ahead of time of the
-+eventual file size using this option usually reduces the number of
-+fragments to one.  The usefulness of this option on Linux is yet to be tested.
++Without this option, larger files may not be entirely contiguous on the
++filesystem, but with this option rsync will probably copy more slowly.  If the
++destination is not an extent-supporting filesystem (such as ext4, xfs, NTFS,
++etc.), this option may have no positive effect at all.
 +
  dit(bf(-n, --dry-run)) This makes rsync perform a trial run that doesn't
  make any changes (and produces mostly the same output as a real run).  It
@@ -258,7 +279,7 @@ diff --git a/syscall.c b/syscall.c
  extern int dry_run;
  extern int am_root;
  extern int am_sender;
-@@ -325,3 +329,21 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
+@@ -325,3 +329,25 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
  	return lseek(fd, offset, whence);
  #endif
  }
@@ -266,17 +287,21 @@ diff --git a/syscall.c b/syscall.c
 +#ifdef SUPPORT_PREALLOCATION
 +int do_fallocate(int fd, OFF_T offset, OFF_T length)
 +{
++#ifdef FALLOC_FL_KEEP_SIZE
++#define DO_FALLOC_OPTIONS FALLOC_FL_KEEP_SIZE
++#else
++#define DO_FALLOC_OPTIONS 0
++#endif
 +	RETURN_ERROR_IF(dry_run, 0);
 +	RETURN_ERROR_IF_RO_OR_LO;
-+	/* TODO: Use FALLOC_FL_KEEP_SIZE to avoid the need to truncate. */
 +#if defined HAVE_FALLOCATE
-+	return fallocate(fd, 0, offset, length);
++	return fallocate(fd, DO_FALLOC_OPTIONS, offset, length);
 +#elif defined HAVE_SYS_FALLOCATE
-+	return syscall(SYS_fallocate, fd, 0, (loff_t) offset, (loff_t) length);
++	return syscall(SYS_fallocate, fd, DO_FALLOC_OPTIONS, (loff_t)offset, (loff_t)length);
 +#elif defined HAVE_EFFICIENT_POSIX_FALLOCATE
 +	return posix_fallocate(fd, offset, length);
 +#else
-+#error coding error in SUPPORT_PREALLOCATION
++#error Coding error in SUPPORT_PREALLOCATION logic.
 +#endif
 +}
 +#endif
@@ -302,57 +327,64 @@ diff --git a/util.c b/util.c
  extern int module_id;
  extern int modify_window;
  extern int relative_paths;
-@@ -332,6 +333,10 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
+@@ -332,6 +333,9 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
  	int ifd;
  	char buf[1024 * 8];
  	int len;   /* Number of bytes read into `buf'. */
-+#ifdef SUPPORT_PREALLOCATION
-+	OFF_T preallocated_len = 0;
-+	OFF_T offset = 0;
++#ifdef PREALLOCATE_NEEDS_TRUNCATE
++	OFF_T preallocated_len = 0, offset = 0;
 +#endif
  
  	if ((ifd = do_open(source, O_RDONLY, 0)) < 0) {
  		int save_errno = errno;
-@@ -357,7 +362,27 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
+@@ -357,6 +361,25 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
  		}
  	}
  
 +#ifdef SUPPORT_PREALLOCATION
 +	if (preallocate_files) {
-+		/* Preallocate enough space for file's eventual length if
-+		 * possible; seems to reduce fragmentation on Windows. */
 +		STRUCT_STAT srcst;
-+		if (do_fstat(ifd, &srcst) == 0) {
-+			if (srcst.st_size > 0) {
-+				if (do_fallocate(ofd, 0, srcst.st_size) == 0)
-+					preallocated_len = srcst.st_size;
-+				else
-+					rsyserr(FWARNING, errno, "do_fallocate %s", full_fname(dest));
-+			}
-+		} else
++
++		/* Try to preallocate enough space for file's eventual length.  Can
++		 * reduce fragmentation on filesystems like ext4, xfs, and NTFS. */
++		if (do_fstat(ifd, &srcst) < 0)
 +			rsyserr(FWARNING, errno, "fstat %s", full_fname(source));
++		else if (srcst.st_size > 0) {
++			if (do_fallocate(ofd, 0, srcst.st_size) == 0) {
++#ifdef PREALLOCATE_NEEDS_TRUNCATE
++				preallocated_len = srcst.st_size;
++#endif
++			} else
++				rsyserr(FWARNING, errno, "do_fallocate %s", full_fname(dest));
++		}
 +	}
 +#endif
 +
  	while ((len = safe_read(ifd, buf, sizeof buf)) > 0) {
-+#ifdef SUPPORT_PREALLOCATION
-+		offset += len;
-+#endif
  		if (full_write(ofd, buf, len) < 0) {
  			int save_errno = errno;
- 			rsyserr(FERROR_XFER, errno, "write %s", full_fname(dest));
-@@ -382,6 +407,16 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
+@@ -366,6 +389,9 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
+ 			errno = save_errno;
+ 			return -1;
+ 		}
++#ifdef PREALLOCATE_NEEDS_TRUNCATE
++		offset += len;
++#endif
+ 	}
+ 
+ 	if (len < 0) {
+@@ -382,6 +408,16 @@ int copy_file(const char *source, const char *dest, int ofd, mode_t mode)
  			full_fname(source));
  	}
  
-+#ifdef SUPPORT_PREALLOCATION
++#ifdef PREALLOCATE_NEEDS_TRUNCATE
 +	/* Source file might have shrunk since we fstatted it.
 +	 * Cut off any extra preallocated zeros from dest file. */
-+	if (preallocated_len > offset)
-+		if (ftruncate(ofd, offset) < 0)
-+			/* If we fail to truncate, the dest file may be wrong, so we
-+			 * must trigger the "partial transfer" error. */
-+			rsyserr(FERROR_XFER, errno, "ftruncate %s", full_fname(dest));
++	if (offset < preallocated_len && ftruncate(ofd, offset) < 0) {
++		/* If we fail to truncate, the dest file may be wrong, so we
++		 * must trigger the "partial transfer" error. */
++		rsyserr(FERROR_XFER, errno, "ftruncate %s", full_fname(dest));
++	}
 +#endif
 +
  	if (close(ofd) < 0) {
