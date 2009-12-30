@@ -23,7 +23,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: 24079e988fc31af4eba56cd2701fdc5a4154980d
+based-on: a01e3b490eb36ccf9e704840e1b6683dab867550
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -82,15 +82,15 @@ diff --git a/checksum.c b/checksum.c
 diff --git a/cleanup.c b/cleanup.c
 --- a/cleanup.c
 +++ b/cleanup.c
-@@ -27,6 +27,7 @@ extern int am_daemon;
- extern int am_sender;
- extern int am_generator;
+@@ -26,6 +26,7 @@ extern int am_server;
+ extern int am_daemon;
+ extern int am_receiver;
  extern int io_error;
 +extern int use_db;
  extern int keep_partial;
  extern int got_xfer_error;
  extern int protocol_version;
-@@ -139,6 +140,12 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
+@@ -140,6 +141,12 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
  		/* FALLTHROUGH */
  #include "case_N.h"
  
@@ -147,7 +147,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/configure.in b/configure.in
 --- a/configure.in
 +++ b/configure.in
-@@ -331,7 +331,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
+@@ -337,7 +337,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
      sys/un.h sys/attr.h mcheck.h arpa/inet.h arpa/nameser.h locale.h \
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
@@ -156,7 +156,7 @@ diff --git a/configure.in b/configure.in
  AC_HEADER_MAJOR
  
  AC_CACHE_CHECK([if makedev takes 3 args],rsync_cv_MAKEDEV_TAKES_3_ARGS,[
-@@ -1013,6 +1013,29 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1019,6 +1019,29 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -761,7 +761,7 @@ new file mode 100644
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -53,6 +53,7 @@ extern int preserve_specials;
+@@ -54,6 +54,7 @@ extern int delete_during;
  extern int missing_args;
  extern int uid_ndx;
  extern int gid_ndx;
@@ -769,7 +769,7 @@ diff --git a/flist.c b/flist.c
  extern int eol_nulls;
  extern int relative_paths;
  extern int implied_dirs;
-@@ -1307,11 +1308,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1309,11 +1310,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -783,7 +783,7 @@ diff --git a/flist.c b/flist.c
  
  #if EXTRA_ROUNDING > 0
  	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
-@@ -1394,8 +1392,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1396,8 +1394,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		return NULL;
  	}
  
@@ -798,7 +798,7 @@ diff --git a/flist.c b/flist.c
  
  	if (unsort_ndx)
  		F_NDX(file) = stats.num_dirs;
-@@ -2060,6 +2062,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2075,6 +2077,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		     | (eol_nulls || reading_remotely ? RL_EOL_NULLS : 0);
  	int implied_dot_dir = 0;
  
@@ -819,7 +819,7 @@ diff --git a/generator.c b/generator.c
  extern int append_mode;
  extern int make_backups;
  extern int csum_length;
-@@ -531,7 +532,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
+@@ -530,7 +531,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
  	   of the file time to determine whether to sync */
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
@@ -829,16 +829,16 @@ diff --git a/generator.c b/generator.c
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
  
-@@ -2076,6 +2078,9 @@ void generate_files(int f_out, const char *local_name)
+@@ -2075,6 +2077,9 @@ void generate_files(int f_out, const char *local_name)
  			: "enabled");
  	}
  
 +	if (use_db && always_checksum)
 +		db_connect();
 +
- 	/* Since we often fill up the outgoing socket and then just sit around
- 	 * waiting for the other 2 processes to do their thing, we don't want
- 	 * to exit on a timeout.  If the data stops flowing, the receiver will
+ 	dflt_perms = (ACCESSPERMS & ~orig_umask);
+ 
+ 	do {
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
@@ -885,7 +885,7 @@ diff --git a/main.c b/main.c
  extern int file_total;
  extern int recurse;
  extern int xfer_dirs;
-@@ -80,6 +81,7 @@ extern char *filesfrom_host;
+@@ -83,6 +84,7 @@ extern char *filesfrom_host;
  extern char *partial_dir;
  extern char *dest_option;
  extern char *rsync_path;
@@ -893,7 +893,7 @@ diff --git a/main.c b/main.c
  extern char *shell_cmd;
  extern char *batch_name;
  extern char *password_file;
-@@ -1593,6 +1595,9 @@ int main(int argc,char *argv[])
+@@ -1609,6 +1611,9 @@ int main(int argc,char *argv[])
  		exit_cleanup(RERR_SYNTAX);
  	}
  
@@ -912,7 +912,7 @@ diff --git a/options.c b/options.c
  char *filesfrom_host = NULL;
 +char *db_config = NULL;
  int eol_nulls = 0;
- int protect_args = 0;
+ int protect_args = -1;
  int human_readable = 1;
 @@ -567,6 +568,7 @@ static void print_rsync_version(enum logcode f)
  	char const *links = "no ";

@@ -9,7 +9,7 @@ To use this patch, run these commands for a successful build:
     ./configure                              (optional if already run)
     make
 
-based-on: 24079e988fc31af4eba56cd2701fdc5a4154980d
+based-on: a01e3b490eb36ccf9e704840e1b6683dab867550
 diff --git a/io.c b/io.c
 --- a/io.c
 +++ b/io.c
@@ -21,34 +21,27 @@ diff --git a/io.c b/io.c
  extern struct file_list *cur_flist;
  #ifdef ICONV_OPTION
  extern int filesfrom_convert;
-@@ -154,16 +155,24 @@ static void check_timeout(void)
- {
- 	time_t t;
+@@ -161,11 +162,19 @@ static void check_timeout(BOOL allow_keepalive)
+ 	 * the receiver ignores them.  Note that the am_receiver flag is not
+ 	 * set until the receiver forks from the generator, so timeouts will be
+ 	 * based on receiving data on the receiving side until that event. */
+-	if (!io_timeout || am_receiver)
++	if ((!io_timeout || am_receiver) && !stop_at_utime)
+ 		return;
  
-+	if ((!io_timeout || ignore_timeout) && !stop_at_utime)
-+		return;
-+
-+	t = time(NULL);
-+
+ 	t = time(NULL);
+ 
 +	if (stop_at_utime && t >= stop_at_utime) {
 +		rprintf(FERROR, "run-time limit exceeded\n");
 +		exit_cleanup(RERR_TIMEOUT);
 +	}
 +
- 	if (!io_timeout || ignore_timeout)
- 		return;
- 
- 	if (!last_io_in) {
--		last_io_in = time(NULL);
-+		last_io_in = t;
- 		return;
- 	}
- 
--	t = time(NULL);
--
- 	if (t - last_io_in >= io_timeout) {
- 		if (!am_server && !am_daemon) {
- 			rprintf(FERROR, "io timeout after %d seconds -- exiting\n",
++	if (!io_timeout || am_receiver)
++		return;
++
+ 	if (allow_keepalive && we_send_keepalive_messages) {
+ 		/* This may put data into iobuf.msg w/o flushing. */
+ 		maybe_send_keepalive(t, False);
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -86,7 +79,7 @@ diff --git a/options.c b/options.c
    {"rsh",             'e', POPT_ARG_STRING, &shell_cmd, 0, 0, 0 },
    {"rsync-path",       0,  POPT_ARG_STRING, &rsync_path, 0, 0, 0 },
    {"temp-dir",        'T', POPT_ARG_STRING, &tmpdir, 0, 0, 0 },
-@@ -1763,6 +1769,36 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1764,6 +1770,36 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -123,7 +116,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2465,6 +2501,15 @@ void server_options(char **args, int *argc_p)
+@@ -2480,6 +2516,15 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = arg;
  	}
  
@@ -151,7 +144,7 @@ diff --git a/rsync.yo b/rsync.yo
       --write-batch=FILE      write a batched update to FILE
       --only-write-batch=FILE like --write-batch but w/o updating dest
       --read-batch=FILE       read a batched update from FILE
-@@ -2295,6 +2297,19 @@ files can show up as being rapidly sent when the data is quickly buffered,
+@@ -2309,6 +2311,19 @@ files can show up as being rapidly sent when the data is quickly buffered,
  while other can show up as very slow when the flushing of the output buffer
  occurs.  This may be fixed in a future version.
  
