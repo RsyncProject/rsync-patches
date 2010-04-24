@@ -9,11 +9,11 @@ To use this patch, run these commands for a successful build:
     ./configure                              (optional if already run)
     make
 
-based-on: a01e3b490eb36ccf9e704840e1b6683dab867550
+based-on: 25082d1ef6712a15c52a1dacb36b7f0642c23ac8
 diff --git a/io.c b/io.c
 --- a/io.c
 +++ b/io.c
-@@ -57,6 +57,7 @@ extern int remove_source_files;
+@@ -58,6 +58,7 @@ extern int remove_source_files;
  extern int preserve_hard_links;
  extern BOOL extra_flist_sending_enabled;
  extern struct stats stats;
@@ -21,12 +21,12 @@ diff --git a/io.c b/io.c
  extern struct file_list *cur_flist;
  #ifdef ICONV_OPTION
  extern int filesfrom_convert;
-@@ -161,11 +162,19 @@ static void check_timeout(BOOL allow_keepalive)
- 	 * the receiver ignores them.  Note that the am_receiver flag is not
- 	 * set until the receiver forks from the generator, so timeouts will be
- 	 * based on receiving data on the receiving side until that event. */
--	if (!io_timeout || am_receiver)
-+	if ((!io_timeout || am_receiver) && !stop_at_utime)
+@@ -168,11 +169,19 @@ static void check_timeout(BOOL allow_keepalive)
+ 	 * generator might be blocked trying to send checksums, it needs to
+ 	 * know that the receiver is active).  Thus, as long as one or the
+ 	 * other is successfully doing work, the generator will not timeout. */
+-	if (!io_timeout)
++	if (!io_timeout && !stop_at_utime)
  		return;
  
  	t = time(NULL);
@@ -36,12 +36,12 @@ diff --git a/io.c b/io.c
 +		exit_cleanup(RERR_TIMEOUT);
 +	}
 +
-+	if (!io_timeout || am_receiver)
++	if (!io_timeout)
 +		return;
 +
- 	if (allow_keepalive && we_send_keepalive_messages) {
+ 	if (allow_keepalive) {
  		/* This may put data into iobuf.msg w/o flushing. */
- 		maybe_send_keepalive(t, False);
+ 		maybe_send_keepalive(t, 0);
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -144,7 +144,7 @@ diff --git a/rsync.yo b/rsync.yo
       --write-batch=FILE      write a batched update to FILE
       --only-write-batch=FILE like --write-batch but w/o updating dest
       --read-batch=FILE       read a batched update from FILE
-@@ -2309,6 +2311,19 @@ files can show up as being rapidly sent when the data is quickly buffered,
+@@ -2339,6 +2341,19 @@ files can show up as being rapidly sent when the data is quickly buffered,
  while other can show up as very slow when the flushing of the output buffer
  occurs.  This may be fixed in a future version.
  
@@ -167,7 +167,7 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
-@@ -123,6 +123,133 @@ NORETURN void overflow_exit(const char *str)
+@@ -122,6 +122,133 @@ NORETURN void overflow_exit(const char *str)
  	exit_cleanup(RERR_MALLOC);
  }
  
