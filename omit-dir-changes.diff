@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                              (optional if already run)
     make
 
-based-on: 25082d1ef6712a15c52a1dacb36b7f0642c23ac8
+based-on: d64bda1c1e79dc385f194d74f7957ce7cd118654
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -19,15 +19,15 @@ diff --git a/generator.c b/generator.c
  extern int uid_ndx;
  extern int gid_ndx;
  extern int delete_mode;
-@@ -436,6 +437,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -433,6 +434,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  	     const char *xname)
  {
  	if (statret >= 0) { /* A from-dest-dir statret can == 1! */
 +		int omit_changes = omit_dir_changes && S_ISDIR(sxp->st.st_mode);
  		int keep_time = !preserve_times ? 0
- 		    : S_ISDIR(file->mode) ? preserve_times > 1 :
- #ifdef CAN_SET_SYMLINK_TIMES
-@@ -465,10 +467,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+ 		    : S_ISDIR(file->mode) ? preserve_times & PRESERVE_DIR_TIMES
+ 		    : S_ISLNK(file->mode) ? preserve_times & PRESERVE_LINK_TIMES
+@@ -459,10 +461,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		} else if (preserve_executability
  		 && ((sxp->st.st_mode & 0111 ? 1 : 0) ^ (file->mode & 0111 ? 1 : 0)))
  			iflags |= ITEM_REPORT_PERMS;
@@ -62,35 +62,36 @@ diff --git a/options.c b/options.c
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -699,6 +700,7 @@ void usage(enum logcode F)
-   rprintf(F," -D                          same as --devices --specials\n");
+@@ -701,6 +702,7 @@ void usage(enum logcode F)
    rprintf(F," -t, --times                 preserve modification times\n");
    rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
+   rprintf(F," -J, --omit-link-times       omit symlinks from --times\n");
 +  rprintf(F,"     --omit-dir-changes      omit directories from any attribute changes\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
  #ifdef SUPPORT_XATTRS
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
-@@ -849,6 +851,7 @@ static struct poptOption long_options[] = {
-   {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
-   {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
-   {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
+@@ -854,6 +856,7 @@ static struct poptOption long_options[] = {
+   {"omit-link-times", 'J', POPT_ARG_VAL,    &omit_link_times, 1, 0, 0 },
+   {"no-omit-link-times",0, POPT_ARG_VAL,    &omit_link_times, 0, 0, 0 },
+   {"no-J",             0,  POPT_ARG_VAL,    &omit_link_times, 0, 0, 0 },
 +  {"omit-dir-changes", 0,  POPT_ARG_NONE,   &omit_dir_changes, 0, 0, 0 },
    {"modify-window",    0,  POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
-@@ -2072,6 +2075,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2077,6 +2080,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		parse_filter_str(&filter_list, backup_dir_buf, rule_template(0), 0);
  	}
  
 +	if (omit_dir_changes)
 +		omit_dir_times = 1;
- 	if (make_backups && !backup_dir) {
- 		omit_dir_times = 0; /* Implied, so avoid -O to sender. */
- 		if (preserve_times > 1)
-@@ -2315,6 +2320,8 @@ void server_options(char **args, int *argc_p)
- 			argstr[x++] = 'm';
- 		if (omit_dir_times)
++
+ 	if (preserve_times) {
+ 		preserve_times = PRESERVE_FILE_TIMES;
+ 		if (!omit_dir_times)
+@@ -2328,6 +2334,8 @@ void server_options(char **args, int *argc_p)
  			argstr[x++] = 'O';
+ 		if (omit_link_times)
+ 			argstr[x++] = 'J';
 +		if (omit_dir_changes == 1)
 +			args[ac++] = "--omit-dir-changes";
  	} else {
@@ -107,7 +108,7 @@ diff --git a/rsync.c b/rsync.c
  extern int am_root;
  extern int am_server;
  extern int am_sender;
-@@ -505,9 +506,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -507,9 +508,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  			file->flags |= FLAG_TIME_FAILED;
  	}
  
@@ -124,17 +125,17 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -356,6 +356,7 @@ to the detailed description below for a complete description.  verb(
-  -D                          same as --devices --specials
+@@ -357,6 +357,7 @@ to the detailed description below for a complete description.  verb(
   -t, --times                 preserve modification times
   -O, --omit-dir-times        omit directories from --times
+  -J, --omit-link-times       omit symlinks from --times
 +     --omit-dir-changes      omit directories from any attribute changes
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
-@@ -1108,6 +1109,10 @@ it is preserving modification times (see bf(--times)).  If NFS is sharing
- the directories on the receiving side, it is a good idea to use bf(-O).
- This option is inferred if you use bf(--backup) without bf(--backup-dir).
+@@ -1118,6 +1119,10 @@ This option is inferred if you use bf(--backup) without bf(--backup-dir).
+ dit(bf(-J, --omit-link-times)) This tells rsync to omit symlinks when
+ it is preserving modification times (see bf(--times)).
  
 +dit(bf(--omit-dir-changes)) This tells rsync to omit directories when applying
 +any preserved attributes (owner, group, times, permissions) to already existing

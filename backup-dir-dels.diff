@@ -19,7 +19,7 @@ To use this patch, run these commands for a successful build:
     ./configure                                 (optional if already run)
     make
 
-based-on: 25082d1ef6712a15c52a1dacb36b7f0642c23ac8
+based-on: d64bda1c1e79dc385f194d74f7957ce7cd118654
 diff --git a/backup.c b/backup.c
 --- a/backup.c
 +++ b/backup.c
@@ -97,8 +97,8 @@ diff --git a/backup.c b/backup.c
  	for ( ; b; name = b + 1, b = strchr(name, '/')) {
  		*b = '\0';
  
--		while (mkdir_defmode(backup_dir_buf) < 0) {
-+		while (mkdir_defmode(buf) < 0) {
+-		while (do_mkdir(backup_dir_buf, ACCESSPERMS) < 0) {
++		while (do_mkdir(buf, ACCESSPERMS) < 0) {
  			if (errno == EEXIST) {
 -				val = validate_backup_dir();
 +				val = validate_backup_dir(buf);
@@ -223,7 +223,7 @@ diff --git a/options.c b/options.c
  char *sockopts = NULL;
  char *usermap = NULL;
  char *groupmap = NULL;
-@@ -670,6 +676,8 @@ void usage(enum logcode F)
+@@ -671,6 +677,8 @@ void usage(enum logcode F)
    rprintf(F," -b, --backup                make backups (see --suffix & --backup-dir)\n");
    rprintf(F,"     --backup-dir=DIR        make backups into hierarchy based in DIR\n");
    rprintf(F,"     --suffix=SUFFIX         set backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
@@ -232,7 +232,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -u, --update                skip files that are newer on the receiver\n");
    rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
    rprintf(F,"     --append                append data onto shorter files\n");
-@@ -969,7 +977,9 @@ static struct poptOption long_options[] = {
+@@ -974,7 +982,9 @@ static struct poptOption long_options[] = {
    {"backup",          'b', POPT_ARG_VAL,    &make_backups, 1, 0, 0 },
    {"no-backup",        0,  POPT_ARG_VAL,    &make_backups, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
@@ -242,7 +242,7 @@ diff --git a/options.c b/options.c
    {"list-only",        0,  POPT_ARG_VAL,    &list_only, 2, 0, 0 },
    {"read-batch",       0,  POPT_ARG_STRING, &batch_name, OPT_READ_BATCH, 0, 0 },
    {"write-batch",      0,  POPT_ARG_STRING, &batch_name, OPT_WRITE_BATCH, 0, 0 },
-@@ -2006,6 +2016,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2011,6 +2021,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0, SP_DEFAULT);
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0, SP_DEFAULT);
@@ -251,7 +251,7 @@ diff --git a/options.c b/options.c
  	}
  	if (daemon_filter_list.head && !am_sender) {
  		filter_rule_list *elp = &daemon_filter_list;
-@@ -2027,6 +2039,14 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2032,6 +2044,14 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			if (check_filter(elp, FLOG, dir, 1) < 0)
  				goto options_rejected;
  		}
@@ -266,7 +266,7 @@ diff --git a/options.c b/options.c
  	}
  
  	if (!backup_suffix)
-@@ -2038,6 +2058,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2043,6 +2063,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			backup_suffix);
  		return 0;
  	}
@@ -287,7 +287,7 @@ diff --git a/options.c b/options.c
  	if (backup_dir) {
  		while (*backup_dir == '.' && backup_dir[1] == '/')
  			backup_dir += 2;
-@@ -2071,6 +2105,34 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2076,6 +2110,34 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			"P *%s", backup_suffix);
  		parse_filter_str(&filter_list, backup_dir_buf, rule_template(0), 0);
  	}
@@ -320,9 +320,9 @@ diff --git a/options.c b/options.c
 +		parse_rule(&filter_list, backup_dir_dels_buf, 0, 0);
 +	}
  
- 	if (make_backups && !backup_dir) {
- 		omit_dir_times = 0; /* Implied, so avoid -O to sender. */
-@@ -2484,6 +2546,10 @@ void server_options(char **args, int *argc_p)
+ 	if (preserve_times) {
+ 		preserve_times = PRESERVE_FILE_TIMES;
+@@ -2497,6 +2559,10 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = "--backup-dir";
  		args[ac++] = backup_dir;
  	}
@@ -333,7 +333,7 @@ diff --git a/options.c b/options.c
  
  	/* Only send --suffix if it specifies a non-default value. */
  	if (strcmp(backup_suffix, backup_dir ? "" : BACKUP_SUFFIX) != 0) {
-@@ -2492,7 +2558,14 @@ void server_options(char **args, int *argc_p)
+@@ -2505,7 +2571,14 @@ void server_options(char **args, int *argc_p)
  			goto oom;
  		args[ac++] = arg;
  	}

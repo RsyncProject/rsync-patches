@@ -12,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 25082d1ef6712a15c52a1dacb36b7f0642c23ac8
+based-on: d64bda1c1e79dc385f194d74f7957ce7cd118654
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -36,7 +36,7 @@ diff --git a/flist.c b/flist.c
  extern char *usermap, *groupmap;
  
  extern char curr_dir[MAXPATHLEN];
-@@ -910,7 +911,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -912,7 +913,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -400,7 +400,7 @@ diff --git a/options.c b/options.c
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *logfile_name = NULL;
-@@ -746,6 +747,7 @@ void usage(enum logcode F)
+@@ -748,6 +749,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -408,7 +408,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F,"     --skip-compress=LIST    skip compressing files with a suffix in LIST\n");
-@@ -798,7 +800,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -800,7 +802,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -417,7 +417,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
-@@ -938,6 +940,7 @@ static struct poptOption long_options[] = {
+@@ -943,6 +945,7 @@ static struct poptOption long_options[] = {
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -425,7 +425,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_VAL,    &fuzzy_basis, 1, 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -1764,6 +1767,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1769,6 +1772,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -447,7 +447,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2636,6 +2654,11 @@ void server_options(char **args, int *argc_p)
+@@ -2649,6 +2667,11 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -544,28 +544,24 @@ diff --git a/rsync.c b/rsync.c
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct chmod_mode_struct *daemon_chmod_modes;
  #ifdef ICONV_OPTION
-@@ -644,8 +645,15 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -646,7 +647,12 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
--	ret = robust_rename(fnametmp, fname, temp_copy_name,
--			    file->mode & INITACCESSPERMS);
+-	ret = robust_rename(fnametmp, fname, temp_copy_name, file->mode);
 +#ifdef HAVE_LINK
 +	if (link_by_hash_dir)
 +		ret = link_by_hash(fnametmp, fname, file);
 +	else
 +#endif
-+	{
-+		ret = robust_rename(fnametmp, fname, temp_copy_name,
-+				    file->mode & INITACCESSPERMS);
-+	}
++		ret = robust_rename(fnametmp, fname, temp_copy_name, file->mode);
  	if (ret < 0) {
  		rsyserr(FERROR_XFER, errno, "%s %s -> \"%s\"",
  			ret == -2 ? "copy" : "rename",
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -869,6 +869,14 @@ struct stats {
+@@ -871,6 +871,14 @@ struct stats {
  	int xferred_files;
  };
  
@@ -583,7 +579,7 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -400,6 +400,7 @@ to the detailed description below for a complete description.  verb(
+@@ -401,6 +401,7 @@ to the detailed description below for a complete description.  verb(
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
