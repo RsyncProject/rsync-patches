@@ -9,7 +9,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: c463617443f999befe1b20cc5b3ffb484dee025b
+based-on: 8b7f20b6d35ee7458665c33114919567f5793503
 diff --git a/acls.c b/acls.c
 --- a/acls.c
 +++ b/acls.c
@@ -18,10 +18,10 @@ diff --git a/acls.c b/acls.c
  extern int numeric_ids;
  extern int inc_recurse;
 +extern int protocol_version;
+ extern int preserve_devices;
+ extern int preserve_specials;
  
- /* Flags used to indicate what items are being transmitted for an entry. */
- #define XMIT_USER_OBJ (1<<0)
-@@ -110,6 +111,18 @@ static const char *str_acl_type(SMB_ACL_TYPE_T type)
+@@ -112,6 +113,18 @@ static const char *str_acl_type(SMB_ACL_TYPE_T type)
  	return "unknown ACL type!";
  }
  
@@ -40,7 +40,7 @@ diff --git a/acls.c b/acls.c
  static int calc_sacl_entries(const rsync_acl *racl)
  {
  	/* A System ACL always gets user/group/other permission entries. */
-@@ -558,6 +571,96 @@ int get_acl(const char *fname, stat_x *sxp)
+@@ -574,6 +587,96 @@ int get_acl(const char *fname, stat_x *sxp)
  	return 0;
  }
  
@@ -137,9 +137,9 @@ diff --git a/acls.c b/acls.c
  /* === Send functions === */
  
  /* Send the ida list over the file descriptor. */
-@@ -633,6 +736,11 @@ static void send_rsync_acl(rsync_acl *racl, SMB_ACL_TYPE_T type,
+@@ -649,6 +752,11 @@ static void send_rsync_acl(int f, rsync_acl *racl, SMB_ACL_TYPE_T type,
   * This also frees the ACL data. */
- void send_acl(stat_x *sxp, int f)
+ void send_acl(int f, stat_x *sxp)
  {
 +	if (protocol_version < 30) {
 +		old_send_acl(sxp, f);
@@ -149,7 +149,7 @@ diff --git a/acls.c b/acls.c
  	if (!sxp->acc_acl) {
  		sxp->acc_acl = create_racl();
  		rsync_acl_fake_perms(sxp->acc_acl, sxp->st.st_mode);
-@@ -650,6 +758,160 @@ void send_acl(stat_x *sxp, int f)
+@@ -666,6 +774,160 @@ void send_acl(int f, stat_x *sxp)
  	}
  }
  
@@ -309,17 +309,17 @@ diff --git a/acls.c b/acls.c
 +
  /* === Receive functions === */
  
- static uint32 recv_acl_access(uchar *name_follows_ptr, int f)
-@@ -765,6 +1027,11 @@ static int recv_rsync_acl(item_list *racl_list, SMB_ACL_TYPE_T type, int f)
+ static uint32 recv_acl_access(int f, uchar *name_follows_ptr)
+@@ -787,6 +1049,11 @@ static int recv_rsync_acl(int f, item_list *racl_list, SMB_ACL_TYPE_T type, mode
  /* Receive the ACL info the sender has included for this file-list entry. */
- void receive_acl(struct file_struct *file, int f)
+ void receive_acl(int f, struct file_struct *file)
  {
 +	if (protocol_version < 30) {
 +		old_recv_acl(file, f);
 +		return;
 +	}
 +
- 	F_ACL(file) = recv_rsync_acl(&access_acl_list, SMB_ACL_TYPE_ACCESS, f);
+ 	F_ACL(file) = recv_rsync_acl(f, &access_acl_list, SMB_ACL_TYPE_ACCESS, file->mode);
  
  	if (S_ISDIR(file->mode))
 diff --git a/compat.c b/compat.c

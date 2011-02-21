@@ -4,7 +4,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: c463617443f999befe1b20cc5b3ffb484dee025b
+based-on: 8b7f20b6d35ee7458665c33114919567f5793503
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -37,15 +37,15 @@ diff --git a/compat.c b/compat.c
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -55,6 +55,7 @@ extern int delete_during;
- extern int uid_ndx;
- extern int gid_ndx;
+@@ -53,6 +53,7 @@ extern int preserve_devices;
+ extern int preserve_specials;
+ extern int delete_during;
  extern int eol_nulls;
 +extern int atimes_ndx;
  extern int relative_paths;
  extern int implied_dirs;
- extern int file_extra_cnt;
-@@ -394,7 +395,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+ extern int ignore_perishable;
+@@ -392,7 +393,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  #endif
  			    int ndx, int first_ndx)
  {
@@ -54,7 +54,7 @@ diff --git a/flist.c b/flist.c
  	static mode_t mode;
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
-@@ -478,6 +479,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -476,6 +477,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  		xflags |= XMIT_SAME_TIME;
  	else
  		modtime = file->modtime;
@@ -68,7 +68,7 @@ diff --git a/flist.c b/flist.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != -1) {
-@@ -549,6 +557,8 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -547,6 +555,8 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
@@ -77,16 +77,16 @@ diff --git a/flist.c b/flist.c
  	if (preserve_uid && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
  			write_int(f, uid);
-@@ -635,7 +645,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
- static struct file_struct *recv_file_entry(struct file_list *flist,
- 					   int xflags, int f)
+@@ -632,7 +642,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+ 
+ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int xflags)
  {
 -	static int64 modtime;
 +	static int64 modtime, atime;
  	static mode_t mode;
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
-@@ -768,6 +778,16 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -765,6 +775,16 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  	}
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
@@ -103,7 +103,7 @@ diff --git a/flist.c b/flist.c
  
  	if (chmod_modes && !S_ISLNK(mode))
  		mode = tweak_mode(mode, chmod_modes);
-@@ -918,6 +938,8 @@ static struct file_struct *recv_file_entry(struct file_list *flist,
+@@ -915,6 +935,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		F_GROUP(file) = gid;
  		file->flags |= gid_flags;
  	}
@@ -112,10 +112,10 @@ diff --git a/flist.c b/flist.c
  	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
  
-@@ -1290,6 +1312,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
- 		F_OWNER(file) = st.st_uid;
- 	if (gid_ndx) /* Check gid_ndx instead of preserve_gid for del support */
+@@ -1289,6 +1311,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		F_GROUP(file) = st.st_gid;
+ 	if (am_generator && st.st_uid == our_uid)
+ 		file->flags |= FLAG_OWNED_BY_US;
 +	if (atimes_ndx)
 +		f_atime_set(file, st.st_atime);
  
@@ -132,7 +132,7 @@ diff --git a/generator.c b/generator.c
  
  extern int verbose;
  extern int dry_run;
-@@ -648,6 +649,9 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -682,6 +683,9 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		 : iflags & (ITEM_TRANSFER|ITEM_LOCAL_CHANGE) && !(iflags & ITEM_MATCHED)
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  			iflags |= ITEM_REPORT_TIME;
@@ -142,7 +142,7 @@ diff --git a/generator.c b/generator.c
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -1024,6 +1028,8 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+@@ -1058,6 +1062,8 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
@@ -151,7 +151,7 @@ diff --git a/generator.c b/generator.c
  			if (preserve_hard_links && F_IS_HLINKED(file))
  				finish_hard_link(file, fname, ndx, &sxp->st, itemizing, code, j);
  			if (!maybe_ATTRS_REPORT && (verbose > 1 || stdout_format_has_i > 1)) {
-@@ -1209,6 +1215,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+@@ -1243,6 +1249,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -159,7 +159,7 @@ diff --git a/generator.c b/generator.c
  	double len;
  
  	if (!F_IS_ACTIVE(f)) {
-@@ -1223,14 +1230,16 @@ static void list_file_entry(struct file_struct *f)
+@@ -1257,14 +1264,16 @@ static void list_file_entry(struct file_struct *f)
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -178,7 +178,7 @@ diff --git a/generator.c b/generator.c
  			f_name(f, NULL));
  	}
  }
-@@ -2075,7 +2084,7 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -2119,7 +2128,7 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  			STRUCT_STAT st;
  			if (link_stat(fname, &st, 0) == 0
  			 && cmp_time(st.st_mtime, file->modtime) != 0)
@@ -222,7 +222,7 @@ diff --git a/ifuncs.h b/ifuncs.h
 diff --git a/log.c b/log.c
 --- a/log.c
 +++ b/log.c
-@@ -660,7 +660,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
+@@ -658,7 +658,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
  			c[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
  			c[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
  			c[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
@@ -252,7 +252,7 @@ diff --git a/options.c b/options.c
  #ifdef SUPPORT_XATTRS
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
 @@ -489,6 +491,9 @@ static struct poptOption long_options[] = {
-   {"times",           't', POPT_ARG_VAL,    &preserve_times, 2, 0, 0 },
+   {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
 +  {"atimes",          'U', POPT_ARG_VAL,    &preserve_atimes, 1, 0, 0 },
@@ -261,7 +261,7 @@ diff --git a/options.c b/options.c
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
    {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
    {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
-@@ -1778,6 +1783,8 @@ void server_options(char **args, int *argc_p)
+@@ -1784,6 +1789,8 @@ void server_options(char **args, int *argc_p)
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -273,7 +273,7 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -382,6 +382,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -380,6 +380,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  	int updated = 0;
  	stat_x sx2;
  	int change_uid, change_gid;
@@ -281,13 +281,15 @@ diff --git a/rsync.c b/rsync.c
  	mode_t new_mode = file->mode;
  	int inherit;
  
-@@ -425,20 +426,38 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -423,22 +424,40 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		set_xattr(fname, file, fnamecmp, sxp);
  #endif
  
 +	/* This code must be the first update in the function due to
 +	 * how it uses the "updated" variable. */
- 	if (!preserve_times || (S_ISDIR(sxp->st.st_mode) && preserve_times == 1))
+ 	if (!preserve_times
+ 	 || (!(preserve_times & PRESERVE_DIR_TIMES) && S_ISDIR(sxp->st.st_mode))
+ 	 || (!(preserve_times & PRESERVE_LINK_TIMES) && S_ISLNK(sxp->st.st_mode)))
  		flags |= ATTRS_SKIP_MTIME;
 +	if (!atimes_ndx || S_ISDIR(sxp->st.st_mode))
 +		flags |= ATTRS_SKIP_ATIME;
@@ -324,7 +326,7 @@ diff --git a/rsync.c b/rsync.c
  	}
  
  	change_uid = am_root && uid_ndx && sxp->st.st_uid != (uid_t)F_OWNER(file);
-@@ -572,7 +591,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -574,7 +593,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
  
  	/* Change permissions before putting the file into place. */
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
@@ -333,7 +335,7 @@ diff --git a/rsync.c b/rsync.c
  
  	/* move tmp file over real file */
  	if (verbose > 2)
-@@ -599,7 +618,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -601,7 +620,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
  
    do_set_file_attrs:
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
@@ -353,7 +355,7 @@ diff --git a/rsync.h b/rsync.h
  
  /* These flags are used in the live flist data. */
  
-@@ -155,6 +156,7 @@
+@@ -160,6 +161,7 @@
  
  #define ATTRS_REPORT		(1<<0)
  #define ATTRS_SKIP_MTIME	(1<<1)
@@ -361,7 +363,7 @@ diff --git a/rsync.h b/rsync.h
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -635,12 +637,14 @@ extern int file_extra_cnt;
+@@ -652,12 +654,14 @@ extern int file_extra_cnt;
  extern int inc_recurse;
  extern int uid_ndx;
  extern int gid_ndx;
@@ -387,7 +389,7 @@ diff --git a/rsync.yo b/rsync.yo
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
-@@ -1047,6 +1048,12 @@ it is preserving modification times (see bf(--times)).  If NFS is sharing
+@@ -1057,6 +1058,12 @@ it is preserving modification times (see bf(--times)).  If NFS is sharing
  the directories on the receiving side, it is a good idea to use bf(-O).
  This option is inferred if you use bf(--backup) without bf(--backup-dir).
  
@@ -400,7 +402,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(--super)) This tells the receiving side to attempt super-user
  activities even if the receiving rsync wasn't run by the super-user.  These
  activities include: preserving users via the bf(--owner) option, preserving
-@@ -1780,7 +1787,10 @@ quote(itemization(
+@@ -1812,7 +1819,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
@@ -412,6 +414,88 @@ diff --git a/rsync.yo b/rsync.yo
    it() The bf(a) means that the ACL information changed.
    it() The bf(x) means that the extended attribute information changed.
  ))
+diff --git a/syscall.c b/syscall.c
+--- a/syscall.c
++++ b/syscall.c
+@@ -302,15 +302,15 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
+ }
+ 
+ #ifdef HAVE_UTIMENSAT
+-int do_utimensat(const char *fname, time_t modtime, uint32 mod_nsec)
++int do_utimensat(const char *fname, time_t modtime, uint32 mod_nsec, time_t atime, uint32 a_nsec)
+ {
+ 	struct timespec t[2];
+ 
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
+ 
+-	t[0].tv_sec = 0;
+-	t[0].tv_nsec = UTIME_NOW;
++	t[0].tv_sec = atime;
++	t[0].tv_nsec = a_nsec;
+ 	t[1].tv_sec = modtime;
+ 	t[1].tv_nsec = mod_nsec;
+ 	return utimensat(AT_FDCWD, fname, t, AT_SYMLINK_NOFOLLOW);
+@@ -318,15 +318,15 @@ int do_utimensat(const char *fname, time_t modtime, uint32 mod_nsec)
+ #endif
+ 
+ #ifdef HAVE_LUTIMES
+-int do_lutimes(const char *fname, time_t modtime, uint32 mod_nsec)
++int do_lutimes(const char *fname, time_t modtime, uint32 mod_nsec, time_t atime, uint32 a_nsec)
+ {
+ 	struct timeval t[2];
+ 
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
+ 
+-	t[0].tv_sec = time(NULL);
+-	t[0].tv_usec = 0;
++	t[0].tv_sec = atime;
++	t[0].tv_usec = a_nsec;
+ 	t[1].tv_sec = modtime;
+ 	t[1].tv_usec = mod_nsec / 1000;
+ 	return lutimes(fname, t);
+@@ -334,22 +334,22 @@ int do_lutimes(const char *fname, time_t modtime, uint32 mod_nsec)
+ #endif
+ 
+ #ifdef HAVE_UTIMES
+-int do_utimes(const char *fname, time_t modtime, uint32 mod_nsec)
++int do_utimes(const char *fname, time_t modtime, uint32 mod_nsec, time_t atime, uint32 a_nsec)
+ {
+ 	struct timeval t[2];
+ 
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
+ 
+-	t[0].tv_sec = time(NULL);
+-	t[0].tv_usec = 0;
++	t[0].tv_sec = atime;
++	t[0].tv_usec = a_nsec;
+ 	t[1].tv_sec = modtime;
+ 	t[1].tv_usec = mod_nsec / 1000;
+ 	return utimes(fname, t);
+ }
+ 
+ #elif defined HAVE_UTIME
+-int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec))
++int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec), time_t atime, UNUSED(uint32 a_nsec))
+ {
+ #ifdef HAVE_STRUCT_UTIMBUF
+ 	struct utimbuf tbuf;
+@@ -361,11 +361,11 @@ int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec))
+ 	RETURN_ERROR_IF_RO_OR_LO;
+ 
+ # ifdef HAVE_STRUCT_UTIMBUF
+-	tbuf.actime = time(NULL);
++	tbuf.actime = atime;
+ 	tbuf.modtime = modtime;
+ 	return utime(fname, &tbuf);
+ # else
+-	t[0] = time(NULL);
++	t[0] = atime;
+ 	t[1] = modtime;
+ 	return utime(fname, t);
+ # endif
 diff --git a/testsuite/atimes.test b/testsuite/atimes.test
 new file mode 100644
 --- /dev/null
@@ -449,7 +533,7 @@ diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
      eval "$1" 
      status=$?
 @@ -226,10 +230,13 @@ checkit() {
- 	failed="YES";
+ 	failed="$failed status=$status"
      fi
  
 +    if test x$TLS_ARGS != x--atimes; then
@@ -461,7 +545,7 @@ diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
      echo ""
 -    ( cd "$2" && rsync_ls_lR . ) > "$tmpdir/ls-from"
      ( cd "$3" && rsync_ls_lR . ) > "$tmpdir/ls-to"
-     diff $diffopt "$tmpdir/ls-from" "$tmpdir/ls-to" || failed=YES
+     diff $diffopt "$tmpdir/ls-from" "$tmpdir/ls-to" || failed="$failed dir-diff"
  
 diff --git a/tls.c b/tls.c
 --- a/tls.c
@@ -560,17 +644,14 @@ diff --git a/tls.c b/tls.c
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
-@@ -123,7 +123,7 @@ NORETURN void overflow_exit(const char *str)
- 	exit_cleanup(RERR_MALLOC);
- }
+@@ -126,20 +126,24 @@ NORETURN void overflow_exit(const char *str)
  
+ /* This returns 0 for success, 1 for a symlink if symlink time-setting
+  * is not possible, or -1 for any other error. */
 -int set_modtime(const char *fname, time_t modtime, mode_t mode)
 +int set_times(const char *fname, time_t modtime, time_t atime, mode_t mode)
  {
- #if !defined HAVE_LUTIMES || !defined HAVE_UTIMES
- 	if (S_ISLNK(mode))
-@@ -131,9 +131,13 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
- #endif
+ 	static int switch_step = 0;
  
  	if (verbose > 2) {
 -		rprintf(FINFO, "set modtime of %s to (%ld) %s",
@@ -584,28 +665,33 @@ diff --git a/util.c b/util.c
 +			mtimebuf, (long)atime, timestring(atime));
  	}
  
- 	if (dry_run)
-@@ -142,7 +146,7 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
- 	{
+ 	switch (switch_step) {
+ #ifdef HAVE_UTIMENSAT
+ #include "case_N.h"
+-		if (do_utimensat(fname, modtime, 0) == 0)
++		if (do_utimensat(fname, modtime, 0, atime, 0) == 0)
+ 			break;
+ 		if (errno != ENOSYS)
+ 			return -1;
+@@ -149,7 +153,7 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
+ 
+ #ifdef HAVE_LUTIMES
+ #include "case_N.h"
+-		if (do_lutimes(fname, modtime, 0) == 0)
++		if (do_lutimes(fname, modtime, 0, atime, 0) == 0)
+ 			break;
+ 		if (errno != ENOSYS)
+ 			return -1;
+@@ -168,10 +172,10 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
+ 
+ #include "case_N.h"
  #ifdef HAVE_UTIMES
- 		struct timeval t[2];
--		t[0].tv_sec = time(NULL);
-+		t[0].tv_sec = atime;
- 		t[0].tv_usec = 0;
- 		t[1].tv_sec = modtime;
- 		t[1].tv_usec = 0;
-@@ -156,12 +160,12 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
- 		return utimes(fname, t);
- #elif defined HAVE_STRUCT_UTIMBUF
- 		struct utimbuf tbuf;
--		tbuf.actime = time(NULL);
-+		tbuf.actime = atime;
- 		tbuf.modtime = modtime;
- 		return utime(fname,&tbuf);
- #elif defined HAVE_UTIME
- 		time_t t[2];
--		t[0] = time(NULL);
-+		t[0] = atime;
- 		t[1] = modtime;
- 		return utime(fname,t);
+-		if (do_utimes(fname, modtime, 0) == 0)
++		if (do_utimes(fname, modtime, 0, atime, 0) == 0)
+ 			break;
  #else
+-		if (do_utime(fname, modtime, 0) == 0)
++		if (do_utime(fname, modtime, 0, atime, 0) == 0)
+ 			break;
+ #endif
+ 

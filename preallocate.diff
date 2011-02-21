@@ -9,7 +9,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: c463617443f999befe1b20cc5b3ffb484dee025b
+based-on: 8b7f20b6d35ee7458665c33114919567f5793503
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -45,9 +45,9 @@ diff --git a/configure.ac b/configure.ac
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
 +    posix_fallocate \
      seteuid strerror putenv iconv_open locale_charset nl_langinfo getxattr \
-     extattr_get_link sigaction sigprocmask setattrlist)
- 
-@@ -578,6 +579,42 @@ if test x"$ac_cv_func_iconv_open" != x"yes"; then
+     extattr_get_link sigaction sigprocmask setattrlist \
+     utimensat)
+@@ -579,6 +580,42 @@ if test x"$ac_cv_func_iconv_open" != x"yes"; then
      AC_CHECK_FUNC(libiconv_open, [ac_cv_func_iconv_open=yes; AC_DEFINE(HAVE_ICONV_OPEN, 1)])
  fi
  
@@ -110,7 +110,7 @@ diff --git a/options.c b/options.c
  
  #if SUBPROTOCOL_VERSION != 0
 @@ -256,6 +258,9 @@ static void print_rsync_version(enum logcode f)
- #if defined HAVE_LUTIMES && defined HAVE_UTIMES
+ #ifdef CAN_SET_SYMLINK_TIMES
  	symtimes = "";
  #endif
 +#ifdef SUPPORT_PREALLOCATION
@@ -150,7 +150,7 @@ diff --git a/options.c b/options.c
    {"inplace",          0,  POPT_ARG_VAL,    &inplace, 1, 0, 0 },
    {"no-inplace",       0,  POPT_ARG_VAL,    &inplace, 0, 0, 0 },
    {"append",           0,  POPT_ARG_NONE,   0, OPT_APPEND, 0, 0 },
-@@ -2068,6 +2079,9 @@ void server_options(char **args, int *argc_p)
+@@ -2074,6 +2085,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -163,7 +163,7 @@ diff --git a/options.c b/options.c
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
-@@ -45,6 +45,7 @@ extern int cleanup_got_literal;
+@@ -46,6 +46,7 @@ extern int cleanup_got_literal;
  extern int remove_source_files;
  extern int append_mode;
  extern int sparse_files;
@@ -171,7 +171,7 @@ diff --git a/receiver.c b/receiver.c
  extern int keep_partial;
  extern int checksum_seed;
  extern int inplace;
-@@ -175,6 +176,22 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -195,6 +196,22 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  	char *data;
  	int32 i;
  	char *map = NULL;
@@ -194,12 +194,11 @@ diff --git a/receiver.c b/receiver.c
  
  	read_sum_head(f_in, &sum);
  
-@@ -285,8 +302,14 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -306,7 +323,14 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  		goto report_write_error;
  
  #ifdef HAVE_FTRUNCATE
--	if (inplace && fd != -1
--	 && ftruncate(fd, offset) < 0) {
+-	if (inplace && fd != -1 && do_ftruncate(fd, offset) < 0) {
 +	/* inplace: New data could be shorter than old data.
 +	 * preallocate_files: total_size could have been an overestimate.
 +	 *     Cut off any extra preallocated zeros from dest file. */
@@ -207,14 +206,14 @@ diff --git a/receiver.c b/receiver.c
 +#ifdef PREALLOCATE_NEEDS_TRUNCATE
 +	  || preallocated_len > offset
 +#endif
-+	  ) && fd != -1 && ftruncate(fd, offset) < 0) {
++	  ) && fd != -1 && do_ftruncate(fd, offset) < 0) {
  		rsyserr(FERROR_XFER, errno, "ftruncate failed on %s",
  			full_fname(fname));
  	}
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -617,6 +617,21 @@ struct ht_int64_node {
+@@ -634,6 +634,21 @@ struct ht_int64_node {
  #define ACLS_NEED_MASK 1
  #endif
  
@@ -247,7 +246,7 @@ diff --git a/rsync.yo b/rsync.yo
   -n, --dry-run               perform a trial run with no changes made
   -W, --whole-file            copy files whole (w/o delta-xfer algorithm)
   -x, --one-file-system       don't cross filesystem boundaries
-@@ -1096,6 +1097,17 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
+@@ -1106,6 +1107,17 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
  filesystem. It seems to have problems seeking over null regions,
  and ends up corrupting the files.
  
@@ -279,10 +278,10 @@ diff --git a/syscall.c b/syscall.c
  extern int dry_run;
  extern int am_root;
  extern int read_only;
-@@ -284,3 +288,25 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
- 	return lseek(fd, offset, whence);
+@@ -374,3 +378,25 @@ int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec))
+ #else
+ #error Need utimes or utime function.
  #endif
- }
 +
 +#ifdef SUPPORT_PREALLOCATION
 +int do_fallocate(int fd, OFF_T offset, OFF_T length)
@@ -327,7 +326,7 @@ diff --git a/util.c b/util.c
  extern int module_id;
  extern int modify_window;
  extern int relative_paths;
-@@ -276,6 +277,9 @@ int copy_file(const char *source, const char *dest, int ofd,
+@@ -287,6 +288,9 @@ int copy_file(const char *source, const char *dest, int ofd,
  	int ifd;
  	char buf[1024 * 8];
  	int len;   /* Number of bytes read into `buf'. */
@@ -337,7 +336,7 @@ diff --git a/util.c b/util.c
  
  	if ((ifd = do_open(source, O_RDONLY, 0)) < 0) {
  		int save_errno = errno;
-@@ -309,6 +313,25 @@ int copy_file(const char *source, const char *dest, int ofd,
+@@ -320,6 +324,25 @@ int copy_file(const char *source, const char *dest, int ofd,
  		}
  	}
  
@@ -363,7 +362,7 @@ diff --git a/util.c b/util.c
  	while ((len = safe_read(ifd, buf, sizeof buf)) > 0) {
  		if (full_write(ofd, buf, len) < 0) {
  			int save_errno = errno;
-@@ -318,6 +341,9 @@ int copy_file(const char *source, const char *dest, int ofd,
+@@ -329,6 +352,9 @@ int copy_file(const char *source, const char *dest, int ofd,
  			errno = save_errno;
  			return -1;
  		}
@@ -373,7 +372,7 @@ diff --git a/util.c b/util.c
  	}
  
  	if (len < 0) {
-@@ -334,6 +360,16 @@ int copy_file(const char *source, const char *dest, int ofd,
+@@ -345,6 +371,16 @@ int copy_file(const char *source, const char *dest, int ofd,
  			full_fname(source));
  	}
  
