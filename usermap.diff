@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 8b7f20b6d35ee7458665c33114919567f5793503
+based-on: 72193c82a60ce52550c91d9f2596dedd3d16dde0
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
@@ -267,9 +267,9 @@ diff --git a/uidlist.c b/uidlist.c
  
  #ifdef HAVE_GETGROUPS
  # ifndef GETGROUPS_T
-@@ -41,6 +44,9 @@ extern int numeric_ids;
- 
- #define GID_NONE ((gid_t)-1)
+@@ -39,6 +42,9 @@ extern int numeric_ids;
+ # endif
+ #endif
  
 +#define NFLAGS_WILD_NAME_MATCH (1<<0)
 +#define NFLAGS_NAME_MATCH (1<<1)
@@ -277,7 +277,7 @@ diff --git a/uidlist.c b/uidlist.c
  struct idlist {
  	struct idlist *next;
  	const char *name;
-@@ -48,8 +54,8 @@ struct idlist {
+@@ -46,8 +52,28 @@ struct idlist {
  	uint16 flags;
  };
  
@@ -285,10 +285,30 @@ diff --git a/uidlist.c b/uidlist.c
 -static struct idlist *gidlist;
 +static struct idlist *uidlist, *uidmap;
 +static struct idlist *gidlist, *gidmap;
++
++static id_t id_parse(const char *num_str)
++{
++	id_t tmp, num = 0;
++	const char *cp = num_str;
++
++	while (*cp) {
++		if (!isDigit(cp)) {
++		  invalid_num:
++			rprintf(FERROR, "Invalid ID number: %s\n", num_str);
++			exit_cleanup(RERR_SYNTAX);
++		}
++		tmp = num * 10 + *cp++ - '0';
++		if (tmp < num)
++			goto invalid_num;
++		num = tmp;
++	}
++
++	return num;
++}
  
  static struct idlist *add_to_list(struct idlist **root, id_t id, const char *name,
  				  id_t id2, uint16 flags)
-@@ -84,22 +90,6 @@ static const char *gid_to_name(gid_t gid)
+@@ -82,22 +108,6 @@ static const char *gid_to_name(gid_t gid)
  	return NULL;
  }
  
@@ -311,7 +331,7 @@ diff --git a/uidlist.c b/uidlist.c
  static int is_in_group(gid_t gid)
  {
  #ifdef HAVE_GETGROUPS
-@@ -159,34 +149,53 @@ static int is_in_group(gid_t gid)
+@@ -157,34 +167,53 @@ static int is_in_group(gid_t gid)
  #endif
  }
  
@@ -385,21 +405,23 @@ diff --git a/uidlist.c b/uidlist.c
  	}
  
  	return node;
-@@ -195,12 +204,9 @@ static struct idlist *recv_add_gid(gid_t id, const char *name)
+@@ -193,23 +222,22 @@ static struct idlist *recv_add_gid(gid_t id, const char *name)
  /* this function is a definate candidate for a faster algorithm */
  uid_t match_uid(uid_t uid)
  {
 -	static uid_t last_in, last_out;
-+	static uid_t last_in = -1, last_out = -1;
++	static struct idlist *last = NULL;
  	struct idlist *list;
  
 -	if (uid == 0)
 -		return 0;
 -
- 	if (uid == last_in)
- 		return last_out;
- 
-@@ -208,10 +214,13 @@ uid_t match_uid(uid_t uid)
+-	if (uid == last_in)
+-		return last_out;
+-
+-	last_in = uid;
++	if (last && uid == last->id)
++		return last->id2;
  
  	for (list = uidlist; list; list = list->next) {
  		if (list->id == uid)
@@ -410,12 +432,13 @@ diff --git a/uidlist.c b/uidlist.c
 -	return last_out = uid;
 +	if (!list)
 +		list = recv_add_id(&uidlist, uidmap, uid, NULL);
++	last = list;
 +
-+	return last_out = list->id2;
++	return list->id2;
  }
  
  gid_t match_gid(gid_t gid, uint16 *flags_ptr)
-@@ -227,7 +236,7 @@ gid_t match_gid(gid_t gid, uint16 *flags_ptr)
+@@ -225,7 +253,7 @@ gid_t match_gid(gid_t gid, uint16 *flags_ptr)
  				break;
  		}
  		if (!list)
@@ -424,7 +447,7 @@ diff --git a/uidlist.c b/uidlist.c
  		last = list;
  	}
  
-@@ -320,7 +329,7 @@ uid_t recv_user_name(int f, uid_t uid)
+@@ -318,7 +346,7 @@ uid_t recv_user_name(int f, uid_t uid)
  		free(name);
  		name = NULL;
  	}
@@ -433,7 +456,7 @@ diff --git a/uidlist.c b/uidlist.c
  	return node->id2;
  }
  
-@@ -336,7 +345,7 @@ gid_t recv_group_name(int f, gid_t gid, uint16 *flags_ptr)
+@@ -334,7 +362,7 @@ gid_t recv_group_name(int f, gid_t gid, uint16 *flags_ptr)
  		free(name);
  		name = NULL;
  	}
@@ -442,7 +465,7 @@ diff --git a/uidlist.c b/uidlist.c
  	if (flags_ptr && node->flags & FLAG_SKIP_GROUP)
  		*flags_ptr |= FLAG_SKIP_GROUP;
  	return node->id2;
-@@ -363,17 +372,103 @@ void recv_id_list(int f, struct file_list *flist)
+@@ -361,17 +389,103 @@ void recv_id_list(int f, struct file_list *flist)
  
  	/* Now convert all the uids/gids from sender values to our values. */
  #ifdef SUPPORT_ACLS
@@ -464,7 +487,7 @@ diff --git a/uidlist.c b/uidlist.c
  	}
  }
 +
-+void parse_name_map(char *map, int usernames)
++void parse_name_map(char *map, BOOL usernames)
 +{
 +	struct idlist **idmap_ptr = usernames ? &uidmap : &gidmap;
 +	struct idlist **idlist_ptr = usernames ? &uidlist : &gidlist;
@@ -498,11 +521,11 @@ diff --git a/uidlist.c b/uidlist.c
 +				exit_cleanup(RERR_SYNTAX);
 +			}
 +			if (dash)
-+				name = (char *)atol(dash+1);
++				name = (char *)id_parse(dash+1);
 +			else
 +				name = (char *)0;
 +			flags = 0;
-+			id1 = atol(cp);
++			id1 = id_parse(cp);
 +		} else if (strpbrk(cp, "*[?")) {
 +			flags = NFLAGS_WILD_NAME_MATCH;
 +			name = cp;
@@ -518,7 +541,7 @@ diff --git a/uidlist.c b/uidlist.c
 +				cp = colon+1;
 +				goto bad_number;
 +			}
-+			add_to_list(idmap_ptr, id1, name, atol(colon+1), flags);
++			add_to_list(idmap_ptr, id1, name, id_parse(colon+1), flags);
 +		} else if (usernames) {
 +			uid_t uid;
 +			if (name_to_uid(colon+1, &uid))
