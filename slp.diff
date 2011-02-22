@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
 TODO: the configure changes should abort if the user requests --enable-slp
 and we can't honor that request.
 
-based-on: d64bda1c1e79dc385f194d74f7957ce7cd118654
+based-on: 3bd9f51917ed5718275c6132006be155239a0550
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -44,7 +44,7 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
-@@ -1164,6 +1164,13 @@ int daemon_main(void)
+@@ -1165,6 +1165,13 @@ int daemon_main(void)
  	 * address too.  In fact, why not just do inet_ntop on the
  	 * local address??? */
  
@@ -94,9 +94,9 @@ diff --git a/configure.ac b/configure.ac
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -98,6 +98,9 @@ typedef struct {
- 	char *socket_options;
+@@ -99,6 +99,9 @@ typedef struct {
  
+ 	int listen_backlog;
  	int rsync_port;
 +#ifdef HAVE_LIBSLP
 +	int slp_refresh;
@@ -104,7 +104,7 @@ diff --git a/loadparm.c b/loadparm.c
  } global_vars;
  
  /* This structure describes a single section.  Their order must match the
-@@ -312,6 +315,9 @@ static struct parm_struct parm_table[] =
+@@ -317,6 +320,9 @@ static struct parm_struct parm_table[] =
   {"motd file",         P_STRING, P_GLOBAL,&Vars.g.motd_file,           NULL,0},
   {"pid file",          P_STRING, P_GLOBAL,&Vars.g.pid_file,            NULL,0},
   {"port",              P_INTEGER,P_GLOBAL,&Vars.g.rsync_port,          NULL,0},
@@ -114,9 +114,9 @@ diff --git a/loadparm.c b/loadparm.c
   {"socket options",    P_STRING, P_GLOBAL,&Vars.g.socket_options,      NULL,0},
  
   {"auth users",        P_STRING, P_LOCAL, &Vars.l.auth_users,          NULL,0},
-@@ -443,6 +449,9 @@ FN_GLOBAL_STRING(lp_pid_file, &Vars.g.pid_file)
- FN_GLOBAL_STRING(lp_socket_options, &Vars.g.socket_options)
+@@ -450,6 +456,9 @@ FN_GLOBAL_STRING(lp_socket_options, &Vars.g.socket_options)
  
+ FN_GLOBAL_INTEGER(lp_listen_backlog, &Vars.g.listen_backlog)
  FN_GLOBAL_INTEGER(lp_rsync_port, &Vars.g.rsync_port)
 +#ifdef HAVE_LIBSLP
 +FN_GLOBAL_INTEGER(lp_slp_refresh, &Vars.g.slp_refresh)
@@ -127,7 +127,7 @@ diff --git a/loadparm.c b/loadparm.c
 diff --git a/main.c b/main.c
 --- a/main.c
 +++ b/main.c
-@@ -1237,6 +1237,18 @@ static int start_client(int argc, char *argv[])
+@@ -1241,6 +1241,18 @@ static int start_client(int argc, char *argv[])
  
  	if (!read_batch) { /* for read_batch, NO source is specified */
  		char *path = check_for_hostspec(argv[0], &shell_machine, &rsync_port);
@@ -181,7 +181,7 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -199,6 +199,10 @@
+@@ -204,6 +204,10 @@
  #define SIGNIFICANT_ITEM_FLAGS (~(\
  	ITEM_BASIS_TYPE_FOLLOWS | ITEM_XNAME_FOLLOWS | ITEM_LOCAL_CHANGE))
  
@@ -220,9 +220,9 @@ new file mode 100644
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -120,6 +120,15 @@ details on some of the options you may be able to set. By default no
- special socket options are set.  These settings can also be specified
- via the bf(--sockopts) command-line option.
+@@ -123,6 +123,15 @@ via the bf(--sockopts) command-line option.
+ dit(bf(listen backlog)) You can override the default backlog value when the
+ daemon listens for connections.  It defaults to 5.
  
 +dit(bf(slp refresh)) This parameter is used to determine how long service
 +advertisements are valid (measured in seconds), and is only applicable if
@@ -236,7 +236,7 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
  enddit()
  
  manpagesection(MODULE PARAMETERS)
-@@ -768,6 +777,7 @@ use chroot = yes
+@@ -822,6 +831,7 @@ use chroot = yes
  max connections = 4
  syslog facility = local5
  pid file = /var/run/rsyncd.pid
@@ -247,7 +247,7 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 diff --git a/socket.c b/socket.c
 --- a/socket.c
 +++ b/socket.c
-@@ -515,6 +515,16 @@ void start_accept_loop(int port, int (*fn)(int, int))
+@@ -533,6 +533,16 @@ void start_accept_loop(int port, int (*fn)(int, int))
  {
  	fd_set deffds;
  	int *sp, maxfd, i;
@@ -264,7 +264,7 @@ diff --git a/socket.c b/socket.c
  
  #ifdef HAVE_SIGACTION
  	sigact.sa_flags = SA_NOCLDSTOP;
-@@ -543,14 +553,25 @@ void start_accept_loop(int port, int (*fn)(int, int))
+@@ -561,14 +571,25 @@ void start_accept_loop(int port, int (*fn)(int, int))
  			maxfd = sp[i];
  	}
  
@@ -290,7 +290,7 @@ diff --git a/socket.c b/socket.c
  
  		/* close log file before the potentially very long select so
  		 * file can be trimmed by another process instead of growing
-@@ -563,7 +584,18 @@ void start_accept_loop(int port, int (*fn)(int, int))
+@@ -581,7 +602,18 @@ void start_accept_loop(int port, int (*fn)(int, int))
  		fds = deffds;
  #endif
  

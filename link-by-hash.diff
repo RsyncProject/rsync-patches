@@ -12,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: d64bda1c1e79dc385f194d74f7957ce7cd118654
+based-on: 3bd9f51917ed5718275c6132006be155239a0550
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -28,15 +28,15 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -74,6 +74,7 @@ extern int sender_keeps_checksum;
- extern int unsort_ndx;
+@@ -72,6 +72,7 @@ extern int unsort_ndx;
+ extern uid_t our_uid;
  extern struct stats stats;
  extern char *filesfrom_host;
 +extern char *link_by_hash_dir;
  extern char *usermap, *groupmap;
  
  extern char curr_dir[MAXPATHLEN];
-@@ -912,7 +913,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -910,7 +911,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -447,7 +447,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2649,6 +2667,11 @@ void server_options(char **args, int *argc_p)
+@@ -2651,6 +2669,11 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -462,7 +462,7 @@ diff --git a/options.c b/options.c
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
-@@ -197,11 +197,13 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
+@@ -216,11 +216,13 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
  }
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -477,7 +477,7 @@ diff --git a/receiver.c b/receiver.c
  	int32 len;
  	OFF_T offset = 0;
  	OFF_T offset2;
-@@ -221,6 +223,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -240,6 +242,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  	} else
  		mapbuf = NULL;
  
@@ -487,7 +487,7 @@ diff --git a/receiver.c b/receiver.c
  	sum_init(checksum_seed);
  
  	if (append_mode > 0) {
-@@ -268,6 +273,8 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -287,6 +292,8 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  			cleanup_got_literal = 1;
  
  			sum_update(data, i);
@@ -496,7 +496,7 @@ diff --git a/receiver.c b/receiver.c
  
  			if (fd != -1 && write_file(fd,data,i) != i)
  				goto report_write_error;
-@@ -294,6 +301,8 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -314,6 +321,8 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  
  			see_token(map, len);
  			sum_update(map, len);
@@ -505,7 +505,7 @@ diff --git a/receiver.c b/receiver.c
  		}
  
  		if (updating_basis_or_equiv) {
-@@ -341,6 +350,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -360,6 +369,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  	if (sum_end(file_sum1) != checksum_len)
  		overflow_exit("checksum_len"); /* Impossible... */
  
@@ -515,7 +515,7 @@ diff --git a/receiver.c b/receiver.c
  	if (mapbuf)
  		unmap_file(mapbuf);
  
-@@ -355,7 +367,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -374,7 +386,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  
  static void discard_receive_data(int f_in, OFF_T length)
  {
@@ -524,7 +524,7 @@ diff --git a/receiver.c b/receiver.c
  }
  
  static void handle_delayed_updates(char *local_name)
-@@ -783,7 +795,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -802,7 +814,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  
  		/* recv file data */
  		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
@@ -536,7 +536,7 @@ diff --git a/receiver.c b/receiver.c
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -49,6 +49,7 @@ extern int flist_eof;
+@@ -47,6 +47,7 @@ extern int flist_eof;
  extern int file_old_total;
  extern int keep_dirlinks;
  extern int make_backups;
@@ -544,7 +544,7 @@ diff --git a/rsync.c b/rsync.c
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct chmod_mode_struct *daemon_chmod_modes;
  #ifdef ICONV_OPTION
-@@ -646,7 +647,12 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -644,7 +645,12 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
  		rprintf(FINFO, "renaming %s to %s\n", fnametmp, fname);
@@ -561,7 +561,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -871,6 +871,14 @@ struct stats {
+@@ -884,6 +884,14 @@ struct stats {
  	int xferred_files;
  };
  

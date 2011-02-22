@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
 This patch has not yet been tested by me (Wayne), but was provided
 Darryl Dixon.  Thanks!
 
-based-on: 2cad2e975c16725a8406c35979ea772c1661824c
+based-on: 3bd9f51917ed5718275c6132006be155239a0550
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -22,8 +22,8 @@ diff --git a/generator.c b/generator.c
  extern int preserve_specials;
  extern int preserve_hard_links;
  extern int preserve_executability;
-@@ -1535,7 +1536,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 	fnamecmp = fname;
+@@ -1592,7 +1593,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 
  	fnamecmp_type = FNAMECMP_FNAME;
  
 -	if (statret == 0 && !S_ISREG(sx.st.st_mode)) {
@@ -70,7 +70,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2674,6 +2682,9 @@ void server_options(char **args, int *argc_p)
+@@ -2676,6 +2684,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -83,7 +83,7 @@ diff --git a/options.c b/options.c
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
-@@ -37,6 +37,7 @@ extern int protocol_version;
+@@ -38,6 +38,7 @@ extern int protocol_version;
  extern int relative_paths;
  extern int preserve_hard_links;
  extern int preserve_perms;
@@ -91,7 +91,7 @@ diff --git a/receiver.c b/receiver.c
  extern int preserve_xattrs;
  extern int basis_dir_cnt;
  extern int make_backups;
-@@ -197,7 +198,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
+@@ -216,7 +217,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
  }
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -100,7 +100,7 @@ diff --git a/receiver.c b/receiver.c
  {
  	static char file_sum1[MAX_DIGEST_LEN];
  	struct map_struct *mapbuf;
-@@ -231,7 +232,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -250,7 +251,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  		if (append_mode == 2 && mapbuf) {
  			for (j = CHUNK_SIZE; j < sum.flength; j += CHUNK_SIZE) {
  				if (INFO_GTE(PROGRESS, 1))
@@ -109,7 +109,7 @@ diff --git a/receiver.c b/receiver.c
  				sum_update(map_ptr(mapbuf, offset, CHUNK_SIZE),
  					   CHUNK_SIZE);
  				offset = j;
-@@ -239,7 +240,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -258,7 +259,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  			if (offset < sum.flength) {
  				int32 len = (int32)(sum.flength - offset);
  				if (INFO_GTE(PROGRESS, 1))
@@ -118,7 +118,7 @@ diff --git a/receiver.c b/receiver.c
  				sum_update(map_ptr(mapbuf, offset, len), len);
  			}
  		}
-@@ -253,7 +254,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -272,7 +273,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  
  	while ((i = recv_token(f_in, &data)) != 0) {
  		if (INFO_GTE(PROGRESS, 1))
@@ -127,12 +127,12 @@ diff --git a/receiver.c b/receiver.c
  
  		if (allowed_lull)
  			maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH | MSK_ACTIVE_RECEIVER);
-@@ -322,14 +323,15 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -341,14 +342,15 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  		goto report_write_error;
  
  #ifdef HAVE_FTRUNCATE
 -	if (inplace && fd != -1 && do_ftruncate(fd, offset) < 0) {
-+	/* Makesure to avoid ftruncate() on a block device: */
++	/* Make sure to avoid ftruncate() on a block device: */
 +	if (inplace && fd != -1 && !IS_DEVICE(file->mode) && do_ftruncate(fd, offset) < 0) {
  		rsyserr(FERROR_XFER, errno, "ftruncate failed on %s",
  			full_fname(fname));
@@ -145,7 +145,7 @@ diff --git a/receiver.c b/receiver.c
  
  	if (fd != -1 && offset > 0 && sparse_end(fd, offset) != 0) {
  	    report_write_error:
-@@ -353,9 +355,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -372,9 +374,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  }
  
  
@@ -157,7 +157,7 @@ diff --git a/receiver.c b/receiver.c
  }
  
  static void handle_delayed_updates(char *local_name)
-@@ -609,7 +611,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -628,7 +630,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  					"(Skipping batched update for%s \"%s\")\n",
  					redoing ? " resend of" : "",
  					fname);
@@ -166,7 +166,7 @@ diff --git a/receiver.c b/receiver.c
  				file->flags |= FLAG_FILE_SENT;
  				continue;
  			}
-@@ -621,13 +623,13 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -640,13 +642,13 @@ int recv_files(int f_in, int f_out, char *local_name)
  		if (!do_xfers) { /* log the transfer */
  			log_item(FCLIENT, file, iflags, NULL);
  			if (read_batch)
@@ -182,7 +182,7 @@ diff --git a/receiver.c b/receiver.c
  			continue;
  		}
  
-@@ -710,7 +712,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -729,7 +731,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  		} else if (do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR_XFER, errno, "fstat %s failed",
  				full_fname(fnamecmp));
@@ -191,7 +191,7 @@ diff --git a/receiver.c b/receiver.c
  			close(fd1);
  			if (inc_recurse)
  				send_msg_int(MSG_NO_SEND, ndx);
-@@ -725,18 +727,32 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -744,18 +746,32 @@ int recv_files(int f_in, int f_out, char *local_name)
  			 */
  			rprintf(FERROR_XFER, "recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -226,7 +226,7 @@ diff --git a/receiver.c b/receiver.c
  		/* If we're not preserving permissions, change the file-list's
  		 * mode based on the local permissions and some heuristics. */
  		if (!preserve_perms) {
-@@ -767,7 +783,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -786,7 +802,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  		}
  
  		if (fd2 == -1) {
@@ -235,7 +235,7 @@ diff --git a/receiver.c b/receiver.c
  			if (fd1 != -1)
  				close(fd1);
  			if (inc_recurse)
-@@ -782,8 +798,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -801,8 +817,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
