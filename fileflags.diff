@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 3bd9f51917ed5718275c6132006be155239a0550
+based-on: d52aeae4e9af689aed4ae6af2b7602552c1383e7
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -177,7 +177,18 @@ diff --git a/flist.c b/flist.c
  #ifdef SUPPORT_HARD_LINKS
  	static int64 dev;
  #endif
-@@ -824,6 +843,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -783,6 +802,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ 			modtime = first->modtime;
+ 			modtime_nsec = F_MOD_NSEC(first);
+ 			mode = first->mode;
++#ifdef SUPPORT_FILEFLAGS
++			if (preserve_fileflags)
++				fileflags = F_FFLAGS(first);
++#endif
+ 			if (preserve_uid)
+ 				uid = F_OWNER(first);
+ 			if (preserve_gid)
+@@ -824,6 +847,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  
  	if (chmod_modes && !S_ISLNK(mode) && mode)
  		mode = tweak_mode(mode, chmod_modes);
@@ -188,7 +199,7 @@ diff --git a/flist.c b/flist.c
  
  	if (preserve_uid && !(xflags & XMIT_SAME_UID)) {
  		if (protocol_version < 30)
-@@ -975,6 +998,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -975,6 +1002,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  	}
  #endif
  	file->mode = mode;
@@ -199,7 +210,7 @@ diff --git a/flist.c b/flist.c
  	if (preserve_uid)
  		F_OWNER(file) = uid;
  	if (preserve_gid) {
-@@ -1372,6 +1399,10 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1372,6 +1403,10 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	}
  #endif
  	file->mode = st.st_mode;
@@ -503,17 +514,16 @@ diff --git a/rsync.c b/rsync.c
  		if (ret < 0) {
  			rsyserr(FERROR_XFER, errno, "failed to set times on %s",
  				full_fname(fname));
-@@ -529,7 +563,8 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -529,7 +563,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		if (am_root >= 0) {
- 			if (do_lchown(fname,
- 			    change_uid ? (uid_t)F_OWNER(file) : sxp->st.st_uid,
--			    change_gid ? (gid_t)F_GROUP(file) : sxp->st.st_gid) != 0) {
-+			    change_gid ? (gid_t)F_GROUP(file) : sxp->st.st_gid,
-+			    sxp->st.st_mode, ST_FLAGS(sxp->st)) != 0) {
+ 			uid_t uid = change_uid ? (uid_t)F_OWNER(file) : sxp->st.st_uid;
+ 			gid_t gid = change_gid ? (gid_t)F_GROUP(file) : sxp->st.st_gid;
+-			if (do_lchown(fname, uid, gid) != 0) {
++			if (do_lchown(fname, uid, gid, sxp->st.st_mode, ST_FLAGS(sxp->st)) != 0) {
  				/* We shouldn't have attempted to change uid
  				 * or gid unless have the privilege. */
  				rsyserr(FERROR_XFER, errno, "%s %s failed",
-@@ -563,7 +598,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -567,7 +601,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  
  #ifdef HAVE_CHMOD
  	if (!BITS_EQUAL(sxp->st.st_mode, new_mode, CHMOD_BITS)) {
@@ -522,7 +532,7 @@ diff --git a/rsync.c b/rsync.c
  		if (ret < 0) {
  			rsyserr(FERROR_XFER, errno,
  				"failed to set permissions on %s",
-@@ -575,6 +610,19 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -579,6 +613,19 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  	}
  #endif
  
@@ -542,7 +552,7 @@ diff --git a/rsync.c b/rsync.c
  	if (INFO_GTE(NAME, 2) && flags & ATTRS_REPORT) {
  		if (updated)
  			rprintf(FCLIENT, "%s\n", fname);
-@@ -639,7 +687,8 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -643,7 +690,8 @@ int finish_transfer(const char *fname, const char *fnametmp,
  
  	/* Change permissions before putting the file into place. */
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
@@ -552,7 +562,7 @@ diff --git a/rsync.c b/rsync.c
  
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
-@@ -656,6 +705,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -660,6 +708,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	}
  	if (ret == 0) {
  		/* The file was moved into place (not copied), so it's done. */
@@ -681,7 +691,7 @@ diff --git a/rsync.yo b/rsync.yo
  
  See also bf(--keep-dirlinks) for an analogous option for the receiving
  side.
-@@ -1057,6 +1062,29 @@ Note that this option does not copy rsyncs special xattr values (e.g. those
+@@ -1058,6 +1063,29 @@ Note that this option does not copy rsyncs special xattr values (e.g. those
  used by bf(--fake-super)) unless you repeat the option (e.g. -XX).  This
  "copy all xattrs" mode cannot be used with bf(--fake-super).
  
@@ -711,7 +721,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(--chmod)) This option tells rsync to apply one or more
  comma-separated "chmod" modes to the permission of the files in the
  transfer.  The resulting value is treated as though it were the permissions
-@@ -1355,12 +1383,13 @@ display as a "*missing" entry in the bf(--list-only) output.
+@@ -1352,12 +1380,13 @@ display as a "*missing" entry in the bf(--list-only) output.
  dit(bf(--ignore-errors)) Tells bf(--delete) to go ahead and delete files
  even when there are I/O errors.
  
@@ -728,7 +738,7 @@ diff --git a/rsync.yo b/rsync.yo
  bf(--recursive) option was also enabled.
  
  dit(bf(--max-delete=NUM)) This tells rsync not to delete more than NUM
-@@ -1954,7 +1983,7 @@ with older versions of rsync, but that also turns on the output of other
+@@ -1951,7 +1980,7 @@ with older versions of rsync, but that also turns on the output of other
  verbose messages).
  
  The "%i" escape has a cryptic output that is 11 letters long.  The general
@@ -737,7 +747,7 @@ diff --git a/rsync.yo b/rsync.yo
  type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -2010,7 +2039,7 @@ quote(itemization(
+@@ -2007,7 +2036,7 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
