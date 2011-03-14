@@ -1,0 +1,808 @@
+This patch adds support for HFS+ compression.
+
+Written by Mike Bombich.  Taken from http://www.bombich.com/rsync.html
+
+Modified by Wayne to fix some issues and tweak the implementation a bit.
+This compiles on OS X and passes the testsuite, but otherwise UNTESTED!
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/fileflags.diff
+    patch -p1 <patches/crtimes.diff
+    patch -p1 <patches/hfs-compression.diff
+    ./prepare-source
+    ./configure
+    make
+
+TODO:
+ - Should rsync try to treat the compressed data as file data and use the
+   rsync algorithm on the data transfer?
+
+based-on: patch/master/crtimes
+diff --git a/flist.c b/flist.c
+--- a/flist.c
++++ b/flist.c
+@@ -1580,6 +1580,8 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
+ #ifdef SUPPORT_XATTRS
+ 		if (preserve_xattrs) {
+ 			sx.st.st_mode = file->mode;
++			if (preserve_fileflags)
++				sx.st.st_flags = F_FFLAGS(file);
+ 			if (get_xattr(fname, &sx) < 0) {
+ 				io_error |= IOERR_GENERAL;
+ 				return NULL;
+diff --git a/generator.c b/generator.c
+--- a/generator.c
++++ b/generator.c
+@@ -37,6 +37,8 @@ extern int implied_dirs;
+ extern int keep_dirlinks;
+ extern int preserve_acls;
+ extern int preserve_xattrs;
++extern int preserve_hfs_compression;
++extern int fs_supports_hfs_compression;
+ extern int preserve_links;
+ extern int preserve_devices;
+ extern int preserve_specials;
+@@ -1385,13 +1387,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 				goto cleanup;
+ 			}
+ 		}
+-#ifdef SUPPORT_XATTRS
+-		if (preserve_xattrs && statret == 1)
+-			copy_xattrs(fnamecmpbuf, fname);
+-#endif
+-		if (set_file_attrs(fname, file, real_ret ? NULL : &real_sx, NULL, 0)
+-		    && INFO_GTE(NAME, 1) && code != FNONE && f_out != -1)
+-			rprintf(code, "%s/\n", fname);
+ 
+ 		/* We need to ensure that the dirs in the transfer have writable
+ 		 * permissions during the time we are putting files within them.
+@@ -1401,6 +1396,16 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		 && make_mutable(fname, file->mode, F_FFLAGS(file), force_change))
+ 			need_retouch_dir_perms = 1;
+ #endif
++
++#ifdef SUPPORT_XATTRS
++		/* Copy directory xattrs for a directory that already existed */
++		if (preserve_xattrs && statret == 1)
++			copy_xattrs(fnamecmpbuf, fname);
++#endif
++		if (set_file_attrs(fname, file, real_ret ? NULL : &real_sx, NULL, 0)
++		    && INFO_GTE(NAME, 1) && code != FNONE && f_out != -1)
++			rprintf(code, "%s/\n", fname);
++
+ #ifdef HAVE_CHMOD
+ 		if (!am_root && !(file->mode & S_IWUSR) && dir_tweaking) {
+ 			mode_t mode = file->mode | S_IWUSR;
+@@ -1678,6 +1683,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 					fname, fnamecmpbuf);
+ 			}
+ 			sx.st.st_size = F_LENGTH(fuzzy_file);
++#ifdef SUPPORT_HFS_COMPRESSION
++			if (sx.st.st_flags & UF_COMPRESSED) {
++				if (preserve_hfs_compression)
++					sx.st.st_size = 0;
++				else if (fs_supports_hfs_compression)
++					sx.st.st_flags &= ~UF_COMPRESSED;
++			}
++#endif
+ 			statret = 0;
+ 			fnamecmp = fnamecmpbuf;
+ 			fnamecmp_type = FNAMECMP_FUZZY;
+@@ -1853,6 +1866,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 	if (read_batch)
+ 		goto cleanup;
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (F_FFLAGS(file) & UF_COMPRESSED) {
++		/* At this point the attrs have already been copied, we don't need to transfer a data fork
++		 * If my filesystem doesn't support HFS compression, the existing file's content
++		 * will not be automatically truncated, so we'll do that manually here */
++		if (!fs_supports_hfs_compression && sx.st.st_size > 0) {
++			if (ftruncate(fd, 0) == 0)
++				sx.st.st_size = 0;
++		}
++	}
++#endif
++
+ 	if (statret != 0 || whole_file)
+ 		write_sum_head(f_out, NULL);
+ 	else if (sx.st.st_size <= 0) {
+diff --git a/lib/sysxattrs.c b/lib/sysxattrs.c
+--- a/lib/sysxattrs.c
++++ b/lib/sysxattrs.c
+@@ -22,6 +22,17 @@
+ #include "rsync.h"
+ #include "sysxattrs.h"
+ 
++extern int preserve_hfs_compression;
++
++#ifdef HAVE_OSX_XATTRS
++#ifndef XATTR_SHOWCOMPRESSION
++#define XATTR_SHOWCOMPRESSION 0x0020
++#endif
++#define GETXATTR_FETCH_LIMIT (64*1024*1024)
++
++int xattr_options = XATTR_NOFOLLOW;
++#endif
++
+ #ifdef SUPPORT_XATTRS
+ 
+ #if defined HAVE_LINUX_XATTRS
+@@ -55,7 +66,27 @@ ssize_t sys_llistxattr(const char *path, char *list, size_t size)
+ 
+ ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size)
+ {
+-	return getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
++	ssize_t len;
++
++	if (preserve_hfs_compression)
++		xattr_options |= XATTR_SHOWCOMPRESSION;
++
++	len = getxattr(path, name, value, size, 0, xattr_options);
++
++	/* If we're retrieving data, handle resource forks > 64MB specially */
++	if (value != NULL && strcmp(name, XATTR_RESOURCEFORK_NAME) == 0 && len == GETXATTR_FETCH_LIMIT) {
++		/* getxattr will only return 64MB of data at a time, need to call again with a new offset */
++		u_int32_t offset = GETXATTR_FETCH_LIMIT;
++		ssize_t data_retrieved = len;
++		while (data_retrieved < (ssize_t)size) {
++			len = getxattr(path, name, value + offset, size - data_retrieved, offset, xattr_options);
++			data_retrieved += len;
++			offset += (u_int32_t)len;
++		}
++		len = data_retrieved;
++	}
++
++	return len;
+ }
+ 
+ ssize_t sys_fgetxattr(int filedes, const char *name, void *value, size_t size)
+@@ -70,12 +101,16 @@ int sys_lsetxattr(const char *path, const char *name, const void *value, size_t
+ 
+ int sys_lremovexattr(const char *path, const char *name)
+ {
+-	return removexattr(path, name, XATTR_NOFOLLOW);
++	if (preserve_hfs_compression)
++		xattr_options |= XATTR_SHOWCOMPRESSION;
++	return removexattr(path, name, xattr_options);
+ }
+ 
+ ssize_t sys_llistxattr(const char *path, char *list, size_t size)
+ {
+-	return listxattr(path, list, size, XATTR_NOFOLLOW);
++	if (preserve_hfs_compression)
++		xattr_options |= XATTR_SHOWCOMPRESSION;
++	return listxattr(path, list, size, xattr_options);
+ }
+ 
+ #elif HAVE_FREEBSD_XATTRS
+diff --git a/main.c b/main.c
+--- a/main.c
++++ b/main.c
+@@ -27,6 +27,19 @@
+ #include <locale.h>
+ #endif
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++/* For getattrlist() */
++#include <sys/attr.h>
++/* For statfs(): */
++#include <sys/mount.h>
++/* For dirname() */
++#include <libgen.h>
++#endif
++
++#ifdef SUPPORT_FORCE_CHANGE
++#include <sys/sysctl.h>
++#endif
++
+ extern int dry_run;
+ extern int list_only;
+ extern int io_timeout;
+@@ -50,7 +63,9 @@ extern int copy_dirlinks;
+ extern int copy_unsafe_links;
+ extern int keep_dirlinks;
+ extern int preserve_hard_links;
++extern int preserve_hfs_compression;
+ extern int protocol_version;
++extern int force_change;
+ extern int file_total;
+ extern int recurse;
+ extern int xfer_dirs;
+@@ -102,6 +117,7 @@ int daemon_over_rsh = 0;
+ mode_t orig_umask = 0;
+ int batch_gen_fd = -1;
+ int sender_keeps_checksum = 0;
++int fs_supports_hfs_compression = 0;
+ 
+ /* There's probably never more than at most 2 outstanding child processes,
+  * but set it higher, just in case. */
+@@ -1062,6 +1078,86 @@ int child_main(int argc, char *argv[])
+ 	return 0;
+ }
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++static int filesystem_supports_hfs_compression(const char *path)
++{
++	struct statfs fsb;
++	char *parent;
++	int statfs_ret, saved_err;
++
++	statfs_ret = statfs(path, &fsb);
++	if (statfs_ret != 0) {
++		saved_err = errno;
++		if ((parent = (char *)dirname((char *)path)) != NULL)
++			statfs_ret = statfs(parent, &fsb);
++		errno = saved_err;
++	}
++
++	if (statfs_ret == 0) {
++		struct attrlist attrs;
++		struct {
++			int32_t len;
++			vol_capabilities_set_t caps;
++		} attrData;
++
++		bzero(&attrs, sizeof(attrs));
++		attrs.bitmapcount = ATTR_BIT_MAP_COUNT;
++		attrs.volattr = ATTR_VOL_CAPABILITIES;
++
++		bzero(&attrData, sizeof(attrData));
++		attrData.len = sizeof(attrData);
++
++		int ret = getattrlist(fsb.f_mntonname, &attrs, &attrData, sizeof(attrData), 0);
++		if (ret == 0) {
++			if (attrData.caps[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_DECMPFS_COMPRESSION) {
++				/* Compression is supported */
++				return 1;
++			}
++		} else {
++			rprintf(FERROR, "Failure in getattrlist while determining HFS compression support on %s (%s): %s\n", path, who_am_i(), strerror(errno));
++		}
++	} else {
++		rprintf(FERROR, "Failure in statfs while determining HFS compression support on %s (%s): %s\n", path, who_am_i(), strerror(errno));
++	}
++	return 0;
++}
++#endif
++
++#if defined SUPPORT_HFS_COMPRESSION || defined SUPPORT_FORCE_CHANGE
++static void do_filesystem_compatibility_checks(const char *path)
++{
++#ifdef SUPPORT_HFS_COMPRESSION
++	fs_supports_hfs_compression = filesystem_supports_hfs_compression(path);
++	if (preserve_hfs_compression > 0) {
++		/* If the filesystem doesn't support compression and decmpfs
++		 * protection wasn't requested, disable support for compression */
++		if (!fs_supports_hfs_compression && preserve_hfs_compression < 2) {
++			preserve_hfs_compression = 0;
++			rprintf(FINFO, "Disabling HFS compression support, %s doesn't support it (use --protect-decmpfs to force protection of the com.apple.decmpfs extended attribute).\n", path);
++		}
++	}
++#endif
++
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change & SYS_IMMUTABLE) {
++		/* determine whether we'll be able to unlock a system immutable item */
++		int mib[2];
++		int securityLevel = 0;
++		size_t len = sizeof(securityLevel);
++
++		mib[0] = CTL_KERN;
++		mib[1] = KERN_SECURELVL;
++		if (sysctl(mib, 2, &securityLevel, &len, NULL, 0) == 0 && securityLevel > 0) {
++			rprintf(FERROR, "System security level is too high to force mutability on system immutable files and directories.\n");
++			/*force_change ~= ~SYS_IMMUTABLE;*/
++			exit_cleanup(RERR_UNSUPPORTED);
++		}
++	}
++#endif
++
++	/* TODO: ACLs and xattrs? */
++}
++#endif
+ 
+ void start_server(int f_in, int f_out, int argc, char *argv[])
+ {
+@@ -1069,6 +1165,10 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+ 	set_nonblocking(f_out);
+ 
+ 	io_set_sock_fds(f_in, f_out);
++#if defined SUPPORT_HFS_COMPRESSION || defined SUPPORT_FORCE_CHANGE
++	if (!local_server)
++		do_filesystem_compatibility_checks(argv[argc - 1]);
++#endif
+ 	setup_protocol(f_out, f_in);
+ 
+ 	if (protocol_version >= 23)
+@@ -1269,7 +1369,13 @@ static int start_client(int argc, char *argv[])
+ 			am_sender = 0;
+ 			if (rsync_port)
+ 				daemon_over_rsh = shell_cmd ? 1 : -1;
++#if defined SUPPORT_HFS_COMPRESSION || defined SUPPORT_FORCE_CHANGE
++			do_filesystem_compatibility_checks(*argv);
++#endif
+ 		} else { /* source is local, check dest arg */
++#if defined SUPPORT_HFS_COMPRESSION || defined SUPPORT_FORCE_CHANGE
++			do_filesystem_compatibility_checks(argv[0]);
++#endif
+ 			am_sender = 1;
+ 
+ 			if (argc > 1) {
+@@ -1297,6 +1403,9 @@ static int start_client(int argc, char *argv[])
+ 					exit_cleanup(RERR_SYNTAX);
+ 				}
+ 				shell_machine = NULL;
++#if defined SUPPORT_HFS_COMPRESSION || defined SUPPORT_FORCE_CHANGE
++				do_filesystem_compatibility_checks(p);
++#endif
+ 			} else { /* hostspec was found, so dest is remote */
+ 				argv[argc] = path;
+ 				if (rsync_port)
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -52,6 +52,7 @@ int preserve_links = 0;
+ int preserve_hard_links = 0;
+ int preserve_acls = 0;
+ int preserve_xattrs = 0;
++int preserve_hfs_compression = 0;
+ int preserve_perms = 0;
+ int preserve_fileflags = 0;
+ int preserve_executability = 0;
+@@ -703,6 +704,10 @@ void usage(enum logcode F)
+ #ifdef SUPPORT_XATTRS
+   rprintf(F," -X, --xattrs                preserve extended attributes\n");
+ #endif
++#ifdef SUPPORT_HFS_COMPRESSION
++  rprintf(F,"     --hfs-compression       preserve HFS compression (if source & destination support it)\n");
++  rprintf(F,"     --protect-decmpfs       preserve HFS compression (regardless of volume support)\n");
++#endif
+   rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
+   rprintf(F," -g, --group                 preserve group\n");
+   rprintf(F,"     --devices               preserve device files (super-user only)\n");
+@@ -954,6 +959,12 @@ static struct poptOption long_options[] = {
+   {"force-uchange",    0,  POPT_ARG_VAL,    &force_change, USR_IMMUTABLE, 0, 0 },
+   {"force-schange",    0,  POPT_ARG_VAL,    &force_change, SYS_IMMUTABLE, 0, 0 },
+ #endif
++#ifdef SUPPORT_HFS_COMPRESSION
++  {"hfs-compression",  0,  POPT_ARG_VAL,    &preserve_hfs_compression, 1, 0, 0 },
++  {"protect-decmpfs",  0,  POPT_ARG_VAL,    &preserve_hfs_compression, 2, 0, 0 },
++  {"no-hfs-compression",0, POPT_ARG_VAL,    &preserve_hfs_compression, 0, 0, 0 },
++  {"no-protect-decmpfs",0, POPT_ARG_VAL,    &preserve_hfs_compression, 0, 0, 0 },
++#endif
+   {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
+   {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
+   {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
+@@ -1902,6 +1913,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 	}
+ #endif
+ 
++	if (preserve_hfs_compression) {
++#ifdef SUPPORT_HFS_COMPRESSION
++		if (!preserve_xattrs)
++			preserve_xattrs = 1;
++		if (!preserve_fileflags)
++			preserve_fileflags = 1;
++#else
++		snprintf(err_buf,sizeof(err_buf),
++			 "HFS compression is not supported on this %s\n",
++			 am_server ? "server" : "client");
++		return 0;
++#endif
++	}
++
+ 	if (write_batch && read_batch) {
+ 		snprintf(err_buf, sizeof err_buf,
+ 			"--write-batch and --read-batch can not be used together\n");
+@@ -2486,6 +2511,11 @@ void server_options(char **args, int *argc_p)
+ 	if (preserve_fileflags)
+ 		args[ac++] = "--fileflags";
+ 
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (preserve_hfs_compression)
++		args[ac++] = preserve_hfs_compression == 1 ? "--hfs-compression" : "--protect-decmpfs";
++#endif
++
+ 	if (do_compression && def_compress_level != Z_DEFAULT_COMPRESSION) {
+ 		if (asprintf(&arg, "--compress-level=%d", def_compress_level) < 0)
+ 			goto oom;
+diff --git a/rsync.c b/rsync.c
+--- a/rsync.c
++++ b/rsync.c
+@@ -517,8 +517,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ #ifdef SUPPORT_XATTRS
+ 	if (am_root < 0)
+ 		set_stat_xattr(fname, file, new_mode);
+-	if (preserve_xattrs && fnamecmp)
++	if (preserve_xattrs && fnamecmp) {
++		uint32 tmpflags = sxp->st.st_flags;
++		sxp->st.st_flags = F_FFLAGS(file); /* set_xattr() needs to check UF_COMPRESSED */
+ 		set_xattr(fname, file, fnamecmp, sxp);
++		sxp->st.st_flags = tmpflags;
++		if (S_ISDIR(sxp->st.st_mode))
++			link_stat(fname, &sx2.st, 0);
++	}
+ #endif
+ 
+ 	if (!preserve_times
+@@ -529,6 +535,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ 	if (sxp->st.st_ino == 2 && S_ISDIR(sxp->st.st_mode))
+ 		flags |= ATTRS_SKIP_CRTIME;
+ 	if (!(flags & ATTRS_SKIP_MTIME)
++#ifdef SUPPORT_HFS_COMPRESSION
++	    && !(sxp->st.st_flags & UF_COMPRESSED) /* setting this alters mtime, so defer to after set_fileflags */
++#endif
+ 	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
+ 		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), sxp->st.st_mode, ST_FLAGS(sxp->st));
+ 		if (ret < 0) {
+@@ -634,6 +643,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ 		 && !set_fileflags(fname, fileflags))
+ 			goto cleanup;
+ 		updated = 1;
++#ifdef SUPPORT_HFS_COMPRESSION
++		int ret = set_modtime(fname, file->modtime, new_mode, fileflags);
++		if (ret < 0) {
++			rsyserr(FERROR_XFER, errno, "failed to set times on %s",
++				full_fname(fname));
++			goto cleanup;
++		}
++		if (ret != 0)
++			file->flags |= FLAG_TIME_FAILED;
++#endif
+ 	}
+ #endif
+ 
+diff --git a/rsync.h b/rsync.h
+--- a/rsync.h
++++ b/rsync.h
+@@ -540,6 +540,17 @@ typedef unsigned int size_t;
+ #define ST_FLAGS(st) NO_FFLAGS
+ #endif
+ 
++#ifndef UF_COMPRESSED
++#define UF_COMPRESSED 0x00000020
++#endif
++#ifndef VOL_CAP_FMT_DECMPFS_COMPRESSION
++#define VOL_CAP_FMT_DECMPFS_COMPRESSION 0x00010000
++#endif
++
++#if defined SUPPORT_XATTRS && defined SUPPORT_FILEFLAGS
++#define SUPPORT_HFS_COMPRESSION 1
++#endif
++
+ /* Find a variable that is either exactly 32-bits or longer.
+  * If some code depends on 32-bit truncation, it will need to
+  * take special action in a "#if SIZEOF_INT32 > 4" section. */
+diff --git a/rsync.yo b/rsync.yo
+--- a/rsync.yo
++++ b/rsync.yo
+@@ -350,6 +350,8 @@ to the detailed description below for a complete description.  verb(
+      --chmod=CHMOD           affect file and/or directory permissions
+  -A, --acls                  preserve ACLs (implies -p)
+  -X, --xattrs                preserve extended attributes
++     --hfs-compression       preserve HFS compression (if source & destination support it)
++     --protect-decmpfs       preserve HFS compression (regardless of volume support)
+  -o, --owner                 preserve owner (super-user only)
+  -g, --group                 preserve group
+      --devices               preserve device files (super-user only)
+@@ -1087,6 +1089,48 @@ flags on files and directories that are being updated or deleted on the
+ receiving side.  It does not try to affect user flags.  This option overrides
+ bf(--force-change) and bf(--force-schange).
+ 
++dit(bf(--hfs-compression)) This option causes rsync to preserve HFS+
++compression on filesystems that support it. Filesystem compression was
++introduced to HFS+ in Mac OS 10.6. A file that is compressed has no data in
++its data fork. Rather, the compressed data is stored in an extended attribute
++named com.apple.decmpfs and a file flag is set to indicate that the file is
++compressed (UF_COMPRESSED). HFS+ decompresses this data "on-the-fly" and
++presents it to the operating system as a normal file. Normal attempts to copy
++compressed files (e.g. in the Finder, via cp, ditto, etc.) will copy the
++file's decompressed contents, remove the UF_COMPRESSED file flag, and discard
++the com.apple.decmpfs extended attribute. This option will preserve the data
++in the com.apple.decmpfs extended attribute and ignore the synthesized data
++fork contents as long as both the source and destination filesystems support
++HFS+ compression.
++
++If the source or destination filesystem does not support HFS+ compression,
++this option will be disabled for both ends of the transfer. Compressed files
++will be decompressed on the destination, data in the com.apple.decmpfs
++extended attribute will be discarded, and the UF_COMPRESSED flag will not be
++set. This option is appropriate if viewing the contents of compressed files is
++required on operating systems that do not support HFS+ compression.
++
++This option implies both bf(--fileflags) and (--xattrs).
++
++dit(bf(--protect-decmpfs)) The com.apple.decmpfs extended attribute is hidden
++by default from list/get xattr calls, therefore normal attempts to copy
++compressed files will functionally decompress those files. While this is
++desirable behavior when copying files to filesystems that do not support HFS+
++compression, it has serious performance and capacity impacts when backing up
++or restoring the Mac OS X filesystem.
++
++This option will transfer the com.apple.decmpfs extended attribute regardless
++of support on the source or destination. If a source file is compressed and an
++existing file on the destination is not compressed, the data fork of the
++destination file will be truncated and the com.apple.decmpfs xattr will be
++transferred instead. Note that compressed files will not be readable to the
++operating system of the destination if that operating system does not support
++HFS+ compression. Once restored (with or without this option) to an operating
++system that supports HFS+ compression, however, these files will be accessible
++as usual.
++
++This option implies bf(--fileflags) and bf(--xattrs).
++
+ dit(bf(--chmod)) This option tells rsync to apply one or more
+ comma-separated "chmod" modes to the permission of the files in the
+ transfer.  The resulting value is treated as though it were the permissions
+diff --git a/t_stub.c b/t_stub.c
+--- a/t_stub.c
++++ b/t_stub.c
+@@ -28,6 +28,7 @@ int module_dirlen = 0;
+ int force_change = 0;
+ int preserve_times = 0;
+ int preserve_xattrs = 0;
++int preserve_hfs_compression = 0;
+ char number_separator = ',';
+ char *partial_dir;
+ char *module_dir;
+diff --git a/xattrs.c b/xattrs.c
+--- a/xattrs.c
++++ b/xattrs.c
+@@ -33,14 +33,21 @@ extern int am_generator;
+ extern int read_only;
+ extern int list_only;
+ extern int preserve_xattrs;
++extern int preserve_hfs_compression;
++extern int fs_supports_hfs_compression;
+ extern int preserve_links;
+ extern int preserve_devices;
+ extern int preserve_specials;
+ extern int checksum_seed;
++extern struct stats stats;
+ 
+ #define RSYNC_XAL_INITIAL 5
+ #define RSYNC_XAL_LIST_INITIAL 100
+ 
++#define GXD_NO_MISSING_ERROR (1<<0)
++#define GXD_OMIT_COMPRESSED (1<<1)
++#define GXD_FILE_IS_COMPRESSED (1<<2)
++
+ #define MAX_FULL_DATUM 32
+ 
+ #define HAS_PREFIX(str, prfx) (*(str) == *(prfx) \
+@@ -73,6 +80,17 @@ extern int checksum_seed;
+ #define XDEF_ACL_SUFFIX "dacl"
+ #define XDEF_ACL_ATTR RSYNC_PREFIX "%" XDEF_ACL_SUFFIX
+ 
++#define APPLE_PREFIX "com.apple."
++#define APLPRE_LEN ((int)sizeof APPLE_PREFIX - 1)
++#define DECMPFS_SUFFIX "decmpfs"
++#define RESOURCEFORK_SUFFIX "ResourceFork"
++
++#define UNREAD_DATA ((char *)1)
++
++#if MAX_DIGEST_LEN < SIZEOF_TIME_T
++#error MAX_DIGEST_LEN is too small to hold an mtime
++#endif
++
+ typedef struct {
+ 	char *datum, *name;
+ 	size_t datum_len, name_len;
+@@ -164,8 +182,7 @@ static ssize_t get_xattr_names(const char *fname)
+ /* On entry, the *len_ptr parameter contains the size of the extra space we
+  * should allocate when we create a buffer for the data.  On exit, it contains
+  * the length of the datum. */
+-static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr,
+-			    int no_missing_error)
++static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr, int flags)
+ {
+ 	size_t datum_len = sys_lgetxattr(fname, name, NULL, 0);
+ 	size_t extra_len = *len_ptr;
+@@ -174,7 +191,7 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
+ 	*len_ptr = datum_len;
+ 
+ 	if (datum_len == (size_t)-1) {
+-		if (errno == ENOTSUP || no_missing_error)
++		if (errno == ENOTSUP || flags & GXD_NO_MISSING_ERROR)
+ 			return NULL;
+ 		rsyserr(FERROR_XFER, errno,
+ 			"get_xattr_data: lgetxattr(\"%s\",\"%s\",0) failed",
+@@ -182,6 +199,15 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
+ 		return NULL;
+ 	}
+ 
++	if (flags & GXD_OMIT_COMPRESSED && datum_len > MAX_FULL_DATUM
++	 && HAS_PREFIX(name, APPLE_PREFIX)
++	 && (strcmp(name+APLPRE_LEN, DECMPFS_SUFFIX) == 0
++	  || (flags & GXD_FILE_IS_COMPRESSED && strcmp(name+APLPRE_LEN, RESOURCEFORK_SUFFIX) == 0))) {
++		/* If we are omitting compress-file-related data,, we don't want to
++		 * actually read this data. */
++		return UNREAD_DATA;
++	}
++
+ 	if (!datum_len && !extra_len)
+ 		extra_len = 1; /* request non-zero amount of memory */
+ 	if (datum_len + extra_len < datum_len)
+@@ -210,7 +236,29 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
+ 	return ptr;
+ }
+ 
+-static int rsync_xal_get(const char *fname, item_list *xalp)
++static void checksum_xattr_data(char *sum, const char *datum, size_t datum_len, stat_x *sxp)
++{
++	if (datum == UNREAD_DATA) {
++		/* For abbreviated compressed data, we store the file's mtime as the checksum. */
++		SIVAL(sum, 0, sxp->st.st_mtime);
++#if SIZEOF_TIME_T > 4
++		SIVAL(sum, 4, sxp->st.st_mtime >> 32);
++#if MAX_DIGEST_LEN > 8
++		memset(sum + 8, 0, MAX_DIGEST_LEN - 8);
++#endif
++#else
++#if MAX_DIGEST_LEN > 4
++		memset(sum + 4, 0, MAX_DIGEST_LEN - 4);
++#endif
++#endif
++	} else {
++		sum_init(checksum_seed);
++		sum_update(datum, datum_len);
++		sum_end(sum);
++	}
++}
++
++static int rsync_xal_get(const char *fname, stat_x *sxp)
+ {
+ 	ssize_t list_len, name_len;
+ 	size_t datum_len, name_offset;
+@@ -219,7 +267,8 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+ 	int user_only = am_sender ? 0 : !am_root;
+ #endif
+ 	rsync_xa *rxa;
+-	int count;
++	int count, flags;
++	item_list *xalp = sxp->xattr;
+ 
+ 	/* This puts the name list into the "namebuf" buffer. */
+ 	if ((list_len = get_xattr_names(fname)) < 0)
+@@ -249,20 +298,21 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+ 		}
+ 
+ 		datum_len = name_len; /* Pass extra size to get_xattr_data() */
+-		if (!(ptr = get_xattr_data(fname, name, &datum_len, 0)))
++		flags = GXD_OMIT_COMPRESSED;
++		if (preserve_hfs_compression && sxp->st.st_flags & UF_COMPRESSED)
++			flags |= GXD_FILE_IS_COMPRESSED;
++		if (!(ptr = get_xattr_data(fname, name, &datum_len, flags)))
+ 			return -1;
+ 
+ 		if (datum_len > MAX_FULL_DATUM) {
+ 			/* For large datums, we store a flag and a checksum. */
++			char *datum = ptr;
+ 			name_offset = 1 + MAX_DIGEST_LEN;
+-			sum_init(checksum_seed);
+-			sum_update(ptr, datum_len);
+-			free(ptr);
+-
+ 			if (!(ptr = new_array(char, name_offset + name_len)))
+ 				out_of_memory("rsync_xal_get");
+ 			*ptr = XSTATE_ABBREV;
+-			sum_end(ptr + 1);
++			checksum_xattr_data(ptr+1, datum, datum_len, sxp);
++			free(datum);
+ 		} else
+ 			name_offset = datum_len;
+ 
+@@ -307,7 +357,7 @@ int get_xattr(const char *fname, stat_x *sxp)
+ 			return 0;
+ 	}
+ 
+-	if (rsync_xal_get(fname, sxp->xattr) < 0) {
++	if (rsync_xal_get(fname, sxp) < 0) {
+ 		free_xattr(sxp);
+ 		return -1;
+ 	}
+@@ -358,6 +408,10 @@ int copy_xattrs(const char *source, const char *dest)
+ 
+ static int find_matching_xattr(item_list *xalp)
+ {
++#ifdef HAVE_OSX_XATTRS
++	xalp = NULL;
++	return -1; /* find_matching_xattr is a waste of cycles for MOSX clients */
++#else
+ 	size_t i, j;
+ 	item_list *lst = rsync_xal_l.items;
+ 
+@@ -391,6 +445,7 @@ static int find_matching_xattr(item_list *xalp)
+ 	}
+ 
+ 	return -1;
++#endif
+ }
+ 
+ /* Store *xalp on the end of rsync_xal_l */
+@@ -570,7 +625,8 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
+ 
+ 			/* Re-read the long datum. */
+ 			if (!(ptr = get_xattr_data(fname, rxa->name, &len, 0))) {
+-				rprintf(FERROR_XFER, "failed to re-read xattr %s for %s\n", rxa->name, fname);
++				if (errno != ENOTSUP && errno != ENOATTR)
++					rprintf(FERROR_XFER, "failed to re-read xattr %s for %s\n", rxa->name, fname);
+ 				write_varint(f_out, 0);
+ 				continue;
+ 			}
+@@ -792,7 +848,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+ 	int user_only = am_root <= 0;
+ #endif
+ 	size_t name_len;
+-	int ret = 0;
++	int flags, ret = 0;
+ 
+ 	/* This puts the current name list into the "namebuf" buffer. */
+ 	if ((list_len = get_xattr_names(fname)) < 0)
+@@ -804,7 +860,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+ 		if (XATTR_ABBREV(rxas[i])) {
+ 			/* See if the fnamecmp version is identical. */
+ 			len = name_len = rxas[i].name_len;
+-			if ((ptr = get_xattr_data(fnamecmp, name, &len, 1)) == NULL) {
++			flags = GXD_OMIT_COMPRESSED | GXD_NO_MISSING_ERROR;
++			if (preserve_hfs_compression && sxp->st.st_flags & UF_COMPRESSED)
++				flags |= GXD_FILE_IS_COMPRESSED;
++			if ((ptr = get_xattr_data(fnamecmp, name, &len, flags)) == NULL) {
+ 			  still_abbrev:
+ 				if (am_generator)
+ 					continue;
+@@ -818,9 +877,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+ 				goto still_abbrev;
+ 			}
+ 
+-			sum_init(checksum_seed);
+-			sum_update(ptr, len);
+-			sum_end(sum);
++			checksum_xattr_data(sum, ptr, len, sxp);
+ 			if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) != 0) {
+ 				free(ptr);
+ 				goto still_abbrev;
+@@ -889,6 +946,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+ 		}
+ 	}
+ 
++#ifdef HAVE_OSX_XATTRS
++	rsync_xal_free(xalp); /* Free this because we aren't using find_matching_xattr(). */
++#endif
++
+ 	return ret;
+ }
+ 
+@@ -935,7 +996,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
+ {
+ 	const char *name = is_access_acl ? XACC_ACL_ATTR : XDEF_ACL_ATTR;
+ 	*len_p = 0; /* no extra data alloc needed from get_xattr_data() */
+-	return get_xattr_data(fname, name, len_p, 1);
++	return get_xattr_data(fname, name, len_p, GXD_NO_MISSING_ERROR);
+ }
+ 
+ int set_xattr_acl(const char *fname, int is_access_acl, const char *buf, size_t buf_len)
+@@ -1083,6 +1144,21 @@ int x_stat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
+ 	int ret = do_stat(fname, fst);
+ 	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
+ 		xst->st_mode = 0;
++#ifdef SUPPORT_HFS_COMPRESSION
++	if (fst->st_flags & UF_COMPRESSED) {
++		if (preserve_hfs_compression) {
++			/* We're sending the compression xattr, not the decompressed data fork.
++			 * Setting rsync's idea of the file size to 0 effectively prevents the
++			 * transfer of the data fork. */
++			fst->st_size = 0;
++		} else if (fs_supports_hfs_compression) {
++			/* If the sender's filesystem supports compression, then we'll be able
++			 * to send the decompressed data fork and the decmpfs xattr will be
++			 * hidden (not sent). As such, we need to strip the compression flag. */
++			fst->st_flags &= ~UF_COMPRESSED;
++		}
++	}
++#endif
+ 	return ret;
+ }
+ 
