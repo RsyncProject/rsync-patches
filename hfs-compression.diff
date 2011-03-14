@@ -193,7 +193,7 @@ diff --git a/lib/sysxattrs.c b/lib/sysxattrs.c
 diff --git a/main.c b/main.c
 --- a/main.c
 +++ b/main.c
-@@ -27,6 +27,21 @@
+@@ -27,6 +27,19 @@
  #include <locale.h>
  #endif
  
@@ -201,21 +201,19 @@ diff --git a/main.c b/main.c
 +/* For getattrlist() */
 +#include <sys/attr.h>
 +/* For statfs(): */
-+#include <sys/param.h>
 +#include <sys/mount.h>
 +/* For dirname() */
 +#include <libgen.h>
 +#endif
 +
 +#ifdef SUPPORT_FORCE_CHANGE
-+#include <sys/types.h>
 +#include <sys/sysctl.h>
 +#endif
 +
  extern int verbose;
  extern int dry_run;
  extern int list_only;
-@@ -47,7 +62,9 @@ extern int copy_dirlinks;
+@@ -47,7 +60,9 @@ extern int copy_dirlinks;
  extern int copy_unsafe_links;
  extern int keep_dirlinks;
  extern int preserve_hard_links;
@@ -225,7 +223,7 @@ diff --git a/main.c b/main.c
  extern int file_total;
  extern int recurse;
  extern int xfer_dirs;
-@@ -87,6 +104,7 @@ int local_server = 0;
+@@ -87,6 +102,7 @@ int local_server = 0;
  int daemon_over_rsh = 0;
  mode_t orig_umask = 0;
  int batch_gen_fd = -1;
@@ -233,7 +231,7 @@ diff --git a/main.c b/main.c
  
  /* There's probably never more than at most 2 outstanding child processes,
   * but set it higher, just in case. */
-@@ -961,6 +979,86 @@ int child_main(int argc, char *argv[])
+@@ -961,6 +977,86 @@ int child_main(int argc, char *argv[])
  	return 0;
  }
  
@@ -320,7 +318,7 @@ diff --git a/main.c b/main.c
  
  void start_server(int f_in, int f_out, int argc, char *argv[])
  {
-@@ -968,6 +1066,10 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+@@ -968,6 +1064,10 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
  	set_nonblocking(f_out);
  
  	io_set_sock_fds(f_in, f_out);
@@ -331,7 +329,7 @@ diff --git a/main.c b/main.c
  	setup_protocol(f_out, f_in);
  
  	if (protocol_version >= 23)
-@@ -1159,7 +1261,13 @@ static int start_client(int argc, char *argv[])
+@@ -1159,7 +1259,13 @@ static int start_client(int argc, char *argv[])
  			am_sender = 0;
  			if (rsync_port)
  				daemon_over_rsh = shell_cmd ? 1 : -1;
@@ -345,7 +343,7 @@ diff --git a/main.c b/main.c
  			am_sender = 1;
  
  			if (argc > 1) {
-@@ -1187,6 +1295,9 @@ static int start_client(int argc, char *argv[])
+@@ -1187,6 +1293,9 @@ static int start_client(int argc, char *argv[])
  					exit_cleanup(RERR_SYNTAX);
  				}
  				shell_machine = NULL;
@@ -640,7 +638,7 @@ diff --git a/xattrs.c b/xattrs.c
  	if (!datum_len && !extra_len)
  		extra_len = 1; /* request non-zero amount of memory */
  	if (datum_len + extra_len < datum_len)
-@@ -209,7 +235,32 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
+@@ -209,7 +235,29 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
  	return ptr;
  }
  
@@ -661,12 +659,9 @@ diff --git a/xattrs.c b/xattrs.c
 +#endif
 +#endif
 +	} else {
-+		int chksum_len;
 +		sum_init(checksum_seed);
 +		sum_update(datum, datum_len);
-+		chksum_len = sum_end(sum);
-+		if (chksum_len < MAX_DIGEST_LEN)
-+			memset(sum + chksum_len, 0, MAX_DIGEST_LEN - chksum_len);
++		sum_end(sum);
 +	}
 +}
 +
@@ -674,7 +669,7 @@ diff --git a/xattrs.c b/xattrs.c
  {
  	ssize_t list_len, name_len;
  	size_t datum_len, name_offset;
-@@ -218,7 +269,8 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+@@ -218,7 +266,8 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
  	int user_only = am_sender ? 0 : am_root <= 0;
  #endif
  	rsync_xa *rxa;
@@ -684,7 +679,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  	/* This puts the name list into the "namebuf" buffer. */
  	if ((list_len = get_xattr_names(fname)) < 0)
-@@ -248,20 +300,21 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+@@ -248,20 +297,21 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
  		}
  
  		datum_len = name_len; /* Pass extra size to get_xattr_data() */
@@ -712,7 +707,7 @@ diff --git a/xattrs.c b/xattrs.c
  		} else
  			name_offset = datum_len;
  
-@@ -306,7 +359,7 @@ int get_xattr(const char *fname, stat_x *sxp)
+@@ -306,7 +356,7 @@ int get_xattr(const char *fname, stat_x *sxp)
  			return 0;
  	}
  
@@ -721,7 +716,7 @@ diff --git a/xattrs.c b/xattrs.c
  		free_xattr(sxp);
  		return -1;
  	}
-@@ -357,6 +410,10 @@ int copy_xattrs(const char *source, const char *dest)
+@@ -357,6 +407,10 @@ int copy_xattrs(const char *source, const char *dest)
  
  static int find_matching_xattr(item_list *xalp)
  {
@@ -732,7 +727,7 @@ diff --git a/xattrs.c b/xattrs.c
  	size_t i, j;
  	item_list *lst = rsync_xal_l.items;
  
-@@ -390,6 +447,7 @@ static int find_matching_xattr(item_list *xalp)
+@@ -390,6 +444,7 @@ static int find_matching_xattr(item_list *xalp)
  	}
  
  	return -1;
@@ -740,7 +735,7 @@ diff --git a/xattrs.c b/xattrs.c
  }
  
  /* Store *xalp on the end of rsync_xal_l */
-@@ -569,7 +627,8 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
+@@ -569,7 +624,8 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
  
  			/* Re-read the long datum. */
  			if (!(ptr = get_xattr_data(fname, rxa->name, &len, 0))) {
@@ -750,7 +745,7 @@ diff --git a/xattrs.c b/xattrs.c
  				write_varint(f_out, 0);
  				continue;
  			}
-@@ -791,7 +850,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -791,7 +847,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  	int user_only = am_root <= 0;
  #endif
  	size_t name_len;
@@ -759,7 +754,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  	/* This puts the current name list into the "namebuf" buffer. */
  	if ((list_len = get_xattr_names(fname)) < 0)
-@@ -803,7 +862,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -803,7 +859,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  		if (XATTR_ABBREV(rxas[i])) {
  			/* See if the fnamecmp version is identical. */
  			len = name_len = rxas[i].name_len;
@@ -771,7 +766,7 @@ diff --git a/xattrs.c b/xattrs.c
  			  still_abbrev:
  				if (am_generator)
  					continue;
-@@ -812,14 +874,8 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -812,14 +871,8 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  				ret = -1;
  				continue;
  			}
@@ -787,7 +782,7 @@ diff --git a/xattrs.c b/xattrs.c
  			if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) != 0) {
  				free(ptr);
  				goto still_abbrev;
-@@ -888,6 +944,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -888,6 +941,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  		}
  	}
  
@@ -798,7 +793,7 @@ diff --git a/xattrs.c b/xattrs.c
  	return ret;
  }
  
-@@ -934,7 +994,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
+@@ -934,7 +991,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
  {
  	const char *name = is_access_acl ? XACC_ACL_ATTR : XDEF_ACL_ATTR;
  	*len_p = 0; /* no extra data alloc needed from get_xattr_data() */
@@ -807,7 +802,7 @@ diff --git a/xattrs.c b/xattrs.c
  }
  
  int set_xattr_acl(const char *fname, int is_access_acl, const char *buf, size_t buf_len)
-@@ -1082,6 +1142,21 @@ int x_stat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
+@@ -1082,6 +1139,21 @@ int x_stat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
  	int ret = do_stat(fname, fst);
  	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
  		xst->st_mode = 0;
