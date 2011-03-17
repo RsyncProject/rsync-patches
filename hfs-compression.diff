@@ -22,12 +22,13 @@ based-on: patch/master/crtimes
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -1580,6 +1580,8 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
+@@ -1580,6 +1580,9 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
  #ifdef SUPPORT_XATTRS
  		if (preserve_xattrs) {
  			sx.st.st_mode = file->mode;
 +			if (preserve_fileflags)
 +				sx.st.st_flags = F_FFLAGS(file);
++			sx.st.st_mtime = file->modtime; /* get_xattr needs mtime for decmpfs xattrs */
  			if (get_xattr(fname, &sx) < 0) {
  				io_error |= IOERR_GENERAL;
  				return NULL;
@@ -82,7 +83,7 @@ diff --git a/generator.c b/generator.c
 +			if (sx.st.st_flags & UF_COMPRESSED) {
 +				if (preserve_hfs_compression)
 +					sx.st.st_size = 0;
-+				else if (fs_supports_hfs_compression)
++				else
 +					sx.st.st_flags &= ~UF_COMPRESSED;
 +			}
 +#endif
@@ -277,7 +278,7 @@ diff --git a/main.c b/main.c
 +		 * protection wasn't requested, disable support for compression */
 +		if (!fs_supports_hfs_compression && preserve_hfs_compression < 2) {
 +			preserve_hfs_compression = 0;
-+			rprintf(FINFO, "Disabling HFS compression support, %s doesn't support it (use --protect-decmpfs to force protection of the com.apple.decmpfs extended attribute).\n", path);
++			rprintf(FINFO, "%s: Disabling HFS compression support, %s doesn't support it (use --protect-decmpfs to force protection of the com.apple.decmpfs extended attribute).\n", who_am_i(), path);
 +		}
 +	}
 +#endif
@@ -550,18 +551,15 @@ diff --git a/t_stub.c b/t_stub.c
 diff --git a/xattrs.c b/xattrs.c
 --- a/xattrs.c
 +++ b/xattrs.c
-@@ -33,14 +33,21 @@ extern int am_generator;
+@@ -33,6 +33,7 @@ extern int am_generator;
  extern int read_only;
  extern int list_only;
  extern int preserve_xattrs;
 +extern int preserve_hfs_compression;
-+extern int fs_supports_hfs_compression;
  extern int preserve_links;
  extern int preserve_devices;
  extern int preserve_specials;
- extern int checksum_seed;
-+extern struct stats stats;
- 
+@@ -41,6 +42,10 @@ extern int checksum_seed;
  #define RSYNC_XAL_INITIAL 5
  #define RSYNC_XAL_LIST_INITIAL 100
  
@@ -572,7 +570,7 @@ diff --git a/xattrs.c b/xattrs.c
  #define MAX_FULL_DATUM 32
  
  #define HAS_PREFIX(str, prfx) (*(str) == *(prfx) \
-@@ -73,6 +80,17 @@ extern int checksum_seed;
+@@ -73,6 +78,17 @@ extern int checksum_seed;
  #define XDEF_ACL_SUFFIX "dacl"
  #define XDEF_ACL_ATTR RSYNC_PREFIX "%" XDEF_ACL_SUFFIX
  
@@ -590,7 +588,7 @@ diff --git a/xattrs.c b/xattrs.c
  typedef struct {
  	char *datum, *name;
  	size_t datum_len, name_len;
-@@ -164,8 +182,7 @@ static ssize_t get_xattr_names(const char *fname)
+@@ -164,8 +180,7 @@ static ssize_t get_xattr_names(const char *fname)
  /* On entry, the *len_ptr parameter contains the size of the extra space we
   * should allocate when we create a buffer for the data.  On exit, it contains
   * the length of the datum. */
@@ -600,7 +598,7 @@ diff --git a/xattrs.c b/xattrs.c
  {
  	size_t datum_len = sys_lgetxattr(fname, name, NULL, 0);
  	size_t extra_len = *len_ptr;
-@@ -174,7 +191,7 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
+@@ -174,7 +189,7 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
  	*len_ptr = datum_len;
  
  	if (datum_len == (size_t)-1) {
@@ -609,7 +607,7 @@ diff --git a/xattrs.c b/xattrs.c
  			return NULL;
  		rsyserr(FERROR_XFER, errno,
  			"get_xattr_data: lgetxattr(\"%s\",\"%s\",0) failed",
-@@ -182,6 +199,15 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
+@@ -182,6 +197,15 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
  		return NULL;
  	}
  
@@ -617,7 +615,7 @@ diff --git a/xattrs.c b/xattrs.c
 +	 && HAS_PREFIX(name, APPLE_PREFIX)
 +	 && (strcmp(name+APLPRE_LEN, DECMPFS_SUFFIX) == 0
 +	  || (flags & GXD_FILE_IS_COMPRESSED && strcmp(name+APLPRE_LEN, RESOURCEFORK_SUFFIX) == 0))) {
-+		/* If we are omitting compress-file-related data,, we don't want to
++		/* If we are omitting compress-file-related data, we don't want to
 +		 * actually read this data. */
 +		return UNREAD_DATA;
 +	}
@@ -625,7 +623,7 @@ diff --git a/xattrs.c b/xattrs.c
  	if (!datum_len && !extra_len)
  		extra_len = 1; /* request non-zero amount of memory */
  	if (datum_len + extra_len < datum_len)
-@@ -210,7 +236,29 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
+@@ -210,7 +234,29 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
  	return ptr;
  }
  
@@ -656,7 +654,7 @@ diff --git a/xattrs.c b/xattrs.c
  {
  	ssize_t list_len, name_len;
  	size_t datum_len, name_offset;
-@@ -219,7 +267,8 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+@@ -219,7 +265,8 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
  	int user_only = am_sender ? 0 : !am_root;
  #endif
  	rsync_xa *rxa;
@@ -666,7 +664,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  	/* This puts the name list into the "namebuf" buffer. */
  	if ((list_len = get_xattr_names(fname)) < 0)
-@@ -249,20 +298,21 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+@@ -249,20 +296,22 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
  		}
  
  		datum_len = name_len; /* Pass extra size to get_xattr_data() */
@@ -690,11 +688,12 @@ diff --git a/xattrs.c b/xattrs.c
  			*ptr = XSTATE_ABBREV;
 -			sum_end(ptr + 1);
 +			checksum_xattr_data(ptr+1, datum, datum_len, sxp);
-+			free(datum);
++			if (datum != UNREAD_DATA)
++				free(datum);
  		} else
  			name_offset = datum_len;
  
-@@ -307,7 +357,7 @@ int get_xattr(const char *fname, stat_x *sxp)
+@@ -307,7 +356,7 @@ int get_xattr(const char *fname, stat_x *sxp)
  			return 0;
  	}
  
@@ -703,7 +702,7 @@ diff --git a/xattrs.c b/xattrs.c
  		free_xattr(sxp);
  		return -1;
  	}
-@@ -358,6 +408,10 @@ int copy_xattrs(const char *source, const char *dest)
+@@ -358,6 +407,10 @@ int copy_xattrs(const char *source, const char *dest)
  
  static int find_matching_xattr(item_list *xalp)
  {
@@ -714,7 +713,7 @@ diff --git a/xattrs.c b/xattrs.c
  	size_t i, j;
  	item_list *lst = rsync_xal_l.items;
  
-@@ -391,6 +445,7 @@ static int find_matching_xattr(item_list *xalp)
+@@ -391,6 +444,7 @@ static int find_matching_xattr(item_list *xalp)
  	}
  
  	return -1;
@@ -722,7 +721,7 @@ diff --git a/xattrs.c b/xattrs.c
  }
  
  /* Store *xalp on the end of rsync_xal_l */
-@@ -570,7 +625,8 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
+@@ -570,7 +624,8 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
  
  			/* Re-read the long datum. */
  			if (!(ptr = get_xattr_data(fname, rxa->name, &len, 0))) {
@@ -732,7 +731,7 @@ diff --git a/xattrs.c b/xattrs.c
  				write_varint(f_out, 0);
  				continue;
  			}
-@@ -792,7 +848,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -792,7 +847,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  	int user_only = am_root <= 0;
  #endif
  	size_t name_len;
@@ -741,7 +740,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  	/* This puts the current name list into the "namebuf" buffer. */
  	if ((list_len = get_xattr_names(fname)) < 0)
-@@ -804,7 +860,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -804,7 +859,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  		if (XATTR_ABBREV(rxas[i])) {
  			/* See if the fnamecmp version is identical. */
  			len = name_len = rxas[i].name_len;
@@ -753,7 +752,7 @@ diff --git a/xattrs.c b/xattrs.c
  			  still_abbrev:
  				if (am_generator)
  					continue;
-@@ -818,9 +877,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -818,9 +876,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  				goto still_abbrev;
  			}
  
@@ -764,7 +763,7 @@ diff --git a/xattrs.c b/xattrs.c
  			if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) != 0) {
  				free(ptr);
  				goto still_abbrev;
-@@ -889,6 +946,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -889,6 +945,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  		}
  	}
  
@@ -775,7 +774,7 @@ diff --git a/xattrs.c b/xattrs.c
  	return ret;
  }
  
-@@ -935,7 +996,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
+@@ -935,7 +995,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
  {
  	const char *name = is_access_acl ? XACC_ACL_ATTR : XDEF_ACL_ATTR;
  	*len_p = 0; /* no extra data alloc needed from get_xattr_data() */
@@ -784,24 +783,56 @@ diff --git a/xattrs.c b/xattrs.c
  }
  
  int set_xattr_acl(const char *fname, int is_access_acl, const char *buf, size_t buf_len)
-@@ -1083,6 +1144,21 @@ int x_stat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
- 	int ret = do_stat(fname, fst);
- 	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
- 		xst->st_mode = 0;
+@@ -1078,11 +1138,33 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
+ 	return 0;
+ }
+ 
 +#ifdef SUPPORT_HFS_COMPRESSION
++static inline void hfs_compress_tweaks(STRUCT_STAT *fst)
++{
 +	if (fst->st_flags & UF_COMPRESSED) {
 +		if (preserve_hfs_compression) {
 +			/* We're sending the compression xattr, not the decompressed data fork.
 +			 * Setting rsync's idea of the file size to 0 effectively prevents the
 +			 * transfer of the data fork. */
 +			fst->st_size = 0;
-+		} else if (fs_supports_hfs_compression) {
++		} else {
 +			/* If the sender's filesystem supports compression, then we'll be able
 +			 * to send the decompressed data fork and the decmpfs xattr will be
 +			 * hidden (not sent). As such, we need to strip the compression flag. */
 +			fst->st_flags &= ~UF_COMPRESSED;
 +		}
 +	}
++}
++#endif
++
+ int x_stat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
+ {
+ 	int ret = do_stat(fname, fst);
+ 	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
+ 		xst->st_mode = 0;
++#ifdef SUPPORT_HFS_COMPRESSION
++	hfs_compress_tweaks(fst);
++#endif
+ 	return ret;
+ }
+ 
+@@ -1091,6 +1173,9 @@ int x_lstat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
+ 	int ret = do_lstat(fname, fst);
+ 	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
+ 		xst->st_mode = 0;
++#ifdef SUPPORT_HFS_COMPRESSION
++	hfs_compress_tweaks(fst);
++#endif
+ 	return ret;
+ }
+ 
+@@ -1099,6 +1184,9 @@ int x_fstat(int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
+ 	int ret = do_fstat(fd, fst);
+ 	if ((ret < 0 || get_stat_xattr(NULL, fd, fst, xst) < 0) && xst)
+ 		xst->st_mode = 0;
++#ifdef SUPPORT_HFS_COMPRESSION
++	hfs_compress_tweaks(fst);
 +#endif
  	return ret;
  }
