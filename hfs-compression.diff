@@ -22,12 +22,10 @@ based-on: patch/b3.0.x/crtimes
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -1493,6 +1493,9 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
- #ifdef SUPPORT_XATTRS
- 		if (preserve_xattrs) {
- 			sx.st.st_mode = file->mode;
-+			if (preserve_fileflags)
-+				sx.st.st_flags = F_FFLAGS(file);
+@@ -1497,6 +1497,7 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
+ 			if (preserve_fileflags)
+ 				sx.st.st_flags = F_FFLAGS(file);
+ #endif
 +			sx.st.st_mtime = file->modtime; /* get_xattr needs mtime for decmpfs xattrs */
  			sx.xattr = NULL;
  			if (get_xattr(fname, &sx) < 0) {
@@ -44,7 +42,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_links;
  extern int preserve_devices;
  extern int preserve_specials;
-@@ -1569,13 +1571,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1568,13 +1570,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  				goto cleanup;
  			}
  		}
@@ -58,9 +56,9 @@ diff --git a/generator.c b/generator.c
  
  		/* We need to ensure that the dirs in the transfer have writable
  		 * permissions during the time we are putting files within them.
-@@ -1585,6 +1580,16 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 		 && make_mutable(fname, file->mode, F_FFLAGS(file), force_change))
- 			need_retouch_dir_perms = 1;
+@@ -1586,6 +1581,16 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 				need_retouch_dir_perms = 1;
+ 		}
  #endif
 +
 +#ifdef SUPPORT_XATTRS
@@ -75,7 +73,7 @@ diff --git a/generator.c b/generator.c
  #ifdef HAVE_CHMOD
  		if (!am_root && !(file->mode & S_IWUSR) && dir_tweaking) {
  			mode_t mode = file->mode | S_IWUSR;
-@@ -1885,6 +1890,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1886,6 +1891,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  					fname, fnamecmpbuf);
  			}
  			sx.st.st_size = F_LENGTH(fuzzy_file);
@@ -90,7 +88,7 @@ diff --git a/generator.c b/generator.c
  			statret = 0;
  			fnamecmp = fnamecmpbuf;
  			fnamecmp_type = FNAMECMP_FUZZY;
-@@ -2069,6 +2082,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -2070,6 +2083,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  	if (read_batch)
  		goto cleanup;
  
@@ -424,7 +422,7 @@ diff --git a/receiver.c b/receiver.c
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -454,8 +454,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -498,8 +498,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  #ifdef SUPPORT_XATTRS
  	if (am_root < 0)
  		set_stat_xattr(fname, file, new_mode);
@@ -440,7 +438,7 @@ diff --git a/rsync.c b/rsync.c
  #endif
  
  	if (!preserve_times
-@@ -466,6 +472,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -510,6 +516,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  	if (sxp->st.st_ino == 2 && S_ISDIR(sxp->st.st_mode))
  		flags |= ATTRS_SKIP_CRTIME;
  	if (!(flags & ATTRS_SKIP_MTIME)
@@ -450,7 +448,7 @@ diff --git a/rsync.c b/rsync.c
  	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
  		int ret = set_modtime(fname, file->modtime, sxp->st.st_mode, ST_FLAGS(sxp->st));
  		if (ret < 0) {
-@@ -571,6 +580,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -620,6 +629,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		 && !set_fileflags(fname, fileflags))
  			goto cleanup;
  		updated = 1;

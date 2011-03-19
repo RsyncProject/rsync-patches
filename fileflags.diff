@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 779663fc6cabf042cfaa6869fd0b10b2d21f5b85
+based-on: e71130fd7739562cd190a92d3f8bcbda02168892
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -175,6 +175,17 @@ diff --git a/flist.c b/flist.c
  	if (preserve_uid)
  		F_OWNER(file) = st.st_uid;
  	if (preserve_gid)
+@@ -1429,6 +1464,10 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
+ #ifdef SUPPORT_XATTRS
+ 		if (preserve_xattrs) {
+ 			sx.st.st_mode = file->mode;
++#ifdef SUPPORT_FILEFLAGS
++			if (preserve_fileflags)
++				sx.st.st_flags = F_FFLAGS(file);
++#endif
+ 			sx.xattr = NULL;
+ 			if (get_xattr(fname, &sx) < 0) {
+ 				io_error |= IOERR_GENERAL;
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -189,7 +200,7 @@ diff --git a/generator.c b/generator.c
  extern int delete_mode;
  extern int delete_before;
  extern int delete_during;
-@@ -164,11 +166,18 @@ static enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
+@@ -164,11 +166,15 @@ static enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
  	}
  
  	if (flags & DEL_NO_UID_WRITE)
@@ -200,22 +211,21 @@ diff --git a/generator.c b/generator.c
  		/* This only happens on the first call to delete_item() since
  		 * delete_dir_contents() always calls us w/DEL_DIR_IS_EMPTY. */
 +#ifdef SUPPORT_FORCE_CHANGE
-+		if (force_change) {
-+			STRUCT_STAT st;
-+			if (x_lstat(fbuf, &st, NULL) == 0)
-+				make_mutable(fbuf, st.st_mode, st.st_flags, force_change);
-+		}
++		if (force_change)
++			make_mutable(fbuf, NULL, NO_FFLAGS, force_change);
 +#endif
  		ignore_perishable = 1;
  		/* If DEL_RECURSE is not set, this just reports emptiness. */
  		ret = delete_dir_contents(fbuf, flags);
-@@ -285,8 +294,12 @@ static enum delret delete_dir_contents(char *fname, uint16 flags)
+@@ -285,8 +291,14 @@ static enum delret delete_dir_contents(char *fname, uint16 flags)
  		}
  
  		strlcpy(p, fp->basename, remainder);
 +#ifdef SUPPORT_FORCE_CHANGE
-+		if (force_change)
-+			make_mutable(fname, fp->mode, F_FFLAGS(fp), force_change);
++		if (force_change) {
++			mode_t mode = fp->mode;
++			make_mutable(fname, &mode, F_FFLAGS(fp), force_change);
++		}
 +#endif
  		if (!(fp->mode & S_IWUSR) && !am_root && fp->flags & FLAG_OWNED_BY_US)
 -			do_chmod(fname, fp->mode | S_IWUSR);
@@ -223,7 +233,7 @@ diff --git a/generator.c b/generator.c
  		/* Save stack by recursing to ourself directly. */
  		if (S_ISDIR(fp->mode)) {
  			if (delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
-@@ -647,6 +660,10 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -647,6 +659,10 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  			return 0;
  		if (perms_differ(file, sxp))
  			return 0;
@@ -234,7 +244,7 @@ diff --git a/generator.c b/generator.c
  		if (ownership_differs(file, sxp))
  			return 0;
  #ifdef SUPPORT_ACLS
-@@ -698,6 +715,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -698,6 +714,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		if (gid_ndx && !(file->flags & FLAG_SKIP_GROUP)
  		    && sxp->st.st_gid != (gid_t)F_GROUP(file))
  			iflags |= ITEM_REPORT_GROUP;
@@ -246,7 +256,7 @@ diff --git a/generator.c b/generator.c
  #ifdef SUPPORT_ACLS
  		if (preserve_acls && !S_ISLNK(file->mode)) {
  			if (!ACL_READY(*sxp))
-@@ -1491,6 +1513,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1491,6 +1512,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			file->mode = dest_mode(file->mode, sx.st.st_mode,
  					       dflt_perms, statret == 0);
  		}
@@ -257,14 +267,16 @@ diff --git a/generator.c b/generator.c
  		if (statret != 0 && basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
  					      itemizing, code);
-@@ -1533,10 +1559,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1533,10 +1558,17 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		/* We need to ensure that the dirs in the transfer have writable
  		 * permissions during the time we are putting files within them.
  		 * This is then fixed after the transfer is done. */
 +#ifdef SUPPORT_FORCE_CHANGE
-+		if (force_change && F_FFLAGS(file) & force_change
-+		 && make_mutable(fname, file->mode, F_FFLAGS(file), force_change))
-+			need_retouch_dir_perms = 1;
++		if (force_change && F_FFLAGS(file) & force_change) {
++			mode_t mode = file->mode;
++			if (make_mutable(fname, &mode, F_FFLAGS(file), force_change))
++				need_retouch_dir_perms = 1;
++		}
 +#endif
  #ifdef HAVE_CHMOD
  		if (!am_root && !(file->mode & S_IWUSR) && dir_tweaking) {
@@ -274,7 +286,7 @@ diff --git a/generator.c b/generator.c
  				rsyserr(FERROR_XFER, errno,
  					"failed to modify permissions on %s",
  					full_fname(fname));
-@@ -1571,6 +1602,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1571,6 +1603,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		file->mode = dest_mode(file->mode, sx.st.st_mode, dflt_perms,
  				       exists);
  	}
@@ -285,7 +297,7 @@ diff --git a/generator.c b/generator.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (preserve_hard_links && F_HLINK_NOT_FIRST(file)
-@@ -2114,13 +2149,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -2114,13 +2150,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  			continue;
  		fname = f_name(file, NULL);
  		if (fix_dir_perms)
@@ -445,7 +457,11 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -32,6 +32,7 @@ extern int dry_run;
+@@ -29,9 +29,11 @@
+ 
+ extern int verbose;
+ extern int dry_run;
++extern int force_change;
  extern int preserve_acls;
  extern int preserve_xattrs;
  extern int preserve_perms;
@@ -453,7 +469,7 @@ diff --git a/rsync.c b/rsync.c
  extern int preserve_executability;
  extern int preserve_times;
  extern int am_root;
-@@ -374,6 +375,39 @@ mode_t dest_mode(mode_t flist_mode, mode_t stat_mode, int dflt_perms,
+@@ -374,6 +376,74 @@ mode_t dest_mode(mode_t flist_mode, mode_t stat_mode, int dflt_perms,
  	return new_mode;
  }
  
@@ -463,37 +479,94 @@ diff --git a/rsync.c b/rsync.c
 +{
 +	if (do_chflags(fname, fileflags) != 0) {
 +		rsyserr(FERROR_XFER, errno,
-+			"failed to set file flags on %s",
-+			full_fname(fname));
++			"failed to set fileflags (%x) on %s",
++			fileflags, full_fname(fname));
 +		return 0;
 +	}
 +
 +	return 1;
 +}
 +
-+/* Remove immutable flags from an object, so it can be altered/removed. */
-+int make_mutable(const char *fname, mode_t mode, uint32 fileflags, uint32 iflags)
++/* Remove immutable flags from an object, so it can be altered/removed.
++ * Returns the fileflags if flags were removed, otherwise 0.  If the
++ * fileflags value is NO_FFLAGS, we will stat the fname to figure out
++ * what the flags are, and return the mode via *mode_ptr (if non-NULL). */
++uint32 make_mutable(const char *fname, mode_t *mode_ptr, uint32 fileflags, uint32 iflags)
 +{
-+	if (S_ISLNK(mode) || !(fileflags & iflags))
++	if (fileflags == NO_FFLAGS) {
++		STRUCT_STAT st;
++		if (x_lstat(fname, &st, NULL) < 0)
++			return 0;
++		fileflags = st.st_flags;
++		if (mode_ptr)
++			*mode_ptr = st.st_mode;
++		else
++			mode_ptr = &st.st_mode;
++	}
++
++	if ((mode_ptr && S_ISLNK(*mode_ptr)) || !(fileflags & iflags))
 +		return 0;
++
 +	if (!set_fileflags(fname, fileflags & ~iflags))
-+		return -1;
-+	return 1;
++		return 0;
++
++	return fileflags;
 +}
 +
 +/* Undo a prior make_mutable() call that returned a 1. */
 +int undo_make_mutable(const char *fname, uint32 fileflags)
 +{
-+	if (!set_fileflags(fname, fileflags))
++	if (!set_fileflags(fname, fileflags)) {
++		rsyserr(FINFO, errno, "failed to relock %s", full_fname(fname));
 +		return -1;
++	}
 +	return 1;
++}
++
++/* This returns the st_flags value if the parent directory was made mutable, otherwise 0.
++ * It stores the parent directory path into parent_dirbuf. */
++int make_parentdir_mutable(const char *fname, uint32 iflags, char *parent_dirbuf, int parent_dirbuf_size)
++{
++	char *slash = strrchr(fname, '/');
++
++	if (slash) {
++		int len = slash - fname;
++		if (len >= parent_dirbuf_size)
++			return 0;
++		strlcpy(parent_dirbuf, fname, len+1);
++	} else
++		strlcpy(parent_dirbuf, ".", parent_dirbuf_size);
++
++	return make_mutable(parent_dirbuf, NULL, NO_FFLAGS, iflags);
 +}
 +#endif
 +
  int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		   const char *fnamecmp, int flags)
  {
-@@ -429,7 +463,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -382,6 +452,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ 	int change_uid, change_gid;
+ 	mode_t new_mode = file->mode;
+ 	int inherit;
++#ifdef SUPPORT_FORCE_CHANGE
++	int became_mutable = 0;
++#endif
+ 
+ 	if (!sxp) {
+ 		if (dry_run)
+@@ -411,6 +484,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ 	if (daemon_chmod_modes && !S_ISLNK(new_mode))
+ 		new_mode = tweak_mode(new_mode, daemon_chmod_modes);
+ 
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change)
++		became_mutable = make_mutable(fname, &sxp->st.st_mode, sxp->st.st_flags, force_change);
++#endif
++
+ #ifdef SUPPORT_ACLS
+ 	if (preserve_acls && !S_ISLNK(file->mode) && !ACL_READY(*sxp))
+ 		get_acl(fname, sxp);
+@@ -429,7 +507,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		flags |= ATTRS_SKIP_MTIME;
  	if (!(flags & ATTRS_SKIP_MTIME)
  	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
@@ -502,7 +575,7 @@ diff --git a/rsync.c b/rsync.c
  		if (ret < 0) {
  			rsyserr(FERROR_XFER, errno, "failed to set times on %s",
  				full_fname(fname));
-@@ -465,7 +499,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -465,7 +543,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		if (am_root >= 0) {
  			uid_t uid = change_uid ? (uid_t)F_OWNER(file) : sxp->st.st_uid;
  			gid_t gid = change_gid ? (gid_t)F_GROUP(file) : sxp->st.st_gid;
@@ -511,7 +584,7 @@ diff --git a/rsync.c b/rsync.c
  				/* We shouldn't have attempted to change uid
  				 * or gid unless have the privilege. */
  				rsyserr(FERROR_XFER, errno, "%s %s failed",
-@@ -503,7 +537,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -503,7 +581,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  
  #ifdef HAVE_CHMOD
  	if (!BITS_EQUAL(sxp->st.st_mode, new_mode, CHMOD_BITS)) {
@@ -520,10 +593,15 @@ diff --git a/rsync.c b/rsync.c
  		if (ret < 0) {
  			rsyserr(FERROR_XFER, errno,
  				"failed to set permissions on %s",
-@@ -515,6 +549,19 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -515,6 +593,24 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  	}
  #endif
  
++#ifdef SUPPORT_FORCE_CHANGE
++	if (became_mutable)
++		undo_make_mutable(fname, sxp->st.st_flags);
++#endif
++
 +#ifdef SUPPORT_FILEFLAGS
 +	if (preserve_fileflags && !S_ISLNK(sxp->st.st_mode)
 +	 && sxp->st.st_flags != F_FFLAGS(file)) {
@@ -540,7 +618,7 @@ diff --git a/rsync.c b/rsync.c
  	if (verbose > 1 && flags & ATTRS_REPORT) {
  		if (updated)
  			rprintf(FCLIENT, "%s\n", fname);
-@@ -578,7 +625,8 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -578,7 +674,8 @@ int finish_transfer(const char *fname, const char *fnametmp,
  
  	/* Change permissions before putting the file into place. */
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
@@ -550,7 +628,7 @@ diff --git a/rsync.c b/rsync.c
  
  	/* move tmp file over real file */
  	if (verbose > 2)
-@@ -597,6 +645,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -597,6 +694,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	}
  	if (ret == 0) {
  		/* The file was moved into place (not copied), so it's done. */
@@ -755,32 +833,89 @@ diff --git a/syscall.c b/syscall.c
  extern int preserve_perms;
  extern int preserve_executability;
  
-@@ -50,7 +51,23 @@ int do_unlink(const char *fname)
+@@ -50,14 +51,56 @@ int do_unlink(const char *fname)
  {
  	if (dry_run) return 0;
  	RETURN_ERROR_IF_RO_OR_LO;
 -	return unlink(fname);
 +	if (unlink(fname) == 0)
 +		return 0;
-+#ifdef SUPPORT_FORCE_CHANGE
-+	if (force_change && errno == EPERM) {
-+		STRUCT_STAT st;
 +
-+		if (x_lstat(fname, &st, NULL) == 0
-+		 && make_mutable(fname, st.st_mode, st.st_flags, force_change) > 0) {
-+			if (unlink(fname) == 0)
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change && (errno == EPERM || errno == EACCES)) {
++		char parent[MAXPATHLEN];
++		int parent_flags;
++		int saved_errno = errno;
++		int file_flags = make_mutable(fname, NULL, NO_FFLAGS, force_change);
++		if (file_flags && unlink(fname) == 0)
++			return 0;
++		parent_flags = make_parentdir_mutable(fname, force_change, parent, sizeof parent);
++		if (parent_flags) {
++			int ret = unlink(fname);
++			undo_make_mutable(parent, parent_flags);
++			if (ret == 0)
 +				return 0;
-+			undo_make_mutable(fname, st.st_flags);
 +		}
-+		/* TODO: handle immutable directories */
-+		errno = EPERM;
++		if (file_flags)
++			undo_make_mutable(fname, file_flags);
++		errno = saved_errno;
 +	}
 +#endif
++
 +	return -1;
  }
  
  int do_symlink(const char *fname1, const char *fname2)
-@@ -69,14 +86,37 @@ int do_link(const char *fname1, const char *fname2)
+ {
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
+-	return symlink(fname1, fname2);
++	if (symlink(fname1, fname2) == 0)
++		return 0;
++
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change && (errno == EPERM || errno == EACCES)) {
++		char parent[MAXPATHLEN];
++		int saved_errno = errno;
++		int parent_flags = make_parentdir_mutable(fname2, force_change, parent, sizeof parent);
++		if (parent_flags) {
++			int ret = symlink(fname1, fname2);
++			undo_make_mutable(parent, parent_flags);
++			if (ret == 0)
++				return 0;
++		}
++		errno = saved_errno;
++	}
++#endif
++
++	return -1;
+ }
+ 
+ #ifdef HAVE_LINK
+@@ -65,18 +108,55 @@ int do_link(const char *fname1, const char *fname2)
+ {
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
+-	return link(fname1, fname2);
++	if (link(fname1, fname2) == 0)
++		return 0;
++
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change && (errno == EPERM || errno == EACCES)) {
++		char parent[MAXPATHLEN];
++		int saved_errno = errno;
++		int parent_flags = make_parentdir_mutable(fname2, force_change, parent, sizeof parent);
++		if (parent_flags) {
++			int ret = link(fname1, fname2);
++			undo_make_mutable(parent, parent_flags);
++			if (ret == 0)
++				return 0;
++		}
++		errno = saved_errno;
++	}
++#endif
++
++	return -1;
  }
  #endif
  
@@ -795,32 +930,28 @@ diff --git a/syscall.c b/syscall.c
 -	return lchown(path, owner, group);
 +	if (lchown(path, owner, group) == 0)
 +		return 0;
++
 +#ifdef SUPPORT_FORCE_CHANGE
-+	if (force_change && errno == EPERM) {
-+		if (fileflags == NO_FFLAGS) {
-+			STRUCT_STAT st;
-+			if (x_lstat(path, &st, NULL) == 0) {
-+				mode = st.st_mode;
-+				fileflags = st.st_flags;
-+			}
-+		}
-+		if (fileflags != NO_FFLAGS
-+		 && make_mutable(path, mode, fileflags, force_change) > 0) {
++	if (force_change && (errno == EPERM || errno == EACCES)) {
++		int saved_errno = errno;
++		fileflags = make_mutable(path, &mode, fileflags, force_change);
++		if (fileflags) {
 +			int ret = lchown(path, owner, group);
 +			undo_make_mutable(path, fileflags);
 +			if (ret == 0)
 +				return 0;
 +		}
-+		errno = EPERM;
++		errno = saved_errno;
 +	}
 +#else
 +	mode = fileflags = 0; /* avoid compiler warning */
 +#endif
++
 +	return -1;
  }
  
  int do_mknod(const char *pathname, mode_t mode, dev_t dev)
-@@ -116,7 +156,7 @@ int do_mknod(const char *pathname, mode_t mode, dev_t dev)
+@@ -116,7 +196,7 @@ int do_mknod(const char *pathname, mode_t mode, dev_t dev)
  			return -1;
  		close(sock);
  #ifdef HAVE_CHMOD
@@ -829,31 +960,65 @@ diff --git a/syscall.c b/syscall.c
  #else
  		return 0;
  #endif
-@@ -133,7 +173,22 @@ int do_rmdir(const char *pathname)
+@@ -133,21 +213,63 @@ int do_rmdir(const char *pathname)
  {
  	if (dry_run) return 0;
  	RETURN_ERROR_IF_RO_OR_LO;
 -	return rmdir(pathname);
 +	if (rmdir(pathname) == 0)
 +		return 0;
-+#ifdef SUPPORT_FORCE_CHANGE
-+	if (force_change && errno == EPERM) {
-+		STRUCT_STAT st;
 +
-+		if (x_lstat(pathname, &st, NULL) == 0
-+		 && make_mutable(pathname, st.st_mode, st.st_flags, force_change) > 0) {
-+			if (rmdir(pathname) == 0)
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change && (errno == EPERM || errno == EACCES)) {
++		char parent[MAXPATHLEN];
++		int parent_flags;
++		int saved_errno = errno;
++		int file_flags = make_mutable(pathname, NULL, NO_FFLAGS, force_change);
++		if (file_flags && rmdir(pathname) == 0)
++			return 0;
++		parent_flags = make_parentdir_mutable(pathname, force_change, parent, sizeof parent);
++		if (parent_flags) {
++			int ret = rmdir(pathname);
++			undo_make_mutable(parent, parent_flags);
++			if (ret == 0)
 +				return 0;
-+			undo_make_mutable(pathname, st.st_flags);
 +		}
-+		errno = EPERM;
++		if (file_flags)
++			undo_make_mutable(pathname, file_flags);
++		errno = saved_errno;
 +	}
 +#endif
++
 +	return -1;
  }
  
  int do_open(const char *pathname, int flags, mode_t mode)
-@@ -147,7 +202,7 @@ int do_open(const char *pathname, int flags, mode_t mode)
+ {
++	int fd;
+ 	if (flags != O_RDONLY) {
+ 		RETURN_ERROR_IF(dry_run, 0);
+ 		RETURN_ERROR_IF_RO_OR_LO;
+ 	}
++	if ((fd = open(pathname, flags | O_BINARY, mode)) >= 0)
++		return fd;
++
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change && (errno == EPERM || errno == EACCES)) {
++		char parent[MAXPATHLEN];
++		int saved_errno = errno;
++		int parent_flags = make_parentdir_mutable(pathname, force_change, parent, sizeof parent);
++		if (parent_flags) {
++			fd = open(pathname, flags | O_BINARY, mode);
++			undo_make_mutable(parent, parent_flags);
++			if (fd >= 0)
++				return fd;
++		}
++		errno = saved_errno;
++	}
++#endif
+ 
+-	return open(pathname, flags | O_BINARY, mode);
++	return -1;
  }
  
  #ifdef HAVE_CHMOD
@@ -862,19 +1027,15 @@ diff --git a/syscall.c b/syscall.c
  {
  	int code;
  	if (dry_run) return 0;
-@@ -170,17 +225,78 @@ int do_chmod(const char *path, mode_t mode)
+@@ -170,17 +292,93 @@ int do_chmod(const char *path, mode_t mode)
  	} else
  		code = chmod(path, mode & CHMOD_BITS); /* DISCOURAGED FUNCTION */
  #endif /* !HAVE_LCHMOD */
 +#ifdef SUPPORT_FORCE_CHANGE
-+	if (code < 0 && force_change && errno == EPERM && !S_ISLNK(mode)) {
-+		if (fileflags == NO_FFLAGS) {
-+			STRUCT_STAT st;
-+			if (x_lstat(path, &st, NULL) == 0)
-+				fileflags = st.st_flags;
-+		}
-+		if (fileflags != NO_FFLAGS
-+		 && make_mutable(path, mode, fileflags, force_change) > 0) {
++	if (code < 0 && force_change && (errno == EPERM || errno == EACCES) && !S_ISLNK(mode)) {
++		int saved_errno = errno;
++		fileflags = make_mutable(path, &mode, fileflags, force_change);
++		if (fileflags) {
 +#ifdef HAVE_LCHMOD
 +			code = lchmod(path, mode & CHMOD_BITS);
 +#else
@@ -884,7 +1045,7 @@ diff --git a/syscall.c b/syscall.c
 +			if (code == 0)
 +				return 0;
 +		}
-+		errno = EPERM;
++		errno = saved_errno;
 +	}
 +#else
 +	fileflags = 0; /* avoid compiler warning */
@@ -911,37 +1072,237 @@ diff --git a/syscall.c b/syscall.c
 -	return rename(fname1, fname2);
 +	if (rename(fname1, fname2) == 0)
 +		return 0;
-+#ifdef SUPPORT_FORCE_CHANGE
-+	if (force_change && errno == EPERM) {
-+		STRUCT_STAT st1, st2;
-+		int became_mutable;
 +
-+		if (x_lstat(fname1, &st1, NULL) != 0)
-+			goto failed;
-+		became_mutable = make_mutable(fname1, st1.st_mode, st1.st_flags, force_change) > 0;
-+		if (became_mutable && rename(fname1, fname2) == 0)
-+			goto success;
-+		if (x_lstat(fname2, &st2, NULL) == 0
-+		 && make_mutable(fname2, st2.st_mode, st2.st_flags, force_change) > 0) {
-+			if (rename(fname1, fname2) == 0) {
-+			  success:
-+				if (became_mutable) /* Yes, use fname2 and st1! */
-+					undo_make_mutable(fname2, st1.st_flags);
-+				return 0;
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change && (errno == EPERM || errno == EACCES)) {
++		int saved_errno = errno;
++		int ret = -1, file2_flags = 0;
++		int file1_flags = make_mutable(fname1, NULL, NO_FFLAGS, force_change);
++		if (file1_flags && rename(fname1, fname2) == 0)
++			ret = 0;
++		else {
++			file2_flags = make_mutable(fname2, NULL, NO_FFLAGS, force_change);
++			if (file2_flags && rename(fname1, fname2) == 0)
++				ret = 0;
++			else {
++				char parent1[MAXPATHLEN];
++				int parent1_flags = make_parentdir_mutable(fname1, force_change,
++							parent1, sizeof parent1);
++				if (parent1_flags && rename(fname1, fname2) == 0)
++					ret = 0;
++				else {
++					char parent2[MAXPATHLEN];
++					int parent2_flags = make_parentdir_mutable(fname2, force_change,
++								parent2, sizeof parent2);
++					if (parent2_flags) {
++						if (rename(fname1, fname2) == 0)
++							ret = 0;
++						undo_make_mutable(parent2, parent2_flags);
++					}
++				}
++				if (parent1_flags)
++					undo_make_mutable(parent1, parent1_flags);
 +			}
-+			undo_make_mutable(fname2, st2.st_flags);
 +		}
-+		/* TODO: handle immutable directories */
-+		if (became_mutable)
-+			undo_make_mutable(fname1, st1.st_flags);
-+	  failed:
-+		errno = EPERM;
++
++		if (ret == 0)
++			file2_flags = file1_flags; /* file1 is now file2 */
++		else if (file1_flags)
++			undo_make_mutable(fname1, file1_flags);
++		if (file2_flags)
++			undo_make_mutable(fname2, file2_flags);
++		if (ret == 0)
++			return 0;
++
++		errno = saved_errno;
 +	}
 +#endif
++
 +	return -1;
  }
  
  #ifdef HAVE_FTRUNCATE
+@@ -222,7 +420,25 @@ int do_mkdir(char *fname, mode_t mode)
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
+ 	trim_trailing_slashes(fname);
+-	return mkdir(fname, mode);
++	if (mkdir(fname, mode) == 0)
++		return 0;
++
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change && (errno == EPERM || errno == EACCES)) {
++		char parent[MAXPATHLEN];
++		int saved_errno = errno;
++		int parent_flags = make_parentdir_mutable(fname, force_change, parent, sizeof parent);
++		if (parent_flags) {
++			int ret = mkdir(fname, mode);
++			undo_make_mutable(parent, parent_flags);
++			if (ret == 0)
++				return 0;
++		}
++		errno = saved_errno;
++	}
++#endif
++
++	return -1;
+ }
+ 
+ /* like mkstemp but forces permissions */
+@@ -235,7 +451,19 @@ int do_mkstemp(char *template, mode_t perms)
+ #if defined HAVE_SECURE_MKSTEMP && defined HAVE_FCHMOD && (!defined HAVE_OPEN64 || defined HAVE_MKSTEMP64)
+ 	{
+ 		int fd = mkstemp(template);
+-		if (fd == -1)
++#ifdef SUPPORT_FORCE_CHANGE
++		if (fd < 0 && force_change) {
++			char parent[MAXPATHLEN];
++			int saved_errno = errno;
++			int parent_flags = make_parentdir_mutable(template, force_change, parent, sizeof parent);
++			if (parent_flags) {
++				fd = mkstemp(template);
++				undo_make_mutable(parent, parent_flags);
++			}
++			errno = saved_errno;
++		}
++#endif
++		if (fd < 0)
+ 			return -1;
+ 		if (fchmod(fd, perms) != 0 && preserve_perms) {
+ 			int errno_save = errno;
+@@ -302,7 +530,7 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
+ }
+ 
+ #ifdef HAVE_UTIMENSAT
+-int do_utimensat(const char *fname, time_t modtime, uint32 mod_nsec)
++int do_utimensat(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode, uint32 fileflags)
+ {
+ 	struct timespec t[2];
+ 
+@@ -313,12 +541,26 @@ int do_utimensat(const char *fname, time_t modtime, uint32 mod_nsec)
+ 	t[0].tv_nsec = UTIME_NOW;
+ 	t[1].tv_sec = modtime;
+ 	t[1].tv_nsec = mod_nsec;
+-	return utimensat(AT_FDCWD, fname, t, AT_SYMLINK_NOFOLLOW);
++	if (utimensat(AT_FDCWD, fname, t, AT_SYMLINK_NOFOLLOW) == 0)
++		return 0;
++
++#ifdef SUPPORT_FORCE_CHANGE
++	fileflags = make_mutable(fname, &mode, fileflags, force_change);
++	if (fileflags) {
++		if (utimensat(AT_FDCWD, fname, t, AT_SYMLINK_NOFOLLOW) == 0)
++			return 0;
++		undo_make_mutable(fname, fileflags);
++	}
++#else
++	mode = fileflags; /* avoid compiler warning */
++#endif
++
++	return -1;
+ }
+ #endif
+ 
+ #ifdef HAVE_LUTIMES
+-int do_lutimes(const char *fname, time_t modtime, uint32 mod_nsec)
++int do_lutimes(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode, uint32 fileflags)
+ {
+ 	struct timeval t[2];
+ 
+@@ -329,12 +571,26 @@ int do_lutimes(const char *fname, time_t modtime, uint32 mod_nsec)
+ 	t[0].tv_usec = 0;
+ 	t[1].tv_sec = modtime;
+ 	t[1].tv_usec = mod_nsec / 1000;
+-	return lutimes(fname, t);
++	if (lutimes(fname, t) == 0)
++		return 0;
++
++#ifdef SUPPORT_FORCE_CHANGE
++	fileflags = make_mutable(fname, &mode, fileflags, force_change);
++	if (fileflags) {
++		if (lutimes(fname, t) == 0)
++			return 0;
++		undo_make_mutable(fname, fileflags);
++	}
++#else
++	mode = fileflags; /* avoid compiler warning */
++#endif
++
++	return -1;
+ }
+ #endif
+ 
+ #ifdef HAVE_UTIMES
+-int do_utimes(const char *fname, time_t modtime, uint32 mod_nsec)
++int do_utimes(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode, uint32 fileflags)
+ {
+ 	struct timeval t[2];
+ 
+@@ -345,14 +601,28 @@ int do_utimes(const char *fname, time_t modtime, uint32 mod_nsec)
+ 	t[0].tv_usec = 0;
+ 	t[1].tv_sec = modtime;
+ 	t[1].tv_usec = mod_nsec / 1000;
+-	return utimes(fname, t);
++	if (utimes(fname, t) == 0)
++		return 0;
++
++#ifdef SUPPORT_FORCE_CHANGE
++	fileflags = make_mutable(fname, &mode, fileflags, force_change);
++	if (fileflags) {
++		if (utimes(fname, t) == 0)
++			return 0;
++		undo_make_mutable(fname, fileflags);
++	}
++#else
++	mode = fileflags; /* avoid compiler warning */
++#endif
++
++	return -1;
+ }
+ 
+ #elif defined HAVE_UTIME
+-int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec))
++int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec), mode_t mode, uint32 fileflags)
+ {
+ #ifdef HAVE_STRUCT_UTIMBUF
+-	struct utimbuf tbuf;
++	struct utimbuf tbuf, *t = &tbuf;
+ #else
+ 	time_t t[2];
+ #endif
+@@ -360,15 +630,28 @@ int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec))
+ 	if (dry_run) return 0;
+ 	RETURN_ERROR_IF_RO_OR_LO;
+ 
+-# ifdef HAVE_STRUCT_UTIMBUF
++#ifdef HAVE_STRUCT_UTIMBUF
+ 	tbuf.actime = time(NULL);
+ 	tbuf.modtime = modtime;
+-	return utime(fname, &tbuf);
+-# else
++#else
+ 	t[0] = time(NULL);
+ 	t[1] = modtime;
+-	return utime(fname, t);
+-# endif
++#endif
++	if (utime(fname, t) == 0)
++		return 0;
++
++#ifdef SUPPORT_FORCE_CHANGE
++	fileflags = make_mutable(fname, &mode, fileflags, force_change);
++	if (fileflags) {
++		if (utime(fname, t) == 0)
++			return 0;
++		undo_make_mutable(fname, fileflags);
++	}
++#else
++	mode = fileflags; /* avoid compiler warning */
++#endif
++
++	return -1;
+ }
+ 
+ #else
 diff --git a/t_stub.c b/t_stub.c
 --- a/t_stub.c
 +++ b/t_stub.c
@@ -953,19 +1314,23 @@ diff --git a/t_stub.c b/t_stub.c
  int preserve_times = 0;
  int preserve_xattrs = 0;
  mode_t orig_umask = 002;
-@@ -90,3 +91,23 @@ struct filter_list_struct daemon_filter_list;
+@@ -90,3 +91,27 @@ struct filter_list_struct daemon_filter_list;
  {
  	return "tester";
  }
 +
 +#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
-+ int make_mutable(UNUSED(const char *fname), UNUSED(mode_t mode), UNUSED(uint32 fileflags), UNUSED(uint32 iflags))
++ uint32 make_mutable(UNUSED(const char *fname), UNUSED(mode_t *mode), UNUSED(uint32 fileflags), UNUSED(uint32 iflags))
 +{
 +	return 0;
 +}
 +
-+/* Undo a prior make_mutable() call that returned a 1. */
 + int undo_make_mutable(UNUSED(const char *fname), UNUSED(uint32 fileflags))
++{
++	return 0;
++}
++
++ int make_parentdir_mutable(UNUSED(const char *fname), UNUSED(uint32 iflags), UNUSED(char *parent_dirbuf), UNUSED(int parent_dirbuf_size))
 +{
 +	return 0;
 +}
@@ -980,43 +1345,8 @@ diff --git a/t_stub.c b/t_stub.c
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
-@@ -30,6 +30,7 @@ extern int modify_window;
- extern int relative_paths;
- extern int preserve_times;
- extern int human_readable;
-+extern int force_change;
- extern int preserve_xattrs;
- extern char *module_dir;
- extern unsigned int module_dirlen;
-@@ -124,9 +125,34 @@ NORETURN void overflow_exit(const char *str)
- 	exit_cleanup(RERR_MALLOC);
- }
+@@ -125,7 +125,7 @@ NORETURN void overflow_exit(const char *str)
  
-+#ifdef SUPPORT_FORCE_CHANGE
-+static int try_a_force_change(const char *fname, time_t modtime, mode_t mode, uint32 fileflags)
-+{
-+	if (fileflags == NO_FFLAGS) {
-+		STRUCT_STAT st;
-+		if (x_lstat(fname, &st, NULL) == 0)
-+			fileflags = st.st_flags;
-+	}
-+
-+	if (fileflags != NO_FFLAGS && make_mutable(fname, mode, fileflags, force_change) > 0) {
-+		int ret, save_force_change = force_change;
-+
-+		force_change = 0; /* Make certain we can't come back here. */
-+		ret = set_modtime(fname, modtime, mode, fileflags);
-+		force_change = save_force_change;
-+
-+		undo_make_mutable(fname, fileflags);
-+	}
-+
-+	errno = EPERM;
-+
-+	return -1;
-+}
-+#endif
-+
  /* This returns 0 for success, 1 for a symlink if symlink time-setting
   * is not possible, or -1 for any other error. */
 -int set_modtime(const char *fname, time_t modtime, mode_t mode)
@@ -1024,44 +1354,37 @@ diff --git a/util.c b/util.c
  {
  	static int switch_step = 0;
  
-@@ -141,6 +167,11 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
+@@ -138,7 +138,7 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
+ 	switch (switch_step) {
+ #ifdef HAVE_UTIMENSAT
  #include "case_N.h"
- 		if (do_utimensat(fname, modtime, 0) == 0)
+-		if (do_utimensat(fname, modtime, 0) == 0)
++		if (do_utimensat(fname, modtime, 0, mode, fileflags) == 0)
  			break;
-+#ifdef SUPPORT_FORCE_CHANGE
-+		if (force_change && errno == EPERM
-+		 && try_a_force_change(fname, modtime, mode, fileflags) == 0)
-+			break;
-+#endif
  		if (errno != ENOSYS)
  			return -1;
- 		switch_step++;
-@@ -151,6 +182,11 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
+@@ -148,7 +148,7 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
+ 
+ #ifdef HAVE_LUTIMES
  #include "case_N.h"
- 		if (do_lutimes(fname, modtime, 0) == 0)
+-		if (do_lutimes(fname, modtime, 0) == 0)
++		if (do_lutimes(fname, modtime, 0, mode, fileflags) == 0)
  			break;
-+#ifdef SUPPORT_FORCE_CHANGE
-+		if (force_change && errno == EPERM
-+		 && try_a_force_change(fname, modtime, mode, fileflags) == 0)
-+			break;
-+#endif
  		if (errno != ENOSYS)
  			return -1;
- 		switch_step++;
-@@ -174,6 +210,13 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
- 		if (do_utime(fname, modtime, 0) == 0)
+@@ -167,10 +167,10 @@ int set_modtime(const char *fname, time_t modtime, mode_t mode)
+ 
+ #include "case_N.h"
+ #ifdef HAVE_UTIMES
+-		if (do_utimes(fname, modtime, 0) == 0)
++		if (do_utimes(fname, modtime, 0, mode, fileflags) == 0)
+ 			break;
+ #else
+-		if (do_utime(fname, modtime, 0) == 0)
++		if (do_utime(fname, modtime, 0, mode, fileflags) == 0)
  			break;
  #endif
-+#ifdef SUPPORT_FORCE_CHANGE
-+		if (force_change && errno == EPERM
-+		 && try_a_force_change(fname, modtime, mode, fileflags) == 0)
-+			break;
-+#else
-+		fileflags = 0; /* avoid compiler warning */
-+#endif
  
- 		return -1;
- 	}
 diff --git a/xattrs.c b/xattrs.c
 --- a/xattrs.c
 +++ b/xattrs.c
