@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: d52aeae4e9af689aed4ae6af2b7602552c1383e7
+based-on: 98ec67d7860209c5cbbc848769f2ba1a7062ddef
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -66,7 +66,7 @@ diff --git a/compat.c b/compat.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -589,7 +589,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
+@@ -591,7 +591,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
      seteuid strerror putenv iconv_open locale_charset nl_langinfo getxattr \
      extattr_get_link sigaction sigprocmask setattrlist getgrouplist \
@@ -258,7 +258,7 @@ diff --git a/generator.c b/generator.c
  #ifdef SUPPORT_ACLS
  		if (preserve_acls && !S_ISLNK(file->mode)) {
  			if (!ACL_READY(*sxp))
-@@ -1320,6 +1331,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1322,6 +1333,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			file->mode = dest_mode(file->mode, sx.st.st_mode,
  					       dflt_perms, statret == 0);
  		}
@@ -269,7 +269,7 @@ diff --git a/generator.c b/generator.c
  		if (statret != 0 && basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
  					      itemizing, code);
-@@ -1362,10 +1377,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1357,10 +1372,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		/* We need to ensure that the dirs in the transfer have writable
  		 * permissions during the time we are putting files within them.
  		 * This is then fixed after the transfer is done. */
@@ -286,7 +286,7 @@ diff --git a/generator.c b/generator.c
  				rsyserr(FERROR_XFER, errno,
  					"failed to modify permissions on %s",
  					full_fname(fname));
-@@ -1400,6 +1420,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1403,6 +1423,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		file->mode = dest_mode(file->mode, sx.st.st_mode, dflt_perms,
  				       exists);
  	}
@@ -297,7 +297,7 @@ diff --git a/generator.c b/generator.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (preserve_hard_links && F_HLINK_NOT_FIRST(file)
-@@ -1979,13 +2003,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -1982,13 +2006,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  			continue;
  		fname = f_name(file, NULL);
  		if (fix_dir_perms)
@@ -329,6 +329,42 @@ diff --git a/log.c b/log.c
  			c[9] = !(iflags & ITEM_REPORT_ACL) ? '.' : 'a';
  			c[10] = !(iflags & ITEM_REPORT_XATTR) ? '.' : 'x';
  			c[11] = '\0';
+diff --git a/main.c b/main.c
+--- a/main.c
++++ b/main.c
+@@ -26,6 +26,9 @@
+ #if defined CONFIG_LOCALE && defined HAVE_LOCALE_H
+ #include <locale.h>
+ #endif
++#ifdef SUPPORT_FORCE_CHANGE
++#include <sys/sysctl.h>
++#endif
+ 
+ extern int dry_run;
+ extern int list_only;
+@@ -834,6 +837,22 @@ static int do_recv(int f_in, int f_out, char *local_name)
+ 	 * points to an identical file won't be replaced by the referent. */
+ 	copy_links = copy_dirlinks = copy_unsafe_links = 0;
+ 
++#ifdef SUPPORT_FORCE_CHANGE
++	if (force_change & SYS_IMMUTABLE) {
++		/* Determine whether we'll be able to unlock a system immutable item. */
++		int mib[2];
++		int securityLevel = 0;
++		size_t len = sizeof securityLevel;
++
++		mib[0] = CTL_KERN;
++		mib[1] = KERN_SECURELVL;
++		if (sysctl(mib, 2, &securityLevel, &len, NULL, 0) == 0 && securityLevel > 0) {
++			rprintf(FERROR, "System security level is too high to force mutability on system immutable files and directories.\n");
++			exit_cleanup(RERR_UNSUPPORTED);
++		}
++	}
++#endif
++
+ #ifdef SUPPORT_HARD_LINKS
+ 	if (preserve_hard_links && !inc_recurse)
+ 		match_hard_links(first_flist);
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
