@@ -18,7 +18,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: 3bd9f51917ed5718275c6132006be155239a0550
+based-on: 28b519c93b6db30b6520d46f8cd65160213fddd2
 diff --git a/fileio.c b/fileio.c
 --- a/fileio.c
 +++ b/fileio.c
@@ -47,26 +47,26 @@ diff --git a/options.c b/options.c
  int protocol_version = PROTOCOL_VERSION;
  int sparse_files = 0;
 +long sparse_files_block_size = SPARSE_WRITE_SIZE;
+ int preallocate_files = 0;
  int do_compression = 0;
  int def_compress_level = Z_DEFAULT_COMPRESSION;
- int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
-@@ -706,6 +707,7 @@ void usage(enum logcode F)
+@@ -711,6 +712,7 @@ void usage(enum logcode F)
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
  #endif
    rprintf(F," -S, --sparse                handle sparse files efficiently\n");
 +  rprintf(F,"     --sparse-block=SIZE     set the block size used to handle sparse files\n");
-   rprintf(F," -n, --dry-run               perform a trial run with no changes made\n");
-   rprintf(F," -W, --whole-file            copy files whole (without delta-xfer algorithm)\n");
-   rprintf(F," -x, --one-file-system       don't cross filesystem boundaries\n");
-@@ -905,6 +907,7 @@ static struct poptOption long_options[] = {
+ #ifdef SUPPORT_PREALLOCATION
+   rprintf(F,"     --preallocate           allocate dest files before writing them\n");
+ #else
+@@ -915,6 +917,7 @@ static struct poptOption long_options[] = {
    {"sparse",          'S', POPT_ARG_VAL,    &sparse_files, 1, 0, 0 },
    {"no-sparse",        0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
    {"no-S",             0,  POPT_ARG_VAL,    &sparse_files, 0, 0, 0 },
 +  {"sparse-block",     0,  POPT_ARG_LONG,   &sparse_files_block_size, 0, 0, 0 },
+   {"preallocate",      0,  POPT_ARG_NONE,   &preallocate_files, 0, 0, 0},
    {"inplace",          0,  POPT_ARG_VAL,    &inplace, 1, 0, 0 },
    {"no-inplace",       0,  POPT_ARG_VAL,    &inplace, 0, 0, 0 },
-   {"append",           0,  POPT_ARG_NONE,   0, OPT_APPEND, 0, 0 },
-@@ -2483,6 +2486,12 @@ void server_options(char **args, int *argc_p)
+@@ -2494,6 +2497,12 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = arg;
  	}
  
@@ -87,12 +87,12 @@ diff --git a/rsync.yo b/rsync.yo
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                handle sparse files efficiently
 +     --sparse-block=SIZE     set block size used to handle sparse files
+      --preallocate           allocate dest files before writing
   -n, --dry-run               perform a trial run with no changes made
   -W, --whole-file            copy files whole (w/o delta-xfer algorithm)
-  -x, --one-file-system       don't cross filesystem boundaries
-@@ -1181,6 +1182,15 @@ NOTE: Don't use this option when the destination is a Solaris "tmpfs"
- filesystem. It seems to have problems seeking over null regions,
- and ends up corrupting the files.
+@@ -1190,6 +1191,15 @@ filesystem, but with this option rsync will probably copy more slowly.  If the
+ destination is not an extent-supporting filesystem (such as ext4, xfs, NTFS,
+ etc.), this option may have no positive effect at all.
  
 +dit(bf(--sparse-block=SIZE)) Change the block size used to handle sparse files
 +to SIZE bytes.  This option only has an effect if the bf(--sparse) (bf(-S))
