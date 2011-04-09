@@ -4,77 +4,99 @@ Jeff Weber expressed interest in this:
 
 http://lists.samba.org/archive/rsync/2007-October/018996.html
 
-This patch is a COMPLETE HACK that covers the most common cases.  Others
-are welcome to improve it.
-
 To use this patch, run these commands for a successful build:
 
     patch -p1 <patches/transliterate.diff
     ./configure                                 (optional if already run)
     make
 
-based-on: 28b519c93b6db30b6520d46f8cd65160213fddd2
+based-on: 591c224584c04e0d6f58ece969946bd5472f7c89
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -86,6 +86,9 @@ extern int filesfrom_convert;
- extern iconv_t ic_send, ic_recv;
- #endif
+@@ -73,6 +73,7 @@ extern uid_t our_uid;
+ extern struct stats stats;
+ extern char *filesfrom_host;
+ extern char *usermap, *groupmap;
++extern char *tr_opt;
  
-+extern char *tr_opt, *tr_left, *tr_right;
-+extern int tr_right_len;
+ extern char curr_dir[MAXPATHLEN];
+ 
+@@ -107,6 +108,8 @@ int file_total = 0; /* total of all active items over all file-lists */
+ int file_old_total = 0; /* total of active items that will soon be gone */
+ int flist_eof = 0; /* all the file-lists are now known */
+ 
++char tr_substitutions[256];
 +
- #ifdef HAVE_UTIMENSAT
- #ifdef HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC
- #define ST_MTIME_NSEC st_mtim.tv_nsec
-@@ -675,6 +678,24 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+ #define NORMAL_NAME 0
+ #define SLASH_ENDING_NAME 1
+ #define DOTDIR_NAME 2
+@@ -675,6 +678,23 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  		stats.total_size += F_LENGTH(file);
  }
  
-+static void transliterate(char *thisname)
++static void transliterate(char *path, int len)
 +{
-+	char *p1, *p2, *pleft;
-+
-+	for (p1 = p2 = thisname; *p1; p1++) {
-+		/* Look up the current character in the left string. */
-+		pleft = strchr(tr_left, *p1);
-+		if (!pleft)
-+			/* Not found: no change. */
-+			*p2++ = *p1;
-+		else if (pleft - tr_left < tr_right_len)
-+			/* Store replacement from the right string. */
-+			*p2++ = tr_right[pleft - tr_left];
-+		/* Otherwise delete. */
++	while (1) {
++		/* Find position of any char in tr_opt in path, or the end of the path. */
++		int span = strcspn(path, tr_opt);
++		if ((len -= span) == 0)
++			return;
++		path += span;
++		if ((*path = tr_substitutions[*(uchar*)path]) == '\0')
++			memmove(path, path+1, len--); /* copies the trailing '\0' too. */
++		else {
++			path++;
++			len--;
++		}
 +	}
-+	*p2 = '\0';
 +}
 +
  static struct file_struct *recv_file_entry(int f, struct file_list *flist, int xflags)
  {
  	static int64 modtime;
-@@ -743,6 +764,9 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -740,9 +760,13 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ 			outbuf.len = 0;
+ 		}
+ 		thisname[outbuf.len] = '\0';
++		basename_len = outbuf.len;
  	}
  #endif
  
 +	if (tr_opt)
-+		transliterate(thisname);
++		transliterate(thisname, basename_len);
 +
  	if (*thisname)
  		clean_fname(thisname, 0);
  
+@@ -2439,6 +2463,15 @@ struct file_list *recv_file_list(int f)
+ 			parse_name_map(usermap, True);
+ 		if (groupmap)
+ 			parse_name_map(groupmap, False);
++		if (tr_opt) { /* Parse FROM/TO string and populate tr_substitutions[] */
++			char *f, *t;
++			if ((t = strchr(tr_opt, '/')) != NULL)
++				*t++ = '\0';
++			else
++				t = "";
++			for (f = tr_opt; *f; f++)
++				tr_substitutions[*(uchar*)f] = *t ? *t++ : '\0';
++		}
+ 	}
+ 
+ 	start_read = stats.total_read;
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -191,6 +191,8 @@ int logfile_format_has_i = 0;
+@@ -191,6 +191,7 @@ int logfile_format_has_i = 0;
  int logfile_format_has_o_or_i = 0;
  int always_checksum = 0;
  int list_only = 0;
-+char *tr_opt = NULL, *tr_left = NULL, *tr_right = NULL;
-+int tr_right_len = 0;
++char *tr_opt = NULL;
  
  #define MAX_BATCH_NAME_LEN 256	/* Must be less than MAXPATHLEN-13 */
  char *batch_name = NULL;
-@@ -795,6 +797,7 @@ void usage(enum logcode F)
+@@ -795,6 +796,7 @@ void usage(enum logcode F)
  #ifdef ICONV_OPTION
    rprintf(F,"     --iconv=CONVERT_SPEC    request charset conversion of filenames\n");
  #endif
@@ -82,7 +104,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -4, --ipv4                  prefer IPv4\n");
    rprintf(F," -6, --ipv6                  prefer IPv6\n");
    rprintf(F,"     --version               print version number\n");
-@@ -1012,6 +1015,7 @@ static struct poptOption long_options[] = {
+@@ -1012,6 +1014,7 @@ static struct poptOption long_options[] = {
    {"iconv",            0,  POPT_ARG_STRING, &iconv_opt, 0, 0, 0 },
    {"no-iconv",         0,  POPT_ARG_NONE,   0, OPT_NO_ICONV, 0, 0 },
  #endif
@@ -90,30 +112,23 @@ diff --git a/options.c b/options.c
    {"ipv4",            '4', POPT_ARG_VAL,    &default_af_hint, AF_INET, 0, 0 },
    {"ipv6",            '6', POPT_ARG_VAL,    &default_af_hint, AF_INET6, 0, 0 },
    {"8-bit-output",    '8', POPT_ARG_VAL,    &allow_8bit_chars, 1, 0, 0 },
-@@ -2271,6 +2275,31 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2271,6 +2274,24 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		}
  	}
  
-+	/* Easiest way to get a local server right is to do this on both sides */
 +	if (tr_opt) {
-+		if (*tr_opt) {
-+			char *p;
-+
++		if (*tr_opt == '/' && tr_opt[1]) {
++			snprintf(err_buf, sizeof err_buf,
++				"Do not start the --tr arg with a slash\n");
++			return 0;
++		}
++		if (*tr_opt && *tr_opt != '/') {
 +			need_unsorted_flist = 1;
-+			/* Our mutation shouldn't interfere with transmission of the
-+			 * original option to the server. */
-+			tr_left = strdup(tr_opt);
-+			p = strchr(tr_left, '/');
-+			if (p != NULL) {
-+				*p = '\0';
-+				p++;
-+				tr_right = p;
-+				tr_right_len = strlen(tr_right);
-+				if (strchr(tr_right, '/') != NULL) {
-+					snprintf(err_buf, sizeof err_buf,
-+						"--tr cannot transliterate slashes\n");
-+					return 0;
-+				}
++			arg = strchr(tr_opt, '/');
++			if (arg && strchr(arg+1, '/')) {
++				snprintf(err_buf, sizeof err_buf,
++					"--tr cannot transliterate slashes\n");
++				return 0;
 +			}
 +		} else
 +			tr_opt = NULL;
@@ -122,7 +137,7 @@ diff --git a/options.c b/options.c
  	am_starting_up = 0;
  
  	return 1;
-@@ -2682,6 +2711,12 @@ void server_options(char **args, int *argc_p)
+@@ -2682,6 +2703,12 @@ void server_options(char **args, int *argc_p)
  	if (fuzzy_basis && am_sender)
  		args[ac++] = "--fuzzy";
  
