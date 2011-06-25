@@ -9,7 +9,7 @@ To use this patch, run these commands for a successful build:
 
 -- Matt McCutchen <hashproduct@gmail.com>
 
-based-on: 28b519c93b6db30b6520d46f8cd65160213fddd2
+based-on: a59a7b242393699fedeb4f66911e3fc9b4fadd73
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -57,9 +57,9 @@ diff --git a/rsync.yo b/rsync.yo
       --del                   an alias for --delete-during
       --delete                delete extraneous files from dest dirs
       --delete-before         receiver deletes before xfer, not during
-@@ -1261,6 +1262,14 @@ dit(bf(--remove-source-files)) This tells rsync to remove from the sending
- side the files (meaning non-directories) that are a part of the transfer
- and have been successfully duplicated on the receiving side.
+@@ -1274,6 +1275,14 @@ bf(--exclude='*.new') for the rsync transfer).
+ Starting with 3.1.0, rsync will skip the sender-side removal (and output an
+ error) if the file's size or modify time has not stayed unchanged.
  
 +dit(bf(--source-backup)) Makes the sender back up the source files it removes
 +due to bf(--remove-source-files).  This option is independent of
@@ -83,24 +83,24 @@ diff --git a/sender.c b/sender.c
  extern int inplace;
  extern int batch_fd;
  extern int write_batch;
-@@ -125,6 +126,7 @@ void successful_send(int ndx)
- 	char fname[MAXPATHLEN];
+@@ -127,6 +128,7 @@ void successful_send(int ndx)
  	struct file_struct *file;
  	struct file_list *flist;
+ 	STRUCT_STAT st;
 +	int result;
  
  	if (!remove_source_files)
  		return;
-@@ -135,7 +137,11 @@ void successful_send(int ndx)
+@@ -151,7 +153,11 @@ void successful_send(int ndx)
  		return;
- 	f_name(file, fname);
+ 	}
  
--	if (do_unlink(fname) == 0) {
+-	if (do_unlink(fname) < 0) {
 +	if (make_source_backups)
 +		result = !make_backup(fname, True);
 +	else
 +		result = do_unlink(fname);
-+	if (result == 0) {
- 		if (INFO_GTE(REMOVE, 1))
- 			rprintf(FINFO, "sender removed %s\n", fname);
- 	} else
++	if (result < 0) {
+ 		failed_op = "remove";
+ 	  failed:
+ 		if (errno == ENOENT)
