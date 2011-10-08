@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: a59a7b242393699fedeb4f66911e3fc9b4fadd73
+based-on: 7c8f180900432e646c0a4bd02e2c4033068dbb7c
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -66,15 +66,14 @@ diff --git a/compat.c b/compat.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -593,7 +593,7 @@ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
+@@ -592,6 +592,7 @@ AC_FUNC_UTIME_NULL
+ AC_FUNC_ALLOCA
+ AC_CHECK_FUNCS(waitpid wait4 getcwd strdup chown chmod lchmod mknod mkfifo \
+     fchmod fstat ftruncate strchr readlink link utime utimes lutimes strftime \
++    chflags \
+     memmove lchown vsnprintf snprintf vasprintf asprintf setsid strpbrk \
+     strlcat strlcpy strtol mallinfo getgroups setgroups geteuid getegid \
      setlocale setmode open64 lseek64 mkstemp64 mtrace va_copy __va_copy \
-     seteuid strerror putenv iconv_open locale_charset nl_langinfo getxattr \
-     extattr_get_link sigaction sigprocmask setattrlist getgrouplist \
--    initgroups utimensat posix_fallocate)
-+    initgroups utimensat posix_fallocate chflags)
- 
- dnl cygwin iconv.h defines iconv_open as libiconv_open
- if test x"$ac_cv_func_iconv_open" != x"yes"; then
 diff --git a/delete.c b/delete.c
 --- a/delete.c
 +++ b/delete.c
@@ -269,24 +268,24 @@ diff --git a/generator.c b/generator.c
  		if (statret != 0 && basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
  					      itemizing, code);
-@@ -1365,10 +1380,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 		/* We need to ensure that the dirs in the transfer have writable
- 		 * permissions during the time we are putting files within them.
- 		 * This is then fixed after the transfer is done. */
+@@ -1366,10 +1381,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		 * readable and writable permissions during the time we are
+ 		 * putting files within them.  This is then restored to the
+ 		 * former permissions after the transfer is done. */
 +#ifdef SUPPORT_FORCE_CHANGE
 +		if (force_change && F_FFLAGS(file) & force_change
 +		 && make_mutable(fname, file->mode, F_FFLAGS(file), force_change))
 +			need_retouch_dir_perms = 1;
 +#endif
  #ifdef HAVE_CHMOD
- 		if (!am_root && !(file->mode & S_IWUSR) && dir_tweaking) {
- 			mode_t mode = file->mode | S_IWUSR;
+ 		if (!am_root && (file->mode & S_IRWXU) != S_IRWXU && dir_tweaking) {
+ 			mode_t mode = file->mode | S_IRWXU;
 -			if (do_chmod(fname, mode) < 0) {
 +			if (do_chmod(fname, mode, 0) < 0) {
  				rsyserr(FERROR_XFER, errno,
  					"failed to modify permissions on %s",
  					full_fname(fname));
-@@ -1403,6 +1423,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1404,6 +1424,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		file->mode = dest_mode(file->mode, sx.st.st_mode, dflt_perms,
  				       exists);
  	}
@@ -297,7 +296,7 @@ diff --git a/generator.c b/generator.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (preserve_hard_links && F_HLINK_NOT_FIRST(file)
-@@ -1982,13 +2006,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -1983,13 +2007,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  			continue;
  		fname = f_name(file, NULL);
  		if (fix_dir_perms)
@@ -320,7 +319,7 @@ diff --git a/generator.c b/generator.c
 diff --git a/log.c b/log.c
 --- a/log.c
 +++ b/log.c
-@@ -731,7 +731,7 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
+@@ -729,7 +729,7 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
  			c[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
  			c[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
  			c[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
@@ -342,7 +341,7 @@ diff --git a/main.c b/main.c
  
  extern int dry_run;
  extern int list_only;
-@@ -834,6 +837,22 @@ static int do_recv(int f_in, int f_out, char *local_name)
+@@ -836,6 +839,22 @@ static int do_recv(int f_in, int f_out, char *local_name)
  	 * points to an identical file won't be replaced by the referent. */
  	copy_links = copy_dirlinks = copy_unsafe_links = 0;
  
@@ -413,7 +412,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -690,6 +696,9 @@ void usage(enum logcode F)
+@@ -691,6 +697,9 @@ void usage(enum logcode F)
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -H, --hard-links            preserve hard links\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
@@ -423,7 +422,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
  #ifdef SUPPORT_ACLS
-@@ -735,7 +744,12 @@ void usage(enum logcode F)
+@@ -736,7 +745,12 @@ void usage(enum logcode F)
    rprintf(F,"     --ignore-missing-args   ignore missing source args without error\n");
    rprintf(F,"     --delete-missing-args   delete missing source args from destination\n");
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
@@ -437,7 +436,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
    rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
    rprintf(F,"     --min-size=SIZE         don't transfer any file smaller than SIZE\n");
-@@ -848,6 +862,10 @@ static struct poptOption long_options[] = {
+@@ -849,6 +863,10 @@ static struct poptOption long_options[] = {
    {"perms",           'p', POPT_ARG_VAL,    &preserve_perms, 1, 0, 0 },
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
@@ -448,7 +447,7 @@ diff --git a/options.c b/options.c
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
-@@ -934,6 +952,14 @@ static struct poptOption long_options[] = {
+@@ -935,6 +953,14 @@ static struct poptOption long_options[] = {
    {"remove-source-files",0,POPT_ARG_VAL,    &remove_source_files, 1, 0, 0 },
    {"force",            0,  POPT_ARG_VAL,    &force_delete, 1, 0, 0 },
    {"no-force",         0,  POPT_ARG_VAL,    &force_delete, 0, 0, 0 },
@@ -463,7 +462,7 @@ diff --git a/options.c b/options.c
    {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
    {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
-@@ -2461,6 +2487,9 @@ void server_options(char **args, int *argc_p)
+@@ -2462,6 +2488,9 @@ void server_options(char **args, int *argc_p)
  	if (xfer_dirs && !recurse && delete_mode && am_sender)
  		args[ac++] = "--no-r";
  
@@ -473,7 +472,7 @@ diff --git a/options.c b/options.c
  	if (do_compression && def_compress_level != Z_DEFAULT_COMPRESSION) {
  		if (asprintf(&arg, "--compress-level=%d", def_compress_level) < 0)
  			goto oom;
-@@ -2548,6 +2577,16 @@ void server_options(char **args, int *argc_p)
+@@ -2549,6 +2578,16 @@ void server_options(char **args, int *argc_p)
  			args[ac++] = "--delete-excluded";
  		if (force_delete)
  			args[ac++] = "--force";
@@ -688,7 +687,7 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -345,6 +345,7 @@ to the detailed description below for a complete description.  verb(
+@@ -359,6 +359,7 @@ to the detailed description below for a complete description.  verb(
   -K, --keep-dirlinks         treat symlinked dir on receiver as dir
   -H, --hard-links            preserve hard links
   -p, --perms                 preserve permissions
@@ -696,7 +695,7 @@ diff --git a/rsync.yo b/rsync.yo
   -E, --executability         preserve executability
       --chmod=CHMOD           affect file and/or directory permissions
   -A, --acls                  preserve ACLs (implies -p)
-@@ -380,7 +381,10 @@ to the detailed description below for a complete description.  verb(
+@@ -394,7 +395,10 @@ to the detailed description below for a complete description.  verb(
       --ignore-missing-args   ignore missing source args without error
       --delete-missing-args   delete missing source args from destination
       --ignore-errors         delete even if there are I/O errors
@@ -708,7 +707,7 @@ diff --git a/rsync.yo b/rsync.yo
       --max-delete=NUM        don't delete more than NUM files
       --max-size=SIZE         don't transfer any file larger than SIZE
       --min-size=SIZE         don't transfer any file smaller than SIZE
-@@ -597,7 +601,8 @@ specified, in which case bf(-r) is not implied.
+@@ -627,7 +631,8 @@ specified, in which case bf(-r) is not implied.
  
  Note that bf(-a) bf(does not preserve hardlinks), because
  finding multiply-linked files is expensive.  You must separately
@@ -718,7 +717,7 @@ diff --git a/rsync.yo b/rsync.yo
  
  dit(--no-OPTION) You may turn off one or more implied options by prefixing
  the option name with "no-".  Not all options may be prefixed with a "no-":
-@@ -896,7 +901,7 @@ they would be using bf(--copy-links).
+@@ -926,7 +931,7 @@ they would be using bf(--copy-links).
  Without this option, if the sending side has replaced a directory with a
  symlink to a directory, the receiving side will delete anything that is in
  the way of the new symlink, including a directory hierarchy (as long as
@@ -727,7 +726,7 @@ diff --git a/rsync.yo b/rsync.yo
  
  See also bf(--keep-dirlinks) for an analogous option for the receiving
  side.
-@@ -1059,6 +1064,29 @@ Note that this option does not copy rsyncs special xattr values (e.g. those
+@@ -1089,6 +1094,29 @@ Note that this option does not copy rsyncs special xattr values (e.g. those
  used by bf(--fake-super)) unless you repeat the option (e.g. -XX).  This
  "copy all xattrs" mode cannot be used with bf(--fake-super).
  
@@ -757,7 +756,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(--chmod)) This option tells rsync to apply one or more
  comma-separated "chmod" modes to the permission of the files in the
  transfer.  The resulting value is treated as though it were the permissions
-@@ -1377,12 +1405,13 @@ display as a "*missing" entry in the bf(--list-only) output.
+@@ -1407,12 +1435,13 @@ display as a "*missing" entry in the bf(--list-only) output.
  dit(bf(--ignore-errors)) Tells bf(--delete) to go ahead and delete files
  even when there are I/O errors.
  
@@ -774,7 +773,7 @@ diff --git a/rsync.yo b/rsync.yo
  bf(--recursive) option was also enabled.
  
  dit(bf(--max-delete=NUM)) This tells rsync not to delete more than NUM
-@@ -1976,7 +2005,7 @@ with older versions of rsync, but that also turns on the output of other
+@@ -2006,7 +2035,7 @@ with older versions of rsync, but that also turns on the output of other
  verbose messages).
  
  The "%i" escape has a cryptic output that is 11 letters long.  The general
@@ -783,7 +782,7 @@ diff --git a/rsync.yo b/rsync.yo
  type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -2032,7 +2061,7 @@ quote(itemization(
+@@ -2062,7 +2091,7 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
@@ -1111,7 +1110,7 @@ diff --git a/util.c b/util.c
 diff --git a/xattrs.c b/xattrs.c
 --- a/xattrs.c
 +++ b/xattrs.c
-@@ -1042,7 +1042,7 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
+@@ -1043,7 +1043,7 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
  	mode = (fst.st_mode & _S_IFMT) | (fmode & ACCESSPERMS)
  	     | (S_ISDIR(fst.st_mode) ? 0700 : 0600);
  	if (fst.st_mode != mode)
