@@ -1,9 +1,9 @@
 Jason M. Felice wrote:
 
-This patch adds the --link-by-hash=DIR option, which hard links received
-files in a link farm arranged by MD4 file hash.  The result is that the system
-will only store one copy of the unique contents of each file, regardless of
-the file's name.
+This patch adds the --link-by-hash=DIR option, which hard links received files
+in a link farm arranged by MD4 or MD5 file hash.  The result is that the system
+will only store one copy of the unique contents of each file, regardless of the
+file's name.
 
 To use this patch, run these commands for a successful build:
 
@@ -12,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 7c8f180900432e646c0a4bd02e2c4033068dbb7c
+based-on: 60ef39705797c9df7069297eb4ed5feab5e88f29
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -25,6 +25,40 @@ diff --git a/Makefile.in b/Makefile.in
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
  	popt/popthelp.o popt/poptparse.o
+diff --git a/checksum.c b/checksum.c
+--- a/checksum.c
++++ b/checksum.c
+@@ -21,6 +21,7 @@
+ 
+ #include "rsync.h"
+ 
++extern int checksum_len;
+ extern int checksum_seed;
+ extern int protocol_version;
+ 
+@@ -221,3 +222,22 @@ int sum_end(char *sum)
+ 
+ 	return MD4_DIGEST_LEN;
+ }
++
++const char *sum_as_hex(const char *sum)
++{
++	static char buf[MAX_DIGEST_LEN*2+1];
++	int i, x1, x2;
++	char *c = buf + checksum_len*2;
++
++	*c = '\0';
++
++	for (i = checksum_len; --i >= 0; ) {
++		x1 = CVAL(sum, i);
++		x2 = x1 >> 4;
++		x1 &= 0xF;
++		*--c = x1 <= 9 ? x1 + '0' : x1 + 'a' - 10;
++		*--c = x2 <= 9 ? x2 + '0' : x2 + 'a' - 10;
++	}
++
++	return buf;
++}
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
@@ -36,7 +70,7 @@ diff --git a/flist.c b/flist.c
  extern char *usermap, *groupmap;
  
  extern char curr_dir[MAXPATHLEN];
-@@ -902,7 +903,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -903,7 +904,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -49,7 +83,7 @@ diff --git a/hashlink.c b/hashlink.c
 new file mode 100644
 --- /dev/null
 +++ b/hashlink.c
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,325 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
 +
@@ -72,33 +106,19 @@ new file mode 100644
 +
 +#include "rsync.h"
 +
++extern int checksum_len;
 +extern char *link_by_hash_dir;
 +
 +#ifdef HAVE_LINK
 +
 +char *make_hash_name(struct file_struct *file)
 +{
-+	char hash[33], *dst;
-+	uchar c, *src = (uchar*)F_SUM(file);
-+	int i;
++	const char *hex = sum_as_hex(F_SUM(file));
++	char *dst;
 +
-+	for (dst = hash, i = 0; i < 4; i++, src++) {
-+		c = *src >> 4;
-+		*(dst++) = (c >= 10) ? (c - 10 + 'a') : (c + '0');
-+		c = *src & 0x0f;
-+		*(dst++) = (c >= 10) ? (c - 10 + 'a') : (c + '0');
-+	}
-+	*dst++ = '/';
-+	for (i = 0; i < 12; i++, src++) {
-+		c = *src >> 4;
-+		*(dst++) = (c >= 10) ? (c - 10 + 'a') : (c + '0');
-+		c = *src & 0x0f;
-+		*(dst++) = (c >= 10) ? (c - 10 + 'a') : (c + '0');
-+	}
-+	*dst = 0;
-+
-+	if (asprintf(&dst,"%s/%s",link_by_hash_dir,hash) < 0)
++	if (asprintf(&dst, "%s/%.8s/%s", link_by_hash_dir, hex, hex+8) < 0)
 +		out_of_memory("make_hash_name");
++
 +	return dst;
 +}
 +
@@ -389,6 +409,35 @@ new file mode 100644
 +	return rc;
 +}
 +#endif
+diff --git a/log.c b/log.c
+--- a/log.c
++++ b/log.c
+@@ -683,23 +683,14 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
+ 			if (protocol_version >= 30
+ 			 && (iflags & ITEM_TRANSFER
+ 			  || (always_checksum && S_ISREG(file->mode)))) {
+-				int i, x1, x2;
+ 				const char *sum = iflags & ITEM_TRANSFER
+ 						? sender_file_sum : F_SUM(file);
+-				c = buf2 + checksum_len*2;
+-				*c = '\0';
+-				for (i = checksum_len; --i >= 0; ) {
+-					x1 = CVAL(sum, i);
+-					x2 = x1 >> 4;
+-					x1 &= 0xF;
+-					*--c = x1 <= 9 ? x1 + '0' : x1 + 'a' - 10;
+-					*--c = x2 <= 9 ? x2 + '0' : x2 + 'a' - 10;
+-				}
++				n = sum_as_hex(sum);
+ 			} else {
+ 				memset(buf2, ' ', checksum_len*2);
+ 				buf2[checksum_len*2] = '\0';
++				n = buf2;
+ 			}
+-			n = buf2;
+ 			break;
+ 		case 'i':
+ 			if (iflags & ITEM_DELETED) {
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -422,10 +471,10 @@ diff --git a/options.c b/options.c
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
 +  {"link-by-hash",     0,  POPT_ARG_STRING, 0, OPT_LINK_BY_HASH, 0, 0},
-   {"fuzzy",           'y', POPT_ARG_VAL,    &fuzzy_basis, 1, 0, 0 },
+   {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -1781,6 +1784,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1785,6 +1788,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -447,7 +496,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2663,6 +2681,11 @@ void server_options(char **args, int *argc_p)
+@@ -2675,6 +2693,11 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -524,7 +573,7 @@ diff --git a/receiver.c b/receiver.c
  }
  
  static void handle_delayed_updates(char *local_name)
-@@ -836,7 +848,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -841,7 +853,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  
  		/* recv file data */
  		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
