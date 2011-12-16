@@ -36,7 +36,7 @@ diff --git a/checksum.c b/checksum.c
  extern int checksum_seed;
  extern int protocol_version;
  
-@@ -221,3 +222,22 @@ int sum_end(char *sum)
+@@ -221,3 +222,24 @@ int sum_end(char *sum)
  
  	return MD4_DIGEST_LEN;
  }
@@ -46,6 +46,8 @@ diff --git a/checksum.c b/checksum.c
 +	static char buf[MAX_DIGEST_LEN*2+1];
 +	int i, x1, x2;
 +	char *c = buf + checksum_len*2;
++
++	assert(c - buf < (int)sizeof buf);
 +
 +	*c = '\0';
 +
@@ -59,31 +61,52 @@ diff --git a/checksum.c b/checksum.c
 +
 +	return buf;
 +}
-diff --git a/flist.c b/flist.c
---- a/flist.c
-+++ b/flist.c
-@@ -72,6 +72,7 @@ extern int unsort_ndx;
- extern uid_t our_uid;
- extern struct stats stats;
+diff --git a/clientserver.c b/clientserver.c
+--- a/clientserver.c
++++ b/clientserver.c
+@@ -50,6 +50,7 @@ extern int logfile_format_has_i;
+ extern int logfile_format_has_o_or_i;
+ extern char *bind_address;
+ extern char *config_file;
++extern char *link_by_hash_dir;
+ extern char *logfile_format;
+ extern char *files_from;
+ extern char *tmpdir;
+@@ -551,6 +552,9 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+ 		return -1;
+ 	}
+ 
++	if (*lp_link_by_hash_dir(i))
++		link_by_hash_dir = lp_link_by_hash_dir(i);
++
+ 	if (am_daemon && am_server) {
+ 		rprintf(FLOG, "rsync allowed access on module %s from %s (%s)\n",
+ 			name, host, addr);
+diff --git a/compat.c b/compat.c
+--- a/compat.c
++++ b/compat.c
+@@ -55,6 +55,7 @@ extern char *partial_dir;
+ extern char *dest_option;
+ extern char *files_from;
  extern char *filesfrom_host;
 +extern char *link_by_hash_dir;
- extern char *usermap, *groupmap;
- 
- extern char curr_dir[MAXPATHLEN];
-@@ -903,7 +904,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
- 		extra_len += EXTRA_LEN;
- #endif
- 
--	if (always_checksum && S_ISREG(mode))
-+	if ((always_checksum || link_by_hash_dir) && S_ISREG(mode))
- 		extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
- 
- #if SIZEOF_INT64 >= 8
+ extern filter_rule_list filter_list;
+ extern int need_unsorted_flist;
+ #ifdef ICONV_OPTION
+@@ -328,4 +329,8 @@ void setup_protocol(int f_out,int f_in)
+ 	} else {
+ 		checksum_seed = read_int(f_in);
+ 	}
++	if (!am_sender && link_by_hash_dir && protocol_version < 30 && checksum_seed != 1) {
++		rprintf(FERROR, "You must specify --checksum-seed=1 when using --link-by-hash with an old version of rsync.\n");
++		exit_cleanup(RERR_PROTOCOL);
++	}
+ }
 diff --git a/hashlink.c b/hashlink.c
 new file mode 100644
 --- /dev/null
 +++ b/hashlink.c
-@@ -0,0 +1,325 @@
+@@ -0,0 +1,334 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
 +
@@ -106,14 +129,17 @@ new file mode 100644
 +
 +#include "rsync.h"
 +
-+extern int checksum_len;
 +extern char *link_by_hash_dir;
++extern char sender_file_sum[MAX_DIGEST_LEN];
 +
 +#ifdef HAVE_LINK
 +
-+char *make_hash_name(struct file_struct *file)
++/* This function is always called after a file is received, so the
++ * sender_file_sum buffer has whatever the last checksum was for the
++ * transferred file. */
++static char *make_hash_name(void)
 +{
-+	const char *hex = sum_as_hex(F_SUM(file));
++	const char *hex = sum_as_hex(sender_file_sum);
 +	char *dst;
 +
 +	if (asprintf(&dst, "%s/%.8s/%s", link_by_hash_dir, hex, hex+8) < 0)
@@ -123,7 +149,7 @@ new file mode 100644
 +}
 +
 +
-+void kill_hashfile(struct hashfile_struct *hashfile)
++static void kill_hashfile(struct hashfile_struct *hashfile)
 +{
 +	if (!hashfile)
 +		return;
@@ -133,7 +159,7 @@ new file mode 100644
 +}
 +
 +
-+void kill_hashfiles(struct hashfile_struct *hashfiles)
++static void kill_hashfiles(struct hashfile_struct *hashfiles)
 +{
 +	struct hashfile_struct *iter, *next;
 +	if ((iter = hashfiles) != NULL) {
@@ -146,7 +172,7 @@ new file mode 100644
 +}
 +
 +
-+struct hashfile_struct *find_hashfiles(char *hashname, int64 size, long *fnbr)
++static struct hashfile_struct *find_hashfiles(char *hashname, int64 size, long *fnbr)
 +{
 +	DIR *d;
 +	struct dirent *di;
@@ -208,7 +234,7 @@ new file mode 100644
 +}
 +
 +
-+struct hashfile_struct *compare_hashfiles(int fd,struct hashfile_struct *files)
++static struct hashfile_struct *compare_hashfiles(int fd,struct hashfile_struct *files)
 +{
 +	int amt, hamt;
 +	char buffer[BUFSIZ], cmpbuffer[BUFSIZ];
@@ -293,7 +319,7 @@ new file mode 100644
 +int link_by_hash(const char *fnametmp, const char *fname, struct file_struct *file)
 +{
 +	STRUCT_STAT st;
-+	char *hashname = make_hash_name(file);
++	char *hashname = make_hash_name();
 +	int first = 0, rc;
 +	char *linkname;
 +	long last_fnbr;
@@ -324,7 +350,8 @@ new file mode 100644
 +		first = 1;
 +		if (asprintf(&linkname,"%s/0",hashname) < 0)
 +			out_of_memory("link_by_hash");
-+		rprintf(FINFO, "(1) linkname = %s\n", linkname);
++		if (DEBUG_GTE(HASHLINK, 2))
++			rprintf(FINFO, "(1) linkname = %s\n", linkname);
 +	} else {
 +		struct hashfile_struct *hashfiles, *hashfile;
 +
@@ -338,7 +365,8 @@ new file mode 100644
 +			first = 1;
 +			if (asprintf(&linkname,"%s/0",hashname) < 0)
 +				out_of_memory("link_by_hash");
-+			rprintf(FINFO, "(2) linkname = %s\n", linkname);
++			if (DEBUG_GTE(HASHLINK, 2))
++				rprintf(FINFO, "(2) linkname = %s\n", linkname);
 +		} else {
 +			int fd;
 +			/* Search for one identical to us. */
@@ -354,20 +382,22 @@ new file mode 100644
 +			if (hashfile) {
 +				first = 0;
 +				linkname = strdup(hashfile->name);
-+				rprintf(FINFO, "(3) linkname = %s\n", linkname);
++				if (DEBUG_GTE(HASHLINK, 2))
++					rprintf(FINFO, "(3) linkname = %s\n", linkname);
 +				kill_hashfile(hashfile);
 +			} else {
 +				first = 1;
 +				if (asprintf(&linkname, "%s/%ld", hashname, last_fnbr + 1) < 0)
 +					out_of_memory("link_by_hash");
-+				rprintf(FINFO, "(4) linkname = %s\n", linkname);
++				if (DEBUG_GTE(HASHLINK, 2))
++					rprintf(FINFO, "(4) linkname = %s\n", linkname);
 +			}
 +		}
 +	}
 +
 +	if (!first) {
-+		rprintf(FINFO, "link-by-hash (existing): \"%s\" -> %s\n",
-+				linkname, full_fname(fname));
++		if (DEBUG_GTE(HASHLINK, 2))
++			rprintf(FINFO, "link-by-hash (existing): \"%s\" -> %s\n", linkname, full_fname(fname));
 +		robust_unlink(fname);
 +		rc = do_link(linkname, fname);
 +		if (rc == -1) {
@@ -376,8 +406,10 @@ new file mode 100644
 +				free(linkname);
 +				if (asprintf(&linkname,"%s/%ld",hashname, last_fnbr + 1) < 0)
 +					out_of_memory("link_by_hash");
-+				rprintf(FINFO, "(5) linkname = %s\n", linkname);
-+				rprintf(FINFO,"link-by-hash: max link count exceeded, starting new file \"%s\".\n", linkname);
++				if (DEBUG_GTE(HASHLINK, 2))
++					rprintf(FINFO, "(5) linkname = %s\n", linkname);
++				if (DEBUG_GTE(HASHLINK, 1))
++					rprintf(FINFO, "link-by-hash: max link count exceeded, starting new file \"%s\".\n", linkname);
 +			} else {
 +				rsyserr(FERROR, errno, "link \"%s\" -> \"%s\"",
 +					linkname, full_fname(fname));
@@ -389,8 +421,8 @@ new file mode 100644
 +	}
 +
 +	if (first) {
-+		rprintf(FINFO, "link-by-hash (new): %s -> \"%s\"\n",
-+				full_fname(fname),linkname);
++		if (DEBUG_GTE(HASHLINK, 2))
++			rprintf(FINFO, "link-by-hash (new): %s -> \"%s\"\n", full_fname(fname),linkname);
 +
 +		rc = robust_rename(fnametmp, fname, NULL, 0644);
 +		if (rc != 0) {
@@ -409,6 +441,41 @@ new file mode 100644
 +	return rc;
 +}
 +#endif
+diff --git a/loadparm.c b/loadparm.c
+--- a/loadparm.c
++++ b/loadparm.c
+@@ -119,6 +119,7 @@ typedef struct {
+ 	char *include;
+ 	char *include_from;
+ 	char *incoming_chmod;
++	char *link_by_hash_dir;
+ 	char *lock_file;
+ 	char *log_file;
+ 	char *log_format;
+@@ -195,6 +196,7 @@ static const all_vars Defaults = {
+  /* include; */			NULL,
+  /* include_from; */		NULL,
+  /* incoming_chmod; */		NULL,
++ /* link_by_hash_dir; */	NULL,
+  /* lock_file; */		DEFAULT_LOCK_FILE,
+  /* log_file; */		NULL,
+  /* log_format; */		"%o %h [%a] %m (%u) %f %l",
+@@ -336,6 +338,7 @@ static struct parm_struct parm_table[] =
+  {"include from",      P_STRING, P_LOCAL, &Vars.l.include_from,        NULL,0},
+  {"include",           P_STRING, P_LOCAL, &Vars.l.include,             NULL,0},
+  {"incoming chmod",    P_STRING, P_LOCAL, &Vars.l.incoming_chmod,      NULL,0},
++ {"link by hash dir",  P_STRING, P_LOCAL, &Vars.l.link_by_hash_dir,    NULL,0},
+  {"list",              P_BOOL,   P_LOCAL, &Vars.l.list,                NULL,0},
+  {"lock file",         P_STRING, P_LOCAL, &Vars.l.lock_file,           NULL,0},
+  {"log file",          P_STRING, P_LOCAL, &Vars.l.log_file,            NULL,0},
+@@ -464,6 +467,7 @@ FN_LOCAL_STRING(lp_hosts_deny, hosts_deny)
+ FN_LOCAL_STRING(lp_include, include)
+ FN_LOCAL_STRING(lp_include_from, include_from)
+ FN_LOCAL_STRING(lp_incoming_chmod, incoming_chmod)
++FN_LOCAL_STRING(lp_link_by_hash_dir, link_by_hash_dir)
+ FN_LOCAL_STRING(lp_lock_file, lock_file)
+ FN_LOCAL_STRING(lp_log_file, log_file)
+ FN_LOCAL_STRING(lp_log_format, log_format)
 diff --git a/log.c b/log.c
 --- a/log.c
 +++ b/log.c
@@ -449,7 +516,24 @@ diff --git a/options.c b/options.c
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *logfile_name = NULL;
-@@ -759,6 +760,7 @@ void usage(enum logcode F)
+@@ -208,7 +209,7 @@ static const char *debug_verbosity[] = {
+ 	/*2*/ "BIND,CMD,CONNECT,DEL,DELTASUM,DUP,FILTER,FLIST,ICONV",
+ 	/*3*/ "ACL,BACKUP,CONNECT2,DELTASUM2,DEL2,EXIT,FILTER2,FLIST2,FUZZY,GENR,OWN,RECV,SEND,TIME",
+ 	/*4*/ "CMD2,DELTASUM3,DEL3,EXIT2,FLIST3,ICONV2,OWN2,PROTO,TIME2",
+-	/*5*/ "CHDIR,DELTASUM4,FLIST4,FUZZY2,HASH,HLINK",
++	/*5*/ "CHDIR,DELTASUM4,FLIST4,FUZZY2,HASH,HASHLINK,HLINK",
+ };
+ 
+ #define MAX_VERBOSITY ((int)(sizeof debug_verbosity / sizeof debug_verbosity[0]) - 1)
+@@ -278,6 +279,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
+ 	DEBUG_WORD(FUZZY, W_REC, "Debug fuzzy scoring (levels 1-2)"),
+ 	DEBUG_WORD(GENR, W_REC, "Debug generator functions"),
+ 	DEBUG_WORD(HASH, W_SND|W_REC, "Debug hashtable code"),
++	DEBUG_WORD(HASHLINK, W_REC, "Debug hashlink code (levels 1-2)"),
+ 	DEBUG_WORD(HLINK, W_SND|W_REC, "Debug hard-link actions (levels 1-3)"),
+ 	DEBUG_WORD(ICONV, W_CLI|W_SRV, "Debug iconv character conversions (levels 1-2)"),
+ 	DEBUG_WORD(IO, W_CLI|W_SRV, "Debug I/O routines (levels 1-4)"),
+@@ -759,6 +761,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -457,7 +541,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F,"     --skip-compress=LIST    skip compressing files with a suffix in LIST\n");
-@@ -811,7 +813,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -811,7 +814,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -466,7 +550,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
-@@ -955,6 +957,7 @@ static struct poptOption long_options[] = {
+@@ -955,6 +958,7 @@ static struct poptOption long_options[] = {
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -474,7 +558,17 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -1785,6 +1788,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1299,6 +1303,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 		iconv_opt = strdup(arg);
+ #endif
+ 
++	if (*lp_link_by_hash_dir(module_id))
++		set_refuse_options("link-by-hash");
++
+ 	/* TODO: Call poptReadDefaultConfig; handle errors. */
+ 
+ 	/* The context leaks in case of an error, but if there's a
+@@ -1785,6 +1792,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -496,7 +590,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2675,6 +2693,11 @@ void server_options(char **args, int *argc_p)
+@@ -2675,6 +2697,11 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -508,80 +602,6 @@ diff --git a/options.c b/options.c
  	if (files_from && (!am_sender || filesfrom_host)) {
  		if (filesfrom_host) {
  			args[ac++] = "--files-from";
-diff --git a/receiver.c b/receiver.c
---- a/receiver.c
-+++ b/receiver.c
-@@ -225,11 +225,13 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
- }
- 
- static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
--			const char *fname, int fd, OFF_T total_size)
-+			const char *fname, int fd, OFF_T total_size,
-+			const char *md4)
- {
- 	static char file_sum1[MAX_DIGEST_LEN];
- 	struct map_struct *mapbuf;
- 	struct sum_struct sum;
-+	md_context mdfour_data;
- 	int32 len;
- 	OFF_T offset = 0;
- 	OFF_T offset2;
-@@ -265,6 +267,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 	} else
- 		mapbuf = NULL;
- 
-+	if (md4)
-+		mdfour_begin(&mdfour_data);
-+
- 	sum_init(checksum_seed);
- 
- 	if (append_mode > 0) {
-@@ -312,6 +317,8 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 			cleanup_got_literal = 1;
- 
- 			sum_update(data, i);
-+			if (md4)
-+				mdfour_update(&mdfour_data, (uchar*)data, i);
- 
- 			if (fd != -1 && write_file(fd,data,i) != i)
- 				goto report_write_error;
-@@ -339,6 +346,8 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 
- 			see_token(map, len);
- 			sum_update(map, len);
-+			if (md4)
-+				mdfour_update(&mdfour_data, (uchar*)map, len);
- 		}
- 
- 		if (updating_basis_or_equiv) {
-@@ -392,6 +401,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 	if (sum_end(file_sum1) != checksum_len)
- 		overflow_exit("checksum_len"); /* Impossible... */
- 
-+	if (md4)
-+		mdfour_result(&mdfour_data, (uchar*)md4);
-+
- 	if (mapbuf)
- 		unmap_file(mapbuf);
- 
-@@ -406,7 +418,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 
- static void discard_receive_data(int f_in, OFF_T length)
- {
--	receive_data(f_in, NULL, -1, 0, NULL, -1, length);
-+	receive_data(f_in, NULL, -1, 0, NULL, -1, length, NULL);
- }
- 
- static void handle_delayed_updates(char *local_name)
-@@ -841,7 +853,7 @@ int recv_files(int f_in, int f_out, char *local_name)
- 
- 		/* recv file data */
- 		recv_ok = receive_data(f_in, fnamecmp, fd1, st.st_size,
--				       fname, fd2, F_LENGTH(file));
-+				       fname, fd2, F_LENGTH(file), F_SUM(file));
- 
- 		log_item(log_code, file, iflags, NULL);
- 
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
@@ -625,6 +645,16 @@ diff --git a/rsync.h b/rsync.h
  struct chmod_mode_struct;
  
  struct flist_ndx_item {
+@@ -1263,7 +1271,8 @@ extern short info_levels[], debug_levels[];
+ #define DEBUG_FUZZY (DEBUG_FLIST+1)
+ #define DEBUG_GENR (DEBUG_FUZZY+1)
+ #define DEBUG_HASH (DEBUG_GENR+1)
+-#define DEBUG_HLINK (DEBUG_HASH+1)
++#define DEBUG_HASHLINK (DEBUG_HASH+1)
++#define DEBUG_HLINK (DEBUG_HASHLINK+1)
+ #define DEBUG_ICONV (DEBUG_HLINK+1)
+ #define DEBUG_IO (DEBUG_ICONV+1)
+ #define DEBUG_OWN (DEBUG_IO+1)
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
@@ -636,3 +666,40 @@ diff --git a/rsync.yo b/rsync.yo
   -z, --compress              compress file data during the transfer
       --compress-level=NUM    explicitly set compression level
       --skip-compress=LIST    skip compressing files with suffix in LIST
+@@ -1830,6 +1831,19 @@ bf(--link-dest) from working properly for a non-super-user when bf(-o) was
+ specified (or implied by bf(-a)).  You can work-around this bug by avoiding
+ the bf(-o) option when sending to an old rsync.
+ 
++dit(bf(--link-by-hash=DIR)) This option hard links the destination files into
++em(DIR), a link farm arranged by MD5 file hash (or sometimes MD4). The result
++is that the system will only store one copy of the unique contents of each
++file, regardless of the file's name.
++
++For a modern rsync (3.0.0 and newer), the link farm's directory hierarchy is
++determined by the file's MD5 hash.  It is recommended that you don't use this
++option with any rsync older than that.  However, if you really need to be able
++to interact with an older rsync on the sending side, you can use the options
++bf(--checksum-seed=1) and bf(--protocol=29) to force a consistent MD4 file
++checksum that will be used instead of MD5.  Note that this MD4 checksum is not
++compatible with older versions of this patch (prior to 3.1.0).
++
+ dit(bf(-z, --compress)) With this option, rsync compresses the file data
+ as it is sent to the destination machine, which reduces the amount of data
+ being transmitted -- something that is useful over a slow connection.
+diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
+--- a/rsyncd.conf.yo
++++ b/rsyncd.conf.yo
+@@ -283,6 +283,13 @@ message telling them to try later.  The default is 0, which means no limit.
+ A negative value disables the module.
+ See also the "lock file" parameter.
+ 
++dit(bf(link by hash dir)) When the "link by hash dir" parameter is set to a
++non-empty string, received files will be hard linked into em(DIR), a link farm
++arranged by MD5 file hash (or sometimes MD4). See the bf(--link-by-hash) option
++for a full explaination.  If this parameter is set it will disable the
++bf(--link-by-hash) command-line option. The default is for this parameter to be
++unset.
++
+ dit(bf(log file)) When the "log file" parameter is set to a non-empty
+ string, the rsync daemon will log messages to the indicated file rather
+ than using syslog. This is particularly useful on systems (such as AIX)
