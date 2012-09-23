@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
 This patch has not yet been tested by me (Wayne), but was provided
 Darryl Dixon.  Thanks!
 
-based-on: 7c8f180900432e646c0a4bd02e2c4033068dbb7c
+based-on: ee51a745c163f3c422a30b22f4beda0e1ead7c20
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -22,7 +22,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_specials;
  extern int preserve_hard_links;
  extern int preserve_executability;
-@@ -1596,7 +1597,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1633,7 +1634,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  
  	fnamecmp_type = FNAMECMP_FNAME;
  
@@ -42,7 +42,7 @@ diff --git a/options.c b/options.c
  int preserve_links = 0;
  int preserve_hard_links = 0;
  int preserve_acls = 0;
-@@ -702,6 +703,7 @@ void usage(enum logcode F)
+@@ -703,6 +704,7 @@ void usage(enum logcode F)
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
@@ -50,7 +50,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve modification times\n");
-@@ -879,6 +881,7 @@ static struct poptOption long_options[] = {
+@@ -883,6 +885,7 @@ static struct poptOption long_options[] = {
    {"no-D",             0,  POPT_ARG_NONE,   0, OPT_NO_D, 0, 0 },
    {"devices",          0,  POPT_ARG_VAL,    &preserve_devices, 1, 0, 0 },
    {"no-devices",       0,  POPT_ARG_VAL,    &preserve_devices, 0, 0, 0 },
@@ -58,7 +58,7 @@ diff --git a/options.c b/options.c
    {"specials",         0,  POPT_ARG_VAL,    &preserve_specials, 1, 0, 0 },
    {"no-specials",      0,  POPT_ARG_VAL,    &preserve_specials, 0, 0, 0 },
    {"links",           'l', POPT_ARG_VAL,    &preserve_links, 1, 0, 0 },
-@@ -1781,6 +1784,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1792,6 +1795,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -70,16 +70,16 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2680,6 +2688,9 @@ void server_options(char **args, int *argc_p)
+@@ -2738,6 +2746,9 @@ void server_options(char **args, int *argc_p)
  	if (relative_paths && !implied_dirs && (!am_sender || protocol_version >= 30))
  		args[ac++] = "--no-implied-dirs";
  
 +	if (write_devices)
 +		args[ac++] = "--write-devices";
 +
- 	if (fuzzy_basis && am_sender)
- 		args[ac++] = "--fuzzy";
- 
+ 	if (remove_source_files == 1)
+ 		args[ac++] = "--remove-source-files";
+ 	else if (remove_source_files)
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
@@ -178,10 +178,10 @@ diff --git a/receiver.c b/receiver.c
  			if (!am_server)
 -				discard_receive_data(f_in, F_LENGTH(file));
 +				discard_receive_data(f_in, file);
+ 			if (inc_recurse)
+ 				send_msg_int(MSG_SUCCESS, ndx);
  			continue;
- 		}
- 
-@@ -763,7 +764,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -770,7 +771,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  		} else if (do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR_XFER, errno, "fstat %s failed",
  				full_fname(fnamecmp));
@@ -190,7 +190,7 @@ diff --git a/receiver.c b/receiver.c
  			close(fd1);
  			if (inc_recurse)
  				send_msg_int(MSG_NO_SEND, ndx);
-@@ -778,18 +779,32 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -785,18 +786,32 @@ int recv_files(int f_in, int f_out, char *local_name)
  			 */
  			rprintf(FERROR_XFER, "recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -225,7 +225,7 @@ diff --git a/receiver.c b/receiver.c
  		/* If we're not preserving permissions, change the file-list's
  		 * mode based on the local permissions and some heuristics. */
  		if (!preserve_perms) {
-@@ -820,7 +835,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -827,7 +842,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  		}
  
  		if (fd2 == -1) {
@@ -234,7 +234,7 @@ diff --git a/receiver.c b/receiver.c
  			if (fd1 != -1)
  				close(fd1);
  			if (inc_recurse)
-@@ -835,8 +850,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -842,8 +857,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */
