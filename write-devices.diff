@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
 This patch has not yet been tested by me (Wayne), but was provided
 Darryl Dixon.  Thanks!
 
-based-on: ee51a745c163f3c422a30b22f4beda0e1ead7c20
+based-on: 1e9ee19a716b72454dfeab663802c626b81cdf2e
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -22,7 +22,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_specials;
  extern int preserve_hard_links;
  extern int preserve_executability;
-@@ -1633,7 +1634,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1657,7 +1658,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  
  	fnamecmp_type = FNAMECMP_FNAME;
  
@@ -42,7 +42,7 @@ diff --git a/options.c b/options.c
  int preserve_links = 0;
  int preserve_hard_links = 0;
  int preserve_acls = 0;
-@@ -703,6 +704,7 @@ void usage(enum logcode F)
+@@ -705,6 +706,7 @@ void usage(enum logcode F)
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
@@ -50,7 +50,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve modification times\n");
-@@ -883,6 +885,7 @@ static struct poptOption long_options[] = {
+@@ -885,6 +887,7 @@ static struct poptOption long_options[] = {
    {"no-D",             0,  POPT_ARG_NONE,   0, OPT_NO_D, 0, 0 },
    {"devices",          0,  POPT_ARG_VAL,    &preserve_devices, 1, 0, 0 },
    {"no-devices",       0,  POPT_ARG_VAL,    &preserve_devices, 0, 0, 0 },
@@ -58,7 +58,7 @@ diff --git a/options.c b/options.c
    {"specials",         0,  POPT_ARG_VAL,    &preserve_specials, 1, 0, 0 },
    {"no-specials",      0,  POPT_ARG_VAL,    &preserve_specials, 0, 0, 0 },
    {"links",           'l', POPT_ARG_VAL,    &preserve_links, 1, 0, 0 },
-@@ -1792,6 +1795,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1794,6 +1797,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -70,7 +70,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2738,6 +2746,9 @@ void server_options(char **args, int *argc_p)
+@@ -2740,6 +2748,9 @@ void server_options(char **args, int *argc_p)
  	if (relative_paths && !implied_dirs && (!am_sender || protocol_version >= 30))
  		args[ac++] = "--no-implied-dirs";
  
@@ -100,6 +100,22 @@ diff --git a/receiver.c b/receiver.c
  {
  	static char file_sum1[MAX_DIGEST_LEN];
  	struct map_struct *mapbuf;
+@@ -241,12 +242,12 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 	OFF_T preallocated_len = 0;
+ #endif
+ 
+-	if (preallocate_files && fd != -1 && total_size > 0) {
++	if (preallocate_files && fd != -1 && F_LENGTH(file) > 0) {
+ 		/* Try to preallocate enough space for file's eventual length.  Can
+ 		 * reduce fragmentation on filesystems like ext4, xfs, and NTFS. */
+-		if (do_fallocate(fd, 0, total_size) == 0) {
++		if (do_fallocate(fd, 0, F_LENGTH(file)) == 0) {
+ #ifdef PREALLOCATE_NEEDS_TRUNCATE
+-			preallocated_len = total_size;
++			preallocated_len = F_LENGTH(file);
+ #endif
+ 		} else
+ 			rsyserr(FWARNING, errno, "do_fallocate %s", full_fname(fname));
 @@ -275,7 +276,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  		if (append_mode == 2 && mapbuf) {
  			for (j = CHUNK_SIZE; j < sum.flength; j += CHUNK_SIZE) {
@@ -127,7 +143,14 @@ diff --git a/receiver.c b/receiver.c
  
  		if (allowed_lull)
  			maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH | MSK_ACTIVE_RECEIVER);
-@@ -373,14 +374,14 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -367,20 +368,20 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 
+ #ifdef HAVE_FTRUNCATE
+ 	/* inplace: New data could be shorter than old data.
+-	 * preallocate_files: total_size could have been an overestimate.
++	 * preallocate_files: F_LENGTH(file) could have been an overestimate.
+ 	 *     Cut off any extra preallocated zeros from dest file. */
+ 	if ((inplace
  #ifdef PREALLOCATE_NEEDS_TRUNCATE
  	  || preallocated_len > offset
  #endif

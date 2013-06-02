@@ -23,7 +23,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: ee51a745c163f3c422a30b22f4beda0e1ead7c20
+based-on: 1e9ee19a716b72454dfeab663802c626b81cdf2e
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -90,7 +90,7 @@ diff --git a/cleanup.c b/cleanup.c
  extern int keep_partial;
  extern int got_xfer_error;
  extern int protocol_version;
-@@ -142,6 +143,12 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
+@@ -141,6 +142,12 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
  #include "case_N.h"
  		switch_step++;
  
@@ -154,32 +154,51 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1094,6 +1095,29 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1096,6 +1097,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
-+AC_CHECK_PROG(MYSQL_CONFIG, mysql_config, 1, 0)
-+if test x$MYSQL_CONFIG = x1; then
-+    AC_MSG_CHECKING(for mysql version >= 4)
-+    mysql_version=`mysql_config --version`
-+    mysql_major_version=`echo $mysql_version | sed 's/\..*//'`
-+    if test $mysql_major_version -lt 4; then
-+	AC_MSG_RESULT(no.. skipping MySQL)
-+    else
-+	AC_MSG_RESULT(yes)
++AC_MSG_CHECKING([whether to include mysql DB support])
++AC_ARG_ENABLE(mysql,
++	AC_HELP_STRING([--disable-mysql],
++		[disable mysql DB support]))
 +
-+	MYSQL_CFLAGS=`mysql_config --cflags`
-+	MYSQL_LIBS=`mysql_config --libs`
++if test x"$enable_mysql" = x"no"; then
++    AC_MSG_RESULT(no)
++else
++    AC_MSG_RESULT([yes])
++    AC_CHECK_PROG(MYSQL_CONFIG, mysql_config, 1, 0)
++    if test x$MYSQL_CONFIG = x1; then
++	AC_MSG_CHECKING(for mysql version >= 4)
++	mysql_version=`mysql_config --version`
++	mysql_major_version=`echo $mysql_version | sed 's/\..*//'`
++	if test $mysql_major_version -lt 4; then
++	    AC_MSG_RESULT(no.. skipping MySQL)
++	else
++	    AC_MSG_RESULT(yes)
 +
-+	CPPFLAGS="$CPPFLAGS $MYSQL_CFLAGS"
-+	LIBS="$MYSQL_LIBS $LIBS"
++	    MYSQL_CFLAGS=`mysql_config --cflags`
++	    MYSQL_LIBS=`mysql_config --libs`
 +
-+	AC_CHECK_LIB(mysqlclient, mysql_init)
-+   fi
++	    CPPFLAGS="$CPPFLAGS $MYSQL_CFLAGS"
++	    LIBS="$MYSQL_LIBS $LIBS"
++
++	    AC_CHECK_LIB(mysqlclient, mysql_init)
++	fi
++    fi
 +fi
 +
-+AC_CHECK_LIB(sqlite3, sqlite3_open)
-+AC_CHECK_FUNCS(sqlite3_open_v2 sqlite3_prepare_v2)
++AC_MSG_CHECKING([whether to include sqlite DB support])
++AC_ARG_ENABLE(sqlite,
++	AC_HELP_STRING([--disable-sqlite],
++		[disable sqlite DB support]))
++
++if test x"$enable_sqlite" = x"no"; then
++    AC_MSG_RESULT(no)
++else
++    AC_CHECK_LIB(sqlite3, sqlite3_open)
++    AC_CHECK_FUNCS(sqlite3_open_v2 sqlite3_prepare_v2)
++fi
 +
  case "$CC" in
  ' checker'*|checker*)
@@ -188,7 +207,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,567 @@
+@@ -0,0 +1,570 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -256,6 +275,8 @@ new file mode 100644
 +#define SEL_SUM 1
 +#define REP_SUM 2
 +#define MAX_PREP_CNT 3
++
++#define MAX_BIND_CNT 6
 +
 +static union {
 +#ifdef USE_MYSQL
@@ -404,7 +425,7 @@ new file mode 100644
 +#ifdef USE_MYSQL
 +static int db_connect_mysql(void)
 +{
-+	MYSQL_BIND binds[10];
++	MYSQL_BIND binds[MAX_BIND_CNT];
 +
 +	if (!(dbh.mysql = mysql_init(NULL)))
 +		out_of_memory("db_read_config");
@@ -450,21 +471,22 @@ new file mode 100644
 +	binds[0].buffer = &bind_disk_id;
 +	binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
 +	binds[1].buffer = &bind_ino;
-+	binds[2].buffer_type = binds[6].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[2].buffer = binds[6].buffer = &bind_size;
-+	binds[3].buffer_type = binds[7].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[3].buffer = binds[7].buffer = &bind_mtime;
-+	binds[4].buffer_type = binds[8].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[4].buffer = binds[8].buffer = &bind_ctime;
-+	binds[5].buffer_type = binds[9].buffer_type = MYSQL_TYPE_BLOB;
-+	binds[5].buffer = binds[9].buffer = &bind_sum;
-+	binds[5].buffer_length = binds[9].buffer_length = checksum_len;
-+	statements[REP_SUM].mysql = prepare_mysql(binds, 10,
++	binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
++	binds[2].buffer = &bind_size;
++	binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
++	binds[3].buffer = &bind_mtime;
++	binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
++	binds[4].buffer = &bind_ctime;
++	binds[5].buffer_type = MYSQL_TYPE_BLOB;
++	binds[5].buffer = &bind_sum;
++	binds[5].buffer_length = checksum_len;
++	statements[REP_SUM].mysql = prepare_mysql(binds, 6,
 +		"INSERT INTO inode_map"
 +		" SET disk_id = ?, ino = ?, sum_type = %d,"
 +		"     size = ?, mtime = ?, ctime = ?, checksum = ?"
 +		" ON DUPLICATE KEY"
-+		" UPDATE size = ?, mtime = ?, ctime = ?, checksum = ?",
++		" UPDATE size = VALUES(size), mtime = VALUES(mtime),"
++		"        ctime = VALUES(ctime), checksum = VALUES(checksum)",
 +		md_num, md_num);
 +	if (!statements[REP_SUM].mysql)
 +		return 0;
@@ -827,7 +849,7 @@ diff --git a/generator.c b/generator.c
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
  
-@@ -2184,6 +2186,9 @@ void generate_files(int f_out, const char *local_name)
+@@ -2193,6 +2195,9 @@ void generate_files(int f_out, const char *local_name)
  			: "enabled");
  	}
  
@@ -912,7 +934,7 @@ diff --git a/options.c b/options.c
  int eol_nulls = 0;
  int protect_args = -1;
  int human_readable = 1;
-@@ -571,6 +572,7 @@ static void print_rsync_version(enum logcode f)
+@@ -573,6 +574,7 @@ static void print_rsync_version(enum logcode f)
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -920,7 +942,7 @@ diff --git a/options.c b/options.c
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -607,6 +609,11 @@ static void print_rsync_version(enum logcode f)
+@@ -609,6 +611,11 @@ static void print_rsync_version(enum logcode f)
  #ifdef CAN_SET_SYMLINK_TIMES
  	symtimes = "";
  #endif
@@ -932,7 +954,7 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -620,8 +627,8 @@ static void print_rsync_version(enum logcode f)
+@@ -622,8 +629,8 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -943,7 +965,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -670,6 +677,7 @@ void usage(enum logcode F)
+@@ -672,6 +679,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -951,7 +973,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -955,6 +963,7 @@ static struct poptOption long_options[] = {
+@@ -957,6 +965,7 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
