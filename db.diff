@@ -23,7 +23,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: 1e9ee19a716b72454dfeab663802c626b81cdf2e
+based-on: 12505e02b1a3789d995ddf6b91c1e641f54ddb25
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -207,11 +207,11 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,570 @@
+@@ -0,0 +1,621 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
-+ * Copyright (C) 2008 Wayne Davison
++ * Copyright (C) 2008-2013 Wayne Davison
 + *
 + * This program is free software; you can redistribute it and/or modify
 + * it under the terms of the GNU General Public License as published by
@@ -247,6 +247,8 @@ new file mode 100644
 +#ifndef HAVE_SQLITE3_PREPARE_V2
 +#define sqlite3_prepare_v2 sqlite3_prepare
 +#endif
++#define MAX_OPEN_FAILURES 10
++#define OPEN_FAIL_MSLEEP 100
 +#endif
 +
 +extern int protocol_version;
@@ -299,6 +301,12 @@ new file mode 100644
 +static char bind_thishost[256];
 +static int bind_thishost_len;
 +
++static char *error_log;
++#if defined USE_SQLITE && defined SQLITE_CONFIG_LOG
++static FILE *error_log_fp;
++#endif
++
++static int check_ctime = 1;
 +static unsigned int prior_disk_id = 0;
 +static unsigned long long prior_devno = 0;
 +
@@ -343,6 +351,10 @@ new file mode 100644
 +			dbname = strdup(cp);
 +		else if (strcasecmp(buf, "dbport") == 0)
 +			dbport = atoi(cp);
++		else if (strcasecmp(buf, "no_ctime") == 0)
++			check_ctime = atoi(cp) ? 0 : 1;
++		else if (strcasecmp(buf, "errlog") == 0)
++			error_log = strdup(cp);
 +		else if (strcasecmp(buf, "thishost") == 0)
 +			bind_thishost_len = strlcpy(bind_thishost, cp, sizeof bind_thishost);
 +		else if (strcasecmp(buf, "dbtype") == 0) {
@@ -384,8 +396,24 @@ new file mode 100644
 +
 +	md_num = protocol_version >= 30 ? 5 : 4;
 +
++	if (error_log) {
++		if (use_db != DB_TYPE_SQLITE)
++			rprintf(log_code, "Ignoring errlog setting for non-SQLite DB.\n");
++#ifndef SQLITE_CONFIG_LOG
++		else
++			rprintf(log_code, "Your sqlite doesn't support SQLITE_CONFIG_LOG.\n");
++#endif
++	}
++
 +	return 1;
 +}
++
++#if defined USE_SQLITE && defined SQLITE_CONFIG_LOG
++static void errorLogCallback(UNUSED(void *pArg), int iErrCode, const char *zMsg)
++{
++	fprintf(error_log_fp, "[%d] %s (%d)\n", (int)getpid(), zMsg, iErrCode);
++}
++#endif
 +
 +#ifdef USE_MYSQL
 +static MYSQL_STMT *prepare_mysql(MYSQL_BIND *binds, int bind_cnt, const char *fmt, ...)
@@ -455,14 +483,16 @@ new file mode 100644
 +	binds[2].buffer = &bind_size;
 +	binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
 +	binds[3].buffer = &bind_mtime;
-+	binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[4].buffer = &bind_ctime;
-+	statements[SEL_SUM].mysql = prepare_mysql(binds, 5,
++	if (check_ctime) {
++		binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[4].buffer = &bind_ctime;
++	}
++	statements[SEL_SUM].mysql = prepare_mysql(binds, 4 + check_ctime,
 +		"SELECT checksum"
 +		" FROM inode_map"
 +		" WHERE disk_id = ? AND ino = ? AND sum_type = %d"
-+		"   AND size = ? AND mtime = ? AND ctime = ?",
-+		md_num);
++		"   AND size = ? AND mtime = ? %s",
++		md_num, check_ctime ? "AND ctime = ?" : "");
 +	if (!statements[SEL_SUM].mysql)
 +		return 0;
 +
@@ -498,10 +528,29 @@ new file mode 100644
 +#ifdef USE_SQLITE
 +static int db_connect_sqlite(void)
 +{
++	int open_failures = 0;
 +	char *sql;
 +
-+	if (sqlite3_open_v2(dbname, &dbh.sqlite, SQLITE_OPEN_READWRITE, NULL) != 0)
-+		return 0;
++#ifdef SQLITE_CONFIG_LOG
++	if (error_log) {
++		if (!(error_log_fp = fopen(error_log, "a"))) {
++			rsyserr(log_code, errno, "unable to append to logfile %s", error_log);
++			error_log = NULL;
++		} else if (sqlite3_config(SQLITE_CONFIG_LOG, errorLogCallback, NULL) != 0)
++			rprintf(log_code, "Failed to set errorLogCallback: %s\n", sqlite3_errmsg(dbh.sqlite));
++	}
++#endif
++
++	while (1) {
++		int ret = sqlite3_open_v2(dbname, &dbh.sqlite, SQLITE_OPEN_READWRITE, NULL);
++		if (ret == 0)
++			break;
++		if (ret != SQLITE_BUSY && ret != SQLITE_LOCKED)
++			return 0;
++		if (++open_failures > MAX_OPEN_FAILURES)
++			return 0;
++		msleep(OPEN_FAIL_MSLEEP);
++	}
 +
 +	sql = "SELECT disk_id"
 +	    " FROM disk"
@@ -513,8 +562,8 @@ new file mode 100644
 +	    "SELECT checksum"
 +	    " FROM inode_map"
 +	    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
-+	    "   AND size = ? AND mtime = ? AND ctime = ?",
-+	    md_num) < 0
++	    "   AND size = ? AND mtime = ? %s",
++	    md_num, check_ctime ? "AND ctime = ?" : "") < 0
 +	 || sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
 +		return 0;
 +	free(sql);
@@ -549,7 +598,7 @@ new file mode 100644
 +#endif
 +	}
 +
-+	rprintf(log_code, "Unable to connect to DB\n");
++	rprintf(log_code, "Unable to connect to DB: %s\n", sqlite3_errmsg(dbh.sqlite));
 +	db_disconnect();
 +	use_db = DB_TYPE_NONE;
 +
@@ -706,7 +755,8 @@ new file mode 100644
 +		bind_ino = st_p->st_ino;
 +		bind_size = st_p->st_size;
 +		bind_mtime = st_p->st_mtime;
-+		bind_ctime = st_p->st_ctime;
++		if (check_ctime)
++			bind_ctime = st_p->st_ctime;
 +
 +		binds[0].buffer_type = MYSQL_TYPE_BLOB;
 +		binds[0].buffer = sum;
@@ -721,7 +771,8 @@ new file mode 100644
 +		sqlite3_bind_int64(stmt, 2, st_p->st_ino);
 +		sqlite3_bind_int64(stmt, 3, st_p->st_size);
 +		sqlite3_bind_int64(stmt, 4, st_p->st_mtime);
-+		sqlite3_bind_int64(stmt, 5, st_p->st_ctime);
++		if (check_ctime)
++			sqlite3_bind_int64(stmt, 5, st_p->st_ctime);
 +		if (sqlite3_step(stmt) == SQLITE_ROW) {
 +			int len = sqlite3_column_bytes(stmt, 0);
 +			if (len > MAX_DIGEST_LEN)
@@ -973,7 +1024,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -957,6 +965,7 @@ static struct poptOption long_options[] = {
+@@ -958,6 +966,7 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -1098,10 +1149,11 @@ diff --git a/support/rsyncdb b/support/rsyncdb
 new file mode 100755
 --- /dev/null
 +++ b/support/rsyncdb
-@@ -0,0 +1,331 @@
-+#!/usr/bin/perl -w
-+use strict;
+@@ -0,0 +1,417 @@
++#!/usr/bin/perl
 +
++use strict;
++use warnings;
 +use DBI;
 +use Getopt::Long;
 +use Cwd qw(abs_path cwd);
@@ -1116,14 +1168,30 @@ new file mode 100755
 +    'init' => \( my $init_db ),
 +    'mounts|m' => \( my $update_mounts ),
 +    'recurse|r' => \( my $recurse_opt ),
-+    'check|c' => \( my $check_opt ),
++    'sums|s=s' => \( my $sums = '4,5' ),
 +    'verbose|v+' => \( my $verbosity = 0 ),
++    'output|o=s' => \( my $output ),
++    'check|c' => \( my $check_opt ),
++    'clean' => \( my $clean_opt ),
++    'only-clean' => \( my $only_clean_opt ),
 +    'help|h' => \( my $help_opt ),
 +);
 +&usage if $help_opt || !defined $db_config;
 +
++$verbosity ||= 1 if $check_opt;
++$clean_opt = 1 if $only_clean_opt;
++$output ||= $verbosity ? 'dn' : '';
++$output .= 's' if $output =~ /c/; # Be nice if they specify c instead of s.
++$output .= 'n' if $output =~ /[isu]/;
++$output .= 'i' if $check_opt;
++$output = lc($output);
++
++my $do_md4 = $sums =~ /\b(md)?4\b/i ? 1 : 0;
++my $do_md5 = $sums =~ /\b(md)?5\b/i ? 1 : 0;
++my $need_sum_cnt = $do_md4 + $do_md5;
++
 +my %config;
-+open(IN, '<', $db_config) or die "Unable to open $db_config: $!\n";
++open IN, '<', $db_config or die "Unable to open $db_config: $!\n";
 +while (<IN>) {
 +    s/[#\r\n].*//s;
 +    next if /^$/;
@@ -1200,7 +1268,7 @@ new file mode 100755
 +my $ins_disk_H = $dbh->prepare("
 +    INSERT INTO disk
 +    (devno, host, mounted, comment)
-+    VALUES(?, ?, ?, ?)
++    VALUES (?, ?, ?, ?)
 +    ") or die $dbh->errstr;
 +
 +my $up_disk_H = $dbh->prepare("
@@ -1209,26 +1277,26 @@ new file mode 100755
 +    WHERE disk_id = ?
 +    ") or die $dbh->errstr;
 +
-+my $row_id = $sqlite ? 'ROWID' : 'ID';
-+my $sel_lastid_H = $dbh->prepare("
-+    SELECT LAST_INSERT_$row_id()
-+    ") or die $dbh->errstr;
-+
 +my $sel_sum_H = $dbh->prepare("
-+    SELECT sum_type, checksum
++    SELECT sum_type, checksum, size, mtime, ctime
 +    FROM inode_map
-+    WHERE disk_id = ? AND ino = ? AND size = ? AND mtime = ? AND ctime = ?
++    WHERE disk_id = ? AND ino = ?
 +    ") or die $dbh->errstr;
 +
 +my $rep_sum_H = $dbh->prepare("
 +    REPLACE INTO inode_map
 +    (disk_id, ino, size, mtime, ctime, sum_type, checksum)
-+    VALUES(?, ?, ?, ?, ?, ?, ?)
++    VALUES (?, ?, ?, ?, ?, ?, ?)
++    ") or die $dbh->errstr;
++
++my $del_sum_H = $dbh->prepare("
++    DELETE FROM inode_map
++    WHERE disk_id = ? AND ino = ? AND sum_type = ?
 +    ") or die $dbh->errstr;
 +
 +my %mounts;
 +if ($update_mounts) {
-+    open(IN, $MOUNT_FILE) or die "Unable to open $MOUNT_FILE: $!\n";
++    open IN, $MOUNT_FILE or die "Unable to open $MOUNT_FILE: $!\n";
 +    while (<IN>) {
 +	my($devname, $mnt) = (split)[0,1];
 +	next unless $devname =~ m#^/dev#;
@@ -1246,29 +1314,25 @@ new file mode 100755
 +$sel_disk_H->execute($thishost);
 +while (my($disk_id, $devno, $mounted, $comment) = $sel_disk_H->fetchrow_array) {
 +    if ($update_mounts) {
-+	if (defined $mounts{$devno}) {
-+	    if ($comment ne $mounts{$devno}) {
-+		if ($mounted) {
-+		    print "Umounting $comment ($thishost:$devno)\n" if $verbosity;
-+		    $up_disk_H->execute(0, $disk_id);
-+		}
-+		next;
-+	    }
++	my $changed;
++	if (defined $mounts{$devno} && $comment eq $mounts{$devno}) {
 +	    if (!$mounted) {
-+		print "Mounting $comment ($thishost:$devno)\n" if $verbosity;
++		print "Noting mounted state for $comment ($thishost:$devno)\n" if $verbosity;
 +		$up_disk_H->execute(1, $disk_id);
++		$mounted = 1;
++		$changed = 1;
 +	    }
 +	} else {
 +	    if ($mounted) {
-+		print "Umounting $comment ($thishost:$devno)\n" if $verbosity;
++		print "Noting UNmounted state for $comment ($thishost:$devno)\n" if $verbosity;
 +		$up_disk_H->execute(0, $disk_id);
 +	    }
++	    # This avoids "No change" notice for an unmounted disk.
 +	    next;
 +	}
-+    } else {
-+	next unless $mounted;
++	print "No change for $comment ($thishost:$devno)\n" if $verbosity && !$changed;
 +    }
-+    $disk_id{$devno} = $disk_id;
++    $disk_id{$devno} = $disk_id if $mounted;
 +}
 +$sel_disk_H->finish;
 +
@@ -1277,11 +1341,25 @@ new file mode 100755
 +	next if $disk_id{$devno};
 +	print "Adding $comment ($thishost:$devno)\n" if $verbosity;
 +	$ins_disk_H->execute($devno, $thishost, 1, $comment);
-+	$sel_lastid_H->execute;
-+	($disk_id{$devno}) = $sel_lastid_H->fetchrow_array;
-+	$sel_lastid_H->finish;
++	$disk_id{$devno} = $dbh->last_insert_id(undef, undef, 'disk', 'disk_id');
 +    }
 +    exit;
++}
++
++my %all_inodes;
++if ($clean_opt) {
++    my $on_list = join ',', map { $disk_id{$_} } keys %disk_id;
++    if ($on_list ne '') {
++	my $sel_inodes_H = $dbh->prepare("
++	    SELECT disk_id, ino, sum_type
++	    FROM inode_map
++	    WHERE disk_id IN ($on_list)
++	    ") or die $dbh->errstr;
++	$sel_inodes_H->execute();
++	while (my($id, $ino, $type) = $sel_inodes_H->fetchrow_array) {
++	    $all_inodes{"$id,$ino,$type"} = 1;
++	}
++    }
 +}
 +
 +my $start_dir = cwd();
@@ -1313,120 +1391,179 @@ new file mode 100755
 +
 +    my $reldir = $dir;
 +    $reldir =~ s#^$start_dir(/|$)# $1 ? '' : '.' #eo;
-+    print "$reldir ... \n" if $verbosity;
++    print "... $reldir/ ...\n" if $output =~ /d/;
 +
 +    my @subdirs;
-+    while (defined(my $fn = readdir(DP))) {
-+	next if $fn =~ /^\.\.?$/ || -l $fn;
++    my @files = sort grep !/^\.\.?$/, readdir DP;
++    closedir DP;
++    foreach my $fn (@files) {
++	next if -l $fn;
 +	if (-d _) {
-+	    push(@subdirs, "$dir/$fn") unless $fn =~ /^(CVS|\.svn|\.git|\.bzr)$/;
++	    push @subdirs, "$dir/$fn" unless $fn =~ /^(CVS|\.svn|\.git|\.bzr)$/;
 +	    next;
 +	}
 +	next unless -f _;
 +
 +	my($dev,$ino,$size,$mtime,$ctime) = (stat(_))[0,1,7,9,10];
 +	my $disk_id = $disk_id{$dev} or next;
-+	$sel_sum_H->execute($disk_id,$ino,$size,$mtime,$ctime) or die $!;
++	if ($clean_opt) {
++	    delete $all_inodes{"$disk_id,$ino,4"};
++	    delete $all_inodes{"$disk_id,$ino,5"};
++	    next if $only_clean_opt;
++	}
++	$sel_sum_H->execute($disk_id,$ino) or die $!;
 +	my($sum4, $dbsum4, $sum5, $dbsum5);
-+	my $dbsumcnt = 0;
-+	while (my($sum_type, $checksum) = $sel_sum_H->fetchrow_array) {
++	my $right_sum_cnt = 0;
++	my $wrong_sum_cnt = 0;
++	while (my($sum_type,$sum,$dbsize,$dbmtime,$dbctime) = $sel_sum_H->fetchrow_array) {
 +	    if ($sum_type == 4) {
-+		$dbsum4 = $checksum;
-+		$dbsumcnt++;
++		$dbsum4 = $sum;
++		next unless $do_md4;
 +	    } elsif ($sum_type == 5) {
-+		$dbsum5 = $checksum;
-+		$dbsumcnt++;
++		$dbsum5 = $sum;
++		next unless $do_md5;
++	    }
++	    if ($size == $dbsize && $mtime == $dbmtime && ($config{no_ctime} || $ctime == $dbctime)) {
++		$right_sum_cnt++;
++	    } else {
++		$wrong_sum_cnt++;
 +	    }
 +	}
 +	$sel_sum_H->finish;
 +
-+	next if !$check_opt && $dbsumcnt == 2;
++	if (!$check_opt && $right_sum_cnt == $need_sum_cnt) {
++	    mention_file($reldir, $fn, $right_sum_cnt, $wrong_sum_cnt, $dbsum4, $dbsum5, $dbsum4, $dbsum5);
++	    next;
++	}
 +
-+	if (!$check_opt || $dbsumcnt || $verbosity > 2) {
-+	    if (!open(IN, $fn)) {
-+		print STDERR "Unable to read $fn: $!\n";
++	if (!$check_opt || $right_sum_cnt || $output =~ /s/) {
++	    if (!open IN, $fn) {
++		print STDERR "ERROR: unable to read $fn: $!\n";
 +		next;
 +	    }
 +
 +	    while (1) {
 +		while (sysread(IN, $_, 64*1024)) {
-+		    $md4->add($_);
-+		    $md5->add($_);
++		    $md4->add($_) if $do_md4;
++		    $md5->add($_) if $do_md5;
 +		}
-+		$sum4 = $md4->digest;
-+		$sum5 = $md5->digest;
-+		print ' ', unpack('H*', $sum4), ' ', unpack('H*', $sum5) if $verbosity > 2;
-+		print " $fn" if $verbosity > 1;
++		$sum4 = $md4->digest if $do_md4;
++		$sum5 = $md5->digest if $do_md5;
 +		my($ino2,$size2,$mtime2,$ctime2) = (stat(IN))[1,7,9,10];
-+		last if $ino == $ino2 && $size == $size2 && $mtime == $mtime2 && $ctime == $ctime2;
++		last if $ino == $ino2 && $size == $size2 && $mtime == $mtime2 && ($config{no_ctime} || $ctime == $ctime2);
 +		$ino = $ino2;
 +		$size = $size2;
 +		$mtime = $mtime2;
 +		$ctime = $ctime2;
 +		sysseek(IN, 0, 0);
-+		print " REREADING\n" if $verbosity > 1;
 +	    }
 +
 +	    close IN;
-+	} elsif ($verbosity > 1) {
-+	    print "_$fn";
 +	}
 +
-+	if ($check_opt) {
-+	    my $dif;
-+	    if ($dbsumcnt == 0) {
-+		$dif = ' --MISSING--';
-+	    } else {
-+		$dif = '';
-+		if (!defined $dbsum4) {
-+		    $dif .= ' -NO-MD4-';
-+		} elsif ($sum4 ne $dbsum4) {
-+		    $dif .= ' -MD4-CHANGED-';
-+		}
-+		if (!defined $dbsum5) {
-+		    $dif .= ' ---NO-MD5---';
-+		} elsif ($sum5 ne $dbsum5) {
-+		    $dif .= ' -MD5-CHANGED-';
-+		}
-+		if ($dif eq '') {
-+		    print " ====OK====\n" if $verbosity > 1;
-+		    next;
-+		}
-+		$dif =~ s/MD4-CHANGED MD5-//;
-+	    }
-+	    if ($verbosity < 2) {
-+		print $verbosity ? ' ' : "$reldir/";
-+		print $fn;
-+	    }
-+	    print $dif, "\n";
++	my $chg = mention_file($reldir, $fn, $right_sum_cnt, $wrong_sum_cnt, $dbsum4, $dbsum5, $sum4, $sum5);
++	if (!$chg) {
++	    # Only $check_opt should get here...
++	} elsif ($check_opt) {
 +	    $exit_code = 1;
 +	} else {
-+	    print "\n" if $verbosity > 1;
-+	    $rep_sum_H->execute($disk_id, $ino, $size, $mtime, $ctime, 4, $sum4);
-+	    $rep_sum_H->execute($disk_id, $ino, $size, $mtime, $ctime, 5, $sum5);
++	    if ($do_md4) {
++		$rep_sum_H->execute($disk_id, $ino, $size, $mtime, $ctime, 4, $sum4);
++	    }
++	    if ($do_md5) {
++		$rep_sum_H->execute($disk_id, $ino, $size, $mtime, $ctime, 5, $sum5);
++	    }
 +	}
 +    }
 +
-+    closedir DP;
++    unshift @dirs, sort @subdirs if $recurse_opt;
++}
 +
-+    unshift(@dirs, sort @subdirs) if $recurse_opt;
++if ($clean_opt) {
++    my $cnt = 0;
++    $dbh->begin_work;
++    while (my ($info, $val) = each %all_inodes) {
++	my ($id, $ino, $type) = split /,/, $info;
++	print "Deleting $info\n" if $verbosity >= 2;
++	$del_sum_H->execute($id, $ino, $type);
++	$cnt++;
++    }
++    $dbh->commit;
++    my $s = $cnt == 1 ? '' : 's';
++    print "Cleaned out $cnt old inode$s.\n" if $verbosity;
 +}
 +
 +exit $exit_code;
 +
++# Returns 1 if there is a checksum change, else undef.
++sub mention_file
++{
++    my ($dir, $name, $right_cnt, $wrong_cnt, $dbsum4, $dbsum5, $sum4, $sum5) = @_;
++
++    my @diffs = $wrong_cnt && !$right_cnt ? '!i' : '  ';
++    if ($do_md4) {
++	push @diffs, !defined $dbsum4 ? '+4' : !defined $sum4 ? '?4' : $sum4 ne $dbsum4 ? '!4' : '  ';
++    }
++    if ($do_md5) {
++	push @diffs, !defined $dbsum5 ? '+5' : !defined $sum5 ? '?5' : $sum5 ne $dbsum5 ? '!5' : '  ';
++    }
++
++    my $chg = grep /\S/, @diffs;
++    if ($chg || $output =~ /u/) {
++	my $line = '';
++	if ($output =~ /i/) {
++	    $line .= "@diffs ";
++	}
++	if ($output =~ /s/) {
++	    $line .= unpack('H*', $sum4) . ' ' if $do_md4;
++	    $line .= unpack('H*', $sum5) . ' ' if $do_md5;
++	}
++	if ($output =~ /n/) {
++	    $line .= ' ' if $line ne ''; # We want 2 spaces, like md5sum.
++	    $line .= $dir . '/' unless $dir eq '.';
++	    print $line, $name, "\n";
++	}
++    }
++
++    return $chg;
++}
++
 +sub usage
 +{
 +    die <<EOT;
-+Usage: rsyncsums --db=CONFIG_FILE [OPTIONS] [DIRS]
++Usage: rsyncdb --db=CONFIG_FILE [OPTIONS] [DIRS]
 +
 +Options:
-+     --db=FILE     Specify the config FILE to read for the DB info.
-+     --init        Create (recreate) needed tables (making them empty).
++--db=FILE          Specify the config FILE to read for the DB info.
++--init             Create (recreate) needed tables (making them empty).
 +                   No DIR scanning, but can be combined with --mounts.
-+ -m, --mounts      Update mount info.  Does no DIR scanning.
-+ -r, --recurse     Scan files in subdirectories too.
-+ -c, --check       Check if the checksums are right (doesn't update).
-+ -v, --verbose     Mention what we're doing.  Repeat for more info.
-+ -h, --help        Display this help message.
++--mounts (-m)      Update mount info.  Does no DIR scanning.
++--recurse (-r)     Scan files in subdirectories too.
++--sums=SUMS (-s)   List which checksums to update (default: 4,5).  Note that
++                   this doesn't affect the order of sum output via "-o s".
++--verbosity (-v)   Output change info for --init, --mounts, and --*clean.
++                   Also makes checksumming output default be "-o dn".
++--output=STR (-o)  One or more letters of what to output (default is nothing).
++                   d = output "... dir_name ..." lines from our scan.
++                   n = output names of items with changes.
++                   s = output checksum info for changes (implies n).
++                   u = output even unchanged items (implies n).
++                   i = output prefixed change info: !i if time and/or size is
++                       wrong, +4/+5 if the MD4/5 sum is missing, !4/!5 if sum
++                       is wrong, ?4/?5 if we didn't need to read the file (i.e.
++                       if time/size is wrong and no sum output was requested).
++--check (-c)       Check if the checksums are right (doesn't update).
++                   Implies --verbose and enables output of "i".
++--clean            Read all inodes from the DB and remove the ones that aren't
++                   found in the DIR(s) while also updating the DB's info.  You
++                   need to specify all mounted DIRs in the DB & also --recurse.
++--only-clean       Like --clean, but avoids adding missing info.
++--help (-h)        Display this help message.
++
++Examples:
++
++rsyncdb --db=/etc/db.conf -r -o n /src
++rsyncdb --db=/etc/db.conf -r --check /src
++rsyncdb --db=/etc/db.conf -s5 -rous /src >/tmp/really-fast-md5sum.txt
 +EOT
 +}
