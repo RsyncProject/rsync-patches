@@ -23,19 +23,64 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: 12505e02b1a3789d995ddf6b91c1e641f54ddb25
+based-on: 0488a14b9930bf91719ac0f1d1c0c8770ca10646
+diff --git a/.gitignore b/.gitignore
+--- a/.gitignore
++++ b/.gitignore
+@@ -23,6 +23,7 @@ config.status
+ /getgroups
+ /gmon.out
+ /rsync
++/rsyncdb
+ /shconfig
+ /testdir
+ /tests-dont-exist
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
 @@ -36,7 +36,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
- 	util.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
+ 	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
 -	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
 +	fileio.o batch.o clientname.o chmod.o db.o acls.o xattrs.o
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
+@@ -60,11 +60,12 @@ CHECK_OBJS=tls.o testrun.o getgroups.o getfsdev.o t_stub.o t_unsafe.o trimslash.
+ 	$(CC) -I. -I$(srcdir) $(CFLAGS) $(CPPFLAGS) -c $< @CC_SHOBJ_FLAG@
+ @OBJ_RESTORE@
+ 
+-all: Makefile rsync$(EXEEXT) @MAKE_MAN@
++all: Makefile rsync$(EXEEXT) rsyncdb @MAKE_MAN@
+ 
+ install: all
+ 	-mkdir -p ${DESTDIR}${bindir}
+ 	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsync$(EXEEXT) ${DESTDIR}${bindir}
++	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsyncdb$(EXEEXT) ${DESTDIR}${bindir}
+ 	-mkdir -p ${DESTDIR}${mandir}/man1
+ 	-mkdir -p ${DESTDIR}${mandir}/man5
+ 	if test -f rsync.1; then ${INSTALLMAN} -m 644 rsync.1 ${DESTDIR}${mandir}/man1; fi
+@@ -76,6 +77,10 @@ install-strip:
+ rsync$(EXEEXT): $(OBJS)
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+ 
++RSYNCDB_OBJS = rsyncdb.o db.o hashtable.o fileio.o syscall.o util2.o lib/compat.o lib/mdfour.o lib/md5.o @BUILD_POPT@
++rsyncdb$(EXEEXT): $(RSYNCDB_OBJS) rsync.h
++	$(CC) -o rsyncdb $(RSYNCDB_OBJS) $(LIBS)
++
+ $(OBJS): $(HEADERS)
+ $(CHECK_OBJS): $(HEADERS)
+ 
+@@ -196,7 +201,7 @@ rsyncd.conf.5: rsyncd.conf.yo
+ 	-$(srcdir)/tweak_manpage rsyncd.conf.5
+ 
+ clean: cleantests
+-	rm -f *~ $(OBJS) $(CHECK_PROGS) $(CHECK_OBJS) $(CHECK_SYMLINKS) \
++	rm -f *~ $(OBJS) $(CHECK_PROGS) $(CHECK_OBJS) $(CHECK_SYMLINKS) rsyncdb rsyncdb.o \
+ 		rounding rounding.h *.old
+ 
+ cleantests:
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
@@ -69,16 +114,26 @@ diff --git a/checksum.c b/checksum.c
  
  	if (protocol_version >= 30) {
  		md5_begin(&m);
-@@ -146,6 +147,9 @@ void file_checksum(char *fname, char *sum, OFF_T size)
+@@ -127,6 +128,9 @@ void file_checksum(char *fname, char *sum, OFF_T size)
+ 			md5_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
+ 
+ 		md5_result(&m, (uchar *)sum);
++
++		if (use_db)
++			db_set_checksum(5, st_p, sum);
+ 	} else {
+ 		mdfour_begin(&m);
+ 
+@@ -144,6 +148,9 @@ void file_checksum(char *fname, char *sum, OFF_T size)
+ 			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
+ 
  		mdfour_result(&m, (uchar *)sum);
++
++		if (use_db)
++			db_set_checksum(4, st_p, sum);
  	}
  
-+	if (use_db)
-+		db_set_checksum(fname, st_p, sum);
-+
  	close(fd);
- 	unmap_file(buf);
- }
 diff --git a/cleanup.c b/cleanup.c
 --- a/cleanup.c
 +++ b/cleanup.c
@@ -207,7 +262,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,621 @@
+@@ -0,0 +1,877 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -259,6 +314,7 @@ new file mode 100644
 +#define DB_TYPE_SQLITE 2
 +
 +int use_db = DB_TYPE_NONE;
++int select_many_sums = 0;
 +
 +static const char *dbhost = NULL, *dbuser = NULL, *dbpass = NULL, *dbname = NULL;
 +static unsigned int dbport = 0;
@@ -276,9 +332,12 @@ new file mode 100644
 +#define SEL_DEV 0
 +#define SEL_SUM 1
 +#define REP_SUM 2
-+#define MAX_PREP_CNT 3
++#define DEL_SUMS 3
++#define INS_PRESENT 4
++#define MAX_PREP_CNT 5
 +
-+#define MAX_BIND_CNT 6
++#define MAX_BIND_CNT 7
++#define MAX_RESULT_BINDS 32
 +
 +static union {
 +#ifdef USE_MYSQL
@@ -291,10 +350,11 @@ new file mode 100644
 +} statements[MAX_PREP_CNT];
 +
 +static int md_num;
++static int check_ctime = 1;
 +static enum logcode log_code;
 +
 +#ifdef USE_MYSQL
-+static unsigned int bind_disk_id;
++static unsigned int bind_disk_id, bind_mdnum;
 +static unsigned long long bind_devno, bind_ino, bind_size, bind_mtime, bind_ctime;
 +static char bind_sum[MAX_DIGEST_LEN];
 +#endif
@@ -305,10 +365,6 @@ new file mode 100644
 +#if defined USE_SQLITE && defined SQLITE_CONFIG_LOG
 +static FILE *error_log_fp;
 +#endif
-+
-+static int check_ctime = 1;
-+static unsigned int prior_disk_id = 0;
-+static unsigned long long prior_devno = 0;
 +
 +int db_read_config(enum logcode code, const char *config_file)
 +{
@@ -470,7 +526,8 @@ new file mode 100644
 +	statements[SEL_DEV].mysql = prepare_mysql(binds, 2,
 +		"SELECT disk_id"
 +		" FROM disk"
-+		" WHERE devno = ? AND host = ? AND mounted = 1");
++		" WHERE devno = ? AND host = ? AND mounted = 1"
++		);
 +	if (!statements[SEL_DEV].mysql)
 +		return 0;
 +
@@ -479,20 +536,28 @@ new file mode 100644
 +	binds[0].buffer = &bind_disk_id;
 +	binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
 +	binds[1].buffer = &bind_ino;
-+	binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[2].buffer = &bind_size;
-+	binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[3].buffer = &bind_mtime;
-+	if (check_ctime) {
-+		binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
-+		binds[4].buffer = &bind_ctime;
++	if (select_many_sums) {
++		statements[SEL_SUM].mysql = prepare_mysql(binds, 2,
++			"SELECT checksum, sum_type, size, mtime, ctime"
++			" FROM inode_map"
++			" WHERE disk_id = ? AND ino = ?"
++			);
++	} else {
++		binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[2].buffer = &bind_size;
++		binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[3].buffer = &bind_mtime;
++		if (check_ctime) {
++			binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
++			binds[4].buffer = &bind_ctime;
++		}
++		statements[SEL_SUM].mysql = prepare_mysql(binds, 4 + check_ctime,
++			"SELECT checksum"
++			" FROM inode_map"
++			" WHERE disk_id = ? AND ino = ? AND sum_type = %d"
++			"   AND size = ? AND mtime = ? %s",
++			md_num, check_ctime ? "AND ctime = ?" : "");
 +	}
-+	statements[SEL_SUM].mysql = prepare_mysql(binds, 4 + check_ctime,
-+		"SELECT checksum"
-+		" FROM inode_map"
-+		" WHERE disk_id = ? AND ino = ? AND sum_type = %d"
-+		"   AND size = ? AND mtime = ? %s",
-+		md_num, check_ctime ? "AND ctime = ?" : "");
 +	if (!statements[SEL_SUM].mysql)
 +		return 0;
 +
@@ -501,23 +566,25 @@ new file mode 100644
 +	binds[0].buffer = &bind_disk_id;
 +	binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
 +	binds[1].buffer = &bind_ino;
-+	binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[2].buffer = &bind_size;
++	binds[2].buffer_type = MYSQL_TYPE_LONG;
++	binds[2].buffer = &bind_mdnum;
 +	binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[3].buffer = &bind_mtime;
++	binds[3].buffer = &bind_size;
 +	binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[4].buffer = &bind_ctime;
-+	binds[5].buffer_type = MYSQL_TYPE_BLOB;
-+	binds[5].buffer = &bind_sum;
-+	binds[5].buffer_length = checksum_len;
-+	statements[REP_SUM].mysql = prepare_mysql(binds, 6,
++	binds[4].buffer = &bind_mtime;
++	binds[5].buffer_type = MYSQL_TYPE_LONGLONG;
++	binds[5].buffer = &bind_ctime;
++	binds[6].buffer_type = MYSQL_TYPE_BLOB;
++	binds[6].buffer = &bind_sum;
++	binds[6].buffer_length = checksum_len;
++	statements[REP_SUM].mysql = prepare_mysql(binds, 7,
 +		"INSERT INTO inode_map"
-+		" SET disk_id = ?, ino = ?, sum_type = %d,"
++		" SET disk_id = ?, ino = ?, sum_type = ?,"
 +		"     size = ?, mtime = ?, ctime = ?, checksum = ?"
 +		" ON DUPLICATE KEY"
 +		" UPDATE size = VALUES(size), mtime = VALUES(mtime),"
-+		"        ctime = VALUES(ctime), checksum = VALUES(checksum)",
-+		md_num, md_num);
++		"        ctime = VALUES(ctime), checksum = VALUES(checksum)"
++		);
 +	if (!statements[REP_SUM].mysql)
 +		return 0;
 +
@@ -552,37 +619,44 @@ new file mode 100644
 +		msleep(OPEN_FAIL_MSLEEP);
 +	}
 +
-+	sql = "SELECT disk_id"
++	sql="SELECT disk_id"
 +	    " FROM disk"
 +	    " WHERE devno = ? AND host = ? AND mounted = 1";
 +	if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_DEV].sqlite, NULL) != 0)
 +		return 0;
 +
-+	if (asprintf(&sql,
-+	    "SELECT checksum"
-+	    " FROM inode_map"
-+	    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
-+	    "   AND size = ? AND mtime = ? %s",
-+	    md_num, check_ctime ? "AND ctime = ?" : "") < 0
-+	 || sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
-+		return 0;
-+	free(sql);
++	if (select_many_sums) {
++		sql="SELECT checksum, sum_type, size, mtime, ctime"
++		    " FROM inode_map"
++		    " WHERE disk_id = ? AND ino = ?";
++		if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
++			return 0;
++	} else {
++		if (asprintf(&sql,
++		    "SELECT checksum"
++		    " FROM inode_map"
++		    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
++		    "   AND size = ? AND mtime = ? %s",
++		    md_num, check_ctime ? "AND ctime = ?" : "") < 0
++		 || sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
++			return 0;
++		free(sql);
++	}
 +
-+	if (asprintf(&sql,
-+	    "INSERT OR REPLACE INTO inode_map"
++	sql="INSERT OR REPLACE INTO inode_map"
 +	    " (disk_id, ino, sum_type, size, mtime, ctime, checksum)"
-+	    " VALUES(?, ?, %d, ?, ?, ?, ?)",
-+	    md_num) < 0
-+	 || sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[REP_SUM].sqlite, NULL) != 0)
++	    " VALUES (?, ?, ?, ?, ?, ?, ?)";
++	if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[REP_SUM].sqlite, NULL) != 0)
 +		return 0;
-+	free(sql);
 +
 +	return 1;
 +}
 +#endif
 +
-+int db_connect(void)
++int db_connect(int select_many)
 +{
++	select_many_sums = select_many;
++
 +	switch (use_db) {
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL:
@@ -654,7 +728,7 @@ new file mode 100644
 +
 +	if ((rc = mysql_stmt_execute(stmt)) == CR_SERVER_LOST) {
 +		db_disconnect();
-+		if (db_connect()) {
++		if (db_connect(select_many_sums)) {
 +			stmt = statements[ndx].mysql;
 +			rc = mysql_stmt_execute(stmt);
 +		}
@@ -669,14 +743,14 @@ new file mode 100644
 +#endif
 +
 +#ifdef USE_MYSQL
-+static int fetch_mysql(MYSQL_BIND *binds, int bind_cnt, int ndx)
++static int fetch_mysql(MYSQL_BIND *binds, int bind_cnt, int ndx, int max_rows)
 +{
-+	unsigned long length[32];
-+	my_bool is_null[32], error[32];
++	unsigned long length[MAX_RESULT_BINDS];
++	my_bool is_null[MAX_RESULT_BINDS], error[MAX_RESULT_BINDS];
 +	MYSQL_STMT *stmt;
-+	int i, rc;
++	int i, rc, rows = 0;
 +
-+	if (bind_cnt > 32)
++	if (bind_cnt > MAX_RESULT_BINDS)
 +		exit_cleanup(RERR_UNSUPPORTED);
 +
 +	if ((stmt = exec_mysql(ndx)) == NULL)
@@ -689,23 +763,33 @@ new file mode 100644
 +	}
 +	mysql_stmt_bind_result(stmt, binds);
 +
-+	if ((rc = mysql_stmt_fetch(stmt)) != 0) {
-+		if (rc != MYSQL_NO_DATA) {
-+			rprintf(log_code, "SELECT fetch failed: %s\n",
-+				mysql_stmt_error(stmt));
++	while (rows < max_rows) {
++		if ((rc = mysql_stmt_fetch(stmt)) != 0) {
++			if (rc != MYSQL_NO_DATA) {
++				rprintf(log_code, "SELECT fetch failed: %s\n",
++					mysql_stmt_error(stmt));
++			}
++			break;
 +		}
-+		mysql_stmt_free_result(stmt);
-+		return 0;
++		for (i = 0; i < bind_cnt; i++)
++			binds[i].buffer += binds[i].buffer_length;
 +	}
 +
 +	mysql_stmt_free_result(stmt);
 +
-+	return is_null[0] ? 0 : 1;
++	return rows;
 +}
 +#endif
 +
-+static void get_disk_id(unsigned long long devno)
++unsigned int get_disk_id(unsigned long long devno)
 +{
++	static unsigned int prior_disk_id = 0;
++	static unsigned long long prior_devno = 0;
++
++	if (prior_devno == devno && prior_disk_id)
++		return prior_disk_id;
++	prior_devno = devno;
++
 +	switch (use_db) {
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL: {
@@ -716,7 +800,7 @@ new file mode 100644
 +		/* Bind where to put the output. */
 +		binds[0].buffer_type = MYSQL_TYPE_LONG;
 +		binds[0].buffer = &prior_disk_id;
-+		if (!fetch_mysql(binds, 1, SEL_DEV))
++		if (!fetch_mysql(binds, 1, SEL_DEV, 1))
 +			prior_disk_id = 0;
 +		break;
 +	    }
@@ -736,14 +820,14 @@ new file mode 100644
 +#endif
 +	}
 +
-+	prior_devno = devno;
++	return prior_disk_id;
 +}
 +
-+int db_get_checksum(UNUSED(const char *fname), const STRUCT_STAT *st_p, char *sum)
++int db_get_checksum(const STRUCT_STAT *st_p, char *sum)
 +{
-+	if (prior_devno != st_p->st_dev)
-+		get_disk_id(st_p->st_dev);
-+	if (prior_disk_id == 0)
++	unsigned int disk_id = get_disk_id(st_p->st_dev);
++
++	if (disk_id == 0)
 +		return 0;
 +
 +	switch (use_db) {
@@ -751,7 +835,7 @@ new file mode 100644
 +	case DB_TYPE_MYSQL: {
 +		MYSQL_BIND binds[1];
 +
-+		bind_disk_id = prior_disk_id;
++		bind_disk_id = disk_id;
 +		bind_ino = st_p->st_ino;
 +		bind_size = st_p->st_size;
 +		bind_mtime = st_p->st_mtime;
@@ -761,13 +845,13 @@ new file mode 100644
 +		binds[0].buffer_type = MYSQL_TYPE_BLOB;
 +		binds[0].buffer = sum;
 +		binds[0].buffer_length = checksum_len;
-+		return fetch_mysql(binds, 1, SEL_SUM);
++		return fetch_mysql(binds, 1, SEL_SUM, 1);
 +	    }
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE: {
 +		sqlite3_stmt *stmt = statements[SEL_SUM].sqlite;
-+		sqlite3_bind_int(stmt, 1, prior_disk_id);
++		sqlite3_bind_int(stmt, 1, disk_id);
 +		sqlite3_bind_int64(stmt, 2, st_p->st_ino);
 +		sqlite3_bind_int64(stmt, 3, st_p->st_size);
 +		sqlite3_bind_int64(stmt, 4, st_p->st_mtime);
@@ -790,36 +874,125 @@ new file mode 100644
 +	return 0;
 +}
 +
-+int db_set_checksum(UNUSED(const char *fname), const STRUCT_STAT *st_p, const char *sum)
++int db_get_both_checksums(const STRUCT_STAT *st_p, int *right_sum_cnt, int *wrong_sum_cnt, char **sum4, char **sum5)
 +{
-+	if (prior_devno != st_p->st_dev)
-+		get_disk_id(st_p->st_dev);
-+	if (prior_disk_id == 0)
++	int rows, j, sum_type[2];
++	static char dbsum[MD5_DIGEST_LEN*2];
++	long long dbsize[2], dbmtime[2], dbctime[2];
++	unsigned int disk_id = get_disk_id(st_p->st_dev);
++
++	if (disk_id == 0)
 +		return 0;
 +
 +	switch (use_db) {
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL: {
-+		bind_disk_id = prior_disk_id;
++		MYSQL_BIND binds[5];
++
++		bind_disk_id = disk_id;
 +		bind_ino = st_p->st_ino;
++
++		/* We set the superfluous lengths for incrementing to extra rows. */
++		binds[0].buffer_type = MYSQL_TYPE_BLOB;
++		binds[0].buffer = dbsum;
++		binds[0].buffer_length = checksum_len;
++		binds[1].buffer_type = MYSQL_TYPE_LONG;
++		binds[1].buffer = (char*)sum_type;
++		binds[1].buffer_length = sizeof (*sum_type);
++		binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[2].buffer = (char*)dbsize;
++		binds[2].buffer_length = sizeof (*dbsize);
++		binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[3].buffer = (char*)dbmtime;
++		binds[3].buffer_length = sizeof (*dbmtime);
++		binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[4].buffer = (char*)dbctime;
++		binds[4].buffer_length = sizeof (*dbctime);
++		rows = fetch_mysql(binds, 5, SEL_SUM, 2);
++		break;
++	    }
++#endif
++#ifdef USE_SQLITE
++	case DB_TYPE_SQLITE: {
++		sqlite3_stmt *stmt = statements[SEL_SUM].sqlite;
++		sqlite3_bind_int(stmt, 1, disk_id);
++		sqlite3_bind_int64(stmt, 2, st_p->st_ino);
++		for (j = 0; j < 2; j++) {
++			if (sqlite3_step(stmt) != SQLITE_ROW)
++				break;
++			int len = sqlite3_column_bytes(stmt, 0);
++			if (len > checksum_len)
++				len = checksum_len;
++			memcpy(dbsum + checksum_len*j, sqlite3_column_blob(stmt, 0), len);
++			sum_type[j] = sqlite3_column_int(stmt, 1);
++			dbsize[j] = sqlite3_column_int(stmt, 2);
++			dbmtime[j] = sqlite3_column_int64(stmt, 3);
++			dbctime[j] = sqlite3_column_int64(stmt, 4);
++		}
++		sqlite3_reset(stmt);
++		rows = j;
++		break;
++	    }
++#endif
++	default:
++		return 0;
++	}
++
++	if (sum4)
++		*sum4 = NULL;
++	if (sum5)
++		*sum5 = NULL;
++	*right_sum_cnt = *wrong_sum_cnt = 0;
++	for (j = 0; j < rows; j++) {
++		if (sum_type[j] == 4) {
++			if (!sum4)
++				continue;
++			*sum4 = dbsum + checksum_len*j;
++		} else {
++			if (!sum5)
++				continue;
++			*sum5 = dbsum + checksum_len*j;
++		}
++		if (st_p->st_size == dbsize[j] && st_p->st_mtime == dbmtime[j] && (!check_ctime || st_p->st_ctime == dbctime[j]))
++			++*right_sum_cnt;
++		else
++			++*wrong_sum_cnt;
++	}
++
++	return rows;
++}
++
++int db_set_checksum(int mdnum, const STRUCT_STAT *st_p, const char *sum)
++{
++	unsigned int disk_id = get_disk_id(st_p->st_dev);
++
++	if (disk_id == 0)
++		return 0;
++
++	switch (use_db) {
++#ifdef USE_MYSQL
++	case DB_TYPE_MYSQL:
++		bind_disk_id = disk_id;
++		bind_ino = st_p->st_ino;
++		bind_mdnum = mdnum;
 +		bind_size = st_p->st_size;
 +		bind_mtime = st_p->st_mtime;
 +		bind_ctime = st_p->st_ctime;
 +		memcpy(bind_sum, sum, checksum_len);
 +
 +		return exec_mysql(REP_SUM) != NULL;
-+	    }
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE: {
 +		int rc;
 +		sqlite3_stmt *stmt = statements[REP_SUM].sqlite;
-+		sqlite3_bind_int(stmt, 1, prior_disk_id);
++		sqlite3_bind_int(stmt, 1, disk_id);
 +		sqlite3_bind_int64(stmt, 2, st_p->st_ino);
-+		sqlite3_bind_int64(stmt, 3, st_p->st_size);
-+		sqlite3_bind_int64(stmt, 4, st_p->st_mtime);
-+		sqlite3_bind_int64(stmt, 5, st_p->st_ctime);
-+		sqlite3_bind_blob(stmt, 6, sum, checksum_len, SQLITE_TRANSIENT);
++		sqlite3_bind_int(stmt, 3, mdnum);
++		sqlite3_bind_int64(stmt, 4, st_p->st_size);
++		sqlite3_bind_int64(stmt, 5, st_p->st_mtime);
++		sqlite3_bind_int64(stmt, 6, st_p->st_ctime);
++		sqlite3_bind_blob(stmt, 7, sum, checksum_len, SQLITE_TRANSIENT);
 +		rc = sqlite3_step(stmt);
 +		sqlite3_reset(stmt);
 +		return rc == SQLITE_DONE;
@@ -828,6 +1001,144 @@ new file mode 100644
 +	}
 +
 +	return 0;
++}
++
++int db_clean_init(void)
++{
++	switch (use_db) {
++#ifdef USE_MYSQL
++	case DB_TYPE_MYSQL: {
++		MYSQL_BIND binds[MAX_BIND_CNT];
++
++		mysql_query(dbh.mysql,
++			"CREATE TEMPORARY TABLE inode_present ("
++			" disk_id integer unsigned NOT NULL,"
++			" ino bigint unsigned NOT NULL,"
++			" present tinyint NOT NULL default '1',"
++			" PRIMARY KEY (disk_id,ino)"
++			") ENGINE=MEMORY"
++			);
++
++		memset(binds, 0, sizeof binds);
++		binds[0].buffer_type = MYSQL_TYPE_LONG;
++		binds[0].buffer = &bind_disk_id;
++		binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[1].buffer = &bind_ino;
++		statements[INS_PRESENT].mysql = prepare_mysql(binds, 2,
++			"INSERT IGNORE INTO inode_present"
++			" SET disk_id = ?, ino = ?, present = 1"
++			);
++		if (!statements[INS_PRESENT].mysql)
++			return 0;
++
++		statements[DEL_SUMS].mysql = prepare_mysql(binds, 0,
++			"DELETE m.*"
++			" FROM inode_map AS m"
++			" LEFT JOIN inode_present USING(disk_id, ino)"
++			" JOIN disk AS d ON(m.disk_id = d.disk_id)"
++			" WHERE mounted = 1 AND present IS NULL"
++			);
++		if (!statements[DEL_SUMS].mysql)
++			return 0;
++
++		return 1;
++	    }
++#endif
++#ifdef USE_SQLITE
++	case DB_TYPE_SQLITE: {
++		char *sql;
++		sql="ATTACH DATABASE '' AS aux1;"; /* Private temp DB, probably in-memory */
++		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
++			return 0;
++
++		sql="CREATE TABLE aux1.inode_present ("
++		    " disk_id integer NOT NULL,"
++		    " ino bigint NOT NULL,"
++		    " present tinyint NOT NULL default '1',"
++		    " PRIMARY KEY (disk_id,ino)"
++		    ")";
++		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
++			return 0;
++
++		sql="INSERT OR IGNORE INTO aux1.inode_present"
++		    " (disk_id, ino, present)"
++		    " VALUES (?, ?, 1)";
++		if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[INS_PRESENT].sqlite, NULL) != 0)
++			return 0;
++
++		sql="DELETE FROM inode_map"
++		    " WHERE ROWID IN ("
++		    "  SELECT m.ROWID"
++		    "  FROM inode_map AS m"
++		    "  LEFT JOIN aux1.inode_present USING(disk_id, ino)"
++		    "  JOIN disk AS d ON(m.disk_id = d.disk_id)"
++		    "  WHERE MOUNTED = 1 AND present IS NULL"
++		    " )";
++		if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[DEL_SUMS].sqlite, NULL) != 0)
++			return 0;
++
++		return 1;
++	    }
++#endif
++	}
++
++	return 0;
++}
++
++int db_note_present(int disk_id, long long ino)
++{
++	switch (use_db) {
++#ifdef USE_MYSQL
++	case DB_TYPE_MYSQL:
++		bind_disk_id = disk_id;
++		bind_ino = ino;
++		return exec_mysql(INS_PRESENT) != NULL;
++#endif
++#ifdef USE_SQLITE
++	case DB_TYPE_SQLITE: {
++		int rc;
++		sqlite3_stmt *stmt = statements[INS_PRESENT].sqlite;
++		sqlite3_bind_int(stmt, 1, disk_id);
++		sqlite3_bind_int64(stmt, 2, ino);
++		rc = sqlite3_step(stmt);
++		sqlite3_reset(stmt);
++		return rc == SQLITE_DONE;
++	    }
++#endif
++	}
++
++	return 0;
++}
++
++/* This function requires the user to have populated all disk_id+inode pairs
++ * into the inode_present table. */
++int db_clean_inodes(void)
++{
++	int del_cnt = 0;
++
++	switch (use_db) {
++#ifdef USE_MYSQL
++	case DB_TYPE_MYSQL: {
++		MYSQL_STMT *stmt = exec_mysql(DEL_SUMS);
++		if (stmt != NULL)
++			del_cnt = mysql_affected_rows(dbh.mysql);
++	    }
++#endif
++#ifdef USE_SQLITE
++	case DB_TYPE_SQLITE: {
++		int rc;
++		sqlite3_stmt *stmt = statements[DEL_SUMS].sqlite;
++		rc = sqlite3_step(stmt);
++		if (rc == SQLITE_DONE)
++			del_cnt = sqlite3_changes(dbh.sqlite);
++		sqlite3_reset(stmt);
++	    }
++#endif
++	}
++
++	db_clean_init();
++
++	return del_cnt;
 +}
 diff --git a/flist.c b/flist.c
 --- a/flist.c
@@ -861,7 +1172,7 @@ diff --git a/flist.c b/flist.c
 -	if (sender_keeps_checksum && S_ISREG(st.st_mode))
 -		memcpy(F_SUM(file), tmp_sum, checksum_len);
 +	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
-+		if (!use_db || !db_get_checksum(thisname, &st, tmp_sum))
++		if (!use_db || !db_get_checksum(&st, tmp_sum))
 +			file_checksum(thisname, &st, tmp_sum);
 +		if (sender_keeps_checksum)
 +			memcpy(F_SUM(file), tmp_sum, checksum_len);
@@ -874,7 +1185,7 @@ diff --git a/flist.c b/flist.c
  	int implied_dot_dir = 0;
  
 +	if (use_db)
-+		db_connect();
++		db_connect(0);
 +
  	rprintf(FLOG, "building file list\n");
  	if (show_filelist_p())
@@ -895,7 +1206,7 @@ diff --git a/generator.c b/generator.c
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
 -		file_checksum(fn, sum, st->st_size);
-+		if (!use_db || !db_get_checksum(fn, st, sum))
++		if (!use_db || !db_get_checksum(st, sum))
 +			file_checksum(fn, st, sum);
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
@@ -905,7 +1216,7 @@ diff --git a/generator.c b/generator.c
  	}
  
 +	if (use_db && always_checksum)
-+		db_connect();
++		db_connect(0);
 +
  	dflt_perms = (ACCESSPERMS & ~orig_umask);
  
@@ -974,6 +1285,18 @@ diff --git a/main.c b/main.c
  	if (am_server) {
  		set_nonblocking(STDIN_FILENO);
  		set_nonblocking(STDOUT_FILENO);
+diff --git a/mkproto.pl b/mkproto.pl
+--- a/mkproto.pl
++++ b/mkproto.pl
+@@ -13,6 +13,8 @@ if (open(IN, 'proto.h')) {
+     STRING => 'char *',
+ );
+ 
++@ARGV = grep !m{/rsyncdb\.c$}, @ARGV;
++
+ $inheader = 0;
+ $protos = qq|/* This file is automatically generated with "make proto". DO NOT EDIT */\n\n|;
+ 
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -985,7 +1308,7 @@ diff --git a/options.c b/options.c
  int eol_nulls = 0;
  int protect_args = -1;
  int human_readable = 1;
-@@ -573,6 +574,7 @@ static void print_rsync_version(enum logcode f)
+@@ -572,6 +573,7 @@ static void print_rsync_version(enum logcode f)
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -993,7 +1316,7 @@ diff --git a/options.c b/options.c
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -609,6 +611,11 @@ static void print_rsync_version(enum logcode f)
+@@ -608,6 +610,11 @@ static void print_rsync_version(enum logcode f)
  #ifdef CAN_SET_SYMLINK_TIMES
  	symtimes = "";
  #endif
@@ -1005,7 +1328,7 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -622,8 +629,8 @@ static void print_rsync_version(enum logcode f)
+@@ -621,8 +628,8 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -1016,7 +1339,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -672,6 +679,7 @@ void usage(enum logcode F)
+@@ -671,6 +678,7 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -1024,7 +1347,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -958,6 +966,7 @@ static struct poptOption long_options[] = {
+@@ -957,6 +965,7 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -1145,6 +1468,631 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
  dit(bf(max verbosity)) This parameter allows you to control
  the maximum amount of verbose information that you'll allow the daemon to
  generate (since the information goes into the log file). The default is 1,
+diff --git a/rsyncdb.c b/rsyncdb.c
+new file mode 100644
+--- /dev/null
++++ b/rsyncdb.c
+@@ -0,0 +1,620 @@
++/*
++ * This helper program maintains an dev+inode DB.
++ *
++ * Copyright (C) 2013 Wayne Davison
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, visit the http://fsf.org website.
++ */
++
++#include "rsync.h"
++#include "itypes.h"
++#include "ifuncs.h"
++#include <popt.h>
++
++#define MYNAME "rsync-db"
++
++#define PTR_SIZE (sizeof (struct file_struct *))
++
++#define MALLOC_MAX 0x40000000
++
++struct name_list {
++	struct name_list *next;
++	char name[1];
++} *dirs_list;
++
++int check_opt;
++int clean_opt;
++int dry_run;
++int recurse_opt;
++int verbosity = 0;
++char *db_config = NULL;
++
++int am_root, am_sender, list_only, read_only;
++int preserve_executability, preserve_perms, sparse_files;
++
++int saw_output_opt, saw_sum_opt;
++int output_dirs, output_name, output_sum, output_info, output_unchanged;
++int do_md4, do_md5;
++
++int checksum_len = MD5_DIGEST_LEN;
++int protocol_version = 31;
++short debug_levels[COUNT_DEBUG];
++
++static struct poptOption long_options[] = {
++  /* longName, shortName, argInfo, argPtr, value, descrip, argDesc */
++  {"check",           'c', POPT_ARG_VAL,    &check_opt, 1, 0, 0},
++  {"only-check",       0,  POPT_ARG_VAL,    &check_opt, 2, 0, 0},
++  {"clean",            0,  POPT_ARG_VAL,    &clean_opt, 1, 0, 0},
++  {"only-clean",       0,  POPT_ARG_VAL,    &clean_opt, 2, 0, 0},
++  {"dry-run",         'n', POPT_ARG_NONE,   &dry_run, 0, 0, 0 },
++  {"db",               0,  POPT_ARG_STRING, &db_config, 0, 0, 0 },
++  {"help",            'h', POPT_ARG_NONE,   0, 'h', 0, 0 },
++  {"output",          'o', POPT_ARG_STRING, 0, 'o', 0, 0 },
++  {"recurse",         'r', POPT_ARG_NONE,   &recurse_opt, 0, 0, 0 },
++  {"recursive",        0,  POPT_ARG_NONE,   &recurse_opt, 0, 0, 0 },
++  {"sums",            's', POPT_ARG_STRING, 0, 's', 0, 0 },
++  {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
++  {0,0,0,0, 0, 0, 0}
++};
++
++static void show_usage(int code);
++static const char *abs_path(const char *curdir, const char *dir);
++static struct name_list *new_name(const char *basename, const char *filename);
++static struct name_list *get_sorted_names(const char *dir);
++static int mention_file(const char *dir, const char *name, int right_cnt, int wrong_cnt,
++			const char *dbsum4, const char *dbsum5, const char *sum4, const char *sum5);
++
++int main(int argc, char *argv[])
++{
++	poptContext pc = poptGetContext(MYNAME, argc, (const char**)argv, long_options, 0);
++	int opt, need_sum_cnt, start_dir_len;
++	struct name_list *prior_dir;
++	struct name_list *names;
++	char *cp, start_dir[MAXPATHLEN];
++	const char **args;
++	int exit_code = 0;
++
++	while ((opt = poptGetNextOpt(pc)) != -1) {
++		switch (opt) {
++		  case 'h':
++		    show_usage(0);
++		    break;
++		  case 'o':
++		    for (cp = poptGetOptArg(pc); *cp; cp++) {
++			    switch (toLower(cp)) {
++			      case 'n':
++				output_name = 1;
++				break;
++			      case 's':
++			      case 'c':
++				output_sum = output_name = 1;
++				break;
++			      case 'i':
++				output_info = output_name = 1;
++				break;
++			      case 'u':
++				output_unchanged = output_name = 1;
++				break;
++			      case 'd':
++				output_dirs = 1;
++				break;
++			    }
++		    }
++		    saw_output_opt = 1;
++		    break;
++		  case 's':
++		    for (cp = poptGetOptArg(pc); *cp; cp++) {
++			    switch (*cp) {
++			      case '4':
++				do_md4 = 1;
++				break;
++			      case '5':
++				do_md5 = 1;
++				break;
++			    }
++		    }
++		    saw_sum_opt = 1;
++		    break;
++		  case 'v':
++		    verbosity++;
++		    break;
++		  default:
++		    show_usage(1);
++		    break;
++		}
++	}
++
++	if (!db_config) {
++		fprintf(stderr, "You must specify the --db=FILE option.\n");
++		show_usage(1);
++	}
++
++	if (check_opt) {
++		if (!verbosity)
++			verbosity = 1;
++		output_info = 1;
++	}
++	if (!saw_output_opt && verbosity)
++		output_dirs = output_name = 1;
++	if (!saw_sum_opt)
++		do_md4 = do_md5 = 1;
++
++	need_sum_cnt = do_md4 + do_md5;
++
++	if (!db_read_config(FERROR, db_config) || !db_connect(1))
++		exit(1);
++
++        if (clean_opt)
++		db_clean_init();
++
++	if (getcwd(start_dir, sizeof start_dir - 1) == NULL) {
++		rsyserr(FERROR, errno, "getcwd()");
++		exit_cleanup(RERR_FILESELECT);
++	}
++	start_dir_len = strlen(start_dir);
++
++	args = poptGetArgs(pc);
++	if (args) {
++		prior_dir = NULL;
++		while (*args) {
++			struct name_list *add = new_name(abs_path(start_dir, *args++), NULL);
++			if (!add)
++				continue;
++			if (prior_dir)
++				prior_dir->next = add;
++			else
++				dirs_list = add;
++			prior_dir = add;
++		}
++	} else
++		dirs_list = new_name(abs_path(start_dir, "."), NULL);
++
++	prior_dir = NULL;
++	while (dirs_list) {
++		struct name_list *subdirs, *prior_subdir, *prior_name;
++		const char *dir = dirs_list->name;
++		const char *reldir = dir;
++
++		if (prior_dir)
++			free((void*)prior_dir);
++		prior_dir = dirs_list;
++		dirs_list = dirs_list->next;
++
++		if (strncmp(reldir, start_dir, start_dir_len) == 0) {
++			if (reldir[start_dir_len] == '\0')
++				reldir = ".";
++			else if (reldir[start_dir_len] == '/')
++				reldir += start_dir_len + 1;
++		}
++		if (output_dirs)
++			printf("... %s/ ...\n", reldir);
++
++		if (chdir(dir) < 0) {
++			fprintf(stderr, "Unable to chdir to %s: %s\n", dir, strerror(errno));
++			continue;
++		}
++		if (!(names = get_sorted_names(dir)))
++			continue;
++
++		subdirs = prior_subdir = prior_name = NULL;
++		while (names) {
++			STRUCT_STAT st;
++			char *dbsum4, sum4[MD5_DIGEST_LEN];
++			char *dbsum5, sum5[MD5_DIGEST_LEN];
++			int right_sum_cnt, wrong_sum_cnt;
++			const char *name = names->name;
++			unsigned int disk_id;
++
++			if (prior_name)
++				free((void*)prior_name);
++			prior_name = names;
++			names = names->next;
++
++			if (lstat(name, &st) < 0) {
++				fprintf(stderr, "Failed to lstat(%s): %s\n", name, strerror(errno));
++				continue;
++			}
++			if (S_ISLNK(st.st_mode))
++				continue;
++			if (S_ISDIR(st.st_mode)) {
++				// add optional excluding of things like /^(CVS|\.svn|\.git|\.bzr)$/;
++				if (recurse_opt) {
++					struct name_list *add = new_name(dir, name);
++					if (add) {
++						if (prior_subdir)
++							prior_subdir->next = add;
++						else
++							subdirs = add;
++						prior_subdir = add;
++					}
++				}
++				continue;
++			}
++			if (!S_ISREG(st.st_mode))
++				continue;
++
++			if (!(disk_id = get_disk_id(st.st_dev)))
++				continue;
++			if (clean_opt) {
++				db_note_present(disk_id, st.st_ino);
++				if (clean_opt > 1)
++					continue;
++			}
++			db_get_both_checksums(&st, &right_sum_cnt, &wrong_sum_cnt,
++					      do_md4 ? &dbsum4 : NULL, do_md5 ? &dbsum5 : NULL);
++
++			if (!check_opt && right_sum_cnt == need_sum_cnt) {
++				mention_file(reldir, name, right_sum_cnt, wrong_sum_cnt, dbsum4, dbsum5, dbsum4, dbsum5);
++				continue;
++			}
++
++			if (!check_opt || right_sum_cnt || output_sum) {
++				uchar *data;
++				int32 remainder;
++				md_context m4, m5;
++				struct map_struct *buf;
++				OFF_T off, len = st.st_size;
++				int fd = do_open(name, O_RDONLY, 0);
++
++				if (fd < 0) {
++					fprintf(stderr, "ERROR: unable to read %s: %s\n", name, strerror(errno));
++					continue;
++				}
++
++				if (do_md4)
++					mdfour_begin(&m4);
++				if (do_md5)
++					md5_begin(&m5);
++
++				buf = map_file(fd, len, MAX_MAP_SIZE, CSUM_CHUNK);
++
++				for (off = 0; off + CSUM_CHUNK <= len; off += CSUM_CHUNK) {
++					data = (uchar*)map_ptr(buf, off, CSUM_CHUNK);
++					if (do_md4)
++						mdfour_update(&m4, data, CSUM_CHUNK);
++					if (do_md5)
++						md5_update(&m5, data, CSUM_CHUNK);
++				}
++
++				remainder = (int32)(len - off);
++				data = (uchar*)map_ptr(buf, off, remainder);
++				if (do_md4) {
++					mdfour_update(&m4, data, remainder);
++					mdfour_result(&m4, (uchar*)sum4);
++				}
++				if (do_md5) {
++					md5_update(&m5, data, remainder);
++					md5_result(&m5, (uchar*)sum5);
++				}
++
++				close(fd);
++				unmap_file(buf);
++			}
++
++			int chg = mention_file(reldir, name, right_sum_cnt, wrong_sum_cnt, dbsum4, dbsum5, sum4, sum5);
++			if (!chg) {
++				// Only check_opt should get here...
++			} else if (check_opt == 2) {
++				exit_code = 1;
++			} else {
++				if (do_md4)
++					db_set_checksum(4, &st, sum4);
++				if (do_md5)
++					db_set_checksum(5, &st, sum5);
++			}
++		}
++		if (prior_name)
++			free((void*)prior_name);
++
++		if (recurse_opt && subdirs) {
++			prior_subdir->next = dirs_list;
++			dirs_list = subdirs;
++		}
++	}
++	if (prior_dir)
++		free((void*)prior_dir);
++
++	if (clean_opt) {
++		int rows = db_clean_inodes();
++		if (verbosity)
++			printf("Cleaned out %d old inode%s.\n", rows, rows == 1 ? "" : "s");
++	}
++
++	return exit_code;
++}
++
++static const char *abs_path(const char *curdir, const char *dir)
++{
++	static char buf[MAXPATHLEN];
++	char *t = buf, *limit = buf - 1;
++	const char *f;
++
++	if (*dir == '/') {
++		curdir = NULL;
++		f = dir;
++	} else {
++		if (*curdir != '/') {
++			fprintf(stderr, "Malformed 'curdir' value passed to abs_path(): %s.\n", curdir);
++			return NULL;
++		}
++		f =  curdir;
++	}
++
++	*t++ = *f++;
++	if (!*f && curdir) {
++		f = dir;
++		curdir = NULL;
++	}
++	while (*f) {
++		/* Discard extra slashes */
++		if (*f == '/') {
++			f++;
++			continue;
++		}
++		if (*f == '.') {
++			/* Discard interior and trailing "." dirs */
++			if (f[1] == '/') {
++				f += 2;
++				continue;
++			}
++			if (f[1] == '\0') {
++				if (curdir) {
++					f = dir;
++					curdir = NULL;
++					continue;
++				}
++				break;
++			}
++			/* collapse ".." dirs */
++			if (f[1] == '.' && (f[2] == '/' || !f[2])) {
++				char *s = t - 1;
++				if (s == buf) {
++					f += 2;
++					continue;
++				}
++				while (s > limit && *--s != '/') {}
++				if (s != t - 1 && (s < buf || *s == '/')) {
++					t = s + 1;
++					f += 2;
++					continue;
++				}
++				limit = t + 2;
++			}
++		}
++		while (1) {
++			if (!*f) {
++				if (curdir) {
++					*t++ = '/';
++					f = dir;
++					curdir = NULL;
++				}
++				break;
++			}
++			if (t - buf >= (int)sizeof buf - 2) {
++				fprintf(stderr, "Directory too long: %s\n", dir);
++				return NULL;
++			}
++
++			if ((*t++ = *f++) == '/')
++				break;
++		}
++	}
++
++	if (t > buf+1 && t[-1] == '/')
++		t--;
++	*t = '\0';
++
++	return buf;
++}
++
++static struct name_list *new_name(const char *basename, const char *filename)
++{
++	struct name_list *n;
++	int blen = strlen(basename);
++	int slen = filename ? (int)strlen(filename) : -1;
++	int len = blen + 1 + slen;
++
++	if (len >= MAXPATHLEN) {
++		if (filename)
++			fprintf(stderr, "Filename too long: %s/%s\n", basename, filename);
++		else
++			fprintf(stderr, "Filename too long: %s\n", basename);
++		return NULL;
++	}
++
++	if (!(n = (struct name_list *)malloc(sizeof (struct name_list) + len)))
++		out_of_memory("new_name");
++
++	memcpy(n->name, basename, blen);
++	if (filename) {
++		n->name[blen] = '/';
++		memcpy(n->name + 1 + blen, filename, slen);
++	}
++	n->name[len] = '\0';
++	n->next = NULL;
++
++	return n;
++}
++
++static int name_compare(const void *n1, const void *n2)
++{
++	struct name_list *p1 = *(struct name_list **)n1;
++	struct name_list *p2 = *(struct name_list **)n2;
++	return strcmp(p1->name, p2->name);
++}
++
++static struct name_list *get_sorted_names(const char *dir)
++{
++	struct name_list *add, **sortbuf, *names = NULL, *prior_name = NULL;
++	struct dirent *di;
++	int cnt = 0;
++	DIR *d;
++
++	if (!(d = opendir("."))) {
++		fprintf(stderr, "Unable to opendir %s: %s\n", dir, strerror(errno));
++		return NULL;
++	}
++	while ((di = readdir(d)) != NULL) {
++		char *dname = d_name(di);
++		if (dname[0] == '.' && (dname[1] == '\0' || (dname[1] == '.' && dname[2] == '\0')))
++			continue;
++		if (!(add = new_name(dname, NULL)))
++			continue;
++		if (prior_name)
++			prior_name->next = add;
++		else
++			names = add;
++		prior_name = add;
++		cnt++;
++	}
++	closedir(d);
++
++	if (cnt) {
++		int j;
++
++		if (!(sortbuf = new_array(struct name_list *, cnt)))
++			out_of_memory("get_sorted_names");
++		for (j = 0; j < cnt; j++) {
++			sortbuf[j] = names;
++			names = names->next;
++		}
++
++		qsort(sortbuf, cnt, PTR_SIZE, name_compare);
++
++		names = prior_name = NULL;
++		for (j = 0; j < cnt; j++) {
++			add = sortbuf[j];
++			if (prior_name)
++				prior_name->next = add;
++			else
++				names = add;
++			prior_name = add;
++		}
++
++		if (prior_name)
++			prior_name->next = NULL;
++		free(sortbuf);
++	}
++
++	return names;
++}
++
++const char *who_am_i(void)
++{
++	return MYNAME;
++}
++
++void rprintf(enum logcode code, const char *format, ...)
++{
++	va_list ap;
++	va_start(ap, format);
++	vfprintf(code == FINFO ? stdout : stderr, format, ap);
++	va_end(ap);
++}
++
++ void rsyserr(UNUSED(enum logcode code), int errcode, const char *format, ...)
++{
++	va_list ap;
++	fputs(MYNAME ": ", stderr);
++	va_start(ap, format);
++	vfprintf(stderr, format, ap);
++	va_end(ap);
++	fprintf(stderr, ": %s (%d)\n", strerror(errcode), errcode);
++}
++
++NORETURN void _exit_cleanup(int code, UNUSED(const char *file), UNUSED(int line))
++{
++	db_disconnect();
++	exit(code);
++}
++
++static inline int sums_ne(const char *sum1, const char *sum2)
++{
++	return memcmp(sum1, sum2, checksum_len) != 0;
++}
++
++// Returns 1 if there is a checksum change, else undef.
++static int mention_file(const char *dir, const char *name, int right_cnt, int wrong_cnt,
++			const char *dbsum4, const char *dbsum5, const char *sum4, const char *sum5)
++{
++	char *info_str = wrong_cnt && !right_cnt ? "!i " : "   ";
++	char *md4_str = !do_md4 ? NULL : !dbsum4 ? "+4 " : !sum4 ? "?4 " : sums_ne(sum4, dbsum4) ? "!4 " : "   ";
++	char *md5_str = !do_md5 ? NULL : !dbsum5 ? "+5 " : !sum5 ? "?5 " : sums_ne(sum5, dbsum5) ? "!5 " : "   ";
++	int chg = *info_str != ' ' || (md4_str && *md4_str != ' ') || (md5_str && *md5_str != ' ');
++	if (chg || output_unchanged) {
++		if (output_info) {
++			fputs(info_str, stdout);
++			if (md4_str)
++				fputs(md4_str, stdout);
++			if (md5_str)
++				fputs(md5_str, stdout);
++		}
++		if (output_sum) {
++			if (do_md4)
++				printf("%s ", sum_as_hex(sum4));
++			if (do_md5)
++				printf("%s ", sum_as_hex(sum5));
++		}
++		if (output_name) {
++			if (output_sum)
++				putchar(' '); /* We want 2 spaces, like md5sum. */
++			if (*dir != '.' || dir[1]) {
++				fputs(dir, stdout);
++				putchar('/');
++			}
++			puts(name);
++		}
++	}
++
++	return chg;
++}
++
++static void show_usage(int code)
++{
++	fprintf(code ? stderr : stdout, "\n\
++Usage: rsyncdb --db=CONFIG_FILE [OPTIONS] [DIRS]\n\
++\n\
++Options:\n\
++--db=FILE          Specify the config FILE to read for the DB info.\n\
++--recurse (-r)     Scan files in subdirectories too.\n\
++--sums=SUMS (-s)   List which checksums to update (default: 4,5).  Note that\n\
++                   this doesn't affect the order of sum output via \"-o s\".\n\
++--verbosity (-v)   Output change info for --init, --mounts, and --*clean.\n\
++                   Also makes checksumming output default be \"-o dn\".\n\
++--output=STR (-o)  One or more letters of what to output (default is nothing).\n\
++                   d = output \"... dir_name ...\" lines from our scan.\n\
++                   n = output names of items with changes.\n\
++                   s = output checksum info for changes (implies n).\n\
++                   u = output even unchanged items (implies n).\n\
++                   i = output prefixed change info: !i if time and/or size is\n\
++                       wrong, +4/+5 if the MD4/5 sum is missing, !4/!5 if sum\n\
++                       is wrong, ?4/?5 if we didn't need to read the file (i.e.\n\
++                       if time/size is wrong and no sum output was requested).\n\
++--check (-c)       Check the checksums (by reading the files) and fix any\n\
++                   issues.  Implies --verbose and enables output of \"i\".\n\
++--only-check       Like --check, but doesn't fix anything.\n\
++--clean            Read all inodes from the DB and remove the ones that aren't\n\
++                   found in the DIR(s) while also updating the DB's info.  You\n\
++                   need to specify all mounted DIRs in the DB & also --recurse.\n\
++--only-clean       Like --clean, but avoids adding missing info.\n\
++--help (-h)        Display this help message.\n\
++\n\
++Examples:\n\
++\n\
++rsyncdb --db=/etc/db.conf -r -o n /src\n\
++rsyncdb --db=/etc/db.conf -r --check /src\n\
++rsyncdb --db=/etc/db.conf -s5 -rous /src >/tmp/really-fast-md5sum.txt\n\
++");
++        exit(code);
++}
 diff --git a/support/rsyncdb b/support/rsyncdb
 new file mode 100755
 --- /dev/null
