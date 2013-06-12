@@ -12,12 +12,12 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 1e9ee19a716b72454dfeab663802c626b81cdf2e
+based-on: 0488a14b9930bf91719ac0f1d1c0c8770ca10646
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
 @@ -37,7 +37,7 @@ OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
- 	util.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
+ 	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
  	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
 -OBJS3=progress.o pipe.o
@@ -78,31 +78,6 @@ diff --git a/checksum.c b/checksum.c
  	if (sumresidue || protocol_version >= 27)
  		mdfour_update(&md, (uchar *)md.buffer, sumresidue);
  
-@@ -221,3 +232,24 @@ int sum_end(char *sum)
- 
- 	return MD4_DIGEST_LEN;
- }
-+
-+const char *sum_as_hex(const char *sum)
-+{
-+	static char buf[MAX_DIGEST_LEN*2+1];
-+	int i, x1, x2;
-+	char *c = buf + checksum_len*2;
-+
-+	assert(c - buf < (int)sizeof buf);
-+
-+	*c = '\0';
-+
-+	for (i = checksum_len; --i >= 0; ) {
-+		x1 = CVAL(sum, i);
-+		x2 = x1 >> 4;
-+		x1 &= 0xF;
-+		*--c = x1 <= 9 ? x1 + '0' : x1 + 'a' - 10;
-+		*--c = x2 <= 9 ? x2 + '0' : x2 + 'a' - 10;
-+	}
-+
-+	return buf;
-+}
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
@@ -267,39 +242,10 @@ diff --git a/loadparm.c b/loadparm.c
  FN_LOCAL_STRING(lp_lock_file, lock_file)
  FN_LOCAL_STRING(lp_log_file, log_file)
  FN_LOCAL_STRING(lp_log_format, log_format)
-diff --git a/log.c b/log.c
---- a/log.c
-+++ b/log.c
-@@ -683,23 +683,14 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
- 			if (protocol_version >= 30
- 			 && (iflags & ITEM_TRANSFER
- 			  || (always_checksum && S_ISREG(file->mode)))) {
--				int i, x1, x2;
- 				const char *sum = iflags & ITEM_TRANSFER
- 						? sender_file_sum : F_SUM(file);
--				c = buf2 + checksum_len*2;
--				*c = '\0';
--				for (i = checksum_len; --i >= 0; ) {
--					x1 = CVAL(sum, i);
--					x2 = x1 >> 4;
--					x1 &= 0xF;
--					*--c = x1 <= 9 ? x1 + '0' : x1 + 'a' - 10;
--					*--c = x2 <= 9 ? x2 + '0' : x2 + 'a' - 10;
--				}
-+				n = sum_as_hex(sum);
- 			} else {
- 				memset(buf2, ' ', checksum_len*2);
- 				buf2[checksum_len*2] = '\0';
-+				n = buf2;
- 			}
--			n = buf2;
- 			break;
- 		case 'i':
- 			if (iflags & ITEM_DELETED) {
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -159,6 +159,7 @@ char *backup_suffix = NULL;
+@@ -158,6 +158,7 @@ char *backup_suffix = NULL;
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
@@ -307,7 +253,7 @@ diff --git a/options.c b/options.c
  char *config_file = NULL;
  char *shell_cmd = NULL;
  char *logfile_name = NULL;
-@@ -208,7 +209,7 @@ static const char *debug_verbosity[] = {
+@@ -207,7 +208,7 @@ static const char *debug_verbosity[] = {
  	/*2*/ "BIND,CMD,CONNECT,DEL,DELTASUM,DUP,FILTER,FLIST,ICONV",
  	/*3*/ "ACL,BACKUP,CONNECT2,DELTASUM2,DEL2,EXIT,FILTER2,FLIST2,FUZZY,GENR,OWN,RECV,SEND,TIME",
  	/*4*/ "CMD2,DELTASUM3,DEL3,EXIT2,FLIST3,ICONV2,OWN2,PROTO,TIME2",
@@ -316,7 +262,7 @@ diff --git a/options.c b/options.c
  };
  
  #define MAX_VERBOSITY ((int)(sizeof debug_verbosity / sizeof debug_verbosity[0]) - 1)
-@@ -278,6 +279,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
+@@ -277,6 +278,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
  	DEBUG_WORD(FUZZY, W_REC, "Debug fuzzy scoring (levels 1-2)"),
  	DEBUG_WORD(GENR, W_REC, "Debug generator functions"),
  	DEBUG_WORD(HASH, W_SND|W_REC, "Debug hashtable code"),
@@ -324,7 +270,7 @@ diff --git a/options.c b/options.c
  	DEBUG_WORD(HLINK, W_SND|W_REC, "Debug hard-link actions (levels 1-3)"),
  	DEBUG_WORD(ICONV, W_CLI|W_SRV, "Debug iconv character conversions (levels 1-2)"),
  	DEBUG_WORD(IO, W_CLI|W_SRV, "Debug I/O routines (levels 1-4)"),
-@@ -762,6 +764,7 @@ void usage(enum logcode F)
+@@ -761,6 +763,7 @@ void usage(enum logcode F)
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
@@ -381,7 +327,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2078,6 +2100,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2069,6 +2091,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0, SP_DEFAULT);
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0, SP_DEFAULT);
@@ -390,7 +336,7 @@ diff --git a/options.c b/options.c
  	}
  	if (daemon_filter_list.head && !am_sender) {
  		filter_rule_list *elp = &daemon_filter_list;
-@@ -2723,6 +2747,12 @@ void server_options(char **args, int *argc_p)
+@@ -2714,6 +2738,12 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
