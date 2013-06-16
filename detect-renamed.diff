@@ -27,12 +27,18 @@ To use this patch, run these commands for a successful build:
 
 TODO:
 
+  The routine that makes missing directories for files that get renamed
+  down into a new sub-hierarchy doesn't properly handle the case where some
+  path elements might exist but not be a dir yet.  We need to either change
+  our stash-ahead algorithm (to not require unknown path elements) or we
+  need to create a better path-making routine.
+
   We need to never return a match from fattr_find() that has a basis
   file.  This will ensure that we don't try to give a renamed file to
   a file that can't use it, while missing out on giving it to a file
   that could use it.
 
-based-on: 1e9ee19a716b72454dfeab663802c626b81cdf2e
+based-on: 70d4a945f7d1ab1aca2c3ca8535240fad4bdf06b
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -460,6 +466,24 @@ diff --git a/generator.c b/generator.c
  static int phase = 0;
  static int dflt_perms;
  
+@@ -1250,7 +1391,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 			 && do_stat(dn, &sx.st) < 0) {
+ 				if (dry_run)
+ 					goto parent_is_dry_missing;
+-				if (make_path(fname, MKP_DROP_NAME | MKP_SKIP_SLASH) < 0) {
++				if (make_path(fname, ACCESSPERMS, MKP_DROP_NAME | MKP_SKIP_SLASH) < 0) {
+ 					rsyserr(FERROR_XFER, errno,
+ 						"recv_generator: mkdir %s failed",
+ 						full_fname(dn));
+@@ -1401,7 +1542,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		}
+ 		if (real_ret != 0 && do_mkdir(fname,file->mode|added_perms) < 0 && errno != EEXIST) {
+ 			if (!relative_paths || errno != ENOENT
+-			 || make_path(fname, MKP_DROP_NAME | MKP_SKIP_SLASH) < 0
++			 || make_path(fname, ACCESSPERMS, MKP_DROP_NAME | MKP_SKIP_SLASH) < 0
+ 			 || (do_mkdir(fname, file->mode|added_perms) < 0 && errno != EEXIST)) {
+ 				rsyserr(FERROR_XFER, errno,
+ 					"recv_generator: mkdir %s failed",
 @@ -1450,9 +1591,12 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		}
  		else if (delete_during && f_out != -1 && !phase
@@ -546,6 +570,18 @@ diff --git a/generator.c b/generator.c
  	phase++;
  	if (DEBUG_GTE(GENR, 1))
  		rprintf(FINFO, "generate_files phase=%d\n", phase);
+diff --git a/main.c b/main.c
+--- a/main.c
++++ b/main.c
+@@ -850,7 +850,7 @@ static int do_recv(int f_in, int f_out, char *local_name)
+ 	}
+ 
+ 	if (backup_dir) {
+-		int ret = make_path(backup_dir_buf, MKP_DROP_NAME); /* drops trailing slash */
++		int ret = make_path(backup_dir_buf, ACCESSPERMS, MKP_DROP_NAME); /* drops trailing slash */
+ 		if (ret < 0)
+ 			exit_cleanup(RERR_SYNTAX);
+ 		if (ret)
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -557,7 +593,7 @@ diff --git a/options.c b/options.c
  int implied_dirs = 1;
  int missing_args = 0; /* 0 = FERROR_XFER, 1 = ignore, 2 = delete */
  int numeric_ids = 0;
-@@ -759,6 +760,7 @@ void usage(enum logcode F)
+@@ -758,6 +759,7 @@ void usage(enum logcode F)
    rprintf(F,"     --modify-window=NUM     compare mod-times with reduced accuracy\n");
    rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F," -y, --fuzzy                 find similar file for basis if no dest file\n");
@@ -573,7 +609,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -2237,7 +2240,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2228,7 +2231,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		inplace = 1;
  	}
  
@@ -582,7 +618,7 @@ diff --git a/options.c b/options.c
  		partial_dir = tmp_partialdir;
  
  	if (inplace) {
-@@ -2246,6 +2249,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2237,6 +2240,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			snprintf(err_buf, sizeof err_buf,
  				 "--%s cannot be used with --%s\n",
  				 append_mode ? "append" : "inplace",
@@ -590,7 +626,7 @@ diff --git a/options.c b/options.c
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -2615,6 +2619,8 @@ void server_options(char **args, int *argc_p)
+@@ -2606,6 +2610,8 @@ void server_options(char **args, int *argc_p)
  			args[ac++] = "--super";
  		if (size_only)
  			args[ac++] = "--size-only";
@@ -599,6 +635,18 @@ diff --git a/options.c b/options.c
  		if (do_stats)
  			args[ac++] = "--stats";
  	} else {
+diff --git a/receiver.c b/receiver.c
+--- a/receiver.c
++++ b/receiver.c
+@@ -208,7 +208,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
+ 	 * information should have been previously transferred, but that may
+ 	 * not be the case with -R */
+ 	if (fd == -1 && relative_paths && errno == ENOENT
+-	 && make_path(fnametmp, MKP_SKIP_SLASH | MKP_DROP_NAME) == 0) {
++	 && make_path(fnametmp, ACCESSPERMS, MKP_SKIP_SLASH | MKP_DROP_NAME) == 0) {
+ 		/* Get back to name with XXXXXX in it. */
+ 		get_tmpname(fnametmp, fname, False);
+ 		fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
@@ -655,7 +703,34 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
-@@ -1117,6 +1117,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
+@@ -174,7 +174,7 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
+ /* Create any necessary directories in fname.  Any missing directories are
+  * created with default permissions.  Returns < 0 on error, or the number
+  * of directories created. */
+-int make_path(char *fname, int flags)
++int make_path(char *fname, mode_t mode, int flags)
+ {
+ 	char *end, *p;
+ 	int ret = 0;
+@@ -197,7 +197,7 @@ int make_path(char *fname, int flags)
+ 
+ 	/* Try to find an existing dir, starting from the deepest dir. */
+ 	for (p = end; ; ) {
+-		if (do_mkdir(fname, ACCESSPERMS) == 0) {
++		if (do_mkdir(fname, mode) == 0) {
+ 			ret++;
+ 			break;
+ 		}
+@@ -229,7 +229,7 @@ int make_path(char *fname, int flags)
+ 		p += strlen(p);
+ 		if (ret < 0) /* Skip mkdir on error, but keep restoring the path. */
+ 			continue;
+-		if (do_mkdir(fname, ACCESSPERMS) < 0)
++		if (do_mkdir(fname, mode) < 0)
+ 			ret = -ret - 1;
+ 		else
+ 			ret++;
+@@ -1111,6 +1111,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
  	return path;
  }
  
@@ -688,3 +763,12 @@ diff --git a/util.c b/util.c
  /**
   * Return a quoted string with the full pathname of the indicated filename.
   * The string " (in MODNAME)" may also be appended.  The returned pointer
+@@ -1204,7 +1230,7 @@ int handle_partial_dir(const char *fname, int create)
+ 			}
+ 			statret = -1;
+ 		}
+-		if (statret < 0 && do_mkdir(dir, 0700) < 0) {
++		if (statret < 0 && make_path(dir, 0700, 0) < 0) {
+ 			*fn = '/';
+ 			return 0;
+ 		}
