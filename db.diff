@@ -2,15 +2,12 @@ Added some DB-access routines to help rsync keep extra filesystem info
 about the files it is dealing with.  This adds both the --db=CONFIG_FILE
 option and the "db config" daemon parameter.
 
-For the moment this only adds checksum caching when the --checksum option
-is used.  Future improvements may include:
+Future improvements may include:
 
- - Updating of MD5 checksums when transferring any file, even w/o -c.
-   We should be able to extend this to work for MD4 checksums too if we
-   make the sender force checksum_seed to 0 when using a DB and having
-   the receiving side check to see if it got a 0 checksum_seed.  (We
-   probably don't want to compute 2 MD4 checksums for the case where
-   the checksum_seed is non-zero.)
+ - Updating of MD4 checksums when transferring any file, even w/o -c.
+   To make that work we'd need to make the sender force checksum_seed to
+   0 when using a DB and having the receiving side check to see if it
+   got a 0 checksum_seed.
 
  - Caching of path info that allows for the finding of files to use for
    moving/linking/copying/alternate-basis-use.
@@ -20,25 +17,43 @@ is used.  Future improvements may include:
 To use this patch, run these commands for a successful build:
 
     patch -p1 <patches/db.diff
-    ./configure                               (optional if already run)
+    ./prepare-source
+    ./configure
     make
 
-based-on: 0488a14b9930bf91719ac0f1d1c0c8770ca10646
+based-on: 01959d6387eb1eed344d9e905cab2e2d59e5bc74
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -23,6 +23,7 @@ config.status
+@@ -15,6 +15,7 @@ config.status
+ /proto.h
+ /proto.h-tstamp
+ /rsync.1
++/rsyncdb.1
+ /rsyncd.conf.5
+ /autom4te*.cache
+ /confdefs.h
+@@ -23,6 +24,7 @@ config.status
  /getgroups
  /gmon.out
  /rsync
 +/rsyncdb
- /shconfig
- /testdir
- /tests-dont-exist
+ /rsync-ssl
+ /stunnel-rsync
+ /stunnel-rsyncd.conf
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
-@@ -36,7 +36,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
+@@ -28,7 +28,7 @@ VERSION=@RSYNC_VERSION@
+ .SUFFIXES:
+ .SUFFIXES: .c .o
+ 
+-GENFILES=configure.sh config.h.in proto.h proto.h-tstamp rsync.1 rsyncd.conf.5
++GENFILES=configure.sh config.h.in proto.h proto.h-tstamp rsync.1 rsyncdb.1 rsyncd.conf.5
+ HEADERS=byteorder.h config.h errcode.h proto.h rsync.h ifuncs.h itypes.h inums.h \
+ 	lib/pool_alloc.h
+ LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
+@@ -38,7 +38,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
@@ -47,37 +62,61 @@ diff --git a/Makefile.in b/Makefile.in
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
-@@ -60,11 +60,12 @@ CHECK_OBJS=tls.o testrun.o getgroups.o getfsdev.o t_stub.o t_unsafe.o trimslash.
+@@ -62,14 +62,16 @@ CHECK_OBJS=tls.o testrun.o getgroups.o getfsdev.o t_stub.o t_unsafe.o trimslash.
  	$(CC) -I. -I$(srcdir) $(CFLAGS) $(CPPFLAGS) -c $< @CC_SHOBJ_FLAG@
  @OBJ_RESTORE@
  
--all: Makefile rsync$(EXEEXT) @MAKE_MAN@
-+all: Makefile rsync$(EXEEXT) rsyncdb @MAKE_MAN@
+-all: Makefile rsync$(EXEEXT) rsync-ssl stunnel-rsync stunnel-rsyncd.conf @MAKE_MAN@
++all: Makefile rsync$(EXEEXT) rsyncdb$(EXEEXT) rsync-ssl stunnel-rsync stunnel-rsyncd.conf @MAKE_MAN@
  
  install: all
- 	-mkdir -p ${DESTDIR}${bindir}
+ 	-${MKDIR_P} ${DESTDIR}${bindir}
  	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsync$(EXEEXT) ${DESTDIR}${bindir}
 +	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsyncdb$(EXEEXT) ${DESTDIR}${bindir}
- 	-mkdir -p ${DESTDIR}${mandir}/man1
- 	-mkdir -p ${DESTDIR}${mandir}/man5
+ 	-${MKDIR_P} ${DESTDIR}${mandir}/man1
+ 	-${MKDIR_P} ${DESTDIR}${mandir}/man5
  	if test -f rsync.1; then ${INSTALLMAN} -m 644 rsync.1 ${DESTDIR}${mandir}/man1; fi
-@@ -76,6 +77,10 @@ install-strip:
++	if test -f rsyncdb.1; then ${INSTALLMAN} -m 644 rsyncdb.1 ${DESTDIR}${mandir}/man1; fi
+ 	if test -f rsyncd.conf.5; then ${INSTALLMAN} -m 644 rsyncd.conf.5 ${DESTDIR}${mandir}/man5; fi
+ 
+ install-ssl-client: rsync-ssl stunnel-rsync
+@@ -92,6 +94,9 @@ install-strip:
  rsync$(EXEEXT): $(OBJS)
  	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
  
-+RSYNCDB_OBJS = rsyncdb.o db.o hashtable.o fileio.o syscall.o util2.o lib/compat.o lib/mdfour.o lib/md5.o @BUILD_POPT@
-+rsyncdb$(EXEEXT): $(RSYNCDB_OBJS) rsync.h
-+	$(CC) -o rsyncdb $(RSYNCDB_OBJS) $(LIBS)
++rsyncdb$(EXEEXT): rsync$(EXEEXT)
++	ln -s rsync$(EXEEXT) rsyncdb$(EXEEXT)
 +
  $(OBJS): $(HEADERS)
  $(CHECK_OBJS): $(HEADERS)
  
-@@ -196,7 +201,7 @@ rsyncd.conf.5: rsyncd.conf.yo
+@@ -208,22 +213,27 @@ proto.h: proto.h-tstamp
+ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
+ 	perl $(srcdir)/mkproto.pl $(srcdir)/*.c $(srcdir)/lib/compat.c
+ 
+-man: rsync.1 rsyncd.conf.5 man-copy
++man: rsync.1 rsyncdb.1 rsyncd.conf.5 man-copy
+ 
+ man-copy:
+ 	@-if test -f rsync.1; then :; else echo 'Copying srcdir rsync.1'; cp -p $(srcdir)/rsync.1 .; fi
++	@-if test -f rsyncdb.1; then :; else echo 'Copying srcdir rsyncdb.1'; cp -p $(srcdir)/rsyncdb.1 .; fi
+ 	@-if test -f rsyncd.conf.5; then :; else echo 'Copying srcdir rsyncd.conf.5'; cp -p $(srcdir)/rsyncd.conf.5 .; fi
+ 
+ rsync.1: rsync.yo
+ 	yodl2man -o rsync.1 $(srcdir)/rsync.yo
+ 	-$(srcdir)/tweak_manpage rsync.1
+ 
++rsyncdb.1: rsyncdb.yo
++	yodl2man -o rsyncdb.1 $(srcdir)/rsyncdb.yo
++	-$(srcdir)/tweak_manpage rsyncdb.1
++
+ rsyncd.conf.5: rsyncd.conf.yo
+ 	yodl2man -o rsyncd.conf.5 $(srcdir)/rsyncd.conf.yo
  	-$(srcdir)/tweak_manpage rsyncd.conf.5
  
  clean: cleantests
 -	rm -f *~ $(OBJS) $(CHECK_PROGS) $(CHECK_OBJS) $(CHECK_SYMLINKS) \
-+	rm -f *~ $(OBJS) $(CHECK_PROGS) $(CHECK_OBJS) $(CHECK_SYMLINKS) rsyncdb rsyncdb.o \
++	rm -f *~ $(OBJS) $(CHECK_PROGS) $(CHECK_OBJS) $(CHECK_SYMLINKS) rsyncdb$(EXEEXT) \
  		rounding rounding.h *.old
  
  cleantests:
@@ -158,6 +197,15 @@ diff --git a/cleanup.c b/cleanup.c
  		if (cleanup_child_pid != -1) {
  			int status;
  			int pid = wait_process(cleanup_child_pid, &status, WNOHANG);
+@@ -174,7 +181,7 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
+ 			    cleanup_file->modtime = 0;
+ 			}
+ 			finish_transfer(cleanup_new_fname, fname, NULL, NULL,
+-					cleanup_file, tweak_modtime, !partial_dir);
++					cleanup_file, tweak_modtime, !partial_dir, NULL);
+ 		}
+ 
+ 		/* FALLTHROUGH */
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
@@ -166,9 +214,9 @@ diff --git a/clientserver.c b/clientserver.c
  extern int remote_protocol;
  extern int protocol_version;
 +extern int always_checksum;
++extern int db_lax;
  extern int io_timeout;
  extern int no_detach;
-+extern int use_db;
  extern int write_batch;
  extern int default_af_hint;
  extern int logfile_format_has_i;
@@ -177,23 +225,23 @@ diff --git a/clientserver.c b/clientserver.c
  extern char *bind_address;
  extern char *config_file;
  extern char *logfile_format;
-@@ -692,6 +695,9 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -692,6 +695,11 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  
  	log_init(1);
  
-+	if (*lp_db_config(i))
++	if (*lp_db_config(i)) {
 +		db_read_config(FLOG, lp_db_config(i));
++		db_lax = lp_db_lax(i);
++	}
 +
  #ifdef HAVE_PUTENV
  	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i)) {
  		int status;
-@@ -896,6 +902,10 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -896,6 +904,8 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  
  	am_server = 1; /* Don't let someone try to be tricky. */
  	quiet = 0;
 +	db_config = NULL;
-+	if (!always_checksum)
-+		use_db = 0;
 +
  	if (lp_ignore_errors(module_id))
  		ignore_errors = 1;
@@ -201,7 +249,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -344,6 +344,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
+@@ -345,6 +345,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
      unistd.h utime.h grp.h compat.h sys/param.h ctype.h sys/wait.h \
      sys/ioctl.h sys/filio.h string.h stdlib.h sys/socket.h sys/mode.h \
      sys/un.h sys/attr.h mcheck.h arpa/inet.h arpa/nameser.h locale.h \
@@ -209,7 +257,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1096,6 +1097,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1100,6 +1101,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -262,7 +310,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,877 @@
+@@ -0,0 +1,1346 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -286,6 +334,14 @@ new file mode 100644
 +#include "ifuncs.h"
 +#include "itypes.h"
 +
++extern int protocol_version;
++extern int recurse;
++extern int checksum_len;
++extern int db_clean, db_check, db_do_md4, db_do_md5, db_no_update, db_lax, db_init, db_mounts;
++extern int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs;
++extern int saw_db_output_opt, saw_db_sum_opt;
++extern char *db_config;
++
 +#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
 +#define USE_MYSQL
 +#include <mysql/mysql.h>
@@ -306,9 +362,6 @@ new file mode 100644
 +#define OPEN_FAIL_MSLEEP 100
 +#endif
 +
-+extern int protocol_version;
-+extern int checksum_len;
-+
 +#define DB_TYPE_NONE 0
 +#define DB_TYPE_MYSQL 1
 +#define DB_TYPE_SQLITE 2
@@ -318,6 +371,7 @@ new file mode 100644
 +
 +static const char *dbhost = NULL, *dbuser = NULL, *dbpass = NULL, *dbname = NULL;
 +static unsigned int dbport = 0;
++static int verbosity;
 +
 +static union {
 +#ifdef USE_MYSQL
@@ -350,7 +404,6 @@ new file mode 100644
 +} statements[MAX_PREP_CNT];
 +
 +static int md_num;
-+static int check_ctime = 1;
 +static enum logcode log_code;
 +
 +#ifdef USE_MYSQL
@@ -365,6 +418,13 @@ new file mode 100644
 +#if defined USE_SQLITE && defined SQLITE_CONFIG_LOG
 +static FILE *error_log_fp;
 +#endif
++
++#define PTR_SIZE (sizeof (struct file_struct *))
++
++struct name_list {
++	struct name_list *next;
++	char name[1];
++} *dirs_list;
 +
 +int db_read_config(enum logcode code, const char *config_file)
 +{
@@ -407,8 +467,6 @@ new file mode 100644
 +			dbname = strdup(cp);
 +		else if (strcasecmp(buf, "dbport") == 0)
 +			dbport = atoi(cp);
-+		else if (strcasecmp(buf, "no_ctime") == 0)
-+			check_ctime = atoi(cp) ? 0 : 1;
 +		else if (strcasecmp(buf, "errlog") == 0)
 +			error_log = strdup(cp);
 +		else if (strcasecmp(buf, "thishost") == 0)
@@ -510,12 +568,64 @@ new file mode 100644
 +static int db_connect_mysql(void)
 +{
 +	MYSQL_BIND binds[MAX_BIND_CNT];
++	const char *save_dbname = db_init ? dbname : NULL;
 +
 +	if (!(dbh.mysql = mysql_init(NULL)))
 +		out_of_memory("db_read_config");
 +
++	if (db_init)
++		dbname = "mysql";
 +	if (!mysql_real_connect(dbh.mysql, dbhost, dbuser, dbpass, dbname, dbport, NULL, 0))
 +		return 0;
++
++	if (db_init) {
++		char *sql;
++		if (asprintf(&sql, "CREATE DATABASE IF NOT EXISTS `%s`", save_dbname) < 0
++		 || mysql_query(dbh.mysql, sql) < 0)
++			exit(1);
++		if (asprintf(&sql, "USE `%s`", save_dbname) < 0
++		 || mysql_query(dbh.mysql, sql) < 0)
++			exit(1);
++
++		if (verbosity)
++			printf("Dropping old tables (if they exist) ...\n");
++		sql="DROP TABLE IF EXISTS disk";
++		mysql_query(dbh.mysql, sql);
++		sql="DROP TABLE IF EXISTS inode_map";
++		mysql_query(dbh.mysql, sql);
++
++		if (verbosity)
++			printf("Creating empty tables ...\n");
++
++		sql="CREATE TABLE disk ("
++		    "  disk_id integer unsigned NOT NULL PRIMARY KEY AUTO_INCREMENT,"
++		    "  devno bigint unsigned NOT NULL,"
++		    "  host varchar(256) NOT NULL default 'localhost',"
++		    "  mounted tinyint NOT NULL default '1',"
++		    "  comment varchar(256) default NULL"
++		    ")";
++		mysql_query(dbh.mysql, sql);
++
++		sql="CREATE TABLE inode_map ("
++		    "  disk_id integer unsigned NOT NULL,"
++		    "  ino bigint unsigned NOT NULL,"
++		    "  size bigint unsigned NOT NULL,"
++		    "  mtime bigint NOT NULL,"
++		    "  ctime bigint NOT NULL,"
++		    "  sum_type tinyint NOT NULL default '0',"
++		    "  checksum binary(16) NOT NULL,"
++		    "  PRIMARY KEY (disk_id,ino,sum_type)"
++		    ")";
++		mysql_query(dbh.mysql, sql);
++
++		if (!db_mounts)
++			exit(0);
++	}
++
++	if (db_mounts) {
++		fprintf(stderr, "Sadly, --mounts is not yet implemented...\n"); /* FIXME */
++		exit(0);
++	}
 +
 +	memset(binds, 0, sizeof binds);
 +	binds[0].buffer_type = MYSQL_TYPE_LONGLONG;
@@ -547,16 +657,16 @@ new file mode 100644
 +		binds[2].buffer = &bind_size;
 +		binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
 +		binds[3].buffer = &bind_mtime;
-+		if (check_ctime) {
++		if (!db_lax) {
 +			binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
 +			binds[4].buffer = &bind_ctime;
 +		}
-+		statements[SEL_SUM].mysql = prepare_mysql(binds, 4 + check_ctime,
++		statements[SEL_SUM].mysql = prepare_mysql(binds, 4 + !db_lax,
 +			"SELECT checksum"
 +			" FROM inode_map"
 +			" WHERE disk_id = ? AND ino = ? AND sum_type = %d"
 +			"   AND size = ? AND mtime = ? %s",
-+			md_num, check_ctime ? "AND ctime = ?" : "");
++			md_num, db_lax ? "" : "AND ctime = ?");
 +	}
 +	if (!statements[SEL_SUM].mysql)
 +		return 0;
@@ -609,7 +719,10 @@ new file mode 100644
 +#endif
 +
 +	while (1) {
-+		int ret = sqlite3_open_v2(dbname, &dbh.sqlite, SQLITE_OPEN_READWRITE, NULL);
++		int open_flags = SQLITE_OPEN_READWRITE;
++		if (db_init)
++			open_flags |= SQLITE_OPEN_CREATE;
++		int ret = sqlite3_open_v2(dbname, &dbh.sqlite, open_flags, NULL);
 +		if (ret == 0)
 +			break;
 +		if (ret != SQLITE_BUSY && ret != SQLITE_LOCKED)
@@ -617,6 +730,52 @@ new file mode 100644
 +		if (++open_failures > MAX_OPEN_FAILURES)
 +			return 0;
 +		msleep(OPEN_FAIL_MSLEEP);
++	}
++
++	if (db_init) {
++		char *sql;
++		if (verbosity)
++			printf("Dropping old tables (if they exist) ...\n");
++		sql="DROP TABLE IF EXISTS disk";
++		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
++			exit(1);
++		sql="DROP TABLE IF EXISTS inode_map";
++		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
++			exit(1);
++
++		if (verbosity)
++			printf("Creating empty tables ...\n");
++
++		sql="CREATE TABLE disk ("
++		    "  disk_id integer NOT NULL PRIMARY KEY AUTOINCREMENT,"
++		    "  devno bigint NOT NULL,"
++		    "  host varchar(256) NOT NULL default 'localhost',"
++		    "  mounted tinyint NOT NULL default '1',"
++		    "  comment varchar(256) default NULL"
++		    ")";
++		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
++			exit(1);
++
++		sql="CREATE TABLE inode_map ("
++		    "  disk_id integer NOT NULL,"
++		    "  ino bigint NOT NULL,"
++		    "  size bigint NOT NULL,"
++		    "  mtime bigint NOT NULL,"
++		    "  ctime bigint NOT NULL,"
++		    "  sum_type tinyint NOT NULL default '0',"
++		    "  checksum binary(16) NOT NULL,"
++		    "  PRIMARY KEY (disk_id,ino,sum_type)"
++		    ")";
++		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
++			exit(1);
++
++		if (!db_mounts)
++			exit(0);
++	}
++
++	if (db_mounts) {
++		fprintf(stderr, "Sadly, --mounts is not yet implemented...\n"); /* FIXME */
++		exit(0);
 +	}
 +
 +	sql="SELECT disk_id"
@@ -637,7 +796,7 @@ new file mode 100644
 +		    " FROM inode_map"
 +		    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
 +		    "   AND size = ? AND mtime = ? %s",
-+		    md_num, check_ctime ? "AND ctime = ?" : "") < 0
++		    md_num, db_lax ? "" : "AND ctime = ?") < 0
 +		 || sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
 +			return 0;
 +		free(sql);
@@ -662,17 +821,18 @@ new file mode 100644
 +	case DB_TYPE_MYSQL:
 +		if (db_connect_mysql())
 +			return 1;
++		rprintf(log_code, "Unable to connect to DB: %s\n", mysql_error(dbh.mysql));
 +		break;
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE:
 +		if (db_connect_sqlite())
 +			return 1;
++		rprintf(log_code, "Unable to connect to DB: %s\n", sqlite3_errmsg(dbh.sqlite));
 +		break;
 +#endif
 +	}
 +
-+	rprintf(log_code, "Unable to connect to DB: %s\n", sqlite3_errmsg(dbh.sqlite));
 +	db_disconnect();
 +	use_db = DB_TYPE_NONE;
 +
@@ -839,7 +999,7 @@ new file mode 100644
 +		bind_ino = st_p->st_ino;
 +		bind_size = st_p->st_size;
 +		bind_mtime = st_p->st_mtime;
-+		if (check_ctime)
++		if (!db_lax)
 +			bind_ctime = st_p->st_ctime;
 +
 +		binds[0].buffer_type = MYSQL_TYPE_BLOB;
@@ -855,7 +1015,7 @@ new file mode 100644
 +		sqlite3_bind_int64(stmt, 2, st_p->st_ino);
 +		sqlite3_bind_int64(stmt, 3, st_p->st_size);
 +		sqlite3_bind_int64(stmt, 4, st_p->st_mtime);
-+		if (check_ctime)
++		if (!db_lax)
 +			sqlite3_bind_int64(stmt, 5, st_p->st_ctime);
 +		if (sqlite3_step(stmt) == SQLITE_ROW) {
 +			int len = sqlite3_column_bytes(stmt, 0);
@@ -953,7 +1113,7 @@ new file mode 100644
 +				continue;
 +			*sum5 = dbsum + checksum_len*j;
 +		}
-+		if (st_p->st_size == dbsize[j] && st_p->st_mtime == dbmtime[j] && (!check_ctime || st_p->st_ctime == dbctime[j]))
++		if (st_p->st_size == dbsize[j] && st_p->st_mtime == dbmtime[j] && (db_lax || st_p->st_ctime == dbctime[j]))
 +			++*right_sum_cnt;
 +		else
 +			++*wrong_sum_cnt;
@@ -1031,12 +1191,16 @@ new file mode 100644
 +		if (!statements[INS_PRESENT].mysql)
 +			return 0;
 +
-+		statements[DEL_SUMS].mysql = prepare_mysql(binds, 0,
++		memset(binds, 0, sizeof binds);
++		binds[0].buffer_type = MYSQL_TYPE_STRING;
++		binds[0].buffer = &bind_thishost;
++		binds[0].buffer_length = bind_thishost_len;
++		statements[DEL_SUMS].mysql = prepare_mysql(binds, 1,
 +			"DELETE m.*"
 +			" FROM inode_map AS m"
 +			" LEFT JOIN inode_present USING(disk_id, ino)"
 +			" JOIN disk AS d ON(m.disk_id = d.disk_id)"
-+			" WHERE mounted = 1 AND present IS NULL"
++			" WHERE host = ? AND mounted = 1 AND present IS NULL"
 +			);
 +		if (!statements[DEL_SUMS].mysql)
 +			return 0;
@@ -1072,7 +1236,7 @@ new file mode 100644
 +		    "  FROM inode_map AS m"
 +		    "  LEFT JOIN aux1.inode_present USING(disk_id, ino)"
 +		    "  JOIN disk AS d ON(m.disk_id = d.disk_id)"
-+		    "  WHERE MOUNTED = 1 AND present IS NULL"
++		    "  WHERE host = ? AND MOUNTED = 1 AND present IS NULL"
 +		    " )";
 +		if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[DEL_SUMS].sqlite, NULL) != 0)
 +			return 0;
@@ -1128,6 +1292,7 @@ new file mode 100644
 +	case DB_TYPE_SQLITE: {
 +		int rc;
 +		sqlite3_stmt *stmt = statements[DEL_SUMS].sqlite;
++		sqlite3_bind_text(stmt, 1, bind_thishost, bind_thishost_len, SQLITE_STATIC);
 +		rc = sqlite3_step(stmt);
 +		if (rc == SQLITE_DONE)
 +			del_cnt = sqlite3_changes(dbh.sqlite);
@@ -1140,757 +1305,15 @@ new file mode 100644
 +
 +	return del_cnt;
 +}
-diff --git a/flist.c b/flist.c
---- a/flist.c
-+++ b/flist.c
-@@ -52,6 +52,7 @@ extern int preserve_devices;
- extern int preserve_specials;
- extern int delete_during;
- extern int missing_args;
-+extern int use_db;
- extern int eol_nulls;
- extern int relative_paths;
- extern int implied_dirs;
-@@ -1302,11 +1303,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
- 		extra_len += EXTRA_LEN;
- #endif
- 
--	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
--		file_checksum(thisname, tmp_sum, st.st_size);
--		if (sender_keeps_checksum)
--			extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
--	}
-+	if (sender_keeps_checksum && S_ISREG(st.st_mode))
-+		extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
- 
- #if EXTRA_ROUNDING > 0
- 	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
-@@ -1391,8 +1389,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
- 		return NULL;
- 	}
- 
--	if (sender_keeps_checksum && S_ISREG(st.st_mode))
--		memcpy(F_SUM(file), tmp_sum, checksum_len);
-+	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
-+		if (!use_db || !db_get_checksum(&st, tmp_sum))
-+			file_checksum(thisname, &st, tmp_sum);
-+		if (sender_keeps_checksum)
-+			memcpy(F_SUM(file), tmp_sum, checksum_len);
-+	}
- 
- 	if (unsort_ndx)
- 		F_NDX(file) = stats.num_dirs;
-@@ -2075,6 +2077,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
- 		     | (eol_nulls || reading_remotely ? RL_EOL_NULLS : 0);
- 	int implied_dot_dir = 0;
- 
-+	if (use_db)
-+		db_connect(0);
 +
- 	rprintf(FLOG, "building file list\n");
- 	if (show_filelist_p())
- 		start_filelist_progress("building file list");
-diff --git a/generator.c b/generator.c
---- a/generator.c
-+++ b/generator.c
-@@ -58,6 +58,7 @@ extern int human_readable;
- extern int ignore_existing;
- extern int ignore_non_existing;
- extern int inplace;
-+extern int use_db;
- extern int append_mode;
- extern int make_backups;
- extern int csum_length;
-@@ -574,7 +575,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
- 	   of the file time to determine whether to sync */
- 	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
- 		char sum[MAX_DIGEST_LEN];
--		file_checksum(fn, sum, st->st_size);
-+		if (!use_db || !db_get_checksum(st, sum))
-+			file_checksum(fn, st, sum);
- 		return memcmp(sum, F_SUM(file), checksum_len) == 0;
- 	}
- 
-@@ -2193,6 +2195,9 @@ void generate_files(int f_out, const char *local_name)
- 			: "enabled");
- 	}
- 
-+	if (use_db && always_checksum)
-+		db_connect(0);
-+
- 	dflt_perms = (ACCESSPERMS & ~orig_umask);
- 
- 	do {
-diff --git a/loadparm.c b/loadparm.c
---- a/loadparm.c
-+++ b/loadparm.c
-@@ -109,6 +109,7 @@ typedef struct {
- 	char *auth_users;
- 	char *charset;
- 	char *comment;
-+	char *db_config;
- 	char *dont_compress;
- 	char *exclude;
- 	char *exclude_from;
-@@ -185,6 +186,7 @@ static const all_vars Defaults = {
-  /* auth_users; */		NULL,
-  /* charset; */ 		NULL,
-  /* comment; */ 		NULL,
-+ /* db_config; */		NULL,
-  /* dont_compress; */		DEFAULT_DONT_COMPRESS,
-  /* exclude; */			NULL,
-  /* exclude_from; */		NULL,
-@@ -322,6 +324,7 @@ static struct parm_struct parm_table[] =
-  {"auth users",        P_STRING, P_LOCAL, &Vars.l.auth_users,          NULL,0},
-  {"charset",           P_STRING, P_LOCAL, &Vars.l.charset,             NULL,0},
-  {"comment",           P_STRING, P_LOCAL, &Vars.l.comment,             NULL,0},
-+ {"db config",         P_STRING, P_LOCAL, &Vars.l.db_config,           NULL,0},
-  {"dont compress",     P_STRING, P_LOCAL, &Vars.l.dont_compress,       NULL,0},
-  {"exclude from",      P_STRING, P_LOCAL, &Vars.l.exclude_from,        NULL,0},
-  {"exclude",           P_STRING, P_LOCAL, &Vars.l.exclude,             NULL,0},
-@@ -454,6 +457,7 @@ FN_GLOBAL_INTEGER(lp_rsync_port, &Vars.g.rsync_port)
- FN_LOCAL_STRING(lp_auth_users, auth_users)
- FN_LOCAL_STRING(lp_charset, charset)
- FN_LOCAL_STRING(lp_comment, comment)
-+FN_LOCAL_STRING(lp_db_config, db_config)
- FN_LOCAL_STRING(lp_dont_compress, dont_compress)
- FN_LOCAL_STRING(lp_exclude, exclude)
- FN_LOCAL_STRING(lp_exclude_from, exclude_from)
-diff --git a/main.c b/main.c
---- a/main.c
-+++ b/main.c
-@@ -51,6 +51,7 @@ extern int copy_unsafe_links;
- extern int keep_dirlinks;
- extern int preserve_hard_links;
- extern int protocol_version;
-+extern int always_checksum;
- extern int file_total;
- extern int recurse;
- extern int xfer_dirs;
-@@ -84,6 +85,7 @@ extern char *filesfrom_host;
- extern char *partial_dir;
- extern char *dest_option;
- extern char *rsync_path;
-+extern char *db_config;
- extern char *shell_cmd;
- extern char *batch_name;
- extern char *password_file;
-@@ -1622,6 +1624,9 @@ int main(int argc,char *argv[])
- 		exit_cleanup(RERR_SYNTAX);
- 	}
- 
-+	if (db_config && always_checksum)
-+		db_read_config(FERROR, db_config);
-+
- 	if (am_server) {
- 		set_nonblocking(STDIN_FILENO);
- 		set_nonblocking(STDOUT_FILENO);
-diff --git a/mkproto.pl b/mkproto.pl
---- a/mkproto.pl
-+++ b/mkproto.pl
-@@ -13,6 +13,8 @@ if (open(IN, 'proto.h')) {
-     STRING => 'char *',
- );
- 
-+@ARGV = grep !m{/rsyncdb\.c$}, @ARGV;
-+
- $inheader = 0;
- $protos = qq|/* This file is automatically generated with "make proto". DO NOT EDIT */\n\n|;
- 
-diff --git a/options.c b/options.c
---- a/options.c
-+++ b/options.c
-@@ -93,6 +93,7 @@ int use_qsort = 0;
- char *files_from = NULL;
- int filesfrom_fd = -1;
- char *filesfrom_host = NULL;
-+char *db_config = NULL;
- int eol_nulls = 0;
- int protect_args = -1;
- int human_readable = 1;
-@@ -572,6 +573,7 @@ static void print_rsync_version(enum logcode f)
- 	char const *links = "no ";
- 	char const *iconv = "no ";
- 	char const *ipv6 = "no ";
-+	char const *db = "no ";
- 	STRUCT_STAT *dumstat;
- 
- #if SUBPROTOCOL_VERSION != 0
-@@ -608,6 +610,11 @@ static void print_rsync_version(enum logcode f)
- #ifdef CAN_SET_SYMLINK_TIMES
- 	symtimes = "";
- #endif
-+#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
-+	db = "";
-+#elif defined HAVE_SQLITE3_H && defined HAVE_LIBSQLITE3
-+	db = "";
-+#endif
- 
- 	rprintf(f, "%s  version %s  protocol version %d%s\n",
- 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -621,8 +628,8 @@ static void print_rsync_version(enum logcode f)
- 		(int)(sizeof (int64) * 8));
- 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
- 		got_socketpair, hardlinks, links, ipv6, have_inplace);
--	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc\n",
--		have_inplace, acls, xattrs, iconv, symtimes, prealloc);
-+	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sdb\n",
-+		have_inplace, acls, xattrs, iconv, symtimes, prealloc, db);
- 
- #ifdef MAINTAINER_MODE
- 	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -671,6 +678,7 @@ void usage(enum logcode F)
-   rprintf(F," -q, --quiet                 suppress non-error messages\n");
-   rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
-   rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
-+  rprintf(F,"     --db=CONFIG_FILE        specify a CONFIG_FILE for DB checksums\n");
-   rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
-   rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
-   rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -957,6 +965,7 @@ static struct poptOption long_options[] = {
-   {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
-   {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
-   {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
-+  {"db",               0,  POPT_ARG_STRING, &db_config, 0, 0, 0 },
-   {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
-   {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
-   {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-diff --git a/pipe.c b/pipe.c
---- a/pipe.c
-+++ b/pipe.c
-@@ -27,6 +27,9 @@ extern int am_server;
- extern int blocking_io;
- extern int filesfrom_fd;
- extern int munge_symlinks;
-+extern int always_checksum;
-+extern int use_db;
-+extern char *db_config;
- extern char *logfile_name;
- extern int remote_option_cnt;
- extern const char **remote_options;
-@@ -141,6 +144,9 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
- 			logfile_close();
- 		}
- 
-+		use_db = 0;
-+		db_config = NULL;
-+
- 		if (remote_option_cnt) {
- 			int rc = remote_option_cnt + 1;
- 			const char **rv = remote_options;
-@@ -148,6 +154,8 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
- 				option_error();
- 				exit_cleanup(RERR_SYNTAX);
- 			}
-+			if (db_config && always_checksum)
-+				db_read_config(FERROR, db_config);
- 		}
- 
- 		if (dup2(to_child_pipe[0], STDIN_FILENO) < 0 ||
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -337,6 +337,7 @@ to the detailed description below for a complete description.  verb(
-  -q, --quiet                 suppress non-error messages
-      --no-motd               suppress daemon-mode MOTD (see caveat)
-  -c, --checksum              skip based on checksum, not mod-time & size
-+     --db=CONFIG_FILE        specify a CONFIG_FILE for DB checksums
-  -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
-      --no-OPTION             turn off an implied OPTION (e.g. --no-D)
-  -r, --recursive             recurse into directories
-@@ -625,6 +626,47 @@ option's before-the-transfer "Does this file need to be updated?" check.
- For protocol 30 and beyond (first supported in 3.0.0), the checksum used is
- MD5.  For older protocols, the checksum used is MD4.
- 
-+dit(bf(--db=CONFIG_FILE))  This option specifies a CONFIG_FILE to read
-+that holds connection details for a database of checksum information.
-+When combined with the bf(--checksum) (bf(-c)) option, rsync will try to
-+use cached checksum information from the DB, and will update it if it is
-+missing.
-+
-+The currently supported DB choices are MySQL and SQLite.  For example, a
-+MySQL configuration might look like this:
-+
-+verb(    dbtype: mysql
-+    dbhost: 127.0.0.1
-+    dbname: rsyncdb
-+    dbuser: rsyncuser
-+    dbpass: somepass
-+    port: 3306
-+    thishost: hostname )
-+
-+And a SQLite configuration might look like this:
-+
-+verb(    dbtype: SQLite
-+    dbname: /var/cache/rsync/sum.db )
-+
-+This option only affects one side of a transfer.  See the
-+bf(--remote-option) option for a way to specify the option for both
-+sides of the transfer (with each side reading the config file from
-+their local filesystem).  For example:
-+
-+verb(    rsync -avc {-M,}--db=/etc/rsyncdb.conf src/ host:dest/ )
-+
-+See the perl script "rsyncdb" in the support directory of the source code
-+(which may also be installed in /usr/bin) for a way to create the tables,
-+populate the mounted-disk information, check files against their checksums,
-+and update both the MD4 and MD5 checksums for files at the same time (since
-+an rsync copy will only update one or the other).
-+
-+You can use a single MySQL DB for all your hosts if you give each one
-+their own "thishost" name and setup their device-mapping data.  Or feel
-+free to use separate databases, separate servers, etc.  See the rsync
-+daemon's "db config" parameter for how to configure a daemon to use a DB
-+(since a client cannot control this parameter on a daemon).
-+
- dit(bf(-a, --archive)) This is equivalent to bf(-rlptgoD). It is a quick
- way of saying you want recursion and want to preserve almost
- everything (with -H being a notable omission).
-diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
---- a/rsyncd.conf.yo
-+++ b/rsyncd.conf.yo
-@@ -312,6 +312,18 @@ is daemon.  This setting has no effect if the "log file" setting is a
- non-empty string (either set in the per-modules settings, or inherited
- from the global settings).
- 
-+dit(bf(db config)) This parameter specifies a config file to read that
-+holds connection details for a database of checksum information.
-+
-+The config file will be read-in prior to any chroot restrictions, but
-+the connection occurs from inside the chroot.  This means that you
-+should use a socket connection (e.g. 127.0.0.1 rather than localhost)
-+for a MySQL config from inside a chroot.  For SQLite, the DB file must
-+be placed inside the chroot (though it can be placed outside the
-+transfer dir if you configured an inside-chroot path).
-+
-+See the bf(--db=CONFIG_FILE) option for full details.
-+
- dit(bf(max verbosity)) This parameter allows you to control
- the maximum amount of verbose information that you'll allow the daemon to
- generate (since the information goes into the log file). The default is 1,
-diff --git a/rsyncdb.c b/rsyncdb.c
-new file mode 100644
---- /dev/null
-+++ b/rsyncdb.c
-@@ -0,0 +1,620 @@
-+/*
-+ * This helper program maintains an dev+inode DB.
-+ *
-+ * Copyright (C) 2013 Wayne Davison
-+ *
-+ * This program is free software; you can redistribute it and/or modify
-+ * it under the terms of the GNU General Public License as published by
-+ * the Free Software Foundation; either version 3 of the License, or
-+ * (at your option) any later version.
-+ *
-+ * This program is distributed in the hope that it will be useful,
-+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-+ * GNU General Public License for more details.
-+ *
-+ * You should have received a copy of the GNU General Public License along
-+ * with this program; if not, visit the http://fsf.org website.
-+ */
-+
-+#include "rsync.h"
-+#include "itypes.h"
-+#include "ifuncs.h"
-+#include <popt.h>
-+
-+#define MYNAME "rsync-db"
-+
-+#define PTR_SIZE (sizeof (struct file_struct *))
-+
-+#define MALLOC_MAX 0x40000000
-+
-+struct name_list {
-+	struct name_list *next;
-+	char name[1];
-+} *dirs_list;
-+
-+int check_opt;
-+int clean_opt;
-+int dry_run;
-+int recurse_opt;
-+int verbosity = 0;
-+char *db_config = NULL;
-+
-+int am_root, am_sender, list_only, read_only;
-+int preserve_executability, preserve_perms, sparse_files;
-+
-+int saw_output_opt, saw_sum_opt;
-+int output_dirs, output_name, output_sum, output_info, output_unchanged;
-+int do_md4, do_md5;
-+
-+int checksum_len = MD5_DIGEST_LEN;
-+int protocol_version = 31;
-+short debug_levels[COUNT_DEBUG];
-+
-+static struct poptOption long_options[] = {
-+  /* longName, shortName, argInfo, argPtr, value, descrip, argDesc */
-+  {"check",           'c', POPT_ARG_VAL,    &check_opt, 1, 0, 0},
-+  {"only-check",       0,  POPT_ARG_VAL,    &check_opt, 2, 0, 0},
-+  {"clean",            0,  POPT_ARG_VAL,    &clean_opt, 1, 0, 0},
-+  {"only-clean",       0,  POPT_ARG_VAL,    &clean_opt, 2, 0, 0},
-+  {"dry-run",         'n', POPT_ARG_NONE,   &dry_run, 0, 0, 0 },
-+  {"db",               0,  POPT_ARG_STRING, &db_config, 0, 0, 0 },
-+  {"help",            'h', POPT_ARG_NONE,   0, 'h', 0, 0 },
-+  {"output",          'o', POPT_ARG_STRING, 0, 'o', 0, 0 },
-+  {"recurse",         'r', POPT_ARG_NONE,   &recurse_opt, 0, 0, 0 },
-+  {"recursive",        0,  POPT_ARG_NONE,   &recurse_opt, 0, 0, 0 },
-+  {"sums",            's', POPT_ARG_STRING, 0, 's', 0, 0 },
-+  {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
-+  {0,0,0,0, 0, 0, 0}
-+};
-+
-+static void show_usage(int code);
-+static const char *abs_path(const char *curdir, const char *dir);
-+static struct name_list *new_name(const char *basename, const char *filename);
-+static struct name_list *get_sorted_names(const char *dir);
-+static int mention_file(const char *dir, const char *name, int right_cnt, int wrong_cnt,
-+			const char *dbsum4, const char *dbsum5, const char *sum4, const char *sum5);
-+
-+int main(int argc, char *argv[])
++static int abs_path(char *buf, int bufsiz, const char *curdir, const char *dir)
 +{
-+	poptContext pc = poptGetContext(MYNAME, argc, (const char**)argv, long_options, 0);
-+	int opt, need_sum_cnt, start_dir_len;
-+	struct name_list *prior_dir;
-+	struct name_list *names;
-+	char *cp, start_dir[MAXPATHLEN];
-+	const char **args;
-+	int exit_code = 0;
++	if (*dir == '/')
++		strlcpy(buf, dir, bufsiz);
++	else
++		snprintf(buf, bufsiz, "%s/%s", curdir, dir);
 +
-+	while ((opt = poptGetNextOpt(pc)) != -1) {
-+		switch (opt) {
-+		  case 'h':
-+		    show_usage(0);
-+		    break;
-+		  case 'o':
-+		    for (cp = poptGetOptArg(pc); *cp; cp++) {
-+			    switch (toLower(cp)) {
-+			      case 'n':
-+				output_name = 1;
-+				break;
-+			      case 's':
-+			      case 'c':
-+				output_sum = output_name = 1;
-+				break;
-+			      case 'i':
-+				output_info = output_name = 1;
-+				break;
-+			      case 'u':
-+				output_unchanged = output_name = 1;
-+				break;
-+			      case 'd':
-+				output_dirs = 1;
-+				break;
-+			    }
-+		    }
-+		    saw_output_opt = 1;
-+		    break;
-+		  case 's':
-+		    for (cp = poptGetOptArg(pc); *cp; cp++) {
-+			    switch (*cp) {
-+			      case '4':
-+				do_md4 = 1;
-+				break;
-+			      case '5':
-+				do_md5 = 1;
-+				break;
-+			    }
-+		    }
-+		    saw_sum_opt = 1;
-+		    break;
-+		  case 'v':
-+		    verbosity++;
-+		    break;
-+		  default:
-+		    show_usage(1);
-+		    break;
-+		}
-+	}
-+
-+	if (!db_config) {
-+		fprintf(stderr, "You must specify the --db=FILE option.\n");
-+		show_usage(1);
-+	}
-+
-+	if (check_opt) {
-+		if (!verbosity)
-+			verbosity = 1;
-+		output_info = 1;
-+	}
-+	if (!saw_output_opt && verbosity)
-+		output_dirs = output_name = 1;
-+	if (!saw_sum_opt)
-+		do_md4 = do_md5 = 1;
-+
-+	need_sum_cnt = do_md4 + do_md5;
-+
-+	if (!db_read_config(FERROR, db_config) || !db_connect(1))
-+		exit(1);
-+
-+        if (clean_opt)
-+		db_clean_init();
-+
-+	if (getcwd(start_dir, sizeof start_dir - 1) == NULL) {
-+		rsyserr(FERROR, errno, "getcwd()");
-+		exit_cleanup(RERR_FILESELECT);
-+	}
-+	start_dir_len = strlen(start_dir);
-+
-+	args = poptGetArgs(pc);
-+	if (args) {
-+		prior_dir = NULL;
-+		while (*args) {
-+			struct name_list *add = new_name(abs_path(start_dir, *args++), NULL);
-+			if (!add)
-+				continue;
-+			if (prior_dir)
-+				prior_dir->next = add;
-+			else
-+				dirs_list = add;
-+			prior_dir = add;
-+		}
-+	} else
-+		dirs_list = new_name(abs_path(start_dir, "."), NULL);
-+
-+	prior_dir = NULL;
-+	while (dirs_list) {
-+		struct name_list *subdirs, *prior_subdir, *prior_name;
-+		const char *dir = dirs_list->name;
-+		const char *reldir = dir;
-+
-+		if (prior_dir)
-+			free((void*)prior_dir);
-+		prior_dir = dirs_list;
-+		dirs_list = dirs_list->next;
-+
-+		if (strncmp(reldir, start_dir, start_dir_len) == 0) {
-+			if (reldir[start_dir_len] == '\0')
-+				reldir = ".";
-+			else if (reldir[start_dir_len] == '/')
-+				reldir += start_dir_len + 1;
-+		}
-+		if (output_dirs)
-+			printf("... %s/ ...\n", reldir);
-+
-+		if (chdir(dir) < 0) {
-+			fprintf(stderr, "Unable to chdir to %s: %s\n", dir, strerror(errno));
-+			continue;
-+		}
-+		if (!(names = get_sorted_names(dir)))
-+			continue;
-+
-+		subdirs = prior_subdir = prior_name = NULL;
-+		while (names) {
-+			STRUCT_STAT st;
-+			char *dbsum4, sum4[MD5_DIGEST_LEN];
-+			char *dbsum5, sum5[MD5_DIGEST_LEN];
-+			int right_sum_cnt, wrong_sum_cnt;
-+			const char *name = names->name;
-+			unsigned int disk_id;
-+
-+			if (prior_name)
-+				free((void*)prior_name);
-+			prior_name = names;
-+			names = names->next;
-+
-+			if (lstat(name, &st) < 0) {
-+				fprintf(stderr, "Failed to lstat(%s): %s\n", name, strerror(errno));
-+				continue;
-+			}
-+			if (S_ISLNK(st.st_mode))
-+				continue;
-+			if (S_ISDIR(st.st_mode)) {
-+				// add optional excluding of things like /^(CVS|\.svn|\.git|\.bzr)$/;
-+				if (recurse_opt) {
-+					struct name_list *add = new_name(dir, name);
-+					if (add) {
-+						if (prior_subdir)
-+							prior_subdir->next = add;
-+						else
-+							subdirs = add;
-+						prior_subdir = add;
-+					}
-+				}
-+				continue;
-+			}
-+			if (!S_ISREG(st.st_mode))
-+				continue;
-+
-+			if (!(disk_id = get_disk_id(st.st_dev)))
-+				continue;
-+			if (clean_opt) {
-+				db_note_present(disk_id, st.st_ino);
-+				if (clean_opt > 1)
-+					continue;
-+			}
-+			db_get_both_checksums(&st, &right_sum_cnt, &wrong_sum_cnt,
-+					      do_md4 ? &dbsum4 : NULL, do_md5 ? &dbsum5 : NULL);
-+
-+			if (!check_opt && right_sum_cnt == need_sum_cnt) {
-+				mention_file(reldir, name, right_sum_cnt, wrong_sum_cnt, dbsum4, dbsum5, dbsum4, dbsum5);
-+				continue;
-+			}
-+
-+			if (!check_opt || right_sum_cnt || output_sum) {
-+				uchar *data;
-+				int32 remainder;
-+				md_context m4, m5;
-+				struct map_struct *buf;
-+				OFF_T off, len = st.st_size;
-+				int fd = do_open(name, O_RDONLY, 0);
-+
-+				if (fd < 0) {
-+					fprintf(stderr, "ERROR: unable to read %s: %s\n", name, strerror(errno));
-+					continue;
-+				}
-+
-+				if (do_md4)
-+					mdfour_begin(&m4);
-+				if (do_md5)
-+					md5_begin(&m5);
-+
-+				buf = map_file(fd, len, MAX_MAP_SIZE, CSUM_CHUNK);
-+
-+				for (off = 0; off + CSUM_CHUNK <= len; off += CSUM_CHUNK) {
-+					data = (uchar*)map_ptr(buf, off, CSUM_CHUNK);
-+					if (do_md4)
-+						mdfour_update(&m4, data, CSUM_CHUNK);
-+					if (do_md5)
-+						md5_update(&m5, data, CSUM_CHUNK);
-+				}
-+
-+				remainder = (int32)(len - off);
-+				data = (uchar*)map_ptr(buf, off, remainder);
-+				if (do_md4) {
-+					mdfour_update(&m4, data, remainder);
-+					mdfour_result(&m4, (uchar*)sum4);
-+				}
-+				if (do_md5) {
-+					md5_update(&m5, data, remainder);
-+					md5_result(&m5, (uchar*)sum5);
-+				}
-+
-+				close(fd);
-+				unmap_file(buf);
-+			}
-+
-+			int chg = mention_file(reldir, name, right_sum_cnt, wrong_sum_cnt, dbsum4, dbsum5, sum4, sum5);
-+			if (!chg) {
-+				// Only check_opt should get here...
-+			} else if (check_opt == 2) {
-+				exit_code = 1;
-+			} else {
-+				if (do_md4)
-+					db_set_checksum(4, &st, sum4);
-+				if (do_md5)
-+					db_set_checksum(5, &st, sum5);
-+			}
-+		}
-+		if (prior_name)
-+			free((void*)prior_name);
-+
-+		if (recurse_opt && subdirs) {
-+			prior_subdir->next = dirs_list;
-+			dirs_list = subdirs;
-+		}
-+	}
-+	if (prior_dir)
-+		free((void*)prior_dir);
-+
-+	if (clean_opt) {
-+		int rows = db_clean_inodes();
-+		if (verbosity)
-+			printf("Cleaned out %d old inode%s.\n", rows, rows == 1 ? "" : "s");
-+	}
-+
-+	return exit_code;
-+}
-+
-+static const char *abs_path(const char *curdir, const char *dir)
-+{
-+	static char buf[MAXPATHLEN];
-+	char *t = buf, *limit = buf - 1;
-+	const char *f;
-+
-+	if (*dir == '/') {
-+		curdir = NULL;
-+		f = dir;
-+	} else {
-+		if (*curdir != '/') {
-+			fprintf(stderr, "Malformed 'curdir' value passed to abs_path(): %s.\n", curdir);
-+			return NULL;
-+		}
-+		f =  curdir;
-+	}
-+
-+	*t++ = *f++;
-+	if (!*f && curdir) {
-+		f = dir;
-+		curdir = NULL;
-+	}
-+	while (*f) {
-+		/* Discard extra slashes */
-+		if (*f == '/') {
-+			f++;
-+			continue;
-+		}
-+		if (*f == '.') {
-+			/* Discard interior and trailing "." dirs */
-+			if (f[1] == '/') {
-+				f += 2;
-+				continue;
-+			}
-+			if (f[1] == '\0') {
-+				if (curdir) {
-+					f = dir;
-+					curdir = NULL;
-+					continue;
-+				}
-+				break;
-+			}
-+			/* collapse ".." dirs */
-+			if (f[1] == '.' && (f[2] == '/' || !f[2])) {
-+				char *s = t - 1;
-+				if (s == buf) {
-+					f += 2;
-+					continue;
-+				}
-+				while (s > limit && *--s != '/') {}
-+				if (s != t - 1 && (s < buf || *s == '/')) {
-+					t = s + 1;
-+					f += 2;
-+					continue;
-+				}
-+				limit = t + 2;
-+			}
-+		}
-+		while (1) {
-+			if (!*f) {
-+				if (curdir) {
-+					*t++ = '/';
-+					f = dir;
-+					curdir = NULL;
-+				}
-+				break;
-+			}
-+			if (t - buf >= (int)sizeof buf - 2) {
-+				fprintf(stderr, "Directory too long: %s\n", dir);
-+				return NULL;
-+			}
-+
-+			if ((*t++ = *f++) == '/')
-+				break;
-+		}
-+	}
-+
-+	if (t > buf+1 && t[-1] == '/')
-+		t--;
-+	*t = '\0';
-+
-+	return buf;
++	return clean_fname(buf, CFN_DROP_TRAILING_DOT_DIR | CFN_COLLAPSE_DOT_DOT_DIRS);
 +}
 +
 +static struct name_list *new_name(const char *basename, const char *filename)
@@ -1902,9 +1325,9 @@ new file mode 100644
 +
 +	if (len >= MAXPATHLEN) {
 +		if (filename)
-+			fprintf(stderr, "Filename too long: %s/%s\n", basename, filename);
++			rprintf(FERROR, "Filename too long: %s/%s\n", basename, filename);
 +		else
-+			fprintf(stderr, "Filename too long: %s\n", basename);
++			rprintf(FERROR, "Filename too long: %s\n", basename);
 +		return NULL;
 +	}
 +
@@ -1937,7 +1360,7 @@ new file mode 100644
 +	DIR *d;
 +
 +	if (!(d = opendir("."))) {
-+		fprintf(stderr, "Unable to opendir %s: %s\n", dir, strerror(errno));
++		rprintf(FERROR, "Unable to opendir %s: %s\n", dir, strerror(errno));
 +		return NULL;
 +	}
 +	while ((di = readdir(d)) != NULL) {
@@ -1985,35 +1408,6 @@ new file mode 100644
 +	return names;
 +}
 +
-+const char *who_am_i(void)
-+{
-+	return MYNAME;
-+}
-+
-+void rprintf(enum logcode code, const char *format, ...)
-+{
-+	va_list ap;
-+	va_start(ap, format);
-+	vfprintf(code == FINFO ? stdout : stderr, format, ap);
-+	va_end(ap);
-+}
-+
-+ void rsyserr(UNUSED(enum logcode code), int errcode, const char *format, ...)
-+{
-+	va_list ap;
-+	fputs(MYNAME ": ", stderr);
-+	va_start(ap, format);
-+	vfprintf(stderr, format, ap);
-+	va_end(ap);
-+	fprintf(stderr, ": %s (%d)\n", strerror(errcode), errcode);
-+}
-+
-+NORETURN void _exit_cleanup(int code, UNUSED(const char *file), UNUSED(int line))
-+{
-+	db_disconnect();
-+	exit(code);
-+}
-+
 +static inline int sums_ne(const char *sum1, const char *sum2)
 +{
 +	return memcmp(sum1, sum2, checksum_len) != 0;
@@ -2024,25 +1418,25 @@ new file mode 100644
 +			const char *dbsum4, const char *dbsum5, const char *sum4, const char *sum5)
 +{
 +	char *info_str = wrong_cnt && !right_cnt ? "!i " : "   ";
-+	char *md4_str = !do_md4 ? NULL : !dbsum4 ? "+4 " : !sum4 ? "?4 " : sums_ne(sum4, dbsum4) ? "!4 " : "   ";
-+	char *md5_str = !do_md5 ? NULL : !dbsum5 ? "+5 " : !sum5 ? "?5 " : sums_ne(sum5, dbsum5) ? "!5 " : "   ";
++	char *md4_str = !db_do_md4 ? NULL : !dbsum4 ? "+4 " : !sum4 ? "?4 " : sums_ne(sum4, dbsum4) ? "!4 " : "   ";
++	char *md5_str = !db_do_md5 ? NULL : !dbsum5 ? "+5 " : !sum5 ? "?5 " : sums_ne(sum5, dbsum5) ? "!5 " : "   ";
 +	int chg = *info_str != ' ' || (md4_str && *md4_str != ' ') || (md5_str && *md5_str != ' ');
-+	if (chg || output_unchanged) {
-+		if (output_info) {
++	if (chg || db_output_unchanged) {
++		if (db_output_info) {
 +			fputs(info_str, stdout);
 +			if (md4_str)
 +				fputs(md4_str, stdout);
 +			if (md5_str)
 +				fputs(md5_str, stdout);
 +		}
-+		if (output_sum) {
-+			if (do_md4)
++		if (db_output_sum) {
++			if (db_do_md4)
 +				printf("%s ", sum_as_hex(sum4));
-+			if (do_md5)
++			if (db_do_md5)
 +				printf("%s ", sum_as_hex(sum5));
 +		}
-+		if (output_name) {
-+			if (output_sum)
++		if (db_output_name) {
++			if (db_output_sum)
 +				putchar(' '); /* We want 2 spaces, like md5sum. */
 +			if (*dir != '.' || dir[1]) {
 +				fputs(dir, stdout);
@@ -2055,49 +1449,1087 @@ new file mode 100644
 +	return chg;
 +}
 +
-+static void show_usage(int code)
++NORETURN void run_dbonly(const char **args, int want_verbosity)
 +{
-+	fprintf(code ? stderr : stdout, "\n\
-+Usage: rsyncdb --db=CONFIG_FILE [OPTIONS] [DIRS]\n\
-+\n\
-+Options:\n\
-+--db=FILE          Specify the config FILE to read for the DB info.\n\
-+--recurse (-r)     Scan files in subdirectories too.\n\
-+--sums=SUMS (-s)   List which checksums to update (default: 4,5).  Note that\n\
-+                   this doesn't affect the order of sum output via \"-o s\".\n\
-+--verbosity (-v)   Output change info for --init, --mounts, and --*clean.\n\
-+                   Also makes checksumming output default be \"-o dn\".\n\
-+--output=STR (-o)  One or more letters of what to output (default is nothing).\n\
-+                   d = output \"... dir_name ...\" lines from our scan.\n\
-+                   n = output names of items with changes.\n\
-+                   s = output checksum info for changes (implies n).\n\
-+                   u = output even unchanged items (implies n).\n\
-+                   i = output prefixed change info: !i if time and/or size is\n\
-+                       wrong, +4/+5 if the MD4/5 sum is missing, !4/!5 if sum\n\
-+                       is wrong, ?4/?5 if we didn't need to read the file (i.e.\n\
-+                       if time/size is wrong and no sum output was requested).\n\
-+--check (-c)       Check the checksums (by reading the files) and fix any\n\
-+                   issues.  Implies --verbose and enables output of \"i\".\n\
-+--only-check       Like --check, but doesn't fix anything.\n\
-+--clean            Read all inodes from the DB and remove the ones that aren't\n\
-+                   found in the DIR(s) while also updating the DB's info.  You\n\
-+                   need to specify all mounted DIRs in the DB & also --recurse.\n\
-+--only-clean       Like --clean, but avoids adding missing info.\n\
-+--help (-h)        Display this help message.\n\
-+\n\
-+Examples:\n\
-+\n\
-+rsyncdb --db=/etc/db.conf -r -o n /src\n\
-+rsyncdb --db=/etc/db.conf -r --check /src\n\
-+rsyncdb --db=/etc/db.conf -s5 -rous /src >/tmp/really-fast-md5sum.txt\n\
-+");
-+        exit(code);
++	char start_dir[MAXPATHLEN], dirbuf[MAXPATHLEN];
++	int need_sum_cnt, start_dir_len;
++	struct name_list *prior_dir;
++	struct name_list *names;
++	int exit_code = 0;
++
++	verbosity = want_verbosity;
++	checksum_len = MD5_DIGEST_LEN; /* Same as MD4_DIGEST_LEN */
++	protocol_version = 31;
++
++	if (db_check) {
++		if (!verbosity)
++			verbosity = 1;
++		db_output_info = 1;
++	}
++	if (!saw_db_output_opt && verbosity)
++		db_output_dirs = db_output_name = 1;
++	if (!saw_db_sum_opt)
++		db_do_md4 = db_do_md5 = 1;
++
++	need_sum_cnt = db_do_md4 + db_do_md5;
++
++	if (!db_read_config(FERROR, db_config) || !db_connect(1))
++		exit(1);
++
++        if (db_clean)
++		db_clean_init();
++
++	if (getcwd(start_dir, sizeof start_dir - 1) == NULL) {
++		rsyserr(FERROR, errno, "getcwd()");
++		exit_cleanup(RERR_FILESELECT);
++	}
++	start_dir_len = strlen(start_dir);
++
++	if (args) {
++		prior_dir = NULL;
++		while (*args) {
++			struct name_list *add;
++			if (abs_path(dirbuf, sizeof dirbuf, start_dir, *args++) <= 0)
++				continue;
++			if (!(add = new_name(dirbuf, NULL)))
++				continue;
++			if (prior_dir)
++				prior_dir->next = add;
++			else
++				dirs_list = add;
++			prior_dir = add;
++		}
++	} else
++		dirs_list = new_name(start_dir, NULL);
++
++	prior_dir = NULL;
++	while (dirs_list) {
++		struct name_list *subdirs, *prior_subdir, *prior_name;
++		const char *dir = dirs_list->name;
++		const char *reldir = dir;
++
++		if (prior_dir)
++			free((void*)prior_dir);
++		prior_dir = dirs_list;
++		dirs_list = dirs_list->next;
++
++		if (strncmp(reldir, start_dir, start_dir_len) == 0) {
++			if (reldir[start_dir_len] == '\0')
++				reldir = ".";
++			else if (reldir[start_dir_len] == '/')
++				reldir += start_dir_len + 1;
++		}
++		if (db_output_dirs)
++			printf("... %s/ ...\n", reldir);
++
++		if (chdir(dir) < 0) {
++			rprintf(FERROR, "Unable to chdir to %s: %s\n", dir, strerror(errno));
++			continue;
++		}
++		if (!(names = get_sorted_names(dir)))
++			continue;
++
++		subdirs = prior_subdir = prior_name = NULL;
++		while (names) {
++			STRUCT_STAT st;
++			char *dbsum4, sum4[MD5_DIGEST_LEN];
++			char *dbsum5, sum5[MD5_DIGEST_LEN];
++			int right_sum_cnt, wrong_sum_cnt;
++			const char *name = names->name;
++			unsigned int disk_id;
++
++			if (prior_name)
++				free((void*)prior_name);
++			prior_name = names;
++			names = names->next;
++
++			if (lstat(name, &st) < 0) {
++				rprintf(FERROR, "Failed to lstat(%s): %s\n", name, strerror(errno));
++				continue;
++			}
++			if (S_ISLNK(st.st_mode))
++				continue;
++			if (S_ISDIR(st.st_mode)) {
++				// add optional excluding of things like /^(CVS|\.svn|\.git|\.bzr)$/;
++				if (recurse) {
++					struct name_list *add = new_name(dir, name);
++					if (add) {
++						if (prior_subdir)
++							prior_subdir->next = add;
++						else
++							subdirs = add;
++						prior_subdir = add;
++					}
++				}
++				continue;
++			}
++			if (!S_ISREG(st.st_mode))
++				continue;
++
++			if (!(disk_id = get_disk_id(st.st_dev)))
++				continue;
++			if (db_clean) {
++				db_note_present(disk_id, st.st_ino);
++				if (db_no_update && !db_check)
++					continue;
++			}
++			db_get_both_checksums(&st, &right_sum_cnt, &wrong_sum_cnt,
++					      db_do_md4 ? &dbsum4 : NULL, db_do_md5 ? &dbsum5 : NULL);
++
++			if (!db_check && right_sum_cnt == need_sum_cnt) {
++				mention_file(reldir, name, right_sum_cnt, wrong_sum_cnt, dbsum4, dbsum5, dbsum4, dbsum5);
++				continue;
++			}
++
++			if (!db_check || right_sum_cnt || db_output_sum) {
++				uchar *data;
++				int32 remainder;
++				md_context m4, m5;
++				struct map_struct *buf;
++				OFF_T off, len = st.st_size;
++				int fd = do_open(name, O_RDONLY, 0);
++
++				if (fd < 0) {
++					rprintf(FERROR, "ERROR: unable to read %s: %s\n", name, strerror(errno));
++					continue;
++				}
++
++				if (db_do_md4)
++					mdfour_begin(&m4);
++				if (db_do_md5)
++					md5_begin(&m5);
++
++				buf = map_file(fd, len, MAX_MAP_SIZE, CSUM_CHUNK);
++
++				for (off = 0; off + CSUM_CHUNK <= len; off += CSUM_CHUNK) {
++					data = (uchar*)map_ptr(buf, off, CSUM_CHUNK);
++					if (db_do_md4)
++						mdfour_update(&m4, data, CSUM_CHUNK);
++					if (db_do_md5)
++						md5_update(&m5, data, CSUM_CHUNK);
++				}
++
++				remainder = (int32)(len - off);
++				data = (uchar*)map_ptr(buf, off, remainder);
++				if (db_do_md4) {
++					mdfour_update(&m4, data, remainder);
++					mdfour_result(&m4, (uchar*)sum4);
++				}
++				if (db_do_md5) {
++					md5_update(&m5, data, remainder);
++					md5_result(&m5, (uchar*)sum5);
++				}
++
++				close(fd);
++				unmap_file(buf);
++			}
++
++			int chg = mention_file(reldir, name, right_sum_cnt, wrong_sum_cnt, dbsum4, dbsum5, sum4, sum5);
++			if (!chg) {
++				// Only db_check should get here...
++			} else if (db_no_update) {
++				exit_code = 1;
++			} else {
++				if (db_do_md4)
++					db_set_checksum(4, &st, sum4);
++				if (db_do_md5)
++					db_set_checksum(5, &st, sum5);
++			}
++		}
++		if (prior_name)
++			free((void*)prior_name);
++
++		if (recurse && subdirs) {
++			prior_subdir->next = dirs_list;
++			dirs_list = subdirs;
++		}
++	}
++	if (prior_dir)
++		free((void*)prior_dir);
++
++	if (db_clean) {
++		int rows = db_clean_inodes();
++		if (verbosity)
++			printf("Cleaned out %d old inode%s.\n", rows, rows == 1 ? "" : "s");
++	}
++
++	db_disconnect();
++
++	exit(exit_code);
 +}
+diff --git a/flist.c b/flist.c
+--- a/flist.c
++++ b/flist.c
+@@ -52,6 +52,7 @@ extern int preserve_devices;
+ extern int preserve_specials;
+ extern int delete_during;
+ extern int missing_args;
++extern int use_db;
+ extern int eol_nulls;
+ extern int relative_paths;
+ extern int implied_dirs;
+@@ -1302,11 +1303,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 		extra_len += EXTRA_LEN;
+ #endif
+ 
+-	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
+-		file_checksum(thisname, tmp_sum, st.st_size);
+-		if (sender_keeps_checksum)
+-			extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
+-	}
++	if (sender_keeps_checksum && S_ISREG(st.st_mode))
++		extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
+ 
+ #if EXTRA_ROUNDING > 0
+ 	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
+@@ -1391,8 +1389,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 		return NULL;
+ 	}
+ 
+-	if (sender_keeps_checksum && S_ISREG(st.st_mode))
+-		memcpy(F_SUM(file), tmp_sum, checksum_len);
++	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
++		if (!use_db || !db_get_checksum(&st, tmp_sum))
++			file_checksum(thisname, &st, tmp_sum);
++		if (sender_keeps_checksum)
++			memcpy(F_SUM(file), tmp_sum, checksum_len);
++	}
+ 
+ 	if (unsort_ndx)
+ 		F_NDX(file) = stats.num_dirs;
+@@ -2076,6 +2078,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+ 		     | (eol_nulls || reading_remotely ? RL_EOL_NULLS : 0);
+ 	int implied_dot_dir = 0;
+ 
++	if (use_db) {
++		if (always_checksum)
++			db_connect(0); /* Will reset use_db on error. */
++		else
++			use_db = 0;
++	}
++
+ 	rprintf(FLOG, "building file list\n");
+ 	if (show_filelist_p())
+ 		start_filelist_progress("building file list");
+diff --git a/generator.c b/generator.c
+--- a/generator.c
++++ b/generator.c
+@@ -58,6 +58,7 @@ extern int human_readable;
+ extern int ignore_existing;
+ extern int ignore_non_existing;
+ extern int inplace;
++extern int use_db;
+ extern int append_mode;
+ extern int make_backups;
+ extern int csum_length;
+@@ -574,7 +575,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
+ 	   of the file time to determine whether to sync */
+ 	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
+ 		char sum[MAX_DIGEST_LEN];
+-		file_checksum(fn, sum, st->st_size);
++		if (!use_db || !db_get_checksum(st, sum))
++			file_checksum(fn, st, sum);
+ 		return memcmp(sum, F_SUM(file), checksum_len) == 0;
+ 	}
+ 
+@@ -836,7 +838,7 @@ static int copy_altdest_file(const char *src, const char *dest, struct file_stru
+ 	}
+ 	partialptr = partial_dir ? partial_dir_fname(dest) : NULL;
+ 	preserve_xattrs = 0; /* xattrs were copied with file */
+-	ok = finish_transfer(dest, copy_to, src, partialptr, file, 1, 0);
++	ok = finish_transfer(dest, copy_to, src, partialptr, file, 1, 0, NULL);
+ 	preserve_xattrs = save_preserve_xattrs;
+ 	cleanup_disable();
+ 	return ok ? 0 : -1;
+@@ -2193,6 +2195,13 @@ void generate_files(int f_out, const char *local_name)
+ 			: "enabled");
+ 	}
+ 
++	if (use_db) {
++		if (always_checksum)
++			db_connect(0); /* Will reset use_db on error. */
++		else
++			use_db = 0;
++	}
++
+ 	dflt_perms = (ACCESSPERMS & ~orig_umask);
+ 
+ 	do {
+diff --git a/loadparm.c b/loadparm.c
+--- a/loadparm.c
++++ b/loadparm.c
+@@ -109,6 +109,7 @@ typedef struct {
+ 	char *auth_users;
+ 	char *charset;
+ 	char *comment;
++	char *db_config;
+ 	char *dont_compress;
+ 	char *exclude;
+ 	char *exclude_from;
+@@ -139,6 +140,7 @@ typedef struct {
+ 	int syslog_facility;
+ 	int timeout;
+ 
++	BOOL db_lax;
+ 	BOOL fake_super;
+ 	BOOL forward_lookup;
+ 	BOOL ignore_errors;
+@@ -185,6 +187,7 @@ static const all_vars Defaults = {
+  /* auth_users; */		NULL,
+  /* charset; */ 		NULL,
+  /* comment; */ 		NULL,
++ /* db_config; */		NULL,
+  /* dont_compress; */		DEFAULT_DONT_COMPRESS,
+  /* exclude; */			NULL,
+  /* exclude_from; */		NULL,
+@@ -213,6 +216,7 @@ static const all_vars Defaults = {
+  /* syslog_facility; */		LOG_DAEMON,
+  /* timeout; */			0,
+ 
++ /* db_lax; */			False,
+  /* fake_super; */		False,
+  /* forward_lookup; */		True,
+  /* ignore_errors; */		False,
+@@ -322,6 +326,8 @@ static struct parm_struct parm_table[] =
+  {"auth users",        P_STRING, P_LOCAL, &Vars.l.auth_users,          NULL,0},
+  {"charset",           P_STRING, P_LOCAL, &Vars.l.charset,             NULL,0},
+  {"comment",           P_STRING, P_LOCAL, &Vars.l.comment,             NULL,0},
++ {"db config",         P_STRING, P_LOCAL, &Vars.l.db_config,           NULL,0},
++ {"db lax",            P_BOOL,   P_LOCAL, &Vars.l.db_lax,              NULL,0},
+  {"dont compress",     P_STRING, P_LOCAL, &Vars.l.dont_compress,       NULL,0},
+  {"exclude from",      P_STRING, P_LOCAL, &Vars.l.exclude_from,        NULL,0},
+  {"exclude",           P_STRING, P_LOCAL, &Vars.l.exclude,             NULL,0},
+@@ -454,6 +460,7 @@ FN_GLOBAL_INTEGER(lp_rsync_port, &Vars.g.rsync_port)
+ FN_LOCAL_STRING(lp_auth_users, auth_users)
+ FN_LOCAL_STRING(lp_charset, charset)
+ FN_LOCAL_STRING(lp_comment, comment)
++FN_LOCAL_STRING(lp_db_config, db_config)
+ FN_LOCAL_STRING(lp_dont_compress, dont_compress)
+ FN_LOCAL_STRING(lp_exclude, exclude)
+ FN_LOCAL_STRING(lp_exclude_from, exclude_from)
+@@ -482,6 +489,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+ FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
+ FN_LOCAL_INTEGER(lp_timeout, timeout)
+ 
++FN_LOCAL_BOOL(lp_db_lax, db_lax)
+ FN_LOCAL_BOOL(lp_fake_super, fake_super)
+ FN_LOCAL_BOOL(lp_forward_lookup, forward_lookup)
+ FN_LOCAL_BOOL(lp_ignore_errors, ignore_errors)
+diff --git a/main.c b/main.c
+--- a/main.c
++++ b/main.c
+@@ -34,6 +34,7 @@ extern int am_root;
+ extern int am_server;
+ extern int am_sender;
+ extern int am_daemon;
++extern int am_dbadmin;
+ extern int inc_recurse;
+ extern int blocking_io;
+ extern int always_checksum;
+@@ -51,6 +52,7 @@ extern int copy_unsafe_links;
+ extern int keep_dirlinks;
+ extern int preserve_hard_links;
+ extern int protocol_version;
++extern int always_checksum;
+ extern int file_total;
+ extern int recurse;
+ extern int xfer_dirs;
+@@ -84,6 +86,7 @@ extern char *filesfrom_host;
+ extern char *partial_dir;
+ extern char *dest_option;
+ extern char *rsync_path;
++extern char *db_config;
+ extern char *shell_cmd;
+ extern char *batch_name;
+ extern char *password_file;
+@@ -1622,6 +1625,9 @@ int main(int argc,char *argv[])
+ 		exit_cleanup(RERR_SYNTAX);
+ 	}
+ 
++	if (db_config)
++		db_read_config(FERROR, db_config);
++
+ 	if (am_server) {
+ 		set_nonblocking(STDIN_FILENO);
+ 		set_nonblocking(STDOUT_FILENO);
+diff --git a/mkproto.pl b/mkproto.pl
+--- a/mkproto.pl
++++ b/mkproto.pl
+@@ -13,6 +13,8 @@ if (open(IN, 'proto.h')) {
+     STRING => 'char *',
+ );
+ 
++@ARGV = grep !m{/rsyncdb\.c$}, @ARGV;
++
+ $inheader = 0;
+ $protos = qq|/* This file is automatically generated with "make proto". DO NOT EDIT */\n\n|;
+ 
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -93,6 +93,7 @@ int use_qsort = 0;
+ char *files_from = NULL;
+ int filesfrom_fd = -1;
+ char *filesfrom_host = NULL;
++char *db_config = NULL;
+ int eol_nulls = 0;
+ int protect_args = -1;
+ int human_readable = 1;
+@@ -100,6 +101,9 @@ int recurse = 0;
+ int allow_inc_recurse = 1;
+ int xfer_dirs = -1;
+ int am_daemon = 0;
++int db_clean, db_check, db_do_md4, db_do_md5, db_no_update, db_lax, db_init, db_mounts;
++int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs;
++int saw_db_output_opt, saw_db_sum_opt;
+ int connect_timeout = 0;
+ int keep_partial = 0;
+ int safe_symlinks = 0;
+@@ -572,6 +576,7 @@ static void print_rsync_version(enum logcode f)
+ 	char const *links = "no ";
+ 	char const *iconv = "no ";
+ 	char const *ipv6 = "no ";
++	char const *db = "no ";
+ 	STRUCT_STAT *dumstat;
+ 
+ #if SUBPROTOCOL_VERSION != 0
+@@ -608,6 +613,11 @@ static void print_rsync_version(enum logcode f)
+ #ifdef CAN_SET_SYMLINK_TIMES
+ 	symtimes = "";
+ #endif
++#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
++	db = "";
++#elif defined HAVE_SQLITE3_H && defined HAVE_LIBSQLITE3
++	db = "";
++#endif
+ 
+ 	rprintf(f, "%s  version %s  protocol version %d%s\n",
+ 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
+@@ -621,8 +631,8 @@ static void print_rsync_version(enum logcode f)
+ 		(int)(sizeof (int64) * 8));
+ 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
+ 		got_socketpair, hardlinks, links, ipv6, have_inplace);
+-	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc\n",
+-		have_inplace, acls, xattrs, iconv, symtimes, prealloc);
++	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sdb\n",
++		have_inplace, acls, xattrs, iconv, symtimes, prealloc, db);
+ 
+ #ifdef MAINTAINER_MODE
+ 	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
+@@ -671,6 +681,9 @@ void usage(enum logcode F)
+   rprintf(F," -q, --quiet                 suppress non-error messages\n");
+   rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
+   rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
++  rprintf(F,"     --db=CONFIG_FILE        specify a CONFIG_FILE for DB checksums\n");
++  rprintf(F,"     --db-only=CONFIG_FILE   behave like rsyncdb\n");
++  rprintf(F,"     --db-lax                ignore ctime changes (use with CAUTION)\n");
+   rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
+   rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
+   rprintf(F," -r, --recursive             recurse into directories\n");
+@@ -818,6 +831,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
+       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
+       OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
++      OPT_NO_DB, OPT_DBONLY,
+       OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
+       OPT_SERVER, OPT_REFUSED_BASE = 9000};
+ 
+@@ -957,6 +971,10 @@ static struct poptOption long_options[] = {
+   {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
+   {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
+   {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
++  {"db",               0,  POPT_ARG_STRING, &db_config, 0, 0, 0 },
++  {"no-db",            0,  POPT_ARG_NONE,   0, OPT_NO_DB, 0, 0 },
++  {"db-lax",           0,  POPT_ARG_VAL,    &db_lax, 1, 0, 0 },
++  {"no-db-lax",        0,  POPT_ARG_VAL,    &db_lax, 0, 0, 0 },
+   {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
+   {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
+   {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
+@@ -1045,6 +1063,9 @@ static struct poptOption long_options[] = {
+   {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
+   {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
+   {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
++  /* All the following options switch us into DB-admin option-parsing. */
++  {"db-help",          0,  POPT_ARG_NONE,   0, OPT_DBONLY, 0, 0 },
++  {"db-only",          0,  POPT_ARG_STRING, 0, OPT_DBONLY, 0, 0 },
+   {0,0,0,0, 0, 0, 0}
+ };
+ 
+@@ -1098,6 +1119,51 @@ static struct poptOption long_daemon_options[] = {
+   {0,0,0,0, 0, 0, 0}
+ };
+ 
++static void dbonly_usage(enum logcode F)
++{
++  print_rsync_version(F);
++
++  rprintf(F,"\n");
++  rprintf(F,"Usage: rsync --db=CONFIG_FILE [OPTIONS] [DIRS]\n");
++  rprintf(F,"\n");
++  rprintf(F,"Options:\n");
++  rprintf(F,"    --db=CONFIG   Specify the CONFIG file to read for the DB info.\n");
++  rprintf(F,"    --db-lax      Ignore ctime changes (use with CAUTION).\n");
++  rprintf(F,"-r, --recursive   Scan files in subdirs (the default w/o --no-recursive).\n");
++  rprintf(F,"-s, --sums=SUMS   List which checksums to update (default: 4,5).\n");
++  rprintf(F,"-o, --output=STR  One or more letters of what to output (default is nothing).\n");
++  rprintf(F,"-c, --check       Check the checksums (by reading the files) and fix issues.\n");
++  rprintf(F,"                  Implies --verbose and enables --output=i.\n");
++  rprintf(F,"    --clean       Note all inodes in the DIRS and remove DB extras.\n");
++  rprintf(F,"-N, --no-update   Avoids updating/adding info with --check and/or --clean.\n");
++  rprintf(F,"    --init        Initialize a DB by (re-)creating its tables.\n");
++  rprintf(F,"    --mounts      Scan for mounted filesystems and update the DB.\n");
++  rprintf(F,"-v, --verbose     Output more info.\n");
++  rprintf(F,"-h, --help        Display this help message.\n");
++}
++
++static struct poptOption long_dbonly_options[] = {
++  /* longName, shortName, argInfo, argPtr, value, descrip, argDesc */
++  {"check",           'c', POPT_ARG_NONE,   &db_check, 0, 0, 0},
++  {"clean",            0,  POPT_ARG_NONE,   &db_clean, 0, 0, 0},
++  {"db",               0,  POPT_ARG_STRING, &db_config, 0, 0, 0 },
++  {"db-only",          0,  POPT_ARG_STRING, &db_config, 0, 0, 0 },
++  {"db-lax",           0,  POPT_ARG_VAL,    &db_lax, 1, 0, 0 },
++  {"no-db-lax",        0,  POPT_ARG_VAL,    &db_lax, 0, 0, 0 },
++  {"no-update",       'N', POPT_ARG_NONE,   &db_no_update, 0, 0, 0 },
++  {"no-u",             0,  POPT_ARG_NONE,   &db_no_update, 0, 0, 0 },
++  {"output",          'o', POPT_ARG_STRING, 0, 'o', 0, 0 },
++  {"recursive",       'r', POPT_ARG_VAL,    &recurse, 1, 0, 0 },
++  {"no-recursive",     0,  POPT_ARG_VAL,    &recurse, 0, 0, 0 },
++  {"no-r",             0,  POPT_ARG_VAL,    &recurse, 0, 0, 0 },
++  {"sums",            's', POPT_ARG_STRING, 0, 's', 0, 0 },
++  {"init",             0,  POPT_ARG_NONE,   &db_init, 0, 0, 0 },
++  {"mounts",           0,  POPT_ARG_NONE,   &db_mounts, 0, 0, 0 },
++  {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
++  {"help",            'h', POPT_ARG_NONE,   0, 'h', 0, 0 },
++  {"db-help",          0,  POPT_ARG_NONE,   0, 'h', 0, 0 },
++  {0,0,0,0, 0, 0, 0}
++};
+ 
+ static char err_buf[200];
+ 
+@@ -1276,6 +1342,82 @@ static void create_refuse_error(int which)
+ 	}
+ }
+ 
++static NORETURN void parse_dbonly_args(int argc, const char **argv)
++{
++	poptContext pc = poptGetContext(RSYNC_NAME, argc, argv, long_dbonly_options, 0);
++	int opt;
++
++	recurse = 1;
++	while ((opt = poptGetNextOpt(pc)) != -1) {
++		const char *cp;
++		switch (opt) {
++		case 'o':
++			for (cp = poptGetOptArg(pc); *cp; cp++) {
++				switch (toLower(cp)) {
++				case 'n':
++					db_output_name = 1;
++					break;
++				case 's':
++				case 'c':
++					db_output_sum = db_output_name = 1;
++					break;
++				case 'i':
++					db_output_info = db_output_name = 1;
++					break;
++				case 'u':
++					db_output_unchanged = db_output_name = 1;
++					break;
++				case 'd':
++					db_output_dirs = 1;
++					break;
++				}
++			}
++			saw_db_output_opt = 1;
++			break;
++
++		case 's':
++			for (cp = poptGetOptArg(pc); *cp; cp++) {
++				switch (*cp) {
++				case '4':
++					db_do_md4 = 1;
++					break;
++				case '5':
++					db_do_md5 = 1;
++					break;
++				}
++			}
++			saw_db_sum_opt = 1;
++			break;
++
++		case 'h':
++			dbonly_usage(FINFO);
++			exit_cleanup(0);
++
++		case 'v':
++			verbose++;
++			break;
++
++		default:
++			rprintf(FERROR,
++				"rsyncdb: %s: %s\n",
++				poptBadOption(pc, POPT_BADOPTION_NOALIAS),
++				poptStrerror(opt));
++			goto dbonly_usage;
++		}
++	}
++
++	if (!db_config) {
++		rprintf(FERROR, "You must specify the --db=FILE option.\n");
++	  dbonly_usage:
++		rprintf(FERROR,
++			"(Type \"rsyncdb --help\" for assistance.)\n");
++		exit_cleanup(RERR_SYNTAX);
++	}
++
++	am_starting_up = 0;
++	run_dbonly(poptGetArgs(pc), verbose);
++	exit(42); /* NOT REACHED */
++}
+ 
+ /**
+  * Process command line arguments.  Called on both local and remote.
+@@ -1293,10 +1435,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 	int argc = *argc_p;
+ 	int opt;
+ 
++	arg = *argv + strlen(*argv);
++	if (arg - *argv > 2 && strcmp(arg-2, "db") == 0) {
++		parse_dbonly_args(argc, argv);
++		/* NOT REACHED */
++	}
++
+ 	if (ref && *ref)
+ 		set_refuse_options(ref);
+ 	if (am_daemon) {
+ 		set_refuse_options("log-file*");
++		set_refuse_options("db");
++		set_refuse_options("db-lax");
+ #ifdef ICONV_OPTION
+ 		if (!*lp_charset(module_id))
+ 			set_refuse_options("iconv");
+@@ -1419,6 +1569,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			am_daemon = 1;
+ 			return 1;
+ 
++		case OPT_DBONLY:
++			protect_args = 0;
++			poptFreeContext(pc);
++			parse_dbonly_args(argc, argv);
++			break; /* NOT REACHED */
++
+ 		case OPT_MODIFY_WINDOW:
+ 			/* The value has already been set by popt, but
+ 			 * we need to remember that we're using a
+@@ -1493,6 +1649,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			preserve_devices = preserve_specials = 0;
+ 			break;
+ 
++		case OPT_NO_DB:
++			db_config = NULL;
++			break;
++
+ 		case 'h':
+ 			human_readable++;
+ 			break;
+diff --git a/pipe.c b/pipe.c
+--- a/pipe.c
++++ b/pipe.c
+@@ -27,6 +27,9 @@ extern int am_server;
+ extern int blocking_io;
+ extern int filesfrom_fd;
+ extern int munge_symlinks;
++extern int always_checksum;
++extern int use_db;
++extern char *db_config;
+ extern char *logfile_name;
+ extern int remote_option_cnt;
+ extern const char **remote_options;
+@@ -142,12 +145,19 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
+ 		}
+ 
+ 		if (remote_option_cnt) {
++			const char *db_config_save = db_config;
+ 			int rc = remote_option_cnt + 1;
+ 			const char **rv = remote_options;
+ 			if (!parse_arguments(&rc, &rv)) {
+ 				option_error();
+ 				exit_cleanup(RERR_SYNTAX);
+ 			}
++			if (db_config != db_config_save
++			 && (!db_config || !db_config_save || strcmp(db_config, db_config_save) != 0)) {
++				use_db = 0;
++				if (db_config)
++					db_read_config(FERROR, db_config);
++			}
+ 		}
+ 
+ 		if (dup2(to_child_pipe[0], STDIN_FILENO) < 0 ||
+diff --git a/receiver.c b/receiver.c
+--- a/receiver.c
++++ b/receiver.c
+@@ -24,6 +24,7 @@
+ 
+ extern int dry_run;
+ extern int do_xfers;
++extern int use_db;
+ extern int am_root;
+ extern int am_server;
+ extern int inc_recurse;
+@@ -537,6 +538,13 @@ int recv_files(int f_in, int f_out, char *local_name)
+ 	if (delay_updates)
+ 		delayed_bits = bitbag_create(cur_flist->used + 1);
+ 
++	if (use_db) {
++		if (append_mode != 1 && protocol_version >= 30)
++			db_connect(0);
++		else
++			use_db = 0;
++	}
++
+ 	while (1) {
+ 		cleanup_disable();
+ 
+@@ -856,10 +864,11 @@ int recv_files(int f_in, int f_out, char *local_name)
+ 		}
+ 
+ 		if ((recv_ok && (!delay_updates || !partialptr)) || inplace) {
++			const char *set_md5 = use_db ? sender_file_sum : NULL;
+ 			if (partialptr == fname)
+ 				partialptr = NULL;
+ 			if (!finish_transfer(fname, fnametmp, fnamecmp,
+-					     partialptr, file, recv_ok, 1))
++					     partialptr, file, recv_ok, 1, set_md5))
+ 				recv_ok = -1;
+ 			else if (fnamecmp == partialptr) {
+ 				do_unlink(partialptr);
+@@ -874,7 +883,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+ 				do_unlink(fnametmp);
+ 				recv_ok = -1;
+ 			} else if (!finish_transfer(partialptr, fnametmp, fnamecmp, NULL,
+-						    file, recv_ok, !partial_dir))
++						    file, recv_ok, !partial_dir, NULL))
+ 				recv_ok = -1;
+ 			else if (delay_updates && recv_ok) {
+ 				bitbag_set_bit(delayed_bits, ndx);
+diff --git a/rsync.c b/rsync.c
+--- a/rsync.c
++++ b/rsync.c
+@@ -640,7 +640,7 @@ RETSIGTYPE sig_int(int sig_num)
+ int finish_transfer(const char *fname, const char *fnametmp,
+ 		    const char *fnamecmp, const char *partialptr,
+ 		    struct file_struct *file, int ok_to_set_time,
+-		    int overwriting_basis)
++		    int overwriting_basis, const char *set_md5)
+ {
+ 	int ret;
+ 	const char *temp_copy_name = partialptr && *partialptr != '/' ? partialptr : NULL;
+@@ -679,6 +679,11 @@ int finish_transfer(const char *fname, const char *fnametmp,
+ 	}
+ 	if (ret == 0) {
+ 		/* The file was moved into place (not copied), so it's done. */
++		if (set_md5) {
++			STRUCT_STAT st;
++			if (do_lstat(fname, &st) == 0)
++				db_set_checksum(5, &st, set_md5);
++		}
+ 		return 1;
+ 	}
+ 	/* The file was copied, so tweak the perms of the copied file.  If it
+diff --git a/rsync.yo b/rsync.yo
+--- a/rsync.yo
++++ b/rsync.yo
+@@ -337,6 +337,9 @@ to the detailed description below for a complete description.  verb(
+  -q, --quiet                 suppress non-error messages
+      --no-motd               suppress daemon-mode MOTD (see caveat)
+  -c, --checksum              skip based on checksum, not mod-time & size
++     --db=CONFIG_FILE        specify a CONFIG_FILE for DB checksums
++     --db-only=CONFIG_FILE   Behave like rsyncdb (see that manpage).
++     --db-lax                Ignore ctime changes (use with CAUTION).
+  -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
+      --no-OPTION             turn off an implied OPTION (e.g. --no-D)
+  -r, --recursive             recurse into directories
+@@ -625,6 +628,66 @@ option's before-the-transfer "Does this file need to be updated?" check.
+ For protocol 30 and beyond (first supported in 3.0.0), the checksum used is
+ MD5.  For older protocols, the checksum used is MD4.
+ 
++dit(bf(--db=CONFIG_FILE))  This option specifies a CONFIG_FILE to read
++that holds connection details for a database of checksum information.
++When combined with the bf(--checksum) (bf(-c)) option, rsync will try to
++use cached checksum information from the DB, and will update it if it is
++missing.
++
++The currently supported DB choices are MySQL and SQLite.  For example, a
++MySQL configuration might look like this:
++
++verb(    dbtype: mysql
++    dbhost: 127.0.0.1
++    dbname: rsyncdb
++    dbuser: rsyncuser
++    dbpass: somepass
++    port: 3306
++    thishost: hostname )
++
++And a SQLite configuration might look like this:
++
++verb(    dbtype: SQLite
++    dbname: /var/cache/rsync/sum.db )
++
++Both the bf(--db) and bf(--db-lax) options only affect the side where the
++option is used.  To affect the remote side of a remote-shell connection,
++use the bf(--remote-option) (bf(-M)) option.  For example, to specify the
++same options on both sides, you could specify something like this:
++
++verb(    rsync -avc {-M,}--db=/etc/rsyncdb.conf src/ host:dest/ )
++
++For a local copy, this option affects both the source and the destination.
++If you wish a local copy to enable this option just for the destination
++files, specify bf(-M--db=CONFIG) (the same for bf(-M--db-lax).  If you wish
++a local copy to enable this option just for the source files, combine
++bf(--db=CONFIG) with bf(-M--no-db) (similarly use bf(-M--no-db-lax)).
++
++See the perl script "rsyncdb" in the support directory of the source code
++(which may also be installed in /usr/bin) for a way to create the tables,
++populate the mounted-disk information, check files against their checksums,
++and update both the MD4 and MD5 checksums for files at the same time (since
++an rsync copy will only update one or the other).
++
++You can use a single MySQL DB for all your hosts if you give each one
++their own "thishost" name and setup their device-mapping data.  Or feel
++free to use separate databases, separate servers, etc.  See the rsync
++daemon's "db config" parameter for how to configure a daemon to use a DB
++(since a client cannot control this parameter on a daemon).
++
++dit(bf(--db-lax)) This option can be used to modify the inode-matching
++algorithm used by bf(--db) to one that ignores the ctime.  This can be very
++DANGEROUS unless your files are known to ALWAYS be updated in a safe manner.
++If unsure, don't use it.
++
++The reason you might want to use it is that the ctime (inode change time) is
++changed by an added hard-link, or the file being moving around.  To use this
++option safely you must be CERTAIN that either rsync w/--db is the only program
++adding files into the cached hierarchies, OR that all new files will have new
++modify times (never a historical mtime that might match an orphaned inode).
++So, for certain applications, such as mirrors of new tar releases, this option
++can save a lot of unneeded checksum re-computation due to ctime changes.
++
+ dit(bf(-a, --archive)) This is equivalent to bf(-rlptgoD). It is a quick
+ way of saying you want recursion and want to preserve almost
+ everything (with -H being a notable omission).
+diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
+--- a/rsyncd.conf.yo
++++ b/rsyncd.conf.yo
+@@ -313,6 +313,22 @@ is daemon.  This setting has no effect if the "log file" setting is a
+ non-empty string (either set in the per-modules settings, or inherited
+ from the global settings).
+ 
++dit(bf(db config)) This parameter specifies a config file to read that
++holds connection details for a database of checksum information.
++
++The config file will be read-in prior to any chroot restrictions, but
++the connection occurs from inside the chroot.  This means that you
++should use a socket connection (e.g. 127.0.0.1 rather than localhost)
++for a MySQL config from inside a chroot.  For SQLite, the DB file must
++be placed inside the chroot (though it can be placed outside the
++transfer dir if you configured an inside-chroot path).
++
++See the bf(--db=CONFIG_FILE) option for full details.
++
++dit(bf(db lax)) This parameter specifies that a "db config" setup should use
++lax (no ctime) lookups.  See the rsync manpage's section -n bf(--db-lax) for
++some warnings about using this setting.
++
+ dit(bf(max verbosity)) This parameter allows you to control
+ the maximum amount of verbose information that you'll allow the daemon to
+ generate (since the information goes into the log file). The default is 1,
+diff --git a/rsyncdb.yo b/rsyncdb.yo
+new file mode 100644
+--- /dev/null
++++ b/rsyncdb.yo
+@@ -0,0 +1,177 @@
++mailto(rsync-bugs@samba.org)
++manpage(rsync)(1)(23 Jun 2013)()()
++manpagename(rsyncdb)(Maintain an rsync checksum DB)
++manpagesynopsis()
++
++verb(rsyncdb --db=CONFIG [OPTION...] [DIR...])
++
++manpagedescription()
++
++Rsyncdb can maintain a checksum-caching DB that rsync can use to make its
++bf(--checksum) option more optimal.  You must specify a config file via
++the bf(--db=CONFIG_FILE) option in order for rsyncdb to know what DB to
++manipulate.  See the rsync manpage's bf(--db) option for full details on
++the file's format.
++
++You can specify one or more directory args for rsyncdb to scan.  If no
++DIR args are specified, the current directory is assumed to be the spot
++to start scanning.
++
++manpagesection(EXAMPLES)
++
++The following command will update checksum information in the database
++described in the /etc/db.conf file:
++
++verb(    rsyncdb --db=/etc/db.conf -o n --clean /dir1 /dir2)
++
++It scans 2 directory hierarchies (/dir1 & /dir2) and cleans out any
++checksums whose inodes are no longer found in those directories (so that
++directory list is presumed to be complete for this host's DB).
++
++The following command will scan all the files in the /dir2 directory (without
++recursive scanning, due to the bf(--no-r) option) and check them against
++the DB:
++
++verb(    rsyncdb --db=/etc/db.conf --check --no-r /dir2)
++
++Any errors found are output as well as being fixed in the DB.  (See
++bf(--no-update) for how to just check without updating.)
++
++The following command will output MD5 sums for all the files found in the
++directories mentioned, even if they are unchanged (due to the
++bf(--output=u) option):
++
++verb(    rsyncdb --db=/etc/db.conf -s5 -ous /dir* >/tmp/md5sums.txt)
++
++This is just like running md5sum, only faster.  Unlike md5sum, you can't
++specify a single file, so use bf(--no-r) and grep the output if you just
++want to see a single file's value.
++
++The following command initializes a new DB, and is required for any new DB:
++
++verb(    rsyncdb --init --mounts --db=/etc/db.conf)
++
++The bf(--init) option should only be used once (unless you want to
++destroy existing data).  The bf(--mounts) option may need to be used
++periodically.
++
++manpagesection(OPTIONS SUMMARY)
++
++Rsyncdb accepts the following options: verb(
++     --db=CONFIG     Specify the CONFIG file to read for the DB info.
++     --db-lax        Ignore ctime changes (use with CAUTION).
++     --no-recursive  Avoid the default --recursive (-r) scanning behavior.
++ -s, --sums=SUMS     List which checksums to update (default: 4,5).
++ -o, --output=STR    One or more letters of what to output (default is nothing).
++ -c, --check         Check the checksums (by reading the files) and fix any
++                     issues.  Implies --verbose and enables --output=i.
++     --clean         Note all inodes in the DIRS and remove DB extras.
++ -N, --no-update     Avoids updating/adding info with --check and/or --clean.
++     --init          Initialize a DB by (re-)creating its tables.
++     --mounts        Scan for mounted filesystems and update the DB.
++ -v, --verbose       Output more info.
++ -h, --help          Display this help message.)
++
++manpageoptions()
++
++Rsyncdb accepts both long (double-dash + word) and short (single-dash + letter)
++options.  The full list of the available options are described below.  If an
++option can be specified in more than one way, the choices are comma-separated.
++Some options only have a long variant, not a short.  If the option takes a
++parameter, the parameter is only listed after the long variant, even though it
++must also be specified for the short.  When specifying a parameter, you can
++either use the form --option=param or replace the '=' with whitespace.  The
++parameter may need to be quoted in some manner for it to survive the shell's
++command-line parsing.
++
++startdit()
++dit(bf(--db=CONFIG_FILE)) This tells rsyncdb what DB-config file to read
++for the DB setup.  This is the same as the option in rsync, so refer to
++that manpage for full details.
++
++dit(bf(--db-lax)) This option works just like it does in rsync, so refer to
++that manpage for full details.
++
++dit(bf(--no-recursive, --no-r)) This disables the default recursive
++directory scan that is performed on the listed directory args.  The
++options bf(--recursive) and bf(-r) are also accepted, if someone wants
++to override an earlier bf(--no-r) override.
++
++dit(bf(--sums=SUMS, -s)) Only output/update the listed checksum types. By
++default we handle both md4 and md5 checksums at the same time (i.e.
++bf(--sums=4,5)).  Note that this option does NOT affect the order that
++checksums are output (if "-o s" is enabled) so bf(-s5,4) is the same as
++bf(-s4,5).
++
++dit(bf(--output=STR, -o)) The output option lets you specify one or more
++letters indicating what information should be output.  The default is to
++output nothing.  The following letters are accepted:
++
++quote(itemization(
++  it() bf(d) outputs "... dir_name ..." lines for each directory in our scan.
++  it() bf(n) outputs the names of files with changes.
++  it() bf(s) outputs checksum info for changes (implies bf(n)).
++  it() bf(u) outputs unchanged files too (implies bf(n)).
++  it() bf(i) outputs prefixed change info.  The output strings are:
++  quote(itemization(
++    it() bf(!i) indicates that the time and/or size is wrong.
++    it() bf(+4) indicates the MD4 sum is missing.
++    it() bf(+5) indicates the MD5 sum is missing.
++    it() bf(!4) indicates the MD4 sum is wrong.
++    it() bf(!5) indicates the MD5 sum is wrong.
++    it() bf(?4) indicates an unknown MD4 difference.  This can happen if we
++    didn't need to read the file; i.e. if the time/size is wrong and no sum
++    info was requested.
++    it() bf(?5) indicates an unknown MD5 difference.
++  ))
++))
++
++dit(bf(--check, -c)) Check the checksums (forcing the reading of all the
++files) and fix any issues that are found.  Implies --verbose and enables
++bf(--output=i).
++
++dit(bf(--clean)) Makes a temp-DB of all the inodes that we find in all the
++listed directories and removes any extraneous checksums from the DB.  You
++will need to specify all the mounted directories that are present (and
++listed as mounted) in the DB on this host or else the checksums from the
++unvisited directories will be discarded from the DB.  If you want to just
++--clean without adding or updating the info of new or changed files,
++specify bf(--no-update) as well.
++
++See the bf(--mount)
++
++dit(bf(--no-update, -N)) Avoids updating/adding info with bf(--check)
++and/or bf(--clean).
++
++dit(bf(--verbose, -v)) Makes the checksumming output default be "--output=dn".
++Also output verbosely for bf(--init), bf(--mounts), and bf(--clean).
++
++dit(bf(--init)) Create the tables in the DB.  If it is used on an existing
++DB, all the existing tables are dropped and re-created.
++
++This option disables scanning for checksum information, but may be combined
++with bf(--mounts).
++
++dit(bf(--mounts)) Populate the "disk" DB with the available device numbers
++and change any mounted/unmount information for devices.  This should be run
++every time a mount-change happens that may affect a directory hierarchy in
++the DB.  Rsyncdb will not save any checksums for a device that is not
++listed in the "disk" table.
++
++Some advanced users may want to maintain the disk table themselves in order
++to support mounting a drive in different (or multiple) locations, etc.
++
++This option disables scanning for checksum information, but may be combined
++with bf(--init).
++
++dit(bf(--help, -h)) Display a summary of the options.
++
++enddit()
++
++manpageseealso()
++
++bf(rsync)(1)
++
++manpageauthor()
++
++Rsyncdb was written by Wayne Davison.
 diff --git a/support/rsyncdb b/support/rsyncdb
 new file mode 100755
 --- /dev/null
 +++ b/support/rsyncdb
-@@ -0,0 +1,417 @@
+@@ -0,0 +1,418 @@
 +#!/usr/bin/perl
 +
 +use strict;
@@ -2113,21 +2545,21 @@ new file mode 100755
 +&Getopt::Long::Configure('bundling');
 +&usage if !&GetOptions(
 +    'db=s' => \( my $db_config ),
++    'db-lax' => \( my $db_lax ),
 +    'init' => \( my $init_db ),
 +    'mounts|m' => \( my $update_mounts ),
-+    'recurse|r' => \( my $recurse_opt ),
++    'recursive|r!' => \( my $recursive_opt = 1 ),
 +    'sums|s=s' => \( my $sums = '4,5' ),
 +    'verbose|v+' => \( my $verbosity = 0 ),
 +    'output|o=s' => \( my $output ),
 +    'check|c' => \( my $check_opt ),
 +    'clean' => \( my $clean_opt ),
-+    'only-clean' => \( my $only_clean_opt ),
++    'update!' => \( my $update = 1 ),
 +    'help|h' => \( my $help_opt ),
 +);
 +&usage if $help_opt || !defined $db_config;
 +
 +$verbosity ||= 1 if $check_opt;
-+$clean_opt = 1 if $only_clean_opt;
 +$output ||= $verbosity ? 'dn' : '';
 +$output .= 's' if $output =~ /c/; # Be nice if they specify c instead of s.
 +$output .= 'n' if $output =~ /[isu]/;
@@ -2357,7 +2789,7 @@ new file mode 100755
 +	if ($clean_opt) {
 +	    delete $all_inodes{"$disk_id,$ino,4"};
 +	    delete $all_inodes{"$disk_id,$ino,5"};
-+	    next if $only_clean_opt;
++	    next if !$update && !$check_opt;
 +	}
 +	$sel_sum_H->execute($disk_id,$ino) or die $!;
 +	my($sum4, $dbsum4, $sum5, $dbsum5);
@@ -2371,7 +2803,7 @@ new file mode 100755
 +		$dbsum5 = $sum;
 +		next unless $do_md5;
 +	    }
-+	    if ($size == $dbsize && $mtime == $dbmtime && ($config{no_ctime} || $ctime == $dbctime)) {
++	    if ($size == $dbsize && $mtime == $dbmtime && ($db_lax || $ctime == $dbctime)) {
 +		$right_sum_cnt++;
 +	    } else {
 +		$wrong_sum_cnt++;
@@ -2398,7 +2830,7 @@ new file mode 100755
 +		$sum4 = $md4->digest if $do_md4;
 +		$sum5 = $md5->digest if $do_md5;
 +		my($ino2,$size2,$mtime2,$ctime2) = (stat(IN))[1,7,9,10];
-+		last if $ino == $ino2 && $size == $size2 && $mtime == $mtime2 && ($config{no_ctime} || $ctime == $ctime2);
++		last if $ino == $ino2 && $size == $size2 && $mtime == $mtime2 && ($db_lax || $ctime == $ctime2);
 +		$ino = $ino2;
 +		$size = $size2;
 +		$mtime = $mtime2;
@@ -2412,7 +2844,7 @@ new file mode 100755
 +	my $chg = mention_file($reldir, $fn, $right_sum_cnt, $wrong_sum_cnt, $dbsum4, $dbsum5, $sum4, $sum5);
 +	if (!$chg) {
 +	    # Only $check_opt should get here...
-+	} elsif ($check_opt) {
++	} elsif (!$update) {
 +	    $exit_code = 1;
 +	} else {
 +	    if ($do_md4) {
@@ -2424,7 +2856,7 @@ new file mode 100755
 +	}
 +    }
 +
-+    unshift @dirs, sort @subdirs if $recurse_opt;
++    unshift @dirs, sort @subdirs if $recursive_opt;
 +}
 +
 +if ($clean_opt) {
@@ -2486,11 +2918,9 @@ new file mode 100755
 +--init             Create (recreate) needed tables (making them empty).
 +                   No DIR scanning, but can be combined with --mounts.
 +--mounts (-m)      Update mount info.  Does no DIR scanning.
-+--recurse (-r)     Scan files in subdirectories too.
++--recursive (-r)   Scan files in subdirs too (the default w/o --no-recursive).
 +--sums=SUMS (-s)   List which checksums to update (default: 4,5).  Note that
 +                   this doesn't affect the order of sum output via "-o s".
-+--verbosity (-v)   Output change info for --init, --mounts, and --*clean.
-+                   Also makes checksumming output default be "-o dn".
 +--output=STR (-o)  One or more letters of what to output (default is nothing).
 +                   d = output "... dir_name ..." lines from our scan.
 +                   n = output names of items with changes.
@@ -2500,12 +2930,15 @@ new file mode 100755
 +                       wrong, +4/+5 if the MD4/5 sum is missing, !4/!5 if sum
 +                       is wrong, ?4/?5 if we didn't need to read the file (i.e.
 +                       if time/size is wrong and no sum output was requested).
-+--check (-c)       Check if the checksums are right (doesn't update).
-+                   Implies --verbose and enables output of "i".
++--check (-c)       Check the checksums (by reading the files) and fix issues.
++                   Implies --verbose and enables --output=i.
 +--clean            Read all inodes from the DB and remove the ones that aren't
 +                   found in the DIR(s) while also updating the DB's info.  You
-+                   need to specify all mounted DIRs in the DB & also --recurse.
-+--only-clean       Like --clean, but avoids adding missing info.
++                   need to specify all mounted DIRs in the DB.
++--no-update        Avoids updating/adding info with --check and/or --clean.
++--db-lax           Ignore ctime changes (use with CAUTION).
++--verbosity (-v)   Output change info for --init, --mounts, and --*clean.
++                   Also makes checksumming output default be "-o dn".
 +--help (-h)        Display this help message.
 +
 +Examples:
