@@ -310,7 +310,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1346 @@
+@@ -0,0 +1,1390 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -358,8 +358,8 @@ new file mode 100644
 +#ifndef HAVE_SQLITE3_PREPARE_V2
 +#define sqlite3_prepare_v2 sqlite3_prepare
 +#endif
-+#define MAX_OPEN_FAILURES 10
-+#define OPEN_FAIL_MSLEEP 100
++#define MAX_LOCK_FAILURES 10
++#define LOCK_FAIL_MSLEEP 100
 +#endif
 +
 +#define DB_TYPE_NONE 0
@@ -583,9 +583,12 @@ new file mode 100644
 +		if (asprintf(&sql, "CREATE DATABASE IF NOT EXISTS `%s`", save_dbname) < 0
 +		 || mysql_query(dbh.mysql, sql) < 0)
 +			exit(1);
++		free(sql);
++
 +		if (asprintf(&sql, "USE `%s`", save_dbname) < 0
 +		 || mysql_query(dbh.mysql, sql) < 0)
 +			exit(1);
++		free(sql);
 +
 +		if (verbosity)
 +			printf("Dropping old tables (if they exist) ...\n");
@@ -618,12 +621,15 @@ new file mode 100644
 +		    ")";
 +		mysql_query(dbh.mysql, sql);
 +
-+		if (!db_mounts)
++		if (!db_mounts) {
++			db_disconnect();
 +			exit(0);
++		}
 +	}
 +
 +	if (db_mounts) {
 +		fprintf(stderr, "Sadly, --mounts is not yet implemented...\n"); /* FIXME */
++		db_disconnect();
 +		exit(0);
 +	}
 +
@@ -703,10 +709,54 @@ new file mode 100644
 +#endif
 +
 +#ifdef USE_SQLITE
++static int db_prepare_queries_sqlite(int prep_write_queries)
++{
++	char *sql;
++	int rc;
++
++	if (prep_write_queries) {
++		sql="INSERT OR REPLACE INTO inode_map"
++		    " (disk_id, ino, sum_type, size, mtime, ctime, checksum)"
++		    " VALUES (?, ?, ?, ?, ?, ?, ?)";
++		if ((rc = sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[REP_SUM].sqlite, NULL)) != 0)
++			return rc;
++	} else {
++		sql="SELECT disk_id"
++		    " FROM disk"
++		    " WHERE devno = ? AND host = ? AND mounted = 1";
++		if ((rc = sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_DEV].sqlite, NULL)) != 0)
++			return rc;
++
++		if (select_many_sums) {
++			sql="SELECT checksum, sum_type, size, mtime, ctime"
++			    " FROM inode_map"
++			    " WHERE disk_id = ? AND ino = ?";
++			if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
++				return rc;
++		} else {
++			if (asprintf(&sql,
++			    "SELECT checksum"
++			    " FROM inode_map"
++			    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
++			    "   AND size = ? AND mtime = ? %s",
++			    md_num, db_lax ? "" : "AND ctime = ?") < 0)
++				return 1;
++			rc = sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL);
++			free(sql);
++			if (rc != 0)
++				return rc;
++		}
++	}
++
++	return 0;
++}
++#endif
++
++#ifdef USE_SQLITE
 +static int db_connect_sqlite(void)
 +{
-+	int open_failures = 0;
-+	char *sql;
++	int lock_failures = 0;
++	int rc;
 +
 +#ifdef SQLITE_CONFIG_LOG
 +	if (error_log) {
@@ -722,14 +772,16 @@ new file mode 100644
 +		int open_flags = SQLITE_OPEN_READWRITE;
 +		if (db_init)
 +			open_flags |= SQLITE_OPEN_CREATE;
-+		int ret = sqlite3_open_v2(dbname, &dbh.sqlite, open_flags, NULL);
-+		if (ret == 0)
-+			break;
-+		if (ret != SQLITE_BUSY && ret != SQLITE_LOCKED)
++		if ((rc = sqlite3_open_v2(dbname, &dbh.sqlite, open_flags, NULL)) == 0) {
++			if ((rc = db_prepare_queries_sqlite(0)) == 0)
++				break;
++			db_disconnect();
++		}
++		if (rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
 +			return 0;
-+		if (++open_failures > MAX_OPEN_FAILURES)
++		if (++lock_failures > MAX_LOCK_FAILURES)
 +			return 0;
-+		msleep(OPEN_FAIL_MSLEEP);
++		msleep(LOCK_FAIL_MSLEEP);
 +	}
 +
 +	if (db_init) {
@@ -769,44 +821,17 @@ new file mode 100644
 +		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
 +			exit(1);
 +
-+		if (!db_mounts)
++		if (!db_mounts) {
++			db_disconnect();
 +			exit(0);
++		}
 +	}
 +
 +	if (db_mounts) {
 +		fprintf(stderr, "Sadly, --mounts is not yet implemented...\n"); /* FIXME */
++		db_disconnect();
 +		exit(0);
 +	}
-+
-+	sql="SELECT disk_id"
-+	    " FROM disk"
-+	    " WHERE devno = ? AND host = ? AND mounted = 1";
-+	if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_DEV].sqlite, NULL) != 0)
-+		return 0;
-+
-+	if (select_many_sums) {
-+		sql="SELECT checksum, sum_type, size, mtime, ctime"
-+		    " FROM inode_map"
-+		    " WHERE disk_id = ? AND ino = ?";
-+		if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
-+			return 0;
-+	} else {
-+		if (asprintf(&sql,
-+		    "SELECT checksum"
-+		    " FROM inode_map"
-+		    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
-+		    "   AND size = ? AND mtime = ? %s",
-+		    md_num, db_lax ? "" : "AND ctime = ?") < 0
-+		 || sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
-+			return 0;
-+		free(sql);
-+	}
-+
-+	sql="INSERT OR REPLACE INTO inode_map"
-+	    " (disk_id, ino, sum_type, size, mtime, ctime, checksum)"
-+	    " VALUES (?, ?, ?, ?, ?, ?, ?)";
-+	if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[REP_SUM].sqlite, NULL) != 0)
-+		return 0;
 +
 +	return 1;
 +}
@@ -821,14 +846,14 @@ new file mode 100644
 +	case DB_TYPE_MYSQL:
 +		if (db_connect_mysql())
 +			return 1;
-+		rprintf(log_code, "Unable to connect to DB: %s\n", mysql_error(dbh.mysql));
++		rprintf(log_code, "[%s] Unable to connect to DB: %s\n", who_am_i(), mysql_error(dbh.mysql));
 +		break;
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE:
 +		if (db_connect_sqlite())
 +			return 1;
-+		rprintf(log_code, "Unable to connect to DB: %s\n", sqlite3_errmsg(dbh.sqlite));
++		rprintf(log_code, "[%s] Unable to connect to DB: %s\n", who_am_i(), sqlite3_errmsg(dbh.sqlite));
 +		break;
 +#endif
 +	}
@@ -1146,6 +1171,19 @@ new file mode 100644
 +	case DB_TYPE_SQLITE: {
 +		int rc;
 +		sqlite3_stmt *stmt = statements[REP_SUM].sqlite;
++		if (stmt == NULL) {
++			int rc, lock_failures = 0;
++			while (1) {
++				if ((rc = db_prepare_queries_sqlite(1)) == 0)
++					break;
++				if (rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
++					return 0;
++				if (++lock_failures > MAX_LOCK_FAILURES)
++					return 0;
++				msleep(LOCK_FAIL_MSLEEP);
++			}
++			stmt = statements[REP_SUM].sqlite;
++		}
 +		sqlite3_bind_int(stmt, 1, disk_id);
 +		sqlite3_bind_int64(stmt, 2, st_p->st_ino);
 +		sqlite3_bind_int(stmt, 3, mdnum);
@@ -1476,7 +1514,7 @@ new file mode 100644
 +	if (!db_read_config(FERROR, db_config) || !db_connect(1))
 +		exit(1);
 +
-+        if (db_clean)
++	if (db_clean)
 +		db_clean_init();
 +
 +	if (getcwd(start_dir, sizeof start_dir - 1) == NULL) {
@@ -1630,10 +1668,16 @@ new file mode 100644
 +			} else if (db_no_update) {
 +				exit_code = 1;
 +			} else {
-+				if (db_do_md4)
-+					db_set_checksum(4, &st, sum4);
-+				if (db_do_md5)
-+					db_set_checksum(5, &st, sum5);
++				int fail = 0;
++				if (db_do_md4 && !db_set_checksum(4, &st, sum4))
++					fail = 1;
++				if (db_do_md5 && !db_set_checksum(5, &st, sum5))
++					fail = 1;
++				if (fail) {
++					fprintf(stderr, "Failed to set checksum on %s/%s\n", reldir, name);
++					db_disconnect();
++					exit(1);
++				}
 +			}
 +		}
 +		if (prior_name)
