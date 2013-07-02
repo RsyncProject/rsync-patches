@@ -78,9 +78,10 @@ diff --git a/Makefile.in b/Makefile.in
 +all: Makefile rsync$(EXEEXT) rsyncdb$(EXEEXT) rsync-ssl stunnel-rsync stunnel-rsyncd.conf @MAKE_MAN@
  
  install: all
- 	-${MKDIR_P} ${DESTDIR}${bindir}
+-	-${MKDIR_P} ${DESTDIR}${bindir}
++	-${MKDIR_P} ${DESTDIR}${bindir} ${DESTDIR}${sbindir}
  	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsync$(EXEEXT) ${DESTDIR}${bindir}
-+	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsyncdb$(EXEEXT) ${DESTDIR}${bindir}
++	rsync -Lt rsyncdb$(EXEEXT) ${DESTDIR}${bindir}/
 +	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsyncdb-mountinfo ${DESTDIR}${sbindir}
  	-${MKDIR_P} ${DESTDIR}${mandir}/man1
  	-${MKDIR_P} ${DESTDIR}${mandir}/man5
@@ -310,7 +311,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1843 @@
+@@ -0,0 +1,1851 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -425,6 +426,8 @@ new file mode 100644
 +static char bind_sum[MAX_DIGEST_LEN];
 +static unsigned long result_length[MAX_RESULT_BINDS];
 +static my_bool result_is_null[MAX_RESULT_BINDS], result_error[MAX_RESULT_BINDS];
++#else
++static int64 bind_mtime;
 +#endif
 +static char bind_thishost[257], bind_mount_uniq[257];
 +static int bind_thishost_len, bind_mount_uniq_len;
@@ -550,11 +553,11 @@ new file mode 100644
 +}
 +#endif
 +
-+static void run_sql(const char *fmt, ...)
++static int run_sql(const char *fmt, ...)
 +{
 +	va_list ap;
 +	char *query;
-+	int qlen;
++	int ok = 0, qlen;
 +
 +	va_start(ap, fmt);
 +	qlen = vasprintf(&query, fmt, ap);
@@ -570,8 +573,8 @@ new file mode 100644
 +		if (mysql_query(dbh.mysql, query) < 0) {
 +			rprintf(FERROR, "Failed to run sql: %s\n", mysql_error(dbh.mysql));
 +			rprintf(FERROR, "%s\n", query);
-+			exit_cleanup(RERR_IPC);
-+		}
++		} else
++			ok = 1;
 +		break;
 +#endif
 +#ifdef USE_SQLITE
@@ -589,13 +592,16 @@ new file mode 100644
 +		if (rc) {
 +			rprintf(FERROR, "[%s] Failed to run sql: %s\n", who_am_i(), sqlite3_errmsg(dbh.sqlite));
 +			rprintf(FERROR, "%s\n", query);
-+			exit_cleanup(RERR_IPC);
-+		}
++		} else
++			ok = 1;
 +		break;
 +	    }
 +#endif
 +	}
++
 +	free(query);
++
++	return ok;
 +}
 +
 +#ifdef USE_MYSQL
@@ -793,17 +799,19 @@ new file mode 100644
 +	if (db_init) {
 +		if (db_output_msgs)
 +			rprintf(FCLIENT, "Creating DB %s (if it does not exist)\n", dbname);
-+		run_sql("CREATE DATABASE IF NOT EXISTS `%s`", dbname);
-+		run_sql("USE `%s`", dbname);
++		if (!run_sql("CREATE DATABASE IF NOT EXISTS `%s`", dbname)
++		 || !run_sql("USE `%s`", dbname))
++			exit_cleanup(RERR_IPC);
 +
 +		if (db_output_msgs)
 +			rprintf(FCLIENT, "Dropping old tables (if they exist))\n");
-+		run_sql("DROP TABLE IF EXISTS disk");
-+		run_sql("DROP TABLE IF EXISTS inode_map");
++		if (!run_sql("DROP TABLE IF EXISTS disk")
++		 || !run_sql("DROP TABLE IF EXISTS inode_map"))
++			exit_cleanup(RERR_IPC);
 +
 +		if (db_output_msgs)
 +			rprintf(FCLIENT, "Creating empty tables ...\n");
-+		run_sql(
++		if (!run_sql(
 +		    "CREATE TABLE disk ("
 +		    "  disk_id integer unsigned NOT NULL PRIMARY KEY AUTO_INCREMENT,"
 +		    "  host varchar(256) NOT NULL default 'localhost',"
@@ -812,9 +820,10 @@ new file mode 100644
 +		    "  last_seen bigint NOT NULL,"
 +		    "  UNIQUE KEY mount_lookup (host, mount_uniq),"
 +		    "  KEY dev_lookup (devno, host)"
-+		    ")");
++		    ")"))
++			exit_cleanup(RERR_IPC);
 +
-+		run_sql(
++		if (!run_sql(
 +		    "CREATE TABLE inode_map ("
 +		    "  disk_id integer unsigned NOT NULL,"
 +		    "  ino bigint unsigned NOT NULL,"
@@ -824,7 +833,8 @@ new file mode 100644
 +		    "  ctime bigint NOT NULL,"
 +		    "  checksum binary(16) NOT NULL,"
 +		    "  PRIMARY KEY (disk_id,ino,sum_type)"
-+		    ")");
++		    ")"))
++			exit_cleanup(RERR_IPC);
 +
 +		if (!db_mounts)
 +			exit_cleanup(0);
@@ -1005,10 +1015,9 @@ new file mode 100644
 +		char *sql;
 +		if (db_output_msgs)
 +			rprintf(FCLIENT, "Dropping old tables (if they exist) ...\n");
-+		sql="DROP TABLE IF EXISTS disk";
-+		run_sql(sql);
-+		sql="DROP TABLE IF EXISTS inode_map";
-+		run_sql(sql);
++		if (!run_sql("DROP TABLE IF EXISTS disk")
++		 || !run_sql("DROP TABLE IF EXISTS inode_map"))
++			exit_cleanup(RERR_IPC);
 +
 +		if (db_output_msgs)
 +			rprintf(FCLIENT, "Creating empty tables ...\n");
@@ -1020,7 +1029,8 @@ new file mode 100644
 +		    "  last_seen bigint NOT NULL,"
 +		    "  UNIQUE (host, mount_uniq)"
 +		    ")";
-+		run_sql(sql);
++		if (!run_sql(sql))
++			exit_cleanup(RERR_IPC);
 +
 +		sql="CREATE TABLE inode_map ("
 +		    "  disk_id integer NOT NULL,"
@@ -1032,7 +1042,8 @@ new file mode 100644
 +		    "  checksum binary(16) NOT NULL,"
 +		    "  PRIMARY KEY (disk_id,ino,sum_type)"
 +		    ")";
-+		run_sql(sql);
++		if (!run_sql(sql))
++			exit_cleanup(RERR_IPC);
 +
 +		if (!db_mounts)
 +			exit_cleanup(0);
@@ -1086,8 +1097,8 @@ new file mode 100644
 +	if (transaction_state > 0) {
 +		if (DEBUG_GTE(DB, 1))
 +			rprintf(FCLIENT, "[%s] Committing our DB transaction\n", who_am_i());
-+		run_sql("COMMIT");
 +		transaction_state = 0;
++		run_sql("COMMIT");
 +	}
 +
 +	if (DEBUG_GTE(DB, 1))
@@ -1114,19 +1125,11 @@ new file mode 100644
 +	switch (use_db) {
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL:
-+		if (transaction_state > 0) {
-+			run_sql("COMMIT");
-+			transaction_state = 0;
-+		}
 +		mysql_close(dbh.mysql);
 +		break;
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE:
-+		if (transaction_state > 0) {
-+			run_sql("COMMIT");
-+			transaction_state = 0;
-+		}
 +		sqlite3_close(dbh.sqlite);
 +		break;
 +#endif
@@ -1463,8 +1466,8 @@ new file mode 100644
 +
 +int db_get_both_checksums(const STRUCT_STAT *st_p, int *right_sum_cnt, int *wrong_sum_cnt, char **sum4, char **sum5)
 +{
-+	int rows, j, sum_type[2];
 +	static char dbsum[MD5_DIGEST_LEN*2];
++	int rows, j, sum_type[2];
 +	int64 dbsize[2], dbmtime[2], dbctime[2];
 +	unsigned int disk_id = get_disk_id(st_p->st_dev);
 +
@@ -1532,6 +1535,11 @@ new file mode 100644
 +		*sum5 = NULL;
 +	*right_sum_cnt = *wrong_sum_cnt = 0;
 +	for (j = 0; j < rows; j++) {
++		if (DEBUG_GTE(DB, 3)) {
++			rprintf(FCLIENT, "DB checksum for %s,%s,%d: %s\n",
++				big_num(st_p->st_dev), big_num(st_p->st_ino), sum_type[j], sum_as_hex(dbsum + checksum_len*j));
++		}
++
 +		if (sum_type[j] == 4) {
 +			if (!sum4)
 +				continue;
@@ -1563,7 +1571,7 @@ new file mode 100644
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL:
 +		if (transaction_state == 0) {
-+			if (mysql_query(dbh.mysql, "BEGIN") < 0)
++			if (!run_sql("BEGIN"))
 +				return 0;
 +			transaction_state = 1;
 +		}
@@ -1584,7 +1592,7 @@ new file mode 100644
 +		sqlite3_stmt *stmt;
 +
 +		if (transaction_state == 0) {
-+			if (sqlite3_exec(dbh.sqlite, "BEGIN", NULL, NULL, NULL) != 0)
++			if (!run_sql("BEGIN"))
 +				return 0;
 +			transaction_state = 1;
 +		}
@@ -1715,7 +1723,8 @@ new file mode 100644
 +	case DB_TYPE_SQLITE: {
 +		char *sql;
 +		sql="ATTACH DATABASE '' AS aux1;"; /* Private temp DB, probably in-memory */
-+		run_sql(sql);
++		if (!run_sql(sql))
++			exit_cleanup(RERR_IPC);
 +
 +		sql="CREATE TABLE aux1.inode_present ("
 +		    " disk_id integer NOT NULL,"
@@ -1723,13 +1732,14 @@ new file mode 100644
 +		    " present tinyint NOT NULL default '1',"
 +		    " PRIMARY KEY (disk_id,ino)"
 +		    ")";
-+		run_sql(sql);
++		if (!run_sql(sql))
++			exit_cleanup(RERR_IPC);
 +
 +		sql="INSERT OR IGNORE INTO aux1.inode_present"
 +		    " (disk_id, ino, present)"
 +		    " VALUES (?, ?, 1)";
 +		if (!prepare_sqlite(INS_PRESENT, False, sql))
-+			exit_cleanup(RERR_SYNTAX);
++			exit_cleanup(RERR_IPC);
 +
 +		sql="DELETE FROM inode_map"
 +		    " WHERE ROWID IN ("
@@ -1740,7 +1750,7 @@ new file mode 100644
 +		    "  WHERE host = ? AND devno != 0 AND present IS NULL"
 +		    " )";
 +		if (!prepare_sqlite(DEL_SUMS, False, sql))
-+			exit_cleanup(RERR_SYNTAX);
++			exit_cleanup(RERR_IPC);
 +
 +		return 1;
 +	    }
@@ -1919,8 +1929,8 @@ new file mode 100644
 +			const char *dbsum4, const char *dbsum5, const char *sum4, const char *sum5)
 +{
 +	char *info_str = wrong_cnt && !right_cnt ? "!i " : "   ";
-+	char *md4_str = !db_do_md4 ? NULL : !dbsum4 ? "+4 " : !*sum4 ? "?4 " : sums_ne(sum4, dbsum4) ? "!4 " : "   ";
-+	char *md5_str = !db_do_md5 ? NULL : !dbsum5 ? "+5 " : !*sum5 ? "?5 " : sums_ne(sum5, dbsum5) ? "!5 " : "   ";
++	char *md4_str = !db_do_md4 ? NULL : !dbsum4 ? "+4 " : !sum4 ? "?4 " : sums_ne(sum4, dbsum4) ? "!4 " : "   ";
++	char *md5_str = !db_do_md5 ? NULL : !dbsum5 ? "+5 " : !sum5 ? "?5 " : sums_ne(sum5, dbsum5) ? "!5 " : "   ";
 +	int chg = *info_str != ' ' || (md4_str && *md4_str != ' ') || (md5_str && *md5_str != ' ');
 +	if (chg || db_output_unchanged) {
 +		if (db_output_info) {
@@ -2022,8 +2032,8 @@ new file mode 100644
 +		subdirs = prior_subdir = prior_name = NULL;
 +		while (names) {
 +			STRUCT_STAT st;
-+			char *dbsum4, sum4[MD5_DIGEST_LEN];
-+			char *dbsum5, sum5[MD5_DIGEST_LEN];
++			char *dbsum4, *sum4, sumbuf4[MD5_DIGEST_LEN];
++			char *dbsum5, *sum5, sumbuf5[MD5_DIGEST_LEN];
 +			int right_sum_cnt, wrong_sum_cnt;
 +			const char *name = names->name;
 +			unsigned int disk_id;
@@ -2033,8 +2043,7 @@ new file mode 100644
 +			prior_name = names;
 +			names = names->next;
 +
-+			dbsum4 = dbsum5 = NULL;
-+			*sum4 = *sum5 = '\0';
++			dbsum4 = dbsum5 = sum4 = sum5 = NULL;
 +
 +			if (lstat(name, &st) < 0) {
 +				rprintf(FERROR, "Failed to lstat(%s): %s\n", name, strerror(errno));
@@ -2106,11 +2115,11 @@ new file mode 100644
 +				data = (uchar*)map_ptr(buf, off, remainder);
 +				if (db_do_md4) {
 +					mdfour_update(&m4, data, remainder);
-+					mdfour_result(&m4, (uchar*)sum4);
++					mdfour_result(&m4, (uchar*)(sum4 = sumbuf4));
 +				}
 +				if (db_do_md5) {
 +					md5_update(&m5, data, remainder);
-+					md5_result(&m5, (uchar*)sum5);
++					md5_result(&m5, (uchar*)(sum5 = sumbuf5));
 +				}
 +
 +				close(fd);
@@ -2928,8 +2937,8 @@ new file mode 100755
 +#!/usr/bin/perl
 +
 +# This script outputs data for rsyncdb --mounts.  It must output a complete
-+# list of the mounts for host in a strict format -- 2 fields with a Tab
-+# between:  $MOUNT_UNIQ\t$PATH
++# list of the mounts for the current host in a strict format -- 2 fields
++# with a Tab between:  $MOUNT_UNIQ\t$PATH
 +#
 +# The list of mounts MUST NOT contain any entry that has the same devnum
 +# (st_dev) as any other entry in the list (as checked via its PATH).
@@ -2949,7 +2958,7 @@ new file mode 100755
 +# whitespace is removed).
 +#
 +# MOUNT_UNIQ may never contain a Tab but it would be legal for PATH to have
-+# a Tab (just really weird).  PATH may NOT have a CR or LF in it.
++# a Tab (just really weird).  Neither may have a CR or LF in it.
 +#
 +# The maximum size for MOUNT_UNIQ is 256 characters.
 +#
