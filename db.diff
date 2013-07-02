@@ -44,7 +44,15 @@ diff --git a/.gitignore b/.gitignore
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
-@@ -28,7 +28,7 @@ VERSION=@RSYNC_VERSION@
+@@ -6,6 +6,7 @@ datarootdir=@datarootdir@
+ exec_prefix=@exec_prefix@
+ stunnel4=@STUNNEL4@
+ bindir=@bindir@
++sbindir=@sbindir@
+ mandir=@mandir@
+ 
+ LIBS=@LIBS@
+@@ -28,7 +29,7 @@ VERSION=@RSYNC_VERSION@
  .SUFFIXES:
  .SUFFIXES: .c .o
  
@@ -53,7 +61,7 @@ diff --git a/Makefile.in b/Makefile.in
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h ifuncs.h itypes.h inums.h \
  	lib/pool_alloc.h
  LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
-@@ -38,7 +38,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
+@@ -38,7 +39,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
@@ -62,7 +70,7 @@ diff --git a/Makefile.in b/Makefile.in
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
-@@ -62,14 +62,16 @@ CHECK_OBJS=tls.o testrun.o getgroups.o getfsdev.o t_stub.o t_unsafe.o trimslash.
+@@ -62,14 +63,17 @@ CHECK_OBJS=tls.o testrun.o getgroups.o getfsdev.o t_stub.o t_unsafe.o trimslash.
  	$(CC) -I. -I$(srcdir) $(CFLAGS) $(CPPFLAGS) -c $< @CC_SHOBJ_FLAG@
  @OBJ_RESTORE@
  
@@ -73,6 +81,7 @@ diff --git a/Makefile.in b/Makefile.in
  	-${MKDIR_P} ${DESTDIR}${bindir}
  	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsync$(EXEEXT) ${DESTDIR}${bindir}
 +	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsyncdb$(EXEEXT) ${DESTDIR}${bindir}
++	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsyncdb-mountinfo ${DESTDIR}${sbindir}
  	-${MKDIR_P} ${DESTDIR}${mandir}/man1
  	-${MKDIR_P} ${DESTDIR}${mandir}/man5
  	if test -f rsync.1; then ${INSTALLMAN} -m 644 rsync.1 ${DESTDIR}${mandir}/man1; fi
@@ -80,7 +89,7 @@ diff --git a/Makefile.in b/Makefile.in
  	if test -f rsyncd.conf.5; then ${INSTALLMAN} -m 644 rsyncd.conf.5 ${DESTDIR}${mandir}/man5; fi
  
  install-ssl-client: rsync-ssl stunnel-rsync
-@@ -92,6 +94,9 @@ install-strip:
+@@ -92,6 +96,9 @@ install-strip:
  rsync$(EXEEXT): $(OBJS)
  	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
  
@@ -90,7 +99,7 @@ diff --git a/Makefile.in b/Makefile.in
  $(OBJS): $(HEADERS)
  $(CHECK_OBJS): $(HEADERS)
  
-@@ -208,22 +213,27 @@ proto.h: proto.h-tstamp
+@@ -208,22 +215,27 @@ proto.h: proto.h-tstamp
  proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
  	perl $(srcdir)/mkproto.pl $(srcdir)/*.c $(srcdir)/lib/compat.c
  
@@ -197,15 +206,6 @@ diff --git a/cleanup.c b/cleanup.c
  		if (cleanup_child_pid != -1) {
  			int status;
  			int pid = wait_process(cleanup_child_pid, &status, WNOHANG);
-@@ -174,7 +181,7 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
- 			    cleanup_file->modtime = 0;
- 			}
- 			finish_transfer(cleanup_new_fname, fname, NULL, NULL,
--					cleanup_file, tweak_modtime, !partial_dir);
-+					cleanup_file, tweak_modtime, !partial_dir, NULL);
- 		}
- 
- 		/* FALLTHROUGH */
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
@@ -310,7 +310,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1390 @@
+@@ -0,0 +1,1843 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -333,14 +333,18 @@ new file mode 100644
 +#include "rsync.h"
 +#include "ifuncs.h"
 +#include "itypes.h"
++#include "inums.h"
 +
 +extern int protocol_version;
 +extern int recurse;
 +extern int checksum_len;
-+extern int db_clean, db_check, db_do_md4, db_do_md5, db_no_update, db_lax, db_init, db_mounts;
-+extern int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs;
++extern int db_clean, db_check, db_do_md4, db_do_md5, db_update, db_lax, db_init, db_mounts;
++extern int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs, db_output_msgs;
 +extern int saw_db_output_opt, saw_db_sum_opt;
 +extern char *db_config;
++
++/* TODO: make this configurable */
++#define RSYNCDB_MOUNTS "/usr/sbin/rsyncdb-mountinfo"
 +
 +#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
 +#define USE_MYSQL
@@ -369,9 +373,13 @@ new file mode 100644
 +int use_db = DB_TYPE_NONE;
 +int select_many_sums = 0;
 +
++#define PREP_READ 0
++#define PREP_WRITE 1
++#define PREP_MOUNT 2
++
 +static const char *dbhost = NULL, *dbuser = NULL, *dbpass = NULL, *dbname = NULL;
 +static unsigned int dbport = 0;
-+static int verbosity;
++static int transaction_state = -1;
 +
 +static union {
 +#ifdef USE_MYSQL
@@ -386,9 +394,14 @@ new file mode 100644
 +#define SEL_DEV 0
 +#define SEL_SUM 1
 +#define REP_SUM 2
-+#define DEL_SUMS 3
-+#define INS_PRESENT 4
-+#define MAX_PREP_CNT 5
++#define UPD_CTIME 3
++#define INS_MOUNT 4
++#define UPD_MOUNT 5 /* SQLite only */
++#define SEL_MOUNT 6
++#define UN_MOUNT 7
++#define DEL_SUMS 8
++#define INS_PRESENT 9
++#define MAX_PREP_CNT 10
 +
 +#define MAX_BIND_CNT 7
 +#define MAX_RESULT_BINDS 32
@@ -408,11 +421,13 @@ new file mode 100644
 +
 +#ifdef USE_MYSQL
 +static unsigned int bind_disk_id, bind_mdnum;
-+static unsigned long long bind_devno, bind_ino, bind_size, bind_mtime, bind_ctime;
++static int64 bind_devno, bind_ino, bind_size, bind_mtime, bind_ctime;
 +static char bind_sum[MAX_DIGEST_LEN];
++static unsigned long result_length[MAX_RESULT_BINDS];
++static my_bool result_is_null[MAX_RESULT_BINDS], result_error[MAX_RESULT_BINDS];
 +#endif
-+static char bind_thishost[256];
-+static int bind_thishost_len;
++static char bind_thishost[257], bind_mount_uniq[257];
++static int bind_thishost_len, bind_mount_uniq_len;
 +
 +static char *error_log;
 +#if defined USE_SQLITE && defined SQLITE_CONFIG_LOG
@@ -420,6 +435,8 @@ new file mode 100644
 +#endif
 +
 +#define PTR_SIZE (sizeof (struct file_struct *))
++
++static void update_mounts(void);
 +
 +struct name_list {
 +	struct name_list *next;
@@ -440,6 +457,8 @@ new file mode 100644
 +		rsyserr(log_code, errno, "unable to open %s", config_file);
 +		return 0;
 +	}
++	if (DEBUG_GTE(DB, 1))
++		rprintf(FCLIENT, "[%s] Reading DB config from %s\n", who_am_i(), config_file);
 +	while (fgets(buf, sizeof buf, fp)) {
 +		lineno++;
 +		if ((cp = strchr(buf, '#')) == NULL
@@ -467,6 +486,8 @@ new file mode 100644
 +			dbname = strdup(cp);
 +		else if (strcasecmp(buf, "dbport") == 0)
 +			dbport = atoi(cp);
++		else if (strcasecmp(buf, "transaction") == 0)
++			transaction_state = atoi(cp) ? 0 : -1;
 +		else if (strcasecmp(buf, "errlog") == 0)
 +			error_log = strdup(cp);
 +		else if (strcasecmp(buf, "thishost") == 0)
@@ -529,8 +550,56 @@ new file mode 100644
 +}
 +#endif
 +
++static void run_sql(const char *fmt, ...)
++{
++	va_list ap;
++	char *query;
++	int qlen;
++
++	va_start(ap, fmt);
++	qlen = vasprintf(&query, fmt, ap);
++	va_end(ap);
++	if (qlen < 0)
++		out_of_memory("run_sql");
++	if (DEBUG_GTE(DB, 3))
++		rprintf(FCLIENT, "[%s] SQL being run: %s\n", who_am_i(), query);
++
++	switch (use_db) {
++	case DB_TYPE_MYSQL:
 +#ifdef USE_MYSQL
-+static MYSQL_STMT *prepare_mysql(MYSQL_BIND *binds, int bind_cnt, const char *fmt, ...)
++		if (mysql_query(dbh.mysql, query) < 0) {
++			rprintf(FERROR, "Failed to run sql: %s\n", mysql_error(dbh.mysql));
++			rprintf(FERROR, "%s\n", query);
++			exit_cleanup(RERR_IPC);
++		}
++		break;
++#endif
++#ifdef USE_SQLITE
++	case DB_TYPE_SQLITE: {
++		int rc, lock_failures = 0;
++		while (1) {
++			if ((rc = sqlite3_exec(dbh.sqlite, query, NULL, NULL, NULL)) == 0)
++				break;
++			if (rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
++				break;
++			if (++lock_failures > MAX_LOCK_FAILURES)
++				break;
++			msleep(LOCK_FAIL_MSLEEP);
++		}
++		if (rc) {
++			rprintf(FERROR, "[%s] Failed to run sql: %s\n", who_am_i(), sqlite3_errmsg(dbh.sqlite));
++			rprintf(FERROR, "%s\n", query);
++			exit_cleanup(RERR_IPC);
++		}
++		break;
++	    }
++#endif
++	}
++	free(query);
++}
++
++#ifdef USE_MYSQL
++static int prepare_mysql(int ndx, MYSQL_BIND *binds, int bind_cnt, const char *fmt, ...)
 +{
 +	va_list ap;
 +	char *query;
@@ -545,163 +614,233 @@ new file mode 100644
 +	va_end(ap);
 +	if (qlen < 0)
 +		out_of_memory("prepare_mysql");
++	if (DEBUG_GTE(DB, 3))
++		rprintf(FCLIENT, "[%s] SQL being prepared: %s\n", who_am_i(), query);
 +
 +	if (mysql_stmt_prepare(stmt, query, qlen) != 0) {
-+		rprintf(log_code, "Prepare failed: %s\n", mysql_stmt_error(stmt));
-+		return NULL;
++		rprintf(log_code, "[%s] Prepare failed: %s\n", who_am_i(), mysql_stmt_error(stmt));
++		rprintf(log_code, "%s\n", query);
++		free(query);
++		return 0;
 +	}
-+	free(query);
 +
 +	if ((param_cnt = mysql_stmt_param_count(stmt)) != bind_cnt) {
-+		rprintf(log_code, "Parameters in statement = %d, bind vars = %d\n",
-+			param_cnt, bind_cnt);
-+		return NULL;
++		rprintf(log_code, "[%s] Parameters in statement = %d, bind vars = %d\n",
++			who_am_i(), param_cnt, bind_cnt);
++		rprintf(log_code, "%s\n", query);
++		free(query);
++		return 0;
 +	}
 +	if (bind_cnt)
 +		mysql_stmt_bind_param(stmt, binds);
 +
-+	return stmt;
++	statements[ndx].mysql = stmt;
++	free(query);
++
++	return 1;
++}
++#endif
++
++#ifdef USE_MYSQL
++static int prepare_mysql_queries(int type)
++{
++	MYSQL_BIND binds[MAX_BIND_CNT];
++	char *sql;
++
++	switch (type) {
++	case PREP_READ:
++		sql="SELECT disk_id"
++		    " FROM disk"
++		    " WHERE host = ? AND devno = ?";
++		memset(binds, 0, sizeof binds);
++		binds[0].buffer_type = MYSQL_TYPE_STRING;
++		binds[0].buffer = &bind_thishost;
++		binds[0].buffer_length = bind_thishost_len;
++		binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[1].buffer = &bind_devno;
++		if (!prepare_mysql(SEL_DEV, binds, 2, sql))
++			return 0;
++
++		memset(binds, 0, sizeof binds);
++		binds[0].buffer_type = MYSQL_TYPE_LONG;
++		binds[0].buffer = &bind_disk_id;
++		binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[1].buffer = &bind_ino;
++		if (select_many_sums) {
++			sql="SELECT checksum, sum_type, size, mtime, ctime"
++			    " FROM inode_map"
++			    " WHERE disk_id = ? AND ino = ?";
++			if (!prepare_mysql(SEL_SUM, binds, 2, sql))
++				return 0;
++		} else {
++			sql="SELECT checksum"
++			    " FROM inode_map"
++			    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
++			    "   AND size = ? AND mtime = ? %s";
++			binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
++			binds[2].buffer = &bind_size;
++			binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
++			binds[3].buffer = &bind_mtime;
++			if (!db_lax) {
++				binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
++				binds[4].buffer = &bind_ctime;
++			}
++			if (!prepare_mysql(SEL_SUM, binds, 4 + !db_lax, sql,	md_num, db_lax ? "" : "AND ctime = ?"))
++				return 0;
++		}
++		break;
++	case PREP_WRITE:
++		sql="INSERT INTO inode_map"
++		    " SET disk_id = ?, ino = ?, sum_type = ?,"
++		    "     size = ?, mtime = ?, ctime = ?, checksum = ?"
++		    " ON DUPLICATE KEY"
++		    " UPDATE size = VALUES(size), mtime = VALUES(mtime),"
++		    "        ctime = VALUES(ctime), checksum = VALUES(checksum)";
++		memset(binds, 0, sizeof binds);
++		binds[0].buffer_type = MYSQL_TYPE_LONG;
++		binds[0].buffer = &bind_disk_id;
++		binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[1].buffer = &bind_ino;
++		binds[2].buffer_type = MYSQL_TYPE_LONG;
++		binds[2].buffer = &bind_mdnum;
++		binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[3].buffer = &bind_size;
++		binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[4].buffer = &bind_mtime;
++		binds[5].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[5].buffer = &bind_ctime;
++		binds[6].buffer_type = MYSQL_TYPE_BLOB;
++		binds[6].buffer = &bind_sum;
++		binds[6].buffer_length = checksum_len;
++		if (!prepare_mysql(REP_SUM, binds, 7, sql))
++			return 0;
++
++		sql="UPDATE inode_map"
++		    " SET ctime = ?"
++		    " WHERE disk_id = ? AND ino = ? AND sum_type = ? AND size = ? AND mtime = ?";
++		memset(binds, 0, sizeof binds);
++		binds[0].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[0].buffer = &bind_ctime;
++		binds[1].buffer_type = MYSQL_TYPE_LONG;
++		binds[1].buffer = &bind_disk_id;
++		binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[2].buffer = &bind_ino;
++		binds[3].buffer_type = MYSQL_TYPE_LONG;
++		binds[3].buffer = &bind_mdnum;
++		binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[4].buffer = &bind_size;
++		binds[5].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[5].buffer = &bind_mtime;
++		if (!prepare_mysql(UPD_CTIME, binds, 6, sql))
++			return 0;
++		break;
++	case PREP_MOUNT:
++		sql="INSERT INTO disk"
++		    " SET host = ?, last_seen = ?, mount_uniq = ?, devno = ?"
++		    " ON DUPLICATE KEY"
++		    " UPDATE last_seen = VALUES(last_seen), devno = VALUES(devno)";
++		memset(binds, 0, sizeof binds);
++		binds[0].buffer_type = MYSQL_TYPE_STRING;
++		binds[0].buffer = &bind_thishost;
++		binds[0].buffer_length = bind_thishost_len;
++		binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[1].buffer = &bind_mtime; /* we abuse mtime to hold the last_seen value */
++		binds[2].buffer_type = MYSQL_TYPE_STRING;
++		binds[2].buffer = &bind_mount_uniq;
++		binds[2].buffer_length = bind_mount_uniq_len;
++		binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[3].buffer = &bind_devno;
++		if (!prepare_mysql(INS_MOUNT, binds, 4, sql))
++			return 0;
++
++		sql="SELECT mount_uniq"
++		    " FROM disk"
++		    " WHERE host = ? AND last_seen < ? AND devno != 0";
++		/* Reusing first 2 binds from INS_MOUNT */
++		if (!prepare_mysql(SEL_MOUNT, binds, 2, sql))
++			return 0;
++
++		sql="UPDATE disk"
++		    " SET devno = 0"
++		    " WHERE host = ? AND last_seen < ? AND devno != 0";
++		/* Reusing binds from SEL_MOUNT */
++		if (!prepare_mysql(UN_MOUNT, binds, 2, sql))
++			return 0;
++		break;
++	}
++
++	return 1;
 +}
 +#endif
 +
 +#ifdef USE_MYSQL
 +static int db_connect_mysql(void)
 +{
-+	MYSQL_BIND binds[MAX_BIND_CNT];
-+	const char *save_dbname = db_init ? dbname : NULL;
++	const char *open_dbname = db_init ? "mysql" : dbname;
 +
 +	if (!(dbh.mysql = mysql_init(NULL)))
 +		out_of_memory("db_read_config");
 +
-+	if (db_init)
-+		dbname = "mysql";
-+	if (!mysql_real_connect(dbh.mysql, dbhost, dbuser, dbpass, dbname, dbport, NULL, 0))
++	if (DEBUG_GTE(DB, 1)) {
++		rprintf(FCLIENT, "[%s] connecting: host=%s user=%s db=%s port=%d\n",
++			who_am_i(), dbhost, dbuser, open_dbname, dbport);
++	}
++	if (!mysql_real_connect(dbh.mysql, dbhost, dbuser, dbpass, open_dbname, dbport, NULL, 0)) {
++		rprintf(log_code, "[%s] Unable to connect to DB: %s\n", who_am_i(), mysql_error(dbh.mysql));
 +		return 0;
++	}
 +
 +	if (db_init) {
-+		char *sql;
-+		if (asprintf(&sql, "CREATE DATABASE IF NOT EXISTS `%s`", save_dbname) < 0
-+		 || mysql_query(dbh.mysql, sql) < 0)
-+			exit(1);
-+		free(sql);
++		if (db_output_msgs)
++			rprintf(FCLIENT, "Creating DB %s (if it does not exist)\n", dbname);
++		run_sql("CREATE DATABASE IF NOT EXISTS `%s`", dbname);
++		run_sql("USE `%s`", dbname);
 +
-+		if (asprintf(&sql, "USE `%s`", save_dbname) < 0
-+		 || mysql_query(dbh.mysql, sql) < 0)
-+			exit(1);
-+		free(sql);
++		if (db_output_msgs)
++			rprintf(FCLIENT, "Dropping old tables (if they exist))\n");
++		run_sql("DROP TABLE IF EXISTS disk");
++		run_sql("DROP TABLE IF EXISTS inode_map");
 +
-+		if (verbosity)
-+			printf("Dropping old tables (if they exist) ...\n");
-+		sql="DROP TABLE IF EXISTS disk";
-+		mysql_query(dbh.mysql, sql);
-+		sql="DROP TABLE IF EXISTS inode_map";
-+		mysql_query(dbh.mysql, sql);
-+
-+		if (verbosity)
-+			printf("Creating empty tables ...\n");
-+
-+		sql="CREATE TABLE disk ("
++		if (db_output_msgs)
++			rprintf(FCLIENT, "Creating empty tables ...\n");
++		run_sql(
++		    "CREATE TABLE disk ("
 +		    "  disk_id integer unsigned NOT NULL PRIMARY KEY AUTO_INCREMENT,"
-+		    "  devno bigint unsigned NOT NULL,"
 +		    "  host varchar(256) NOT NULL default 'localhost',"
-+		    "  mounted tinyint NOT NULL default '1',"
-+		    "  comment varchar(256) default NULL"
-+		    ")";
-+		mysql_query(dbh.mysql, sql);
++		    "  mount_uniq varchar(256) default NULL,"
++		    "  devno bigint unsigned NOT NULL," /* This is 0 when not mounted */
++		    "  last_seen bigint NOT NULL,"
++		    "  UNIQUE KEY mount_lookup (host, mount_uniq),"
++		    "  KEY dev_lookup (devno, host)"
++		    ")");
 +
-+		sql="CREATE TABLE inode_map ("
++		run_sql(
++		    "CREATE TABLE inode_map ("
 +		    "  disk_id integer unsigned NOT NULL,"
 +		    "  ino bigint unsigned NOT NULL,"
++		    "  sum_type tinyint NOT NULL default '0',"
 +		    "  size bigint unsigned NOT NULL,"
 +		    "  mtime bigint NOT NULL,"
 +		    "  ctime bigint NOT NULL,"
-+		    "  sum_type tinyint NOT NULL default '0',"
 +		    "  checksum binary(16) NOT NULL,"
 +		    "  PRIMARY KEY (disk_id,ino,sum_type)"
-+		    ")";
-+		mysql_query(dbh.mysql, sql);
++		    ")");
 +
-+		if (!db_mounts) {
-+			db_disconnect();
-+			exit(0);
-+		}
++		if (!db_mounts)
++			exit_cleanup(0);
 +	}
 +
 +	if (db_mounts) {
-+		fprintf(stderr, "Sadly, --mounts is not yet implemented...\n"); /* FIXME */
-+		db_disconnect();
-+		exit(0);
++		prepare_mysql_queries(PREP_MOUNT);
++		update_mounts();
++		exit_cleanup(0);
 +	}
 +
-+	memset(binds, 0, sizeof binds);
-+	binds[0].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[0].buffer = &bind_devno;
-+	binds[1].buffer_type = MYSQL_TYPE_STRING;
-+	binds[1].buffer = &bind_thishost;
-+	binds[1].buffer_length = bind_thishost_len;
-+	statements[SEL_DEV].mysql = prepare_mysql(binds, 2,
-+		"SELECT disk_id"
-+		" FROM disk"
-+		" WHERE devno = ? AND host = ? AND mounted = 1"
-+		);
-+	if (!statements[SEL_DEV].mysql)
++	if (!prepare_mysql_queries(PREP_READ))
 +		return 0;
 +
-+	memset(binds, 0, sizeof binds);
-+	binds[0].buffer_type = MYSQL_TYPE_LONG;
-+	binds[0].buffer = &bind_disk_id;
-+	binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[1].buffer = &bind_ino;
-+	if (select_many_sums) {
-+		statements[SEL_SUM].mysql = prepare_mysql(binds, 2,
-+			"SELECT checksum, sum_type, size, mtime, ctime"
-+			" FROM inode_map"
-+			" WHERE disk_id = ? AND ino = ?"
-+			);
-+	} else {
-+		binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
-+		binds[2].buffer = &bind_size;
-+		binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
-+		binds[3].buffer = &bind_mtime;
-+		if (!db_lax) {
-+			binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
-+			binds[4].buffer = &bind_ctime;
-+		}
-+		statements[SEL_SUM].mysql = prepare_mysql(binds, 4 + !db_lax,
-+			"SELECT checksum"
-+			" FROM inode_map"
-+			" WHERE disk_id = ? AND ino = ? AND sum_type = %d"
-+			"   AND size = ? AND mtime = ? %s",
-+			md_num, db_lax ? "" : "AND ctime = ?");
-+	}
-+	if (!statements[SEL_SUM].mysql)
-+		return 0;
-+
-+	memset(binds, 0, sizeof binds);
-+	binds[0].buffer_type = MYSQL_TYPE_LONG;
-+	binds[0].buffer = &bind_disk_id;
-+	binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[1].buffer = &bind_ino;
-+	binds[2].buffer_type = MYSQL_TYPE_LONG;
-+	binds[2].buffer = &bind_mdnum;
-+	binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[3].buffer = &bind_size;
-+	binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[4].buffer = &bind_mtime;
-+	binds[5].buffer_type = MYSQL_TYPE_LONGLONG;
-+	binds[5].buffer = &bind_ctime;
-+	binds[6].buffer_type = MYSQL_TYPE_BLOB;
-+	binds[6].buffer = &bind_sum;
-+	binds[6].buffer_length = checksum_len;
-+	statements[REP_SUM].mysql = prepare_mysql(binds, 7,
-+		"INSERT INTO inode_map"
-+		" SET disk_id = ?, ino = ?, sum_type = ?,"
-+		"     size = ?, mtime = ?, ctime = ?, checksum = ?"
-+		" ON DUPLICATE KEY"
-+		" UPDATE size = VALUES(size), mtime = VALUES(mtime),"
-+		"        ctime = VALUES(ctime), checksum = VALUES(checksum)"
-+		);
-+	if (!statements[REP_SUM].mysql)
++	/* TODO move this elsewhere */
++	if (!prepare_mysql_queries(PREP_WRITE))
 +		return 0;
 +
 +	return 1;
@@ -709,46 +848,117 @@ new file mode 100644
 +#endif
 +
 +#ifdef USE_SQLITE
-+static int db_prepare_queries_sqlite(int prep_write_queries)
++static int prepare_sqlite(int ndx, BOOL loop, const char *fmt, ...)
++{
++	va_list ap;
++	char *query;
++	int rc, qlen, lock_failures = 0;
++
++	va_start(ap, fmt);
++	qlen = vasprintf(&query, fmt, ap);
++	va_end(ap);
++	if (qlen < 0)
++		out_of_memory("prepare_sqlite");
++	if (DEBUG_GTE(DB, 3))
++		rprintf(FCLIENT, "[%s] SQL being prepared: %s\n", who_am_i(), query);
++
++	while ((rc = sqlite3_prepare_v2(dbh.sqlite, query, -1, &statements[ndx].sqlite, NULL)) != 0 && loop) {
++		if (DEBUG_GTE(DB, 4)) {
++			rprintf(FCLIENT, "[%s] sqlite3_prepare_v2(,%s,,) returned %d\n",
++				who_am_i(), query, rc);
++		}
++		if (rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
++			break;
++		if (++lock_failures > MAX_LOCK_FAILURES)
++			break;
++		/* XXX remove this? */
++		if (statements[ndx].sqlite) {
++			rprintf(FCLIENT, "[%s] had to clear index %d\n", who_am_i(), ndx);
++			sqlite3_finalize(statements[ndx].sqlite);
++			statements[ndx].sqlite = NULL;
++		}
++		msleep(LOCK_FAIL_MSLEEP);
++	}
++	if (rc) {
++		rprintf(log_code, "[%s] Failed to prepare SQL: %s (%d)\n", who_am_i(), sqlite3_errmsg(dbh.sqlite), rc);
++		rprintf(log_code, "%s\n", query);
++		free(query);
++		return 0;
++	}
++	free(query);
++
++	return 1;
++}
++#endif
++
++#ifdef USE_SQLITE
++static int prepare_sqlite_queries(int type)
 +{
 +	char *sql;
-+	int rc;
 +
-+	if (prep_write_queries) {
-+		sql="INSERT OR REPLACE INTO inode_map"
-+		    " (disk_id, ino, sum_type, size, mtime, ctime, checksum)"
-+		    " VALUES (?, ?, ?, ?, ?, ?, ?)";
-+		if ((rc = sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[REP_SUM].sqlite, NULL)) != 0)
-+			return rc;
-+	} else {
++	switch (type) {
++	case PREP_READ:
 +		sql="SELECT disk_id"
 +		    " FROM disk"
-+		    " WHERE devno = ? AND host = ? AND mounted = 1";
-+		if ((rc = sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_DEV].sqlite, NULL)) != 0)
-+			return rc;
++		    " WHERE host = ? AND devno = ?";
++		if (!prepare_sqlite(SEL_DEV, False, sql))
++			return 0;
 +
 +		if (select_many_sums) {
 +			sql="SELECT checksum, sum_type, size, mtime, ctime"
 +			    " FROM inode_map"
 +			    " WHERE disk_id = ? AND ino = ?";
-+			if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL) != 0)
-+				return rc;
++			if (!prepare_sqlite(SEL_SUM, False, sql))
++				return 0;
 +		} else {
-+			if (asprintf(&sql,
-+			    "SELECT checksum"
++			sql="SELECT checksum"
 +			    " FROM inode_map"
 +			    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
-+			    "   AND size = ? AND mtime = ? %s",
-+			    md_num, db_lax ? "" : "AND ctime = ?") < 0)
-+				return 1;
-+			rc = sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[SEL_SUM].sqlite, NULL);
-+			free(sql);
-+			if (rc != 0)
-+				return rc;
++			    "   AND size = ? AND mtime = ? %s";
++			if (!prepare_sqlite(SEL_SUM, False, sql, md_num, db_lax ? "" : "AND ctime = ?"))
++				return 0;
 +		}
++		break;
++	case PREP_WRITE:
++		sql="INSERT OR REPLACE INTO inode_map"
++		    " (disk_id, ino, sum_type, size, mtime, ctime, checksum)"
++		    " VALUES (?, ?, ?, ?, ?, ?, ?)";
++		if (!prepare_sqlite(REP_SUM, True, sql))
++			return 0;
++		sql="UPDATE inode_map"
++		    " SET ctime = ?"
++		    " WHERE disk_id = ? AND ino = ? AND sum_type = ? AND size = ? AND mtime = ?";
++		if (!prepare_sqlite(UPD_CTIME, False, sql))
++			return 0;
++		break;
++	case PREP_MOUNT:
++		sql="INSERT OR IGNORE INTO disk"
++		    " (host, last_seen, mount_uniq, devno)"
++		    " VALUES (?, ?, ?, ?)";
++		if (!prepare_sqlite(INS_MOUNT, False, sql))
++			return 0;
++
++		sql="UPDATE disk"
++		    " SET last_seen = ?, devno = ?"
++		    " WHERE host = ? AND mount_uniq = ?";
++		if (!prepare_sqlite(UPD_MOUNT, False, sql))
++			return 0;
++
++		sql="SELECT mount_uniq"
++		    " FROM disk"
++		    " WHERE host = ? AND last_seen < ? AND devno != 0";
++		if (!prepare_sqlite(SEL_MOUNT, False, sql))
++			return 0;
++
++		sql="UPDATE disk"
++		    " SET devno = 0"
++		    " WHERE host = ? AND last_seen < ? AND devno != 0";
++		if (!prepare_sqlite(UN_MOUNT, False, sql))
++			return 0;
++		break;
 +	}
 +
-+	return 0;
++	return 1;
 +}
 +#endif
 +
@@ -760,6 +970,8 @@ new file mode 100644
 +
 +#ifdef SQLITE_CONFIG_LOG
 +	if (error_log) {
++		if (DEBUG_GTE(DB, 1))
++			rprintf(FCLIENT, "[%s] Setting sqlite errlog to %s\n", who_am_i(), error_log);
 +		if (!(error_log_fp = fopen(error_log, "a"))) {
 +			rsyserr(log_code, errno, "unable to append to logfile %s", error_log);
 +			error_log = NULL;
@@ -772,41 +984,43 @@ new file mode 100644
 +		int open_flags = SQLITE_OPEN_READWRITE;
 +		if (db_init)
 +			open_flags |= SQLITE_OPEN_CREATE;
++		if (DEBUG_GTE(DB, 1))
++			rprintf(FCLIENT, "[%s] opening %s (%d)\n", who_am_i(), dbname, open_flags);
 +		if ((rc = sqlite3_open_v2(dbname, &dbh.sqlite, open_flags, NULL)) == 0) {
-+			if ((rc = db_prepare_queries_sqlite(0)) == 0)
-+				break;
-+			db_disconnect();
++			break;
++		}
++		if (DEBUG_GTE(DB, 4)) {
++			rprintf(FCLIENT, "[%s] sqlite3_open_v2(%s,,%d,NULL) returned %d\n",
++				who_am_i(), dbname, open_flags, rc);
 +		}
 +		if (rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
-+			return 0;
++			break;
 +		if (++lock_failures > MAX_LOCK_FAILURES)
-+			return 0;
++			break;
++		db_disconnect();
 +		msleep(LOCK_FAIL_MSLEEP);
 +	}
 +
 +	if (db_init) {
 +		char *sql;
-+		if (verbosity)
-+			printf("Dropping old tables (if they exist) ...\n");
++		if (db_output_msgs)
++			rprintf(FCLIENT, "Dropping old tables (if they exist) ...\n");
 +		sql="DROP TABLE IF EXISTS disk";
-+		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
-+			exit(1);
++		run_sql(sql);
 +		sql="DROP TABLE IF EXISTS inode_map";
-+		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
-+			exit(1);
++		run_sql(sql);
 +
-+		if (verbosity)
-+			printf("Creating empty tables ...\n");
-+
++		if (db_output_msgs)
++			rprintf(FCLIENT, "Creating empty tables ...\n");
 +		sql="CREATE TABLE disk ("
 +		    "  disk_id integer NOT NULL PRIMARY KEY AUTOINCREMENT,"
-+		    "  devno bigint NOT NULL,"
 +		    "  host varchar(256) NOT NULL default 'localhost',"
-+		    "  mounted tinyint NOT NULL default '1',"
-+		    "  comment varchar(256) default NULL"
++		    "  mount_uniq varchar(256) default NULL,"
++		    "  devno bigint NOT NULL," /* This is 0 when not mounted */
++		    "  last_seen bigint NOT NULL,"
++		    "  UNIQUE (host, mount_uniq)"
 +		    ")";
-+		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
-+			exit(1);
++		run_sql(sql);
 +
 +		sql="CREATE TABLE inode_map ("
 +		    "  disk_id integer NOT NULL,"
@@ -818,20 +1032,20 @@ new file mode 100644
 +		    "  checksum binary(16) NOT NULL,"
 +		    "  PRIMARY KEY (disk_id,ino,sum_type)"
 +		    ")";
-+		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
-+			exit(1);
++		run_sql(sql);
 +
-+		if (!db_mounts) {
-+			db_disconnect();
-+			exit(0);
-+		}
++		if (!db_mounts)
++			exit_cleanup(0);
 +	}
 +
 +	if (db_mounts) {
-+		fprintf(stderr, "Sadly, --mounts is not yet implemented...\n"); /* FIXME */
-+		db_disconnect();
-+		exit(0);
++		prepare_sqlite_queries(PREP_MOUNT);
++		update_mounts();
++		exit_cleanup(0);
 +	}
++
++	if (!prepare_sqlite_queries(PREP_READ))
++		return 0;
 +
 +	return 1;
 +}
@@ -846,14 +1060,12 @@ new file mode 100644
 +	case DB_TYPE_MYSQL:
 +		if (db_connect_mysql())
 +			return 1;
-+		rprintf(log_code, "[%s] Unable to connect to DB: %s\n", who_am_i(), mysql_error(dbh.mysql));
 +		break;
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE:
 +		if (db_connect_sqlite())
 +			return 1;
-+		rprintf(log_code, "[%s] Unable to connect to DB: %s\n", who_am_i(), sqlite3_errmsg(dbh.sqlite));
 +		break;
 +#endif
 +	}
@@ -870,6 +1082,16 @@ new file mode 100644
 +
 +	if (!dbh.all)
 +		return;
++
++	if (transaction_state > 0) {
++		if (DEBUG_GTE(DB, 1))
++			rprintf(FCLIENT, "[%s] Committing our DB transaction\n", who_am_i());
++		run_sql("COMMIT");
++		transaction_state = 0;
++	}
++
++	if (DEBUG_GTE(DB, 1))
++		rprintf(FCLIENT, "[%s] Disconnecting from the DB\n", who_am_i());
 +
 +	for (ndx = 0; ndx < MAX_PREP_CNT; ndx++) {
 +		if (statements[ndx].all) {
@@ -892,11 +1114,19 @@ new file mode 100644
 +	switch (use_db) {
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL:
++		if (transaction_state > 0) {
++			run_sql("COMMIT");
++			transaction_state = 0;
++		}
 +		mysql_close(dbh.mysql);
 +		break;
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE:
++		if (transaction_state > 0) {
++			run_sql("COMMIT");
++			transaction_state = 0;
++		}
 +		sqlite3_close(dbh.sqlite);
 +		break;
 +#endif
@@ -914,6 +1144,7 @@ new file mode 100644
 +	if ((rc = mysql_stmt_execute(stmt)) == CR_SERVER_LOST) {
 +		db_disconnect();
 +		if (db_connect(select_many_sums)) {
++			/* XXX might need to prepare write statements here in the future... */
 +			stmt = statements[ndx].mysql;
 +			rc = mysql_stmt_execute(stmt);
 +		}
@@ -928,10 +1159,11 @@ new file mode 100644
 +#endif
 +
 +#ifdef USE_MYSQL
-+static int fetch_mysql(MYSQL_BIND *binds, int bind_cnt, int ndx, int max_rows)
++/* This stores up to max_rows into the bind data arrays.  If stmt_ptr is
++ * non-NULL it will be set to the stmt pointer IF we didn't run out of rows
++ * (otherwise it is set to NULL). */
++static int fetch_mysql(MYSQL_BIND *binds, int bind_cnt, int ndx, int max_rows, MYSQL_STMT **stmt_ptr)
 +{
-+	unsigned long length[MAX_RESULT_BINDS];
-+	my_bool is_null[MAX_RESULT_BINDS], error[MAX_RESULT_BINDS];
 +	MYSQL_STMT *stmt;
 +	int i, rc, rows = 0;
 +
@@ -942,9 +1174,9 @@ new file mode 100644
 +		return 0;
 +
 +	for (i = 0; i < bind_cnt; i++) {
-+		binds[i].is_null = &is_null[i];
-+		binds[i].length = &length[i];
-+		binds[i].error = &error[i];
++		binds[i].is_null = &result_is_null[i];
++		binds[i].length = &result_length[i];
++		binds[i].error = &result_error[i];
 +	}
 +	mysql_stmt_bind_result(stmt, binds);
 +
@@ -960,19 +1192,180 @@ new file mode 100644
 +			binds[i].buffer += binds[i].buffer_length;
 +	}
 +
-+	mysql_stmt_free_result(stmt);
++	if (!stmt_ptr || rows < max_rows) {
++		mysql_stmt_free_result(stmt);
++		stmt = NULL;
++	}
++	if (stmt_ptr)
++		*stmt_ptr = stmt;
 +
 +	return rows;
 +}
 +#endif
 +
-+unsigned int get_disk_id(unsigned long long devno)
++static void update_mounts(void)
++{
++	char buf[2048], *argv[2];
++	int f_from, f_to, len;
++	STRUCT_STAT st;
++	int pid, status;
++
++	if (DEBUG_GTE(DB, 2))
++		printf("Running %s to grab mount info\n", RSYNCDB_MOUNTS);
++	argv[0] = RSYNCDB_MOUNTS;
++	argv[1] = NULL;
++	pid = piped_child(argv, &f_from, &f_to);
++	close(f_to);
++
++	bind_mtime = time(NULL); /* abuse mtime slightly to hold our last_seen value */
++
++	/* Strict format has 2 items with one tab as separator: MOUNT_UNIQ\tPATH */
++	while ((len = read_line(f_from, buf, sizeof buf, 0)) > 0) {
++		char *mount_uniq, *path;
++
++		if (DEBUG_GTE(DB, 3))
++			printf("Parsing mount info:\n%s\n", buf);
++		mount_uniq = strtok(buf, "\t");
++		path = mount_uniq ? strtok(NULL, "\r\n") : NULL;
++		if (!path) {
++			fprintf(stderr, "Failed to parse line from %s output\n", RSYNCDB_MOUNTS);
++			exit_cleanup(RERR_SYNTAX);
++		}
++
++		if (lstat(path, &st) < 0) {
++			fprintf(stderr, "Failed to lstat(%s): %s\n", path, strerror(errno));
++			exit_cleanup(RERR_IPC);
++		}
++
++		bind_mount_uniq_len = strlcpy(bind_mount_uniq, mount_uniq, sizeof bind_mount_uniq);
++		if (bind_mount_uniq_len >= (int)sizeof bind_mount_uniq)
++			bind_mount_uniq_len = sizeof bind_mount_uniq - 1;
++
++		if (db_output_msgs) {
++			printf("Marking mount \"%s\" (%s) as recently seen\n",
++				bind_mount_uniq, big_num(st.st_dev));
++		}
++		switch (use_db) {
++#ifdef USE_MYSQL
++		case DB_TYPE_MYSQL:
++			bind_devno = st.st_dev;
++			if (exec_mysql(INS_MOUNT) == NULL) {
++				fprintf(stderr, "Failed to update mount info for \"%s\" - %s\n",
++					bind_mount_uniq, mysql_error(dbh.mysql));
++				exit_cleanup(RERR_IPC);
++			}
++			break;
++#endif
++#ifdef USE_SQLITE
++		case DB_TYPE_SQLITE: {
++			int rc, change_cnt;
++			sqlite3_stmt *stmt = statements[INS_MOUNT].sqlite;
++			sqlite3_bind_text(stmt, 1, bind_thishost, bind_thishost_len, SQLITE_STATIC);
++			sqlite3_bind_int64(stmt, 2, bind_mtime);
++			sqlite3_bind_text(stmt, 3, bind_mount_uniq, bind_mount_uniq_len, SQLITE_STATIC);
++			sqlite3_bind_int64(stmt, 4, st.st_dev);
++			rc = sqlite3_step(stmt);
++			if (rc != SQLITE_DONE) {
++				fprintf(stderr, "Failed to insert mount info for \"%s\" - %s (%d)\n",
++					bind_mount_uniq, sqlite3_errmsg(dbh.sqlite), rc);
++				exit_cleanup(RERR_IPC);
++			}
++			change_cnt = sqlite3_changes(dbh.sqlite);
++			sqlite3_reset(stmt);
++			if (change_cnt == 0) {
++				stmt = statements[UPD_MOUNT].sqlite;
++				sqlite3_bind_int64(stmt, 1, bind_mtime);
++				sqlite3_bind_int64(stmt, 2, st.st_dev);
++				sqlite3_bind_text(stmt, 3, bind_thishost, bind_thishost_len, SQLITE_STATIC);
++				sqlite3_bind_text(stmt, 4, bind_mount_uniq, bind_mount_uniq_len, SQLITE_STATIC);
++				rc = sqlite3_step(stmt);
++				if (rc != SQLITE_DONE) {
++					fprintf(stderr, "Failed to update mount info for \"%s\" - %s (%d)\n",
++						bind_mount_uniq, sqlite3_errmsg(dbh.sqlite), rc);
++					exit_cleanup(RERR_IPC);
++				}
++				sqlite3_reset(stmt);
++			}
++			break;
++		    }
++#endif
++		}
++	}
++	close(f_from);
++
++	waitpid(pid, &status, 0);
++
++	switch (use_db) {
++#ifdef USE_MYSQL
++	case DB_TYPE_MYSQL: {
++		if (db_output_msgs) {
++			MYSQL_BIND binds[1];
++			MYSQL_STMT *stmt;
++
++			binds[0].buffer_type = MYSQL_TYPE_BLOB;
++			binds[0].buffer = bind_mount_uniq;
++			binds[0].buffer_length = sizeof bind_mount_uniq;
++			if (fetch_mysql(binds, 1, SEL_MOUNT, 1, &stmt)) {
++				while (1) {
++					printf("Marking mount \"%s\" as unmounted.\n", bind_mount_uniq);
++					if (mysql_stmt_fetch(stmt) != 0)
++						break;
++				}
++				mysql_stmt_free_result(stmt);
++			}
++		}
++
++		if (exec_mysql(UN_MOUNT) == NULL) {
++			fprintf(stderr, "Failed to update old mount info - %s\n",
++				mysql_error(dbh.mysql));
++			exit_cleanup(RERR_IPC);
++		}
++		break;
++	    }
++#endif
++#ifdef USE_SQLITE
++	case DB_TYPE_SQLITE: {
++		sqlite3_stmt *stmt;
++		int rc;
++
++		if (db_output_msgs) {
++			stmt = statements[SEL_MOUNT].sqlite;
++			sqlite3_bind_text(stmt, 1, bind_thishost, bind_thishost_len, SQLITE_STATIC);
++			sqlite3_bind_int64(stmt, 2, bind_mtime);
++			while (1) {
++				if (sqlite3_step(stmt) != SQLITE_ROW)
++					break;
++				printf("Marking mount \"%s\" as unmounted.\n", sqlite3_column_text(stmt, 0));
++			}
++			sqlite3_reset(stmt);
++		}
++
++		stmt = statements[UN_MOUNT].sqlite;
++		sqlite3_bind_text(stmt, 1, bind_thishost, bind_thishost_len, SQLITE_STATIC);
++		sqlite3_bind_int64(stmt, 2, bind_mtime);
++		rc = sqlite3_step(stmt);
++		sqlite3_reset(stmt);
++		if (rc != SQLITE_DONE) {
++			fprintf(stderr, "Failed to update old mount info - %s (%d)\n",
++				sqlite3_errmsg(dbh.sqlite), rc);
++			exit_cleanup(RERR_IPC);
++		}
++		break;
++	    }
++#endif
++	}
++}
++
++unsigned int get_disk_id(int64 devno)
 +{
 +	static unsigned int prior_disk_id = 0;
-+	static unsigned long long prior_devno = 0;
++	static int64 prior_devno = 0;
 +
-+	if (prior_devno == devno && prior_disk_id)
++	if (prior_devno == devno && prior_disk_id) {
++		if (DEBUG_GTE(DB, 5))
++			rprintf(FCLIENT, "get_disk_id(%s,%s) = %d (cached)\n", bind_thishost, big_num(devno), prior_disk_id);
 +		return prior_disk_id;
++	}
 +	prior_devno = devno;
 +
 +	switch (use_db) {
@@ -980,12 +1373,12 @@ new file mode 100644
 +	case DB_TYPE_MYSQL: {
 +		MYSQL_BIND binds[1];
 +
-+		bind_devno = devno; /* The one variable SEL_DEV input value. */
++		bind_devno = devno; /* The one changing SEL_DEV input value. */
 +
 +		/* Bind where to put the output. */
 +		binds[0].buffer_type = MYSQL_TYPE_LONG;
 +		binds[0].buffer = &prior_disk_id;
-+		if (!fetch_mysql(binds, 1, SEL_DEV, 1))
++		if (!fetch_mysql(binds, 1, SEL_DEV, 1, NULL))
 +			prior_disk_id = 0;
 +		break;
 +	    }
@@ -993,8 +1386,8 @@ new file mode 100644
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE: {
 +		sqlite3_stmt *stmt = statements[SEL_DEV].sqlite;
-+		sqlite3_bind_int64(stmt, 1, devno);
-+		sqlite3_bind_text(stmt, 2, bind_thishost, bind_thishost_len, SQLITE_STATIC);
++		sqlite3_bind_text(stmt, 1, bind_thishost, bind_thishost_len, SQLITE_STATIC);
++		sqlite3_bind_int64(stmt, 2, devno);
 +		if (sqlite3_step(stmt) == SQLITE_ROW)
 +			prior_disk_id = sqlite3_column_int(stmt, 0);
 +		else
@@ -1005,12 +1398,15 @@ new file mode 100644
 +#endif
 +	}
 +
++	if (DEBUG_GTE(DB, 2))
++		rprintf(FCLIENT, "get_disk_id(%s,%s) = %d\n", bind_thishost, big_num(devno), prior_disk_id);
 +	return prior_disk_id;
 +}
 +
 +int db_get_checksum(const STRUCT_STAT *st_p, char *sum)
 +{
 +	unsigned int disk_id = get_disk_id(st_p->st_dev);
++	int ok = 0;
 +
 +	if (disk_id == 0)
 +		return 0;
@@ -1030,7 +1426,8 @@ new file mode 100644
 +		binds[0].buffer_type = MYSQL_TYPE_BLOB;
 +		binds[0].buffer = sum;
 +		binds[0].buffer_length = checksum_len;
-+		return fetch_mysql(binds, 1, SEL_SUM, 1);
++		ok = fetch_mysql(binds, 1, SEL_SUM, 1, NULL);
++		break;
 +	    }
 +#endif
 +#ifdef USE_SQLITE
@@ -1047,23 +1444,28 @@ new file mode 100644
 +			if (len > MAX_DIGEST_LEN)
 +				len = MAX_DIGEST_LEN;
 +			memcpy(sum, sqlite3_column_blob(stmt, 0), len);
-+			sqlite3_reset(stmt);
-+			return 1;
++			ok = 1;
 +		}
 +		sqlite3_reset(stmt);
-+		return 0;
++		break;
 +	    }
 +#endif
 +	}
 +
-+	return 0;
++	if (DEBUG_GTE(DB, 2)) {
++		rprintf(FCLIENT, "[%s] %s DB checksum for %s,%s,%d: %s\n",
++			who_am_i(), ok ? "Found" : "No", big_num(st_p->st_dev),
++			big_num(st_p->st_ino), md_num, sum_as_hex(sum));
++	}
++
++	return ok;
 +}
 +
 +int db_get_both_checksums(const STRUCT_STAT *st_p, int *right_sum_cnt, int *wrong_sum_cnt, char **sum4, char **sum5)
 +{
 +	int rows, j, sum_type[2];
 +	static char dbsum[MD5_DIGEST_LEN*2];
-+	long long dbsize[2], dbmtime[2], dbctime[2];
++	int64 dbsize[2], dbmtime[2], dbctime[2];
 +	unsigned int disk_id = get_disk_id(st_p->st_dev);
 +
 +	if (disk_id == 0)
@@ -1077,7 +1479,7 @@ new file mode 100644
 +		bind_disk_id = disk_id;
 +		bind_ino = st_p->st_ino;
 +
-+		/* We set the superfluous lengths for incrementing to extra rows. */
++		/* NOTE: the superfluous lengths below are for incrementing to extra rows. */
 +		binds[0].buffer_type = MYSQL_TYPE_BLOB;
 +		binds[0].buffer = dbsum;
 +		binds[0].buffer_length = checksum_len;
@@ -1093,7 +1495,7 @@ new file mode 100644
 +		binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
 +		binds[4].buffer = (char*)dbctime;
 +		binds[4].buffer_length = sizeof (*dbctime);
-+		rows = fetch_mysql(binds, 5, SEL_SUM, 2);
++		rows = fetch_mysql(binds, 5, SEL_SUM, 2, NULL);
 +		break;
 +	    }
 +#endif
@@ -1103,9 +1505,10 @@ new file mode 100644
 +		sqlite3_bind_int(stmt, 1, disk_id);
 +		sqlite3_bind_int64(stmt, 2, st_p->st_ino);
 +		for (j = 0; j < 2; j++) {
++			int len;
 +			if (sqlite3_step(stmt) != SQLITE_ROW)
 +				break;
-+			int len = sqlite3_column_bytes(stmt, 0);
++			len = sqlite3_column_bytes(stmt, 0);
 +			if (len > checksum_len)
 +				len = checksum_len;
 +			memcpy(dbsum + checksum_len*j, sqlite3_column_blob(stmt, 0), len);
@@ -1150,6 +1553,8 @@ new file mode 100644
 +int db_set_checksum(int mdnum, const STRUCT_STAT *st_p, const char *sum)
 +{
 +	unsigned int disk_id = get_disk_id(st_p->st_dev);
++	const char *errmsg = NULL;
++	int rc = 0;
 +
 +	if (disk_id == 0)
 +		return 0;
@@ -1157,6 +1562,12 @@ new file mode 100644
 +	switch (use_db) {
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL:
++		if (transaction_state == 0) {
++			if (mysql_query(dbh.mysql, "BEGIN") < 0)
++				return 0;
++			transaction_state = 1;
++		}
++
 +		bind_disk_id = disk_id;
 +		bind_ino = st_p->st_ino;
 +		bind_mdnum = mdnum;
@@ -1164,24 +1575,23 @@ new file mode 100644
 +		bind_mtime = st_p->st_mtime;
 +		bind_ctime = st_p->st_ctime;
 +		memcpy(bind_sum, sum, checksum_len);
-+
-+		return exec_mysql(REP_SUM) != NULL;
++		if (exec_mysql(REP_SUM) == NULL)
++			errmsg = mysql_error(dbh.mysql);
++		break;
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE: {
-+		int rc;
-+		sqlite3_stmt *stmt = statements[REP_SUM].sqlite;
-+		if (stmt == NULL) {
-+			int rc, lock_failures = 0;
-+			while (1) {
-+				if ((rc = db_prepare_queries_sqlite(1)) == 0)
-+					break;
-+				if (rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
-+					return 0;
-+				if (++lock_failures > MAX_LOCK_FAILURES)
-+					return 0;
-+				msleep(LOCK_FAIL_MSLEEP);
-+			}
++		sqlite3_stmt *stmt;
++
++		if (transaction_state == 0) {
++			if (sqlite3_exec(dbh.sqlite, "BEGIN", NULL, NULL, NULL) != 0)
++				return 0;
++			transaction_state = 1;
++		}
++
++		if (!(stmt = statements[REP_SUM].sqlite)) {
++			if (!prepare_sqlite_queries(PREP_WRITE))
++				return 0;
 +			stmt = statements[REP_SUM].sqlite;
 +		}
 +		sqlite3_bind_int(stmt, 1, disk_id);
@@ -1191,6 +1601,64 @@ new file mode 100644
 +		sqlite3_bind_int64(stmt, 5, st_p->st_mtime);
 +		sqlite3_bind_int64(stmt, 6, st_p->st_ctime);
 +		sqlite3_bind_blob(stmt, 7, sum, checksum_len, SQLITE_TRANSIENT);
++		rc = sqlite3_step(stmt);
++		sqlite3_reset(stmt);
++		if (rc != SQLITE_DONE)
++			errmsg = sqlite3_errmsg(dbh.sqlite);
++		break;
++	    }
++#endif
++	}
++
++	if (!errmsg) {
++		if (DEBUG_GTE(DB, 2)) {
++			rprintf(FCLIENT, "[%s] Set DB checksum for %s,%s,%d: %s\n",
++				who_am_i(), big_num(st_p->st_dev), big_num(st_p->st_ino),
++				md_num, sum_as_hex(sum));
++		}
++	} else {
++		rprintf(log_code, "[%s] Failed to set checksum for %s,%s,%d: %s (%d)\n",
++			who_am_i(), big_num(st_p->st_dev), big_num(st_p->st_ino),
++			md_num, errmsg, rc);
++	}
++
++	return errmsg ? 0 : 1;
++}
++
++/* For a delayed-update copy, we set the checksum on the file when it was
++ * inside the partial-dir.  Since renaming the file changes its ctime, we need
++ * to update the ctime to its new value (we can skip this in db_lax mode). */
++int db_update_ctime(int mdnum, const STRUCT_STAT *st_p)
++{
++	unsigned int disk_id = get_disk_id(st_p->st_dev);
++
++	if (disk_id == 0)
++		return 0;
++
++	switch (use_db) {
++#ifdef USE_MYSQL
++	case DB_TYPE_MYSQL:
++		bind_ctime = st_p->st_ctime;
++		bind_disk_id = disk_id;
++		bind_ino = st_p->st_ino;
++		bind_mdnum = mdnum;
++		bind_size = st_p->st_size;
++		bind_mtime = st_p->st_mtime;
++		return exec_mysql(UPD_CTIME) != NULL;
++#endif
++#ifdef USE_SQLITE
++	case DB_TYPE_SQLITE: {
++		int rc;
++
++		sqlite3_stmt *stmt = statements[UPD_CTIME].sqlite;
++		if (stmt == NULL)
++			return 0;
++		sqlite3_bind_int64(stmt, 1, st_p->st_ctime);
++		sqlite3_bind_int(stmt, 2, disk_id);
++		sqlite3_bind_int64(stmt, 3, st_p->st_ino);
++		sqlite3_bind_int(stmt, 4, mdnum);
++		sqlite3_bind_int64(stmt, 5, st_p->st_size);
++		sqlite3_bind_int64(stmt, 6, st_p->st_mtime);
 +		rc = sqlite3_step(stmt);
 +		sqlite3_reset(stmt);
 +		return rc == SQLITE_DONE;
@@ -1207,6 +1675,7 @@ new file mode 100644
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL: {
 +		MYSQL_BIND binds[MAX_BIND_CNT];
++		char *sql;
 +
 +		mysql_query(dbh.mysql,
 +			"CREATE TEMPORARY TABLE inode_present ("
@@ -1217,31 +1686,27 @@ new file mode 100644
 +			") ENGINE=MEMORY"
 +			);
 +
++		sql="INSERT IGNORE INTO inode_present"
++		    " SET disk_id = ?, ino = ?, present = 1";
 +		memset(binds, 0, sizeof binds);
 +		binds[0].buffer_type = MYSQL_TYPE_LONG;
 +		binds[0].buffer = &bind_disk_id;
 +		binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
 +		binds[1].buffer = &bind_ino;
-+		statements[INS_PRESENT].mysql = prepare_mysql(binds, 2,
-+			"INSERT IGNORE INTO inode_present"
-+			" SET disk_id = ?, ino = ?, present = 1"
-+			);
-+		if (!statements[INS_PRESENT].mysql)
-+			return 0;
++		if (!prepare_mysql(INS_PRESENT, binds, 2, sql))
++			exit_cleanup(RERR_SYNTAX);
 +
++		sql="DELETE m.*"
++		    " FROM inode_map AS m"
++		    " LEFT JOIN inode_present USING(disk_id, ino)"
++		    " JOIN disk AS d ON(m.disk_id = d.disk_id)"
++		    " WHERE host = ? AND devno != 0 AND present IS NULL";
 +		memset(binds, 0, sizeof binds);
 +		binds[0].buffer_type = MYSQL_TYPE_STRING;
 +		binds[0].buffer = &bind_thishost;
 +		binds[0].buffer_length = bind_thishost_len;
-+		statements[DEL_SUMS].mysql = prepare_mysql(binds, 1,
-+			"DELETE m.*"
-+			" FROM inode_map AS m"
-+			" LEFT JOIN inode_present USING(disk_id, ino)"
-+			" JOIN disk AS d ON(m.disk_id = d.disk_id)"
-+			" WHERE host = ? AND mounted = 1 AND present IS NULL"
-+			);
-+		if (!statements[DEL_SUMS].mysql)
-+			return 0;
++		if (!prepare_mysql(DEL_SUMS, binds, 1, sql))
++			exit_cleanup(RERR_SYNTAX);
 +
 +		return 1;
 +	    }
@@ -1250,8 +1715,7 @@ new file mode 100644
 +	case DB_TYPE_SQLITE: {
 +		char *sql;
 +		sql="ATTACH DATABASE '' AS aux1;"; /* Private temp DB, probably in-memory */
-+		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
-+			return 0;
++		run_sql(sql);
 +
 +		sql="CREATE TABLE aux1.inode_present ("
 +		    " disk_id integer NOT NULL,"
@@ -1259,14 +1723,13 @@ new file mode 100644
 +		    " present tinyint NOT NULL default '1',"
 +		    " PRIMARY KEY (disk_id,ino)"
 +		    ")";
-+		if (sqlite3_exec(dbh.sqlite, sql, NULL, NULL, NULL) != 0)
-+			return 0;
++		run_sql(sql);
 +
 +		sql="INSERT OR IGNORE INTO aux1.inode_present"
 +		    " (disk_id, ino, present)"
 +		    " VALUES (?, ?, 1)";
-+		if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[INS_PRESENT].sqlite, NULL) != 0)
-+			return 0;
++		if (!prepare_sqlite(INS_PRESENT, False, sql))
++			exit_cleanup(RERR_SYNTAX);
 +
 +		sql="DELETE FROM inode_map"
 +		    " WHERE ROWID IN ("
@@ -1274,10 +1737,10 @@ new file mode 100644
 +		    "  FROM inode_map AS m"
 +		    "  LEFT JOIN aux1.inode_present USING(disk_id, ino)"
 +		    "  JOIN disk AS d ON(m.disk_id = d.disk_id)"
-+		    "  WHERE host = ? AND MOUNTED = 1 AND present IS NULL"
++		    "  WHERE host = ? AND devno != 0 AND present IS NULL"
 +		    " )";
-+		if (sqlite3_prepare_v2(dbh.sqlite, sql, -1, &statements[DEL_SUMS].sqlite, NULL) != 0)
-+			return 0;
++		if (!prepare_sqlite(DEL_SUMS, False, sql))
++			exit_cleanup(RERR_SYNTAX);
 +
 +		return 1;
 +	    }
@@ -1287,7 +1750,7 @@ new file mode 100644
 +	return 0;
 +}
 +
-+int db_note_present(int disk_id, long long ino)
++int db_note_present(int disk_id, int64 ino)
 +{
 +	switch (use_db) {
 +#ifdef USE_MYSQL
@@ -1324,6 +1787,7 @@ new file mode 100644
 +		MYSQL_STMT *stmt = exec_mysql(DEL_SUMS);
 +		if (stmt != NULL)
 +			del_cnt = mysql_affected_rows(dbh.mysql);
++		break;
 +	    }
 +#endif
 +#ifdef USE_SQLITE
@@ -1335,11 +1799,10 @@ new file mode 100644
 +		if (rc == SQLITE_DONE)
 +			del_cnt = sqlite3_changes(dbh.sqlite);
 +		sqlite3_reset(stmt);
++		break;
 +	    }
 +#endif
 +	}
-+
-+	db_clean_init();
 +
 +	return del_cnt;
 +}
@@ -1451,13 +1914,13 @@ new file mode 100644
 +	return memcmp(sum1, sum2, checksum_len) != 0;
 +}
 +
-+// Returns 1 if there is a checksum change, else undef.
++/* Returns 1 if there is a checksum change, else 0. */
 +static int mention_file(const char *dir, const char *name, int right_cnt, int wrong_cnt,
 +			const char *dbsum4, const char *dbsum5, const char *sum4, const char *sum5)
 +{
 +	char *info_str = wrong_cnt && !right_cnt ? "!i " : "   ";
-+	char *md4_str = !db_do_md4 ? NULL : !dbsum4 ? "+4 " : !sum4 ? "?4 " : sums_ne(sum4, dbsum4) ? "!4 " : "   ";
-+	char *md5_str = !db_do_md5 ? NULL : !dbsum5 ? "+5 " : !sum5 ? "?5 " : sums_ne(sum5, dbsum5) ? "!5 " : "   ";
++	char *md4_str = !db_do_md4 ? NULL : !dbsum4 ? "+4 " : !*sum4 ? "?4 " : sums_ne(sum4, dbsum4) ? "!4 " : "   ";
++	char *md5_str = !db_do_md5 ? NULL : !dbsum5 ? "+5 " : !*sum5 ? "?5 " : sums_ne(sum5, dbsum5) ? "!5 " : "   ";
 +	int chg = *info_str != ' ' || (md4_str && *md4_str != ' ') || (md5_str && *md5_str != ' ');
 +	if (chg || db_output_unchanged) {
 +		if (db_output_info) {
@@ -1487,7 +1950,7 @@ new file mode 100644
 +	return chg;
 +}
 +
-+NORETURN void run_dbonly(const char **args, int want_verbosity)
++NORETURN void run_dbonly(const char **args)
 +{
 +	char start_dir[MAXPATHLEN], dirbuf[MAXPATHLEN];
 +	int need_sum_cnt, start_dir_len;
@@ -1495,24 +1958,13 @@ new file mode 100644
 +	struct name_list *names;
 +	int exit_code = 0;
 +
-+	verbosity = want_verbosity;
 +	checksum_len = MD5_DIGEST_LEN; /* Same as MD4_DIGEST_LEN */
 +	protocol_version = 31;
-+
-+	if (db_check) {
-+		if (!verbosity)
-+			verbosity = 1;
-+		db_output_info = 1;
-+	}
-+	if (!saw_db_output_opt && verbosity)
-+		db_output_dirs = db_output_name = 1;
-+	if (!saw_db_sum_opt)
-+		db_do_md4 = db_do_md5 = 1;
 +
 +	need_sum_cnt = db_do_md4 + db_do_md5;
 +
 +	if (!db_read_config(FERROR, db_config) || !db_connect(1))
-+		exit(1);
++		exit_cleanup(RERR_FILEIO);
 +
 +	if (db_clean)
 +		db_clean_init();
@@ -1581,6 +2033,9 @@ new file mode 100644
 +			prior_name = names;
 +			names = names->next;
 +
++			dbsum4 = dbsum5 = NULL;
++			*sum4 = *sum5 = '\0';
++
 +			if (lstat(name, &st) < 0) {
 +				rprintf(FERROR, "Failed to lstat(%s): %s\n", name, strerror(errno));
 +				continue;
@@ -1588,7 +2043,7 @@ new file mode 100644
 +			if (S_ISLNK(st.st_mode))
 +				continue;
 +			if (S_ISDIR(st.st_mode)) {
-+				// add optional excluding of things like /^(CVS|\.svn|\.git|\.bzr)$/;
++				/* add optional excluding of things like /^(CVS|\.svn|\.git|\.bzr)$/; */
 +				if (recurse) {
 +					struct name_list *add = new_name(dir, name);
 +					if (add) {
@@ -1608,7 +2063,7 @@ new file mode 100644
 +				continue;
 +			if (db_clean) {
 +				db_note_present(disk_id, st.st_ino);
-+				if (db_no_update && !db_check)
++				if (!db_update && !db_check)
 +					continue;
 +			}
 +			db_get_both_checksums(&st, &right_sum_cnt, &wrong_sum_cnt,
@@ -1619,7 +2074,7 @@ new file mode 100644
 +				continue;
 +			}
 +
-+			if (!db_check || right_sum_cnt || db_output_sum) {
++			if (db_update || (db_check && right_sum_cnt) || db_output_sum) {
 +				uchar *data;
 +				int32 remainder;
 +				md_context m4, m5;
@@ -1664,8 +2119,8 @@ new file mode 100644
 +
 +			int chg = mention_file(reldir, name, right_sum_cnt, wrong_sum_cnt, dbsum4, dbsum5, sum4, sum5);
 +			if (!chg) {
-+				// Only db_check should get here...
-+			} else if (db_no_update) {
++				/* Only db_check should get here... */
++			} else if (!db_update) {
 +				exit_code = 1;
 +			} else {
 +				int fail = 0;
@@ -1675,8 +2130,7 @@ new file mode 100644
 +					fail = 1;
 +				if (fail) {
 +					fprintf(stderr, "Failed to set checksum on %s/%s\n", reldir, name);
-+					db_disconnect();
-+					exit(1);
++					exit_cleanup(RERR_FILEIO);
 +				}
 +			}
 +		}
@@ -1693,12 +2147,11 @@ new file mode 100644
 +
 +	if (db_clean) {
 +		int rows = db_clean_inodes();
-+		if (verbosity)
++		if (db_output_msgs)
 +			printf("Cleaned out %d old inode%s.\n", rows, rows == 1 ? "" : "s");
 +	}
 +
 +	db_disconnect();
-+
 +	exit(exit_code);
 +}
 diff --git a/flist.c b/flist.c
@@ -1755,6 +2208,16 @@ diff --git a/flist.c b/flist.c
  	rprintf(FLOG, "building file list\n");
  	if (show_filelist_p())
  		start_filelist_progress("building file list");
+@@ -2422,6 +2431,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+ 			rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
+ 	}
+ 
++	if (use_db)
++		db_disconnect();
++
+ 	return flist;
+ }
+ 
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -1776,15 +2239,6 @@ diff --git a/generator.c b/generator.c
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
  
-@@ -836,7 +838,7 @@ static int copy_altdest_file(const char *src, const char *dest, struct file_stru
- 	}
- 	partialptr = partial_dir ? partial_dir_fname(dest) : NULL;
- 	preserve_xattrs = 0; /* xattrs were copied with file */
--	ok = finish_transfer(dest, copy_to, src, partialptr, file, 1, 0);
-+	ok = finish_transfer(dest, copy_to, src, partialptr, file, 1, 0, NULL);
- 	preserve_xattrs = save_preserve_xattrs;
- 	cleanup_disable();
- 	return ok ? 0 : -1;
 @@ -2193,6 +2195,13 @@ void generate_files(int f_out, const char *local_name)
  			: "enabled");
  	}
@@ -1799,6 +2253,14 @@ diff --git a/generator.c b/generator.c
  	dflt_perms = (ACCESSPERMS & ~orig_umask);
  
  	do {
+@@ -2351,4 +2360,7 @@ void generate_files(int f_out, const char *local_name)
+ 
+ 	if (DEBUG_GTE(GENR, 1))
+ 		rprintf(FINFO, "generate_files finished\n");
++
++	if (use_db)
++		db_disconnect();
+ }
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
@@ -1886,16 +2348,26 @@ diff --git a/main.c b/main.c
  extern char *shell_cmd;
  extern char *batch_name;
  extern char *password_file;
-@@ -1622,6 +1625,9 @@ int main(int argc,char *argv[])
- 		exit_cleanup(RERR_SYNTAX);
+@@ -1079,6 +1082,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+ 	if (am_daemon && io_timeout && protocol_version >= 31)
+ 		send_msg_int(MSG_IO_TIMEOUT, io_timeout);
+ 
++	if (db_config)
++		db_read_config(FERROR, db_config);
++
+ 	if (am_sender) {
+ 		keep_dirlinks = 0; /* Must be disabled on the sender. */
+ 		if (need_messages_from_generator)
+@@ -1360,6 +1366,9 @@ static int start_client(int argc, char *argv[])
+ 		}
  	}
  
 +	if (db_config)
 +		db_read_config(FERROR, db_config);
 +
- 	if (am_server) {
- 		set_nonblocking(STDIN_FILENO);
- 		set_nonblocking(STDOUT_FILENO);
+ 	if (daemon_over_rsh < 0)
+ 		return start_socket_client(shell_machine, remote_argc, remote_argv, argc, argv);
+ 
 diff --git a/mkproto.pl b/mkproto.pl
 --- a/mkproto.pl
 +++ b/mkproto.pl
@@ -1911,7 +2383,15 @@ diff --git a/mkproto.pl b/mkproto.pl
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -93,6 +93,7 @@ int use_qsort = 0;
+@@ -80,6 +80,7 @@ int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
+ int am_server = 0;
+ int am_sender = 0;
+ int am_starting_up = 1;
++int am_dbadmin = 0;
+ int relative_paths = -1;
+ int implied_dirs = 1;
+ int missing_args = 0; /* 0 = FERROR_XFER, 1 = ignore, 2 = delete */
+@@ -93,6 +94,7 @@ int use_qsort = 0;
  char *files_from = NULL;
  int filesfrom_fd = -1;
  char *filesfrom_host = NULL;
@@ -1919,17 +2399,25 @@ diff --git a/options.c b/options.c
  int eol_nulls = 0;
  int protect_args = -1;
  int human_readable = 1;
-@@ -100,6 +101,9 @@ int recurse = 0;
+@@ -100,6 +102,9 @@ int recurse = 0;
  int allow_inc_recurse = 1;
  int xfer_dirs = -1;
  int am_daemon = 0;
-+int db_clean, db_check, db_do_md4, db_do_md5, db_no_update, db_lax, db_init, db_mounts;
-+int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs;
++int db_clean, db_check, db_do_md4, db_do_md5, db_update = 1, db_lax, db_init, db_mounts;
++int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs, db_output_msgs;
 +int saw_db_output_opt, saw_db_sum_opt;
  int connect_timeout = 0;
  int keep_partial = 0;
  int safe_symlinks = 0;
-@@ -572,6 +576,7 @@ static void print_rsync_version(enum logcode f)
+@@ -268,6 +273,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
+ 	DEBUG_WORD(CHDIR, W_CLI|W_SRV, "Debug when the current directory changes"),
+ 	DEBUG_WORD(CONNECT, W_CLI, "Debug connection events (levels 1-2)"),
+ 	DEBUG_WORD(CMD, W_CLI, "Debug commands+options that are issued (levels 1-2)"),
++	DEBUG_WORD(DB, W_SND|W_REC, "Debug DB operations (levels 1-5)"),
+ 	DEBUG_WORD(DEL, W_REC, "Debug delete actions (levels 1-3)"),
+ 	DEBUG_WORD(DELTASUM, W_SND|W_REC, "Debug delta-transfer checksumming (levels 1-4)"),
+ 	DEBUG_WORD(DUP, W_REC, "Debug weeding of duplicate names"),
+@@ -572,6 +578,7 @@ static void print_rsync_version(enum logcode f)
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -1937,7 +2425,7 @@ diff --git a/options.c b/options.c
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -608,6 +613,11 @@ static void print_rsync_version(enum logcode f)
+@@ -608,6 +615,11 @@ static void print_rsync_version(enum logcode f)
  #ifdef CAN_SET_SYMLINK_TIMES
  	symtimes = "";
  #endif
@@ -1949,7 +2437,7 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -621,8 +631,8 @@ static void print_rsync_version(enum logcode f)
+@@ -621,8 +633,8 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -1960,7 +2448,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -671,6 +681,9 @@ void usage(enum logcode F)
+@@ -671,6 +683,9 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -1970,7 +2458,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -818,6 +831,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -818,6 +833,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
@@ -1978,7 +2466,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
-@@ -957,6 +971,10 @@ static struct poptOption long_options[] = {
+@@ -957,6 +973,10 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -1989,7 +2477,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1045,6 +1063,9 @@ static struct poptOption long_options[] = {
+@@ -1045,6 +1065,9 @@ static struct poptOption long_options[] = {
    {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
    {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
@@ -1999,16 +2487,13 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1098,6 +1119,51 @@ static struct poptOption long_daemon_options[] = {
+@@ -1098,6 +1121,50 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
 +static void dbonly_usage(enum logcode F)
 +{
-+  print_rsync_version(F);
-+
-+  rprintf(F,"\n");
-+  rprintf(F,"Usage: rsync --db=CONFIG_FILE [OPTIONS] [DIRS]\n");
++  rprintf(F,"Usage: rsyncdb --db=CONFIG_FILE [OPTIONS] [DIRS]\n");
 +  rprintf(F,"\n");
 +  rprintf(F,"Options:\n");
 +  rprintf(F,"    --db=CONFIG   Specify the CONFIG file to read for the DB info.\n");
@@ -2017,12 +2502,11 @@ diff --git a/options.c b/options.c
 +  rprintf(F,"-s, --sums=SUMS   List which checksums to update (default: 4,5).\n");
 +  rprintf(F,"-o, --output=STR  One or more letters of what to output (default is nothing).\n");
 +  rprintf(F,"-c, --check       Check the checksums (by reading the files) and fix issues.\n");
-+  rprintf(F,"                  Implies --verbose and enables --output=i.\n");
 +  rprintf(F,"    --clean       Note all inodes in the DIRS and remove DB extras.\n");
 +  rprintf(F,"-N, --no-update   Avoids updating/adding info with --check and/or --clean.\n");
 +  rprintf(F,"    --init        Initialize a DB by (re-)creating its tables.\n");
 +  rprintf(F,"    --mounts      Scan for mounted filesystems and update the DB.\n");
-+  rprintf(F,"-v, --verbose     Output more info.\n");
++  rprintf(F,"-q, --quiet       Disable the default non-error output.\n");
 +  rprintf(F,"-h, --help        Display this help message.\n");
 +}
 +
@@ -2034,8 +2518,11 @@ diff --git a/options.c b/options.c
 +  {"db-only",          0,  POPT_ARG_STRING, &db_config, 0, 0, 0 },
 +  {"db-lax",           0,  POPT_ARG_VAL,    &db_lax, 1, 0, 0 },
 +  {"no-db-lax",        0,  POPT_ARG_VAL,    &db_lax, 0, 0, 0 },
-+  {"no-update",       'N', POPT_ARG_NONE,   &db_no_update, 0, 0, 0 },
-+  {"no-u",             0,  POPT_ARG_NONE,   &db_no_update, 0, 0, 0 },
++  {"info",             0,  POPT_ARG_STRING, 0, OPT_INFO, 0, 0 },
++  {"debug",            0,  POPT_ARG_STRING, 0, OPT_DEBUG, 0, 0 },
++  {"update",          'u', POPT_ARG_VAL,    &db_update, 1, 0, 0 },
++  {"no-update",       'N', POPT_ARG_VAL,    &db_update, 0, 0, 0 },
++  {"no-u",             0,  POPT_ARG_VAL,    &db_update, 0, 0, 0 },
 +  {"output",          'o', POPT_ARG_STRING, 0, 'o', 0, 0 },
 +  {"recursive",       'r', POPT_ARG_VAL,    &recurse, 1, 0, 0 },
 +  {"no-recursive",     0,  POPT_ARG_VAL,    &recurse, 0, 0, 0 },
@@ -2043,7 +2530,7 @@ diff --git a/options.c b/options.c
 +  {"sums",            's', POPT_ARG_STRING, 0, 's', 0, 0 },
 +  {"init",             0,  POPT_ARG_NONE,   &db_init, 0, 0, 0 },
 +  {"mounts",           0,  POPT_ARG_NONE,   &db_mounts, 0, 0, 0 },
-+  {"verbose",         'v', POPT_ARG_NONE,   0, 'v', 0, 0 },
++  {"quiet",           'q', POPT_ARG_NONE,   &quiet, 0, 0, 0 },
 +  {"help",            'h', POPT_ARG_NONE,   0, 'h', 0, 0 },
 +  {"db-help",          0,  POPT_ARG_NONE,   0, 'h', 0, 0 },
 +  {0,0,0,0, 0, 0, 0}
@@ -2051,16 +2538,19 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1276,6 +1342,82 @@ static void create_refuse_error(int which)
+@@ -1276,6 +1343,100 @@ static void create_refuse_error(int which)
  	}
  }
  
 +static NORETURN void parse_dbonly_args(int argc, const char **argv)
 +{
 +	poptContext pc = poptGetContext(RSYNC_NAME, argc, argv, long_dbonly_options, 0);
++	const char *arg;
 +	int opt;
 +
 +	recurse = 1;
++	am_dbadmin = 1;
++
 +	while ((opt = poptGetNextOpt(pc)) != -1) {
 +		const char *cp;
 +		switch (opt) {
@@ -2106,8 +2596,14 @@ diff --git a/options.c b/options.c
 +			dbonly_usage(FINFO);
 +			exit_cleanup(0);
 +
-+		case 'v':
-+			verbose++;
++		case OPT_INFO:
++			arg = poptGetOptArg(pc);
++			parse_output_words(info_words, info_levels, arg, USER_PRIORITY);
++			break;
++
++		case OPT_DEBUG:
++			arg = poptGetOptArg(pc);
++			parse_output_words(debug_words, debug_levels, arg, USER_PRIORITY);
 +			break;
 +
 +		default:
@@ -2127,14 +2623,23 @@ diff --git a/options.c b/options.c
 +		exit_cleanup(RERR_SYNTAX);
 +	}
 +
++	if (db_check)
++		db_output_info = 1;
++	if (!saw_db_output_opt && !quiet)
++		db_output_dirs = db_output_name = 1;
++	if (!quiet)
++		db_output_msgs = 1;
++	if (!saw_db_sum_opt)
++		db_do_md5 = 1;
++
 +	am_starting_up = 0;
-+	run_dbonly(poptGetArgs(pc), verbose);
++	run_dbonly(poptGetArgs(pc));
 +	exit(42); /* NOT REACHED */
 +}
  
  /**
   * Process command line arguments.  Called on both local and remote.
-@@ -1293,10 +1435,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1293,10 +1454,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	int argc = *argc_p;
  	int opt;
  
@@ -2153,7 +2658,7 @@ diff --git a/options.c b/options.c
  #ifdef ICONV_OPTION
  		if (!*lp_charset(module_id))
  			set_refuse_options("iconv");
-@@ -1419,6 +1569,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1419,6 +1588,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2166,7 +2671,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1493,6 +1649,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1493,6 +1668,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -2213,15 +2718,28 @@ diff --git a/pipe.c b/pipe.c
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
-@@ -24,6 +24,7 @@
+@@ -24,6 +24,8 @@
  
  extern int dry_run;
  extern int do_xfers;
 +extern int use_db;
++extern int db_lax;
  extern int am_root;
  extern int am_server;
  extern int inc_recurse;
-@@ -537,6 +538,13 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -431,6 +433,11 @@ static void handle_delayed_updates(char *local_name)
+ 					"rename failed for %s (from %s)",
+ 					full_fname(fname), partialptr);
+ 			} else {
++				if (use_db && protocol_version >= 30 && !db_lax) {
++					STRUCT_STAT st;
++					if (do_lstat(fname, &st) == 0)
++						db_update_ctime(5, &st);
++				}
+ 				if (remove_source_files
+ 				 || (preserve_hard_links && F_IS_HLINKED(file)))
+ 					send_msg_int(MSG_SUCCESS, ndx);
+@@ -537,6 +544,13 @@ int recv_files(int f_in, int f_out, char *local_name)
  	if (delay_updates)
  		delayed_bits = bitbag_create(cur_flist->used + 1);
  
@@ -2235,52 +2753,66 @@ diff --git a/receiver.c b/receiver.c
  	while (1) {
  		cleanup_disable();
  
-@@ -856,10 +864,11 @@ int recv_files(int f_in, int f_out, char *local_name)
- 		}
- 
- 		if ((recv_ok && (!delay_updates || !partialptr)) || inplace) {
-+			const char *set_md5 = use_db ? sender_file_sum : NULL;
- 			if (partialptr == fname)
- 				partialptr = NULL;
- 			if (!finish_transfer(fname, fnametmp, fnamecmp,
--					     partialptr, file, recv_ok, 1))
-+					     partialptr, file, recv_ok, 1, set_md5))
- 				recv_ok = -1;
- 			else if (fnamecmp == partialptr) {
+@@ -865,6 +879,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				do_unlink(partialptr);
-@@ -874,7 +883,7 @@ int recv_files(int f_in, int f_out, char *local_name)
- 				do_unlink(fnametmp);
- 				recv_ok = -1;
- 			} else if (!finish_transfer(partialptr, fnametmp, fnamecmp, NULL,
--						    file, recv_ok, !partial_dir))
-+						    file, recv_ok, !partial_dir, NULL))
+ 				handle_partial_dir(partialptr, PDIR_DELETE);
+ 			}
++			if (use_db && protocol_version >= 30 && do_lstat(fname, &st) == 0)
++				db_set_checksum(5, &st, sender_file_sum);
+ 		} else if (keep_partial && partialptr) {
+ 			if (!handle_partial_dir(partialptr, PDIR_CREATE)) {
+ 				rprintf(FERROR,
+@@ -878,6 +894,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				recv_ok = -1;
  			else if (delay_updates && recv_ok) {
  				bitbag_set_bit(delayed_bits, ndx);
++				if (use_db && protocol_version >= 30 && do_lstat(partialptr, &st) == 0)
++					db_set_checksum(5, &st, sender_file_sum);
+ 				recv_ok = 2;
+ 			} else
+ 				partialptr = NULL;
+@@ -944,5 +962,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+ 	if (DEBUG_GTE(RECV, 1))
+ 		rprintf(FINFO,"recv_files finished\n");
+ 
++	if (use_db)
++		db_disconnect();
++
+ 	return 0;
+ }
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -640,7 +640,7 @@ RETSIGTYPE sig_int(int sig_num)
- int finish_transfer(const char *fname, const char *fnametmp,
- 		    const char *fnamecmp, const char *partialptr,
- 		    struct file_struct *file, int ok_to_set_time,
--		    int overwriting_basis)
-+		    int overwriting_basis, const char *set_md5)
+@@ -39,6 +39,7 @@ extern int am_daemon;
+ extern int am_sender;
+ extern int am_receiver;
+ extern int am_generator;
++extern int am_dbadmin;
+ extern int am_starting_up;
+ extern int allow_8bit_chars;
+ extern int protocol_version;
+@@ -738,6 +739,8 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
+ 
+ const char *who_am_i(void)
  {
- 	int ret;
- 	const char *temp_copy_name = partialptr && *partialptr != '/' ? partialptr : NULL;
-@@ -679,6 +679,11 @@ int finish_transfer(const char *fname, const char *fnametmp,
- 	}
- 	if (ret == 0) {
- 		/* The file was moved into place (not copied), so it's done. */
-+		if (set_md5) {
-+			STRUCT_STAT st;
-+			if (do_lstat(fname, &st) == 0)
-+				db_set_checksum(5, &st, set_md5);
-+		}
- 		return 1;
- 	}
- 	/* The file was copied, so tweak the perms of the copied file.  If it
++	if (am_dbadmin)
++		return "rsyncdb";
+ 	if (am_starting_up)
+ 		return am_server ? "server" : "client";
+ 	return am_sender ? "sender"
+diff --git a/rsync.h b/rsync.h
+--- a/rsync.h
++++ b/rsync.h
+@@ -1254,7 +1254,8 @@ extern short info_levels[], debug_levels[];
+ #define DEBUG_CHDIR (DEBUG_BIND+1)
+ #define DEBUG_CONNECT (DEBUG_CHDIR+1)
+ #define DEBUG_CMD (DEBUG_CONNECT+1)
+-#define DEBUG_DEL (DEBUG_CMD+1)
++#define DEBUG_DB (DEBUG_CMD+1)
++#define DEBUG_DEL (DEBUG_DB+1)
+ #define DEBUG_DELTASUM (DEBUG_DEL+1)
+ #define DEBUG_DUP (DEBUG_DELTASUM+1)
+ #define DEBUG_EXIT (DEBUG_DUP+1)
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
@@ -2294,7 +2826,7 @@ diff --git a/rsync.yo b/rsync.yo
   -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
       --no-OPTION             turn off an implied OPTION (e.g. --no-D)
   -r, --recursive             recurse into directories
-@@ -625,6 +628,66 @@ option's before-the-transfer "Does this file need to be updated?" check.
+@@ -625,6 +628,67 @@ option's before-the-transfer "Does this file need to be updated?" check.
  For protocol 30 and beyond (first supported in 3.0.0), the checksum used is
  MD5.  For older protocols, the checksum used is MD4.
  
@@ -2318,7 +2850,8 @@ diff --git a/rsync.yo b/rsync.yo
 +And a SQLite configuration might look like this:
 +
 +verb(    dbtype: SQLite
-+    dbname: /var/cache/rsync/sum.db )
++    dbname: /var/cache/rsync/sum.db
++    transaction: 1)
 +
 +Both the bf(--db) and bf(--db-lax) options only affect the side where the
 +option is used.  To affect the remote side of a remote-shell connection,
@@ -2387,11 +2920,76 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
  dit(bf(max verbosity)) This parameter allows you to control
  the maximum amount of verbose information that you'll allow the daemon to
  generate (since the information goes into the log file). The default is 1,
+diff --git a/rsyncdb-mountinfo b/rsyncdb-mountinfo
+new file mode 100755
+--- /dev/null
++++ b/rsyncdb-mountinfo
+@@ -0,0 +1,60 @@
++#!/usr/bin/perl
++
++# This script outputs data for rsyncdb --mounts.  It must output a complete
++# list of the mounts for host in a strict format -- 2 fields with a Tab
++# between:  $MOUNT_UNIQ\t$PATH
++#
++# The list of mounts MUST NOT contain any entry that has the same devnum
++# (st_dev) as any other entry in the list (as checked via its PATH).
++#
++# MOUNT_UNIQ is a unique string that identifies the mount on this host.
++# This cannot be the devnum (st_dev) because that can vary depending on the
++# mount order or be reused for different mounts if they are not mounted at
++# the same time.  By default the value is "Mount of $devname", which should
++# be adequate for situations that don't want removable media in the DB
++# (though you may need to take steps to weed-out removable media from the
++# list to ensure that such inodes stay out of the DB).
++#
++# You can override the MOUNT_UNIQ value by putting a .rsyndb_mount_uniq
++# file in the root directory of any mount, at which point it is up to you
++# to make sure that the value stays unique (note that all sequences of
++# whitespace are transformed into a single space, and leading/trailing
++# whitespace is removed).
++#
++# MOUNT_UNIQ may never contain a Tab but it would be legal for PATH to have
++# a Tab (just really weird).  PATH may NOT have a CR or LF in it.
++#
++# The maximum size for MOUNT_UNIQ is 256 characters.
++#
++# If this script doesn't meet your needs, feel free to edit it and choose
++# some other method of finding a unique value for each mount.  If you come
++# up with a good idiom that might be useful to others, please share it back
++# to me.
++
++use strict;
++use warnings;
++
++my $MOUNT_FILE = '/etc/mtab';
++my $VALID_DEVICE_REGEX = qr{^/dev};
++
++my %hash;
++
++open MOUNTS, $MOUNT_FILE or die "Unable to open $MOUNT_FILE: $!\n";
++while (<MOUNTS>) {
++    my ($devname, $path) = (split)[0,1];
++    next unless $devname =~ /$VALID_DEVICE_REGEX/;
++
++    my ($devno) = (stat($path))[0];
++    next unless defined $devno; # Skip if mount is invalid.
++    next if $hash{$devno}++; # SKip if we've seen this devno earlier.
++
++    my $mount_uniq = "Mount of $devname";
++    if (open UNIQ, '<', "$path/.rsyndb_mount_uniq") {
++	$mount_uniq = <UNIQ>;
++	close UNIQ;
++	$mount_uniq =~ s/\s+/ /g; # This ensures no tab, CR, nor LF.
++	$mount_uniq =~ s/^ | $//g; # .. and no leading or trailing whitespace.
++    }
++    print $mount_uniq, "\t", $path, "\n";
++}
++close MOUNTS;
 diff --git a/rsyncdb.yo b/rsyncdb.yo
 new file mode 100644
 --- /dev/null
 +++ b/rsyncdb.yo
-@@ -0,0 +1,177 @@
+@@ -0,0 +1,186 @@
 +mailto(rsync-bugs@samba.org)
 +manpage(rsync)(1)(23 Jun 2013)()()
 +manpagename(rsyncdb)(Maintain an rsync checksum DB)
@@ -2411,6 +3009,12 @@ new file mode 100644
 +DIR args are specified, the current directory is assumed to be the spot
 +to start scanning.
 +
++Note that the rsyncdb program is usually just a symlink to the rsync program.
++You can force rsync to behave as rsyncdb either by having a symlink (or
++hardlink) name that ends with "db" or by bf(starting) the rsync args with
++bf(--db-only=CONFIG) (and that option works just like bf(--db=CONFIG) to
++a program named rsyncdb).
++
 +manpagesection(EXAMPLES)
 +
 +The following command will update checksum information in the database
@@ -2420,7 +3024,7 @@ new file mode 100644
 +
 +It scans 2 directory hierarchies (/dir1 & /dir2) and cleans out any
 +checksums whose inodes are no longer found in those directories (so that
-+directory list is presumed to be complete for this host's DB).
++directory args are presumed to be complete for this host's DB contents).
 +
 +The following command will scan all the files in the /dir2 directory (without
 +recursive scanning, due to the bf(--no-r) option) and check them against
@@ -2429,13 +3033,13 @@ new file mode 100644
 +verb(    rsyncdb --db=/etc/db.conf --check --no-r /dir2)
 +
 +Any errors found are output as well as being fixed in the DB.  (See
-+bf(--no-update) for how to just check without updating.)
++bf(--no-update) for how to check without updating.)
 +
 +The following command will output MD5 sums for all the files found in the
 +directories mentioned, even if they are unchanged (due to the
 +bf(--output=u) option):
 +
-+verb(    rsyncdb --db=/etc/db.conf -s5 -ous /dir* >/tmp/md5sums.txt)
++verb(    rsyncdb --db=/etc/db.conf -rous /dir* >/tmp/md5sums.txt)
 +
 +This is just like running md5sum, only faster.  Unlike md5sum, you can't
 +specify a single file, so use bf(--no-r) and grep the output if you just
@@ -2443,7 +3047,7 @@ new file mode 100644
 +
 +The following command initializes a new DB, and is required for any new DB:
 +
-+verb(    rsyncdb --init --mounts --db=/etc/db.conf)
++verb(    rsyncdb --db=/etc/db.conf --init --mounts)
 +
 +The bf(--init) option should only be used once (unless you want to
 +destroy existing data).  The bf(--mounts) option may need to be used
@@ -2455,15 +3059,15 @@ new file mode 100644
 +     --db=CONFIG     Specify the CONFIG file to read for the DB info.
 +     --db-lax        Ignore ctime changes (use with CAUTION).
 +     --no-recursive  Avoid the default --recursive (-r) scanning behavior.
-+ -s, --sums=SUMS     List which checksums to update (default: 4,5).
++ -s, --sums=SUMS     List which checksums to update (default: md5).
 + -o, --output=STR    One or more letters of what to output (default is nothing).
 + -c, --check         Check the checksums (by reading the files) and fix any
-+                     issues.  Implies --verbose and enables --output=i.
++                     issues.  Enables --output=i.
 +     --clean         Note all inodes in the DIRS and remove DB extras.
 + -N, --no-update     Avoids updating/adding info with --check and/or --clean.
 +     --init          Initialize a DB by (re-)creating its tables.
 +     --mounts        Scan for mounted filesystems and update the DB.
-+ -v, --verbose       Output more info.
++ -q, --quiet         Disables the default non-error output.
 + -h, --help          Display this help message.)
 +
 +manpageoptions()
@@ -2492,18 +3096,20 @@ new file mode 100644
 +to override an earlier bf(--no-r) override.
 +
 +dit(bf(--sums=SUMS, -s)) Only output/update the listed checksum types. By
-+default we handle both md4 and md5 checksums at the same time (i.e.
-+bf(--sums=4,5)).  Note that this option does NOT affect the order that
-+checksums are output (if "-o s" is enabled) so bf(-s5,4) is the same as
-+bf(-s4,5).
++default we deal with just the newer md5 checksums (i.e.  bf(--sums=5)).
++
++Note that this option does NOT affect the order that checksums are output
++if "-o s" is enabled, so bf(-s5,4) is the same as bf(-s4,5).
 +
 +dit(bf(--output=STR, -o)) The output option lets you specify one or more
 +letters indicating what information should be output.  The default is to
-+output nothing.  The following letters are accepted:
++output "d" and "n" if bf(--output) is not specified.
++
++The following letters are accepted:
 +
 +quote(itemization(
 +  it() bf(d) outputs "... dir_name ..." lines for each directory in our scan.
-+  it() bf(n) outputs the names of files with changes.
++  it() bf(n) outputs the names of files with changes (implied by all but "d").
 +  it() bf(s) outputs checksum info for changes (implies bf(n)).
 +  it() bf(u) outputs unchanged files too (implies bf(n)).
 +  it() bf(i) outputs prefixed change info.  The output strings are:
@@ -2521,8 +3127,7 @@ new file mode 100644
 +))
 +
 +dit(bf(--check, -c)) Check the checksums (forcing the reading of all the
-+files) and fix any issues that are found.  Implies --verbose and enables
-+bf(--output=i).
++files) and fix any issues that are found.  Forces bf(--output=ni) on.
 +
 +dit(bf(--clean)) Makes a temp-DB of all the inodes that we find in all the
 +listed directories and removes any extraneous checksums from the DB.  You
@@ -2537,8 +3142,10 @@ new file mode 100644
 +dit(bf(--no-update, -N)) Avoids updating/adding info with bf(--check)
 +and/or bf(--clean).
 +
-+dit(bf(--verbose, -v)) Makes the checksumming output default be "--output=dn".
-+Also output verbosely for bf(--init), bf(--mounts), and bf(--clean).
++dit(bf(--quiet, -q)) Disable the default (non-error) output settings.  This
++turns off the messages that bf(--init), bf(--mount), and bf(--clean) output,
++and makes the default for bf(--output) be nothing (though an explicit
++bf(--output) option is not affected).
 +
 +dit(bf(--init)) Create the tables in the DB.  If it is used on an existing
 +DB, all the existing tables are dropped and re-created.
@@ -2860,7 +3467,7 @@ new file mode 100755
 +	    next;
 +	}
 +
-+	if (!$check_opt || $right_sum_cnt || $output =~ /s/) {
++	if ($update || ($check_opt && $right_sum_cnt) || $output =~ /s/) {
 +	    if (!open IN, $fn) {
 +		print STDERR "ERROR: unable to read $fn: $!\n";
 +		next;
