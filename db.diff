@@ -311,7 +311,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1851 @@
+@@ -0,0 +1,1849 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -374,9 +374,8 @@ new file mode 100644
 +int use_db = DB_TYPE_NONE;
 +int select_many_sums = 0;
 +
-+#define PREP_READ 0
-+#define PREP_WRITE 1
-+#define PREP_MOUNT 2
++#define PREP_NORM 0
++#define PREP_MOUNT 1
 +
 +static const char *dbhost = NULL, *dbuser = NULL, *dbpass = NULL, *dbname = NULL;
 +static unsigned int dbport = 0;
@@ -654,7 +653,7 @@ new file mode 100644
 +	char *sql;
 +
 +	switch (type) {
-+	case PREP_READ:
++	case PREP_NORM:
 +		sql="SELECT disk_id"
 +		    " FROM disk"
 +		    " WHERE host = ? AND devno = ?";
@@ -694,8 +693,7 @@ new file mode 100644
 +			if (!prepare_mysql(SEL_SUM, binds, 4 + !db_lax, sql,	md_num, db_lax ? "" : "AND ctime = ?"))
 +				return 0;
 +		}
-+		break;
-+	case PREP_WRITE:
++
 +		sql="INSERT INTO inode_map"
 +		    " SET disk_id = ?, ino = ?, sum_type = ?,"
 +		    "     size = ?, mtime = ?, ctime = ?, checksum = ?"
@@ -740,6 +738,7 @@ new file mode 100644
 +		if (!prepare_mysql(UPD_CTIME, binds, 6, sql))
 +			return 0;
 +		break;
++
 +	case PREP_MOUNT:
 +		sql="INSERT INTO disk"
 +		    " SET host = ?, last_seen = ?, mount_uniq = ?, devno = ?"
@@ -841,16 +840,13 @@ new file mode 100644
 +	}
 +
 +	if (db_mounts) {
-+		prepare_mysql_queries(PREP_MOUNT);
++		if (!prepare_mysql_queries(PREP_MOUNT))
++			exit_cleanup(RERR_IPC);
 +		update_mounts();
 +		exit_cleanup(0);
 +	}
 +
-+	if (!prepare_mysql_queries(PREP_READ))
-+		return 0;
-+
-+	/* TODO move this elsewhere */
-+	if (!prepare_mysql_queries(PREP_WRITE))
++	if (!prepare_mysql_queries(PREP_NORM))
 +		return 0;
 +
 +	return 1;
@@ -858,7 +854,7 @@ new file mode 100644
 +#endif
 +
 +#ifdef USE_SQLITE
-+static int prepare_sqlite(int ndx, BOOL loop, const char *fmt, ...)
++static int prepare_sqlite(int ndx, const char *fmt, ...)
 +{
 +	va_list ap;
 +	char *query;
@@ -872,7 +868,7 @@ new file mode 100644
 +	if (DEBUG_GTE(DB, 3))
 +		rprintf(FCLIENT, "[%s] SQL being prepared: %s\n", who_am_i(), query);
 +
-+	while ((rc = sqlite3_prepare_v2(dbh.sqlite, query, -1, &statements[ndx].sqlite, NULL)) != 0 && loop) {
++	while ((rc = sqlite3_prepare_v2(dbh.sqlite, query, -1, &statements[ndx].sqlite, NULL)) != 0) {
 +		if (DEBUG_GTE(DB, 4)) {
 +			rprintf(FCLIENT, "[%s] sqlite3_prepare_v2(,%s,,) returned %d\n",
 +				who_am_i(), query, rc);
@@ -907,63 +903,64 @@ new file mode 100644
 +	char *sql;
 +
 +	switch (type) {
-+	case PREP_READ:
++	case PREP_NORM:
 +		sql="SELECT disk_id"
 +		    " FROM disk"
 +		    " WHERE host = ? AND devno = ?";
-+		if (!prepare_sqlite(SEL_DEV, False, sql))
++		if (!prepare_sqlite(SEL_DEV, sql))
 +			return 0;
 +
 +		if (select_many_sums) {
 +			sql="SELECT checksum, sum_type, size, mtime, ctime"
 +			    " FROM inode_map"
 +			    " WHERE disk_id = ? AND ino = ?";
-+			if (!prepare_sqlite(SEL_SUM, False, sql))
++			if (!prepare_sqlite(SEL_SUM, sql))
 +				return 0;
 +		} else {
 +			sql="SELECT checksum"
 +			    " FROM inode_map"
 +			    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
 +			    "   AND size = ? AND mtime = ? %s";
-+			if (!prepare_sqlite(SEL_SUM, False, sql, md_num, db_lax ? "" : "AND ctime = ?"))
++			if (!prepare_sqlite(SEL_SUM, sql, md_num, db_lax ? "" : "AND ctime = ?"))
 +				return 0;
 +		}
-+		break;
-+	case PREP_WRITE:
++
 +		sql="INSERT OR REPLACE INTO inode_map"
 +		    " (disk_id, ino, sum_type, size, mtime, ctime, checksum)"
 +		    " VALUES (?, ?, ?, ?, ?, ?, ?)";
-+		if (!prepare_sqlite(REP_SUM, True, sql))
++		if (!prepare_sqlite(REP_SUM, sql))
 +			return 0;
++
 +		sql="UPDATE inode_map"
 +		    " SET ctime = ?"
 +		    " WHERE disk_id = ? AND ino = ? AND sum_type = ? AND size = ? AND mtime = ?";
-+		if (!prepare_sqlite(UPD_CTIME, False, sql))
++		if (!prepare_sqlite(UPD_CTIME, sql))
 +			return 0;
 +		break;
++
 +	case PREP_MOUNT:
 +		sql="INSERT OR IGNORE INTO disk"
 +		    " (host, last_seen, mount_uniq, devno)"
 +		    " VALUES (?, ?, ?, ?)";
-+		if (!prepare_sqlite(INS_MOUNT, False, sql))
++		if (!prepare_sqlite(INS_MOUNT, sql))
 +			return 0;
 +
 +		sql="UPDATE disk"
 +		    " SET last_seen = ?, devno = ?"
 +		    " WHERE host = ? AND mount_uniq = ?";
-+		if (!prepare_sqlite(UPD_MOUNT, False, sql))
++		if (!prepare_sqlite(UPD_MOUNT, sql))
 +			return 0;
 +
 +		sql="SELECT mount_uniq"
 +		    " FROM disk"
 +		    " WHERE host = ? AND last_seen < ? AND devno != 0";
-+		if (!prepare_sqlite(SEL_MOUNT, False, sql))
++		if (!prepare_sqlite(SEL_MOUNT, sql))
 +			return 0;
 +
 +		sql="UPDATE disk"
 +		    " SET devno = 0"
 +		    " WHERE host = ? AND last_seen < ? AND devno != 0";
-+		if (!prepare_sqlite(UN_MOUNT, False, sql))
++		if (!prepare_sqlite(UN_MOUNT, sql))
 +			return 0;
 +		break;
 +	}
@@ -1007,8 +1004,12 @@ new file mode 100644
 +			break;
 +		if (++lock_failures > MAX_LOCK_FAILURES)
 +			break;
-+		db_disconnect();
 +		msleep(LOCK_FAIL_MSLEEP);
++	}
++
++	if (rc) {
++		rprintf(log_code, "Unable to connect to DB: %s (%d)\n", sqlite3_errmsg(dbh.sqlite), rc);
++		return 0;
 +	}
 +
 +	if (db_init) {
@@ -1050,13 +1051,16 @@ new file mode 100644
 +	}
 +
 +	if (db_mounts) {
-+		prepare_sqlite_queries(PREP_MOUNT);
++		if (!prepare_sqlite_queries(PREP_MOUNT))
++			exit_cleanup(RERR_IPC);
 +		update_mounts();
 +		exit_cleanup(0);
 +	}
 +
-+	if (!prepare_sqlite_queries(PREP_READ))
++	if (!prepare_sqlite_queries(PREP_NORM)) {
++		db_disconnect();
 +		return 0;
++	}
 +
 +	return 1;
 +}
@@ -1147,7 +1151,6 @@ new file mode 100644
 +	if ((rc = mysql_stmt_execute(stmt)) == CR_SERVER_LOST) {
 +		db_disconnect();
 +		if (db_connect(select_many_sums)) {
-+			/* XXX might need to prepare write statements here in the future... */
 +			stmt = statements[ndx].mysql;
 +			rc = mysql_stmt_execute(stmt);
 +		}
@@ -1245,7 +1248,7 @@ new file mode 100644
 +			bind_mount_uniq_len = sizeof bind_mount_uniq - 1;
 +
 +		if (db_output_msgs) {
-+			printf("Marking mount \"%s\" (%s) as recently seen\n",
++			printf("Marking mount \"%s\" (%s) as mounted\n",
 +				bind_mount_uniq, big_num(st.st_dev));
 +		}
 +		switch (use_db) {
@@ -1589,7 +1592,7 @@ new file mode 100644
 +#endif
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE: {
-+		sqlite3_stmt *stmt;
++		sqlite3_stmt *stmt = statements[REP_SUM].sqlite;
 +
 +		if (transaction_state == 0) {
 +			if (!run_sql("BEGIN"))
@@ -1597,11 +1600,6 @@ new file mode 100644
 +			transaction_state = 1;
 +		}
 +
-+		if (!(stmt = statements[REP_SUM].sqlite)) {
-+			if (!prepare_sqlite_queries(PREP_WRITE))
-+				return 0;
-+			stmt = statements[REP_SUM].sqlite;
-+		}
 +		sqlite3_bind_int(stmt, 1, disk_id);
 +		sqlite3_bind_int64(stmt, 2, st_p->st_ino);
 +		sqlite3_bind_int(stmt, 3, mdnum);
@@ -1738,7 +1736,7 @@ new file mode 100644
 +		sql="INSERT OR IGNORE INTO aux1.inode_present"
 +		    " (disk_id, ino, present)"
 +		    " VALUES (?, ?, 1)";
-+		if (!prepare_sqlite(INS_PRESENT, False, sql))
++		if (!prepare_sqlite(INS_PRESENT, sql))
 +			exit_cleanup(RERR_IPC);
 +
 +		sql="DELETE FROM inode_map"
@@ -1749,7 +1747,7 @@ new file mode 100644
 +		    "  JOIN disk AS d ON(m.disk_id = d.disk_id)"
 +		    "  WHERE host = ? AND devno != 0 AND present IS NULL"
 +		    " )";
-+		if (!prepare_sqlite(DEL_SUMS, False, sql))
++		if (!prepare_sqlite(DEL_SUMS, sql))
 +			exit_cleanup(RERR_IPC);
 +
 +		return 1;
@@ -2203,7 +2201,17 @@ diff --git a/flist.c b/flist.c
  
  	if (unsort_ndx)
  		F_NDX(file) = stats.num_dirs;
-@@ -2076,6 +2078,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2053,6 +2055,9 @@ void send_extra_file_list(int f, int at_least)
+   finish:
+ 	if (io_error != save_io_error && protocol_version == 30 && !ignore_errors)
+ 		send_msg_int(MSG_IO_ERROR, io_error);
++
++	if (use_db && flist_eof)
++		db_disconnect();
+ }
+ 
+ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2076,6 +2081,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		     | (eol_nulls || reading_remotely ? RL_EOL_NULLS : 0);
  	int implied_dot_dir = 0;
  
@@ -2217,11 +2225,11 @@ diff --git a/flist.c b/flist.c
  	rprintf(FLOG, "building file list\n");
  	if (show_filelist_p())
  		start_filelist_progress("building file list");
-@@ -2422,6 +2431,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2422,6 +2434,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  			rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
  	}
  
-+	if (use_db)
++	if (use_db && (!inc_recurse || flist_eof))
 +		db_disconnect();
 +
  	return flist;
@@ -2754,7 +2762,7 @@ diff --git a/receiver.c b/receiver.c
  
 +	if (use_db) {
 +		if (append_mode != 1 && protocol_version >= 30)
-+			db_connect(0);
++			db_connect(0); /* Will reset use_db on error. */
 +		else
 +			use_db = 0;
 +	}
