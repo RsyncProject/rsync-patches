@@ -81,7 +81,7 @@ diff --git a/Makefile.in b/Makefile.in
 -	-${MKDIR_P} ${DESTDIR}${bindir}
 +	-${MKDIR_P} ${DESTDIR}${bindir} ${DESTDIR}${sbindir}
  	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsync$(EXEEXT) ${DESTDIR}${bindir}
-+	rsync -Lt rsyncdb$(EXEEXT) ${DESTDIR}${bindir}/
++	rsync -lt rsyncdb$(EXEEXT) ${DESTDIR}${bindir}/
 +	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsyncdb-mountinfo ${DESTDIR}${sbindir}
  	-${MKDIR_P} ${DESTDIR}${mandir}/man1
  	-${MKDIR_P} ${DESTDIR}${mandir}/man5
@@ -199,7 +199,7 @@ diff --git a/cleanup.c b/cleanup.c
  		switch_step++;
  
 +		if (use_db)
-+			db_disconnect();
++			db_disconnect(False);
 +
 +		/* FALLTHROUGH */
 +#include "case_N.h"
@@ -311,7 +311,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1849 @@
+@@ -0,0 +1,1859 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -877,12 +877,6 @@ new file mode 100644
 +			break;
 +		if (++lock_failures > MAX_LOCK_FAILURES)
 +			break;
-+		/* XXX remove this? */
-+		if (statements[ndx].sqlite) {
-+			rprintf(FCLIENT, "[%s] had to clear index %d\n", who_am_i(), ndx);
-+			sqlite3_finalize(statements[ndx].sqlite);
-+			statements[ndx].sqlite = NULL;
-+		}
 +		msleep(LOCK_FAIL_MSLEEP);
 +	}
 +	if (rc) {
@@ -1058,7 +1052,7 @@ new file mode 100644
 +	}
 +
 +	if (!prepare_sqlite_queries(PREP_NORM)) {
-+		db_disconnect();
++		db_disconnect(False);
 +		return 0;
 +	}
 +
@@ -1085,13 +1079,12 @@ new file mode 100644
 +#endif
 +	}
 +
-+	db_disconnect();
-+	use_db = DB_TYPE_NONE;
++	db_disconnect(False);
 +
 +	return 0;
 +}
 +
-+void db_disconnect(void)
++void db_disconnect(BOOL commit)
 +{
 +	int ndx;
 +
@@ -1099,10 +1092,15 @@ new file mode 100644
 +		return;
 +
 +	if (transaction_state > 0) {
-+		if (DEBUG_GTE(DB, 1))
-+			rprintf(FCLIENT, "[%s] Committing our DB transaction\n", who_am_i());
++		if (DEBUG_GTE(DB, 1)) {
++			rprintf(FCLIENT, "[%s] %s our DB transaction\n",
++				who_am_i(), commit ? "Committing" : "Rolling back");
++		}
 +		transaction_state = 0;
-+		run_sql("COMMIT");
++		if (commit)
++			run_sql("COMMIT");
++		else
++			run_sql("ROLLBACK");
 +	}
 +
 +	if (DEBUG_GTE(DB, 1))
@@ -1140,6 +1138,7 @@ new file mode 100644
 +	}
 +
 +	dbh.all = NULL;
++	use_db = DB_TYPE_NONE;
 +}
 +
 +#ifdef USE_MYSQL
@@ -1149,7 +1148,8 @@ new file mode 100644
 +	int rc;
 +
 +	if ((rc = mysql_stmt_execute(stmt)) == CR_SERVER_LOST) {
-+		db_disconnect();
++		db_disconnect(False);
++		use_db = DB_TYPE_MYSQL;
 +		if (db_connect(select_many_sums)) {
 +			stmt = statements[ndx].mysql;
 +			rc = mysql_stmt_execute(stmt);
@@ -1593,6 +1593,7 @@ new file mode 100644
 +#ifdef USE_SQLITE
 +	case DB_TYPE_SQLITE: {
 +		sqlite3_stmt *stmt = statements[REP_SUM].sqlite;
++		int lock_failures = 0;
 +
 +		if (transaction_state == 0) {
 +			if (!run_sql("BEGIN"))
@@ -1607,10 +1608,18 @@ new file mode 100644
 +		sqlite3_bind_int64(stmt, 5, st_p->st_mtime);
 +		sqlite3_bind_int64(stmt, 6, st_p->st_ctime);
 +		sqlite3_bind_blob(stmt, 7, sum, checksum_len, SQLITE_TRANSIENT);
-+		rc = sqlite3_step(stmt);
-+		sqlite3_reset(stmt);
++		while (1) {
++			rc = sqlite3_step(stmt);
++			if (rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
++				break;
++			if (++lock_failures > MAX_LOCK_FAILURES)
++				break;
++			sqlite3_reset(stmt);
++			msleep(LOCK_FAIL_MSLEEP);
++		}
 +		if (rc != SQLITE_DONE)
 +			errmsg = sqlite3_errmsg(dbh.sqlite);
++		sqlite3_reset(stmt);
 +		break;
 +	    }
 +#endif
@@ -1623,9 +1632,10 @@ new file mode 100644
 +				md_num, sum_as_hex(sum));
 +		}
 +	} else {
-+		rprintf(log_code, "[%s] Failed to set checksum for %s,%s,%d: %s (%d)\n",
++		rprintf(log_code, "[%s] Failed to set checksum for %s,%s,%d: %s (%d) -- closing DB\n",
 +			who_am_i(), big_num(st_p->st_dev), big_num(st_p->st_ino),
 +			md_num, errmsg, rc);
++		db_disconnect(False);
 +	}
 +
 +	return errmsg ? 0 : 1;
@@ -2158,7 +2168,7 @@ new file mode 100644
 +			printf("Cleaned out %d old inode%s.\n", rows, rows == 1 ? "" : "s");
 +	}
 +
-+	db_disconnect();
++	db_disconnect(True);
 +	exit(exit_code);
 +}
 diff --git a/flist.c b/flist.c
@@ -2207,7 +2217,7 @@ diff --git a/flist.c b/flist.c
  		send_msg_int(MSG_IO_ERROR, io_error);
 +
 +	if (use_db && flist_eof)
-+		db_disconnect();
++		db_disconnect(True);
  }
  
  struct file_list *send_file_list(int f, int argc, char *argv[])
@@ -2230,7 +2240,7 @@ diff --git a/flist.c b/flist.c
  	}
  
 +	if (use_db && (!inc_recurse || flist_eof))
-+		db_disconnect();
++		db_disconnect(True);
 +
  	return flist;
  }
@@ -2270,14 +2280,16 @@ diff --git a/generator.c b/generator.c
  	dflt_perms = (ACCESSPERMS & ~orig_umask);
  
  	do {
-@@ -2351,4 +2360,7 @@ void generate_files(int f_out, const char *local_name)
+@@ -2318,6 +2327,9 @@ void generate_files(int f_out, const char *local_name)
+ 			wait_for_receiver();
+ 	}
  
- 	if (DEBUG_GTE(GENR, 1))
- 		rprintf(FINFO, "generate_files finished\n");
-+
 +	if (use_db)
-+		db_disconnect();
- }
++		db_disconnect(True);
++
+ 	info_levels[INFO_FLIST] = save_info_flist;
+ 	info_levels[INFO_PROGRESS] = save_info_progress;
+ 
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
@@ -2788,15 +2800,16 @@ diff --git a/receiver.c b/receiver.c
  				recv_ok = 2;
  			} else
  				partialptr = NULL;
-@@ -944,5 +962,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -941,6 +959,9 @@ int recv_files(int f_in, int f_out, char *local_name)
+ 	if (phase == 2 && delay_updates) /* for protocol_version < 29 */
+ 		handle_delayed_updates(local_name);
+ 
++	if (use_db)
++		db_disconnect(True);
++
  	if (DEBUG_GTE(RECV, 1))
  		rprintf(FINFO,"recv_files finished\n");
  
-+	if (use_db)
-+		db_disconnect();
-+
- 	return 0;
- }
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
