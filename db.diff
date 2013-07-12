@@ -311,7 +311,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1859 @@
+@@ -0,0 +1,1860 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -429,7 +429,7 @@ new file mode 100644
 +static int64 bind_mtime;
 +#endif
 +static char bind_thishost[257], bind_mount_uniq[257];
-+static int bind_thishost_len, bind_mount_uniq_len;
++static unsigned long bind_thishost_len, bind_mount_uniq_len;
 +
 +static char *error_log;
 +#if defined USE_SQLITE && defined SQLITE_CONFIG_LOG
@@ -752,7 +752,8 @@ new file mode 100644
 +		binds[1].buffer = &bind_mtime; /* we abuse mtime to hold the last_seen value */
 +		binds[2].buffer_type = MYSQL_TYPE_STRING;
 +		binds[2].buffer = &bind_mount_uniq;
-+		binds[2].buffer_length = bind_mount_uniq_len;
++		binds[2].buffer_length = sizeof bind_mount_uniq;
++		binds[2].length = &bind_mount_uniq_len;
 +		binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
 +		binds[3].buffer = &bind_devno;
 +		if (!prepare_mysql(INS_MOUNT, binds, 4, sql))
@@ -1188,12 +1189,12 @@ new file mode 100644
 +
 +	while (rows < max_rows) {
 +		if ((rc = mysql_stmt_fetch(stmt)) != 0) {
-+			if (rc != MYSQL_NO_DATA) {
-+				rprintf(log_code, "SELECT fetch failed: %s\n",
-+					mysql_stmt_error(stmt));
-+			}
++			if (rc != MYSQL_NO_DATA)
++				rprintf(log_code, "SELECT fetch failed: %s\n", mysql_stmt_error(stmt));
 +			break;
 +		}
++		if (++rows >= max_rows)
++			break;
 +		for (i = 0; i < bind_cnt; i++)
 +			binds[i].buffer += binds[i].buffer_length;
 +	}
@@ -1230,7 +1231,7 @@ new file mode 100644
 +		char *mount_uniq, *path;
 +
 +		if (DEBUG_GTE(DB, 3))
-+			printf("Parsing mount info:\n%s\n", buf);
++			printf("Parsing mount info: %s\n", buf);
 +		mount_uniq = strtok(buf, "\t");
 +		path = mount_uniq ? strtok(NULL, "\r\n") : NULL;
 +		if (!path) {
