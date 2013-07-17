@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 01959d6387eb1eed344d9e905cab2e2d59e5bc74
+based-on: 62327b1281be9151423048235573e0ca208fc095
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -81,7 +81,7 @@ diff --git a/Makefile.in b/Makefile.in
 -	-${MKDIR_P} ${DESTDIR}${bindir}
 +	-${MKDIR_P} ${DESTDIR}${bindir} ${DESTDIR}${sbindir}
  	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsync$(EXEEXT) ${DESTDIR}${bindir}
-+	rsync -lt rsyncdb$(EXEEXT) ${DESTDIR}${bindir}/
++	rsync -ilt rsyncdb$(EXEEXT) ${DESTDIR}${bindir}/
 +	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsyncdb-mountinfo ${DESTDIR}${sbindir}
  	-${MKDIR_P} ${DESTDIR}${mandir}/man1
  	-${MKDIR_P} ${DESTDIR}${mandir}/man5
@@ -311,7 +311,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1860 @@
+@@ -0,0 +1,1868 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -1041,6 +1041,12 @@ new file mode 100644
 +		if (!run_sql(sql))
 +			exit_cleanup(RERR_IPC);
 +
++#if SQLITE_VERSION_NUMBER >= 3007000
++		/* Using WAL locking makes concurrency much better (requires 3.7.0). */
++		sql="PRAGMA journal_mode = wal";
++		run_sql(sql); /* We don't check this for success. */
++#endif
++
 +		if (!db_mounts)
 +			exit_cleanup(0);
 +	}
@@ -1249,7 +1255,7 @@ new file mode 100644
 +			bind_mount_uniq_len = sizeof bind_mount_uniq - 1;
 +
 +		if (db_output_msgs) {
-+			printf("Marking mount \"%s\" (%s) as mounted\n",
++			printf("Marking mount \"%s\" (%s) as a recent mount\n",
 +				bind_mount_uniq, big_num(st.st_dev));
 +		}
 +		switch (use_db) {
@@ -1760,6 +1766,8 @@ new file mode 100644
 +		    " )";
 +		if (!prepare_sqlite(DEL_SUMS, sql))
 +			exit_cleanup(RERR_IPC);
++
++		transaction_state = -1; /* bug work-around -- force transaction off when cleaning XXX */
 +
 +		return 1;
 +	    }
