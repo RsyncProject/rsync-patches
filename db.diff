@@ -311,7 +311,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1868 @@
+@@ -0,0 +1,1886 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -812,27 +812,27 @@ new file mode 100644
 +		if (db_output_msgs)
 +			rprintf(FCLIENT, "Creating empty tables ...\n");
 +		if (!run_sql(
-+		    "CREATE TABLE disk ("
-+		    "  disk_id integer unsigned NOT NULL PRIMARY KEY AUTO_INCREMENT,"
-+		    "  host varchar(128) NOT NULL default 'localhost',"
-+		    "  mount_uniq varchar(128) default NULL,"
-+		    "  devno bigint unsigned NOT NULL," /* This is 0 when not mounted */
-+		    "  last_seen bigint NOT NULL,"
-+		    "  UNIQUE KEY mount_lookup (host, mount_uniq),"
-+		    "  KEY dev_lookup (devno, host)"
++		    "CREATE TABLE disk (\n"
++		    "  disk_id integer unsigned NOT NULL PRIMARY KEY AUTO_INCREMENT,\n"
++		    "  host varchar(128) NOT NULL default 'localhost',\n"
++		    "  mount_uniq varchar(128) default NULL,\n"
++		    "  devno bigint unsigned NOT NULL,\n" /* This is 0 when not mounted */
++		    "  last_seen bigint NOT NULL,\n"
++		    "  UNIQUE KEY mount_lookup (host, mount_uniq),\n"
++		    "  KEY dev_lookup (devno, host)\n"
 +		    ")"))
 +			exit_cleanup(RERR_IPC);
 +
 +		if (!run_sql(
-+		    "CREATE TABLE inode_map ("
-+		    "  disk_id integer unsigned NOT NULL,"
-+		    "  ino bigint unsigned NOT NULL,"
-+		    "  sum_type tinyint NOT NULL default '0',"
-+		    "  size bigint unsigned NOT NULL,"
-+		    "  mtime bigint NOT NULL,"
-+		    "  ctime bigint NOT NULL,"
-+		    "  checksum binary(16) NOT NULL,"
-+		    "  PRIMARY KEY (disk_id,ino,sum_type)"
++		    "CREATE TABLE inode_map (\n"
++		    "  disk_id integer unsigned NOT NULL,\n"
++		    "  ino bigint unsigned NOT NULL,\n"
++		    "  sum_type tinyint NOT NULL default '0',\n"
++		    "  size bigint unsigned NOT NULL,\n"
++		    "  mtime bigint NOT NULL,\n"
++		    "  ctime bigint NOT NULL,\n"
++		    "  checksum binary(16) NOT NULL,\n"
++		    "  PRIMARY KEY (disk_id,ino,sum_type)\n"
 +		    ")"))
 +			exit_cleanup(RERR_IPC);
 +
@@ -1017,32 +1017,32 @@ new file mode 100644
 +
 +		if (db_output_msgs)
 +			rprintf(FCLIENT, "Creating empty tables ...\n");
-+		sql="CREATE TABLE disk ("
-+		    "  disk_id integer NOT NULL PRIMARY KEY AUTOINCREMENT,"
-+		    "  host varchar(128) NOT NULL default 'localhost',"
-+		    "  mount_uniq varchar(128) default NULL,"
-+		    "  devno bigint NOT NULL," /* This is 0 when not mounted */
-+		    "  last_seen bigint NOT NULL,"
-+		    "  UNIQUE (host, mount_uniq)"
++		sql="CREATE TABLE disk (\n"
++		    "  disk_id integer NOT NULL PRIMARY KEY AUTOINCREMENT,\n"
++		    "  host varchar(128) NOT NULL default 'localhost',\n"
++		    "  mount_uniq varchar(128) default NULL,\n"
++		    "  devno bigint NOT NULL,\n" /* This is 0 when not mounted */
++		    "  last_seen bigint NOT NULL,\n"
++		    "  UNIQUE (host, mount_uniq)\n"
 +		    ")";
 +		if (!run_sql(sql))
 +			exit_cleanup(RERR_IPC);
 +
-+		sql="CREATE TABLE inode_map ("
-+		    "  disk_id integer NOT NULL,"
-+		    "  ino bigint NOT NULL,"
-+		    "  size bigint NOT NULL,"
-+		    "  mtime bigint NOT NULL,"
-+		    "  ctime bigint NOT NULL,"
-+		    "  sum_type tinyint NOT NULL default '0',"
-+		    "  checksum binary(16) NOT NULL,"
-+		    "  PRIMARY KEY (disk_id,ino,sum_type)"
++		sql="CREATE TABLE inode_map (\n"
++		    "  disk_id integer NOT NULL,\n"
++		    "  ino bigint NOT NULL,\n"
++		    "  size bigint NOT NULL,\n"
++		    "  mtime bigint NOT NULL,\n"
++		    "  ctime bigint NOT NULL,\n"
++		    "  sum_type tinyint NOT NULL default '0',\n"
++		    "  checksum binary(16) NOT NULL,\n"
++		    "  PRIMARY KEY (disk_id,ino,sum_type)\n"
 +		    ")";
 +		if (!run_sql(sql))
 +			exit_cleanup(RERR_IPC);
 +
 +#if SQLITE_VERSION_NUMBER >= 3007000
-+		/* Using WAL locking makes concurrency much better (requires 3.7.0). */
++		/* Using WAL locking makes concurrency much better (requires sqlite 3.7.0). */
 +		sql="PRAGMA journal_mode = wal";
 +		run_sql(sql); /* We don't check this for success. */
 +#endif
@@ -1172,16 +1172,24 @@ new file mode 100644
 +#endif
 +
 +#ifdef USE_MYSQL
-+/* This stores up to max_rows into the bind data arrays.  If stmt_ptr is
-+ * non-NULL it will be set to the stmt pointer IF we didn't run out of rows
-+ * (otherwise it is set to NULL). */
++/* This stores up to max_rows into the values pointed to by the bind data arrays.
++ * If max_rows is > 1, then all the buffer pointers MUST be set to an array long
++ * enough to hold the max count of rows.  The buffer pointer will be incremented
++ * to read additional rows (but never past the end).  If stmt_ptr is non-NULL, it
++ * will be set to the "stmt" pointer IFF we didn't run out of rows before hitting
++ * the max.  In this case, the caller should call mysql_stmt_fetch() to read any
++ * remaining rows (the buffer pointers will point at the final array element) and
++ * then call mysql_stmt_free_result().  If *stmt_ptr is a NULL value, there were
++ * not enough rows to fill the max_rows arrays, and the stmt was already freed. */
 +static int fetch_mysql(MYSQL_BIND *binds, int bind_cnt, int ndx, int max_rows, MYSQL_STMT **stmt_ptr)
 +{
 +	MYSQL_STMT *stmt;
 +	int i, rc, rows = 0;
 +
-+	if (bind_cnt > MAX_RESULT_BINDS)
++	if (bind_cnt > MAX_RESULT_BINDS) {
++		fprintf(stderr, "Internal error: MAX_RESULT_BINDS overflow\n");
 +		exit_cleanup(RERR_UNSUPPORTED);
++	}
 +
 +	if ((stmt = exec_mysql(ndx)) == NULL)
 +		return 0;
@@ -1201,8 +1209,23 @@ new file mode 100644
 +		}
 +		if (++rows >= max_rows)
 +			break;
-+		for (i = 0; i < bind_cnt; i++)
-+			binds[i].buffer += binds[i].buffer_length;
++		for (i = 0; i < bind_cnt; i++) {
++			switch (binds[i].buffer_type) {
++			case MYSQL_TYPE_BLOB:
++			case MYSQL_TYPE_STRING:
++			    binds[i].buffer += binds[i].buffer_length;
++			    break;
++			case MYSQL_TYPE_LONG:
++			    binds[i].buffer += sizeof (int);
++			    break;
++			case MYSQL_TYPE_LONGLONG:
++			    binds[i].buffer += sizeof (int64);
++			    break;
++			default:
++			    fprintf(stderr, "Unknown MYSQL_TYPE_* in multi-row read: %d.\n", binds[i].buffer_type);
++			    exit_cleanup(RERR_UNSUPPORTED);
++			}
++		}
 +	}
 +
 +	if (!stmt_ptr || rows < max_rows) {
@@ -1492,22 +1515,17 @@ new file mode 100644
 +		bind_disk_id = disk_id;
 +		bind_ino = st_p->st_ino;
 +
-+		/* NOTE: the superfluous lengths below are for incrementing to extra rows. */
 +		binds[0].buffer_type = MYSQL_TYPE_BLOB;
 +		binds[0].buffer = dbsum;
 +		binds[0].buffer_length = checksum_len;
 +		binds[1].buffer_type = MYSQL_TYPE_LONG;
 +		binds[1].buffer = (char*)sum_type;
-+		binds[1].buffer_length = sizeof (*sum_type);
 +		binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
 +		binds[2].buffer = (char*)dbsize;
-+		binds[2].buffer_length = sizeof (*dbsize);
 +		binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
 +		binds[3].buffer = (char*)dbmtime;
-+		binds[3].buffer_length = sizeof (*dbmtime);
 +		binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
 +		binds[4].buffer = (char*)dbctime;
-+		binds[4].buffer_length = sizeof (*dbctime);
 +		rows = fetch_mysql(binds, 5, SEL_SUM, 2, NULL);
 +		break;
 +	    }
