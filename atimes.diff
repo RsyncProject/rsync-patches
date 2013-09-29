@@ -4,7 +4,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: 05fce6582a9192c58b2107153ec00056fd120d14
+based-on: bc58313bf7f42f0993f7279299e8137e0f14f01c
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -520,27 +520,49 @@ new file mode 100644
 +
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
+diff --git a/testsuite/daemon.test b/testsuite/daemon.test
+--- a/testsuite/daemon.test
++++ b/testsuite/daemon.test
+@@ -26,8 +26,8 @@ outfile="$scratchdir/rsync.out"
+ 
+ SSH="src/support/lsh.sh --no-cd"
+ FILE_REPL='s/^\([^d][^ ]*\) *\(..........[0-9]\) /\1 \2 /'
+-DIR_REPL='s/^\(d[^ ]*\)  *[0-9][.,0-9]* /\1         DIR /'
+-LS_REPL='s;[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9];####/##/## ##:##:##;'
++DIR_REPL='s/^\(d[^ ]*\)  *[0-9][.,0-9]*  */\1         DIR /'
++LS_REPL='s;[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]  *;####/##/## ##:##:## ;'
+ 
+ build_rsyncd_conf
+ 
 diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
 --- a/testsuite/rsync.fns
 +++ b/testsuite/rsync.fns
-@@ -219,6 +219,10 @@ checkit() {
+@@ -219,6 +219,14 @@ checkit() {
      # We can just write everything to stdout/stderr, because the
      # wrapper hides it unless there is a problem.
  
-+    if test x$TLS_ARGS = x--atimes; then
++    case "x$TLS_ARGS" in
++    *--atimes*)
 +	( cd "$2" && rsync_ls_lR . ) > "$tmpdir/ls-from"
-+    fi
++	;;
++    *)
++	;;
++    esac
 +
      echo "Running: \"$1\""  
      eval "$1" 
      status=$?
-@@ -226,10 +230,13 @@ checkit() {
+@@ -226,10 +234,17 @@ checkit() {
  	failed="$failed status=$status"
      fi
  
-+    if test x$TLS_ARGS != x--atimes; then
++    case "x$TLS_ARGS" in
++    *--atimes*)
++	;;
++    *)
 +	( cd "$2" && rsync_ls_lR . ) > "$tmpdir/ls-from"
-+    fi
++	;;
++    esac
 +
      echo "-------------"
      echo "check how the directory listings compare with diff:"
@@ -561,7 +583,7 @@ diff --git a/tls.c b/tls.c
  static void failed(char const *what, char const *where)
  {
  	fprintf(stderr, PROGRAM ": %s %s: %s\n",
-@@ -116,12 +118,37 @@ static void failed(char const *what, char const *where)
+@@ -116,13 +118,38 @@ static void failed(char const *what, char const *where)
  	exit(1);
  }
  
@@ -579,14 +601,13 @@ diff --git a/tls.c b/tls.c
 +			(int)mt->tm_hour,
 +			(int)mt->tm_min,
 +			(int)mt->tm_sec);
-+		if (nsecs >= 0) {
-+			snprintf(datebuf + len, sizeof datebuf - len, ".%09d", nsecs);
-+		}
++		if (nsecs >= 0 && len >= 0)
++			snprintf(dest + len, destsize - len, ".%09d", nsecs);
 +	} else {
 +		int has_nsecs = nsecs >= 0 ? 1 : 0;
-+		int len = MIN(19 + 9*nsec_times, (int)sizeof datebuf - 1);
-+		memset(datebuf, ' ', len);
-+		datebuf[len] = '\0';
++		int len = MIN(19 + 9*has_nsecs, (int)destsize - 1);
++		memset(dest, ' ', len);
++		dest[len] = '\0';
 +	}
 +}
 +
@@ -599,8 +620,10 @@ diff --git a/tls.c b/tls.c
 +	char mtimebuf[50];
 +	char atimebuf[50];
  	char linkbuf[4096];
++	int nsecs;
  
  	if (do_lstat(fname, &buf) < 0)
+ 		failed("stat", fname);
 @@ -159,30 +186,17 @@ static void list_file(const char *fname)
  	}
  
@@ -624,7 +647,7 @@ diff --git a/tls.c b/tls.c
 -				".%09d", (int)buf.ST_MTIME_NSEC);
 -		}
 +	if (nsec_times)
-+		nsecs = (int)buf.ST_MTIME_NSEC
++		nsecs = (int)buf.ST_MTIME_NSEC;
 +	else
  #endif
 -	} else {
