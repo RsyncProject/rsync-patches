@@ -196,36 +196,38 @@ diff --git a/generator.c b/generator.c
  	int64 len;
  	int colwidth = human_readable ? 14 : 11;
  
-@@ -1135,10 +1150,11 @@ static void list_file_entry(struct file_struct *f)
+@@ -1135,10 +1150,12 @@ static void list_file_entry(struct file_struct *f)
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
 -		rprintf(FINFO, "%s %*s %s %s -> %s\n",
-+		rprintf(FINFO, "%s %*s %s %s %s -> %s\n",
++		rprintf(FINFO, "%s %*s %s%s%s %s -> %s\n",
  			permbuf, colwidth, human_num(len),
 -			timestring(f->modtime), f_name(f, NULL),
 -			F_SYMLINK(f));
 +			timestring(f->modtime),
++			crtimes_ndx ? " " : "",
 +			crtimes_ndx ? timestring(crtime) : "",
 +			f_name(f, NULL), F_SYMLINK(f));
  	} else
  #endif
  	if (missing_args == 2 && f->mode == 0) {
-@@ -1146,9 +1162,11 @@ static void list_file_entry(struct file_struct *f)
+@@ -1146,9 +1163,12 @@ static void list_file_entry(struct file_struct *f)
  			colwidth + 31, "*missing",
  			f_name(f, NULL));
  	} else {
 -		rprintf(FINFO, "%s %*s %s %s\n",
-+		rprintf(FINFO, "%s %*s %s %s %s\n",
++		rprintf(FINFO, "%s %*s %s%s%s %s\n",
  			permbuf, colwidth, human_num(len),
 -			timestring(f->modtime), f_name(f, NULL));
 +			timestring(f->modtime),
++			crtimes_ndx ? " " : "",
 +			crtimes_ndx ? timestring(crtime) : "",
 +			f_name(f, NULL));
  	}
  }
  
-@@ -1240,6 +1258,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1240,6 +1260,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			return;
  		}
  	}
@@ -268,7 +270,7 @@ diff --git a/ifuncs.h b/ifuncs.h
 diff --git a/log.c b/log.c
 --- a/log.c
 +++ b/log.c
-@@ -723,7 +723,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
+@@ -724,7 +724,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
  			c[8] = !(iflags & ITEM_REPORT_FFLAGS) ? '.' : 'f';
  			c[9] = !(iflags & ITEM_REPORT_ACL) ? '.' : 'a';
  			c[10] = !(iflags & ITEM_REPORT_XATTR) ? '.' : 'x';
@@ -584,14 +586,13 @@ diff --git a/tls.c b/tls.c
 +			(int)mt->tm_hour,
 +			(int)mt->tm_min,
 +			(int)mt->tm_sec);
-+		if (nsecs >= 0) {
-+			snprintf(datebuf + len, sizeof datebuf - len, ".%09d", nsecs);
-+		}
++		if (nsecs >= 0 && len >= 0)
++			snprintf(dest + len, destsize - len, ".%09d", nsecs);
 +	} else {
 +		int has_nsecs = nsecs >= 0 ? 1 : 0;
-+		int len = MIN(19 + 9*nsec_times, (int)sizeof datebuf - 1);
-+		memset(datebuf, ' ', len);
-+		datebuf[len] = '\0';
++		int len = MIN(19 + 9*has_nsecs, (int)destsize - 1);
++		memset(dest, ' ', len);
++		dest[len] = '\0';
 +	}
 +}
 +
@@ -605,6 +606,7 @@ diff --git a/tls.c b/tls.c
 +	char mtimebuf[50];
 +	char crtimebuf[50];
  	char linkbuf[4096];
++	int nsecs;
  
  	if (do_lstat(fname, &buf) < 0)
  		failed("stat", fname);
@@ -613,10 +615,11 @@ diff --git a/tls.c b/tls.c
  #ifdef SUPPORT_XATTRS
  	if (am_root < 0)
  		stat_xattr(fname, &buf);
-@@ -160,29 +190,11 @@ static void list_file(const char *fname)
+@@ -159,30 +189,17 @@ static void list_file(const char *fname)
+ 	}
  
  	permstring(permbuf, buf.st_mode);
- 
+-
 -	if (buf.st_mtime) {
 -		int len;
 -		mt = gmtime(&buf.st_mtime);
@@ -629,17 +632,21 @@ diff --git a/tls.c b/tls.c
 -			(int)mt->tm_hour,
 -			(int)mt->tm_min,
 -			(int)mt->tm_sec);
--#ifdef ST_MTIME_NSEC
+ #ifdef ST_MTIME_NSEC
 -		if (nsec_times) {
 -			snprintf(datebuf + len, sizeof datebuf - len,
 -				".%09d", (int)buf.ST_MTIME_NSEC);
 -		}
--#endif
++	if (nsec_times)
++		nsecs = (int)buf.ST_MTIME_NSEC;
++	else
+ #endif
 -	} else {
 -		int len = MIN(19 + 9*nsec_times, (int)sizeof datebuf - 1);
 -		memset(datebuf, ' ', len);
 -		datebuf[len] = '\0';
 -	}
++		nsecs = -1;
 +	storetime(mtimebuf, sizeof mtimebuf, buf.st_mtime, nsecs);
 +	if (display_crtimes)
 +		storetime(crtimebuf, sizeof crtimebuf, crtime, -1);
@@ -648,7 +655,7 @@ diff --git a/tls.c b/tls.c
  
  	/* TODO: Perhaps escape special characters in fname? */
  
-@@ -193,13 +205,14 @@ static void list_file(const char *fname)
+@@ -193,13 +210,14 @@ static void list_file(const char *fname)
  		    (long)minor(buf.st_rdev));
  	} else
  		printf("%15s", do_big_num(buf.st_size, 1, NULL));
@@ -665,7 +672,7 @@ diff --git a/tls.c b/tls.c
    {"link-times",      'l', POPT_ARG_NONE,   &link_times, 0, 0, 0 },
    {"link-owner",      'L', POPT_ARG_NONE,   &link_owner, 0, 0, 0 },
  #ifdef SUPPORT_XATTRS
-@@ -218,6 +231,7 @@ static void tls_usage(int ret)
+@@ -218,6 +236,7 @@ static void tls_usage(int ret)
    fprintf(F,"usage: " PROGRAM " [OPTIONS] FILE ...\n");
    fprintf(F,"Trivial file listing program for portably checking rsync\n");
    fprintf(F,"\nOptions:\n");
