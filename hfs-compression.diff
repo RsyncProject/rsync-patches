@@ -43,7 +43,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_links;
  extern int preserve_devices;
  extern int preserve_specials;
-@@ -1746,6 +1747,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1750,6 +1751,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  					fname, fnamecmpbuf);
  			}
  			sx.st.st_size = F_LENGTH(fuzzy_file);
@@ -58,7 +58,7 @@ diff --git a/generator.c b/generator.c
  			statret = 0;
  			fnamecmp = fnamecmpbuf;
  		}
-@@ -1913,6 +1922,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1917,6 +1926,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  	if (read_batch)
  		goto cleanup;
  
@@ -80,54 +80,48 @@ diff --git a/generator.c b/generator.c
 diff --git a/lib/sysxattrs.c b/lib/sysxattrs.c
 --- a/lib/sysxattrs.c
 +++ b/lib/sysxattrs.c
-@@ -22,6 +22,17 @@
+@@ -22,10 +22,17 @@
  #include "rsync.h"
  #include "sysxattrs.h"
  
 +extern int preserve_hfs_compression;
 +
-+#ifdef HAVE_OSX_XATTRS
+ #ifdef SUPPORT_XATTRS
+ 
+ #ifdef HAVE_OSX_XATTRS
 +#ifndef XATTR_SHOWCOMPRESSION
 +#define XATTR_SHOWCOMPRESSION 0x0020
 +#endif
-+#define GETXATTR_FETCH_LIMIT (64*1024*1024)
+ #define GETXATTR_FETCH_LIMIT (64*1024*1024)
 +
 +int xattr_options = XATTR_NOFOLLOW;
-+#endif
-+
- #ifdef SUPPORT_XATTRS
+ #endif
  
  #if defined HAVE_LINUX_XATTRS
-@@ -55,7 +66,27 @@ ssize_t sys_llistxattr(const char *path, char *list, size_t size)
+@@ -59,7 +66,12 @@ ssize_t sys_llistxattr(const char *path, char *list, size_t size)
  
  ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size)
  {
--	return getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
+-	ssize_t len = getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
 +	ssize_t len;
 +
 +	if (preserve_hfs_compression)
 +		xattr_options |= XATTR_SHOWCOMPRESSION;
 +
 +	len = getxattr(path, name, value, size, 0, xattr_options);
-+
-+	/* If we're retrieving data, handle resource forks > 64MB specially */
-+	if (value != NULL && strcmp(name, XATTR_RESOURCEFORK_NAME) == 0 && len == GETXATTR_FETCH_LIMIT) {
-+		/* getxattr will only return 64MB of data at a time, need to call again with a new offset */
-+		u_int32_t offset = GETXATTR_FETCH_LIMIT;
-+		ssize_t data_retrieved = len;
-+		while (data_retrieved < (ssize_t)size) {
-+			len = getxattr(path, name, value + offset, size - data_retrieved, offset, xattr_options);
-+			data_retrieved += len;
-+			offset += (u_int32_t)len;
-+		}
-+		len = data_retrieved;
-+	}
-+
-+	return len;
- }
  
- ssize_t sys_fgetxattr(int filedes, const char *name, void *value, size_t size)
-@@ -70,12 +101,16 @@ int sys_lsetxattr(const char *path, const char *name, const void *value, size_t
+ 	/* If we're retrieving data, handle resource forks > 64MB specially */
+ 	if (value != NULL && len == GETXATTR_FETCH_LIMIT && (size_t)len < size) {
+@@ -67,7 +79,7 @@ ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t si
+ 		u_int32_t offset = len;
+ 		size_t data_retrieved = len;
+ 		while (data_retrieved < size) {
+-			len = getxattr(path, name, value + offset, size - data_retrieved, offset, XATTR_NOFOLLOW);
++			len = getxattr(path, name, value + offset, size - data_retrieved, offset, xattr_options);
+ 			if (len <= 0)
+ 				break;
+ 			data_retrieved += len;
+@@ -91,12 +103,16 @@ int sys_lsetxattr(const char *path, const char *name, const void *value, size_t
  
  int sys_lremovexattr(const char *path, const char *name)
  {
@@ -642,7 +636,7 @@ diff --git a/xattrs.c b/xattrs.c
  
 +			assert(ptr != UNREAD_DATA);
  			write_varint(f_out, len); /* length might have changed! */
- 			write_buf(f_out, ptr, len);
+ 			write_bigbuf(f_out, ptr, len);
  			free(ptr);
 @@ -793,7 +851,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  	int user_only = am_root <= 0;
