@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 63f91976112b8b2118cc17eb5fc8142175566f4f
+based-on: a3f852bd7864ffd61ae709bc756e73034d4c33a3
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -258,7 +258,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1100,6 +1101,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1096,6 +1097,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -311,7 +311,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1886 @@
+@@ -0,0 +1,1913 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -338,6 +338,9 @@ new file mode 100644
 +
 +extern int protocol_version;
 +extern int recurse;
++extern int same_db;
++extern int am_receiver;
++extern int am_generator;
 +extern int checksum_len;
 +extern int db_clean, db_check, db_do_md4, db_do_md5, db_update, db_lax, db_init, db_mounts;
 +extern int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs, db_output_msgs;
@@ -1489,9 +1492,15 @@ new file mode 100644
 +	}
 +
 +	if (DEBUG_GTE(DB, 2)) {
-+		rprintf(FCLIENT, "[%s] %s DB checksum for %s,%s,%d: %s\n",
-+			who_am_i(), ok ? "Found" : "No", big_num(st_p->st_dev),
-+			big_num(st_p->st_ino), md_num, sum_as_hex(sum));
++		if (ok) {
++			rprintf(FCLIENT, "[%s] Found DB checksum for %s,%s,%d: %s\n",
++				who_am_i(), big_num(st_p->st_dev),
++				big_num(st_p->st_ino), md_num, sum_as_hex(sum));
++		} else {
++			rprintf(FCLIENT, "[%s] No DB checksum for %s,%s,%d\n",
++				who_am_i(), big_num(st_p->st_dev),
++				big_num(st_p->st_ino), md_num);
++		}
 +	}
 +
 +	return ok;
@@ -1588,11 +1597,29 @@ new file mode 100644
 +
 +int db_set_checksum(int mdnum, const STRUCT_STAT *st_p, const char *sum)
 +{
-+	unsigned int disk_id = get_disk_id(st_p->st_dev);
++	unsigned int disk_id;
 +	const char *errmsg = NULL;
 +	int rc = 0;
 +
-+	if (disk_id == 0)
++	if (am_receiver || (am_generator && same_db)) {
++		/* Forward the setting to a single process.  The receiver always
++		 * forward to the generator, and the generator will forward to
++		 * the receiver ONLY if this is a local transfer. */
++		char data[MSG_CHECKSUM_LEN];
++		SIVAL64(data, 0, st_p->st_dev);
++		SIVAL64(data, 8, st_p->st_ino);
++		SIVAL64(data, 16, st_p->st_size);
++		SIVAL64(data, 24, st_p->st_mtime);
++		SIVAL64(data, 32, st_p->st_ctime);
++#if MSG_CHECKSUM_LONGS != 5
++#error Fix the setting of checksum long values
++#endif
++		SIVAL(data, MSG_CHECKSUM_LONGS*8, mdnum);
++		memcpy(data + MSG_CHECKSUM_LONGS*8 + 4, sum, MAX_DIGEST_LEN);
++		return send_msg(MSG_CHECKSUM, data, sizeof data, 0);
++	}
++
++	if ((disk_id = get_disk_id(st_p->st_dev)) == 0)
 +		return 0;
 +
 +	switch (use_db) {
@@ -2283,7 +2310,7 @@ diff --git a/generator.c b/generator.c
  extern int append_mode;
  extern int make_backups;
  extern int csum_length;
-@@ -574,7 +575,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
+@@ -572,7 +573,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
  	   of the file time to determine whether to sync */
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
@@ -2293,7 +2320,7 @@ diff --git a/generator.c b/generator.c
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
  
-@@ -2193,6 +2195,13 @@ void generate_files(int f_out, const char *local_name)
+@@ -2195,6 +2197,13 @@ void generate_files(int f_out, const char *local_name)
  			: "enabled");
  	}
  
@@ -2307,7 +2334,7 @@ diff --git a/generator.c b/generator.c
  	dflt_perms = (ACCESSPERMS & ~orig_umask);
  
  	do {
-@@ -2318,6 +2327,9 @@ void generate_files(int f_out, const char *local_name)
+@@ -2320,6 +2329,9 @@ void generate_files(int f_out, const char *local_name)
  			wait_for_receiver();
  	}
  
@@ -2317,6 +2344,61 @@ diff --git a/generator.c b/generator.c
  	info_levels[INFO_FLIST] = save_info_flist;
  	info_levels[INFO_PROGRESS] = save_info_progress;
  
+diff --git a/io.c b/io.c
+--- a/io.c
++++ b/io.c
+@@ -41,8 +41,10 @@ extern int am_server;
+ extern int am_sender;
+ extern int am_receiver;
+ extern int am_generator;
++extern int local_server;
+ extern int msgs2stderr;
+ extern int inc_recurse;
++extern int same_db;
+ extern int io_error;
+ extern int eol_nulls;
+ extern int flist_eof;
+@@ -1481,6 +1483,32 @@ static void read_a_msg(void)
+ 		if (am_sender)
+ 			maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
+ 		break;
++	case MSG_CHECKSUM:
++		/* This receives some checksum info that we want to make a note of
++		 * (which allows a single process to do all the writing to the db). */
++		if (msg_bytes != MSG_CHECKSUM_LEN)
++			goto overflow;
++		raw_read_buf(data, MSG_CHECKSUM_LEN);
++		if (am_generator && same_db) {
++			iobuf.in_multiplexed = 1;
++			send_msg(MSG_CHECKSUM, data, MSG_CHECKSUM_LEN, 0);
++		} if (am_receiver || (am_sender && !local_server))
++			goto unexpected;
++		else {
++			/* The received data is a set of numbers followed by the checksum. */
++			STRUCT_STAT st;
++			st.st_dev = IVAL64(data, 0);
++			st.st_ino = IVAL64(data, 8);
++			st.st_size = IVAL64(data, 16);
++			st.st_mtime = IVAL64(data, 24);
++			st.st_ctime = IVAL64(data, 32);
++#if MSG_CHECKSUM_LONGS != 5
++#error Fix the parsing of checksum long values
++#endif
++			iobuf.in_multiplexed = 1;
++			db_set_checksum(IVAL(data, MSG_CHECKSUM_LONGS*8), &st, data + MSG_CHECKSUM_LONGS*8 + 4);
++		}
++		break;
+ 	case MSG_DELETED:
+ 		if (msg_bytes >= sizeof data)
+ 			goto overflow;
+@@ -1632,6 +1660,7 @@ static void read_a_msg(void)
+ 		 * with a duplicate exit message. */
+ 		_exit_cleanup(val, __FILE__, 0 - __LINE__);
+ 	default:
++	unexpected:
+ 		rprintf(FERROR, "unexpected tag %d [%s%s]\n",
+ 			tag, who_am_i(), inc_recurse ? "/inc" : "");
+ 		exit_cleanup(RERR_STREAMIO);
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
@@ -2741,7 +2823,7 @@ diff --git a/options.c b/options.c
 diff --git a/pipe.c b/pipe.c
 --- a/pipe.c
 +++ b/pipe.c
-@@ -27,6 +27,9 @@ extern int am_server;
+@@ -27,11 +27,16 @@ extern int am_server;
  extern int blocking_io;
  extern int filesfrom_fd;
  extern int munge_symlinks;
@@ -2751,7 +2833,14 @@ diff --git a/pipe.c b/pipe.c
  extern char *logfile_name;
  extern int remote_option_cnt;
  extern const char **remote_options;
-@@ -142,12 +145,19 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
+ extern struct chmod_mode_struct *chmod_modes;
+ 
++int same_db = 0;
++
+ /**
+  * Create a child connected to us via its stdin/stdout.
+  *
+@@ -142,13 +147,22 @@ pid_t local_child(int argc, char **argv, int *f_in, int *f_out,
  		}
  
  		if (remote_option_cnt) {
@@ -2762,15 +2851,19 @@ diff --git a/pipe.c b/pipe.c
  				option_error();
  				exit_cleanup(RERR_SYNTAX);
  			}
-+			if (db_config != db_config_save
-+			 && (!db_config || !db_config_save || strcmp(db_config, db_config_save) != 0)) {
+-		}
++			if (db_config == db_config_save)
++				same_db = db_config != NULL;
++			else if (!db_config || !db_config_save || strcmp(db_config, db_config_save) != 0) {
 +				use_db = 0;
 +				if (db_config)
 +					db_read_config(FERROR, db_config);
 +			}
- 		}
++		} else if (use_db)
++			same_db = 1;
  
  		if (dup2(to_child_pipe[0], STDIN_FILENO) < 0 ||
+ 		    close(to_child_pipe[1]) < 0 ||
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
@@ -2787,7 +2880,7 @@ diff --git a/receiver.c b/receiver.c
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
  			} else {
-+				if (use_db && protocol_version >= 30 && !db_lax) {
++				if (use_db && !db_lax) {
 +					STRUCT_STAT st;
 +					if (do_lstat(fname, &st) == 0)
 +						db_update_ctime(5, &st);
@@ -2795,48 +2888,34 @@ diff --git a/receiver.c b/receiver.c
  				if (remove_source_files
  				 || (preserve_hard_links && F_IS_HLINKED(file)))
  					send_msg_int(MSG_SUCCESS, ndx);
-@@ -537,6 +544,13 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -537,6 +544,9 @@ int recv_files(int f_in, int f_out, char *local_name)
  	if (delay_updates)
  		delayed_bits = bitbag_create(cur_flist->used + 1);
  
-+	if (use_db) {
-+		if (append_mode != 1 && protocol_version >= 30)
-+			db_connect(0); /* Will reset use_db on error. */
-+		else
-+			use_db = 0;
-+	}
++	if (use_db && (append_mode == 1 || protocol_version < 30))
++		use_db = 0; /* We can't note finished md5 values */
 +
  	while (1) {
  		cleanup_disable();
  
-@@ -866,6 +880,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -864,6 +874,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				do_unlink(partialptr);
  				handle_partial_dir(partialptr, PDIR_DELETE);
  			}
-+			if (use_db && protocol_version >= 30 && do_lstat(fname, &st) == 0)
++			if (use_db && do_lstat(fname, &st) == 0)
 +				db_set_checksum(5, &st, sender_file_sum);
  		} else if (keep_partial && partialptr) {
  			if (!handle_partial_dir(partialptr, PDIR_CREATE)) {
  				rprintf(FERROR,
-@@ -879,6 +895,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -877,6 +889,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				recv_ok = -1;
  			else if (delay_updates && recv_ok) {
  				bitbag_set_bit(delayed_bits, ndx);
-+				if (use_db && protocol_version >= 30 && do_lstat(partialptr, &st) == 0)
++				if (use_db && do_lstat(partialptr, &st) == 0)
 +					db_set_checksum(5, &st, sender_file_sum);
  				recv_ok = 2;
  			} else
  				partialptr = NULL;
-@@ -942,6 +960,9 @@ int recv_files(int f_in, int f_out, char *local_name)
- 	if (phase == 2 && delay_updates) /* for protocol_version < 29 */
- 		handle_delayed_updates(local_name);
- 
-+	if (use_db)
-+		db_disconnect(True);
-+
- 	if (DEBUG_GTE(RECV, 1))
- 		rprintf(FINFO,"recv_files finished\n");
- 
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
@@ -2860,7 +2939,24 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -1254,7 +1254,8 @@ extern short info_levels[], debug_levels[];
+@@ -240,12 +240,16 @@ enum msgcode {
+ 	MSG_IO_ERROR=22,/* the sending side had an I/O error */
+ 	MSG_IO_TIMEOUT=33,/* tell client about a daemon's timeout value */
+ 	MSG_NOOP=42,	/* a do-nothing message (legacy protocol-30 only) */
++	MSG_CHECKSUM=55,/* sent via rcvr -> gen pipe and local-host-only gen -> sender */
+ 	MSG_ERROR_EXIT=86, /* synchronize an error exit (siblings and protocol >= 31) */
+ 	MSG_SUCCESS=100,/* successfully updated indicated flist index */
+ 	MSG_DELETED=101,/* successfully deleted a file on receiving side */
+ 	MSG_NO_SEND=102,/* sender failed to open a file we wanted */
+ };
+ 
++#define MSG_CHECKSUM_LONGS 5
++#define MSG_CHECKSUM_LEN (MSG_CHECKSUM_LONGS*8 + 4 + MAX_DIGEST_LEN)
++
+ #define NDX_DONE -1
+ #define NDX_FLIST_EOF -2
+ #define NDX_DEL_STATS -3
+@@ -1256,7 +1260,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CHDIR (DEBUG_BIND+1)
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)
