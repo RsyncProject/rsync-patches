@@ -43,7 +43,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_links;
  extern int preserve_devices;
  extern int preserve_specials;
-@@ -1750,6 +1751,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1748,6 +1749,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  					fname, fnamecmpbuf);
  			}
  			sx.st.st_size = F_LENGTH(fuzzy_file);
@@ -58,7 +58,7 @@ diff --git a/generator.c b/generator.c
  			statret = 0;
  			fnamecmp = fnamecmpbuf;
  		}
-@@ -1917,6 +1926,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1915,6 +1924,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  	if (read_batch)
  		goto cleanup;
  
@@ -311,7 +311,7 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -526,8 +526,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -573,8 +573,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  #ifdef SUPPORT_XATTRS
  	if (am_root < 0)
  		set_stat_xattr(fname, file, new_mode);
@@ -327,7 +327,7 @@ diff --git a/rsync.c b/rsync.c
  #endif
  
  	if (!preserve_times
-@@ -538,6 +544,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -585,6 +591,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  	if (sxp->st.st_ino == 2 && S_ISDIR(sxp->st.st_mode))
  		flags |= ATTRS_SKIP_CRTIME;
  	if (!(flags & ATTRS_SKIP_MTIME)
@@ -586,16 +586,16 @@ diff --git a/xattrs.c b/xattrs.c
  		} else
  			name_offset = datum_len;
  
-@@ -310,7 +359,7 @@ int get_xattr(const char *fname, stat_x *sxp)
- 			return 0;
- 	}
+@@ -311,7 +360,7 @@ int get_xattr(const char *fname, stat_x *sxp)
+ 	} else if (IS_MISSING_FILE(sxp->st))
+ 		return 0;
  
 -	if (rsync_xal_get(fname, sxp->xattr) < 0) {
 +	if (rsync_xal_get(fname, sxp) < 0) {
  		free_xattr(sxp);
  		return -1;
  	}
-@@ -345,6 +394,8 @@ int copy_xattrs(const char *source, const char *dest)
+@@ -346,6 +395,8 @@ int copy_xattrs(const char *source, const char *dest)
  		datum_len = 0;
  		if (!(ptr = get_xattr_data(source, name, &datum_len, 0)))
  			return -1;
@@ -604,7 +604,7 @@ diff --git a/xattrs.c b/xattrs.c
  		if (sys_lsetxattr(dest, name, ptr, datum_len) < 0) {
  			int save_errno = errno ? errno : EINVAL;
  			rsyserr(FERROR_XFER, errno,
-@@ -361,6 +412,10 @@ int copy_xattrs(const char *source, const char *dest)
+@@ -362,6 +413,10 @@ int copy_xattrs(const char *source, const char *dest)
  
  static int find_matching_xattr(item_list *xalp)
  {
@@ -615,7 +615,7 @@ diff --git a/xattrs.c b/xattrs.c
  	size_t i, j;
  	item_list *lst = rsync_xal_l.items;
  
-@@ -394,6 +449,7 @@ static int find_matching_xattr(item_list *xalp)
+@@ -395,6 +450,7 @@ static int find_matching_xattr(item_list *xalp)
  	}
  
  	return -1;
@@ -623,7 +623,7 @@ diff --git a/xattrs.c b/xattrs.c
  }
  
  /* Store *xalp on the end of rsync_xal_l */
-@@ -573,11 +629,13 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
+@@ -574,11 +630,13 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
  
  			/* Re-read the long datum. */
  			if (!(ptr = get_xattr_data(fname, rxa->name, &len, 0))) {
@@ -638,7 +638,7 @@ diff --git a/xattrs.c b/xattrs.c
  			write_varint(f_out, len); /* length might have changed! */
  			write_bigbuf(f_out, ptr, len);
  			free(ptr);
-@@ -793,7 +851,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -794,7 +852,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  	int user_only = am_root <= 0;
  #endif
  	size_t name_len;
@@ -647,7 +647,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  	/* This puts the current name list into the "namebuf" buffer. */
  	if ((list_len = get_xattr_names(fname)) < 0)
-@@ -805,7 +863,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -806,7 +864,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  		if (XATTR_ABBREV(rxas[i])) {
  			/* See if the fnamecmp version is identical. */
  			len = name_len = rxas[i].name_len;
@@ -659,7 +659,7 @@ diff --git a/xattrs.c b/xattrs.c
  			  still_abbrev:
  				if (am_generator)
  					continue;
-@@ -814,14 +875,14 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -815,14 +876,14 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  				ret = -1;
  				continue;
  			}
@@ -677,7 +677,7 @@ diff --git a/xattrs.c b/xattrs.c
  			if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) != 0) {
  				free(ptr);
  				goto still_abbrev;
-@@ -890,6 +951,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -891,6 +952,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  		}
  	}
  
@@ -688,7 +688,7 @@ diff --git a/xattrs.c b/xattrs.c
  	return ret;
  }
  
-@@ -936,7 +1001,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
+@@ -937,7 +1002,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
  {
  	const char *name = is_access_acl ? XACC_ACL_ATTR : XDEF_ACL_ATTR;
  	*len_p = 0; /* no extra data alloc needed from get_xattr_data() */
@@ -697,7 +697,7 @@ diff --git a/xattrs.c b/xattrs.c
  }
  
  int set_xattr_acl(const char *fname, int is_access_acl, const char *buf, size_t buf_len)
-@@ -1079,11 +1144,33 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
+@@ -1080,11 +1145,33 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
  	return 0;
  }
  
@@ -731,7 +731,7 @@ diff --git a/xattrs.c b/xattrs.c
  	return ret;
  }
  
-@@ -1092,6 +1179,9 @@ int x_lstat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
+@@ -1093,6 +1180,9 @@ int x_lstat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
  	int ret = do_lstat(fname, fst);
  	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
  		xst->st_mode = 0;
@@ -741,7 +741,7 @@ diff --git a/xattrs.c b/xattrs.c
  	return ret;
  }
  
-@@ -1100,6 +1190,9 @@ int x_fstat(int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
+@@ -1101,6 +1191,9 @@ int x_fstat(int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
  	int ret = do_fstat(fd, fst);
  	if ((ret < 0 || get_stat_xattr(NULL, fd, fst, xst) < 0) && xst)
  		xst->st_mode = 0;
