@@ -4,16 +4,18 @@ In the bufferbloat age, anything that can make for a kinder, gentler bulk
 transfer protocol seems desirable.
 
 This add support for user and server selectable congestion control algorithms.
-As examples:
 
---congestion-alg=lp # For the tcp-lp algorithm on the command line
+For example:
+    --congestion-alg=lp # For the tcp-lp algorithm on the command line
 
-Or in a subsection:
+And diffserv support:
+    --diffserv=8 for setting the CS1 bit
+
+Also available in rsync daemon modules:
 
 [mystuff]
-congestion alg = westwood # for a wireless connection
-
-And diffserv support: --diffserv=8 for setting the CS1 bit
+    congestion alg = westwood # for a wireless connection
+    diffserv = 8
 
 This could be improved by being able to specify a list of congestion algorithms
 to try, symbolic names for diffserv (CS1), a better name than 'congestion-alg',
@@ -25,7 +27,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 8946cfc6f8018e30740ee1db4cc2e2008e4f7e7e
+based-on: 3fe686b577132243d90e0d807b0f592ddfee7dc2
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
@@ -37,14 +39,14 @@ diff --git a/loadparm.c b/loadparm.c
  	char *dont_compress;
  	char *exclude;
  	char *exclude_from;
-@@ -138,6 +139,7 @@ typedef struct {
+@@ -134,6 +135,7 @@ typedef struct {
+ /* NOTE: update this macro if the last char* variable changes! */
+ #define LOCAL_STRING_COUNT() (offsetof(local_vars, uid) / sizeof (char*) + 1)
+ 
++	int diffserv;
+ 	int max_connections;
  	int max_verbosity;
  	int syslog_facility;
- 	int timeout;
-+	int diffserv;
- 
- 	BOOL fake_super;
- 	BOOL forward_lookup;
 @@ -185,6 +187,7 @@ static const all_vars Defaults = {
   /* auth_users; */		NULL,
   /* charset; */ 		NULL,
@@ -53,20 +55,20 @@ diff --git a/loadparm.c b/loadparm.c
   /* dont_compress; */		DEFAULT_DONT_COMPRESS,
   /* exclude; */			NULL,
   /* exclude_from; */		NULL,
-@@ -212,6 +215,7 @@ static const all_vars Defaults = {
+@@ -208,6 +211,7 @@ static const all_vars Defaults = {
+  /* temp_dir; */ 		NULL,
+  /* uid; */			NULL,
+ 
++ /* diffserv; */		8,
+  /* max_connections; */		0,
   /* max_verbosity; */		1,
   /* syslog_facility; */		LOG_DAEMON,
-  /* timeout; */			0,
-+ /* diffserv; */		8,
- 
-  /* fake_super; */		False,
-  /* forward_lookup; */		True,
 @@ -322,6 +326,8 @@ static struct parm_struct parm_table[] =
   {"auth users",        P_STRING, P_LOCAL, &Vars.l.auth_users,          NULL,0},
   {"charset",           P_STRING, P_LOCAL, &Vars.l.charset,             NULL,0},
   {"comment",           P_STRING, P_LOCAL, &Vars.l.comment,             NULL,0},
 + {"congestion alg",    P_STRING, P_LOCAL, &Vars.l.congestion_alg,      NULL,0},
-+ {"diffserv",	        P_INTEGER,P_LOCAL, &Vars.l.diffserv,            NULL,0},
++ {"diffserv",          P_INTEGER,P_LOCAL, &Vars.l.diffserv,            NULL,0},
   {"dont compress",     P_STRING, P_LOCAL, &Vars.l.dont_compress,       NULL,0},
   {"exclude from",      P_STRING, P_LOCAL, &Vars.l.exclude_from,        NULL,0},
   {"exclude",           P_STRING, P_LOCAL, &Vars.l.exclude,             NULL,0},
@@ -78,14 +80,14 @@ diff --git a/loadparm.c b/loadparm.c
  FN_LOCAL_STRING(lp_dont_compress, dont_compress)
  FN_LOCAL_STRING(lp_exclude, exclude)
  FN_LOCAL_STRING(lp_exclude_from, exclude_from)
-@@ -481,6 +488,7 @@ FN_LOCAL_INTEGER(lp_max_connections, max_connections)
+@@ -477,6 +484,7 @@ FN_LOCAL_STRING(lp_secrets_file, secrets_file)
+ FN_LOCAL_STRING(lp_temp_dir, temp_dir)
+ FN_LOCAL_STRING(lp_uid, uid)
+ 
++FN_LOCAL_INTEGER(lp_diffserv, diffserv)
+ FN_LOCAL_INTEGER(lp_max_connections, max_connections)
  FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
  FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
- FN_LOCAL_INTEGER(lp_timeout, timeout)
-+FN_LOCAL_INTEGER(lp_diffserv, diffserv)
- 
- FN_LOCAL_BOOL(lp_fake_super, fake_super)
- FN_LOCAL_BOOL(lp_forward_lookup, forward_lookup)
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
