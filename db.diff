@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 4dfe7c9f3ec72a8cd04eaa880542274e3df64d22
+based-on: 43d6d0c5ba63e3a69717702a1d58ea6a04192bb4
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -141,29 +141,7 @@ diff --git a/checksum.c b/checksum.c
  
  /*
    a simple 32 bit checksum that can be upadted from either end
-@@ -98,10 +99,10 @@ void get_checksum2(char *buf, int32 len, char *sum)
- 	}
- }
- 
--void file_checksum(char *fname, char *sum, OFF_T size)
-+void file_checksum(const char *fname, STRUCT_STAT *st_p, char *sum)
- {
- 	struct map_struct *buf;
--	OFF_T i, len = size;
-+	OFF_T i, len = st_p->st_size;
- 	md_context m;
- 	int32 remainder;
- 	int fd;
-@@ -112,7 +113,7 @@ void file_checksum(char *fname, char *sum, OFF_T size)
- 	if (fd == -1)
- 		return;
- 
--	buf = map_file(fd, size, MAX_MAP_SIZE, CSUM_CHUNK);
-+	buf = map_file(fd, len, MAX_MAP_SIZE, CSUM_CHUNK);
- 
- 	if (protocol_version >= 30) {
- 		md5_begin(&m);
-@@ -127,6 +128,9 @@ void file_checksum(char *fname, char *sum, OFF_T size)
+@@ -127,6 +128,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			md5_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		md5_result(&m, (uchar *)sum);
@@ -173,7 +151,7 @@ diff --git a/checksum.c b/checksum.c
  	} else {
  		mdfour_begin(&m);
  
-@@ -144,6 +148,9 @@ void file_checksum(char *fname, char *sum, OFF_T size)
+@@ -144,6 +148,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		mdfour_result(&m, (uchar *)sum);
@@ -258,7 +236,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1096,6 +1097,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1097,6 +1098,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -2236,12 +2214,12 @@ diff --git a/flist.c b/flist.c
  extern int eol_nulls;
  extern int relative_paths;
  extern int implied_dirs;
-@@ -1302,11 +1303,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1305,11 +1306,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		extra_len += EXTRA_LEN;
  #endif
  
 -	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
--		file_checksum(thisname, tmp_sum, st.st_size);
+-		file_checksum(thisname, &st, tmp_sum);
 -		if (sender_keeps_checksum)
 -			extra_len += SUM_EXTRA_CNT * EXTRA_LEN;
 -	}
@@ -2250,7 +2228,7 @@ diff --git a/flist.c b/flist.c
  
  #if EXTRA_ROUNDING > 0
  	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
-@@ -1391,8 +1389,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1394,8 +1392,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		return NULL;
  	}
  
@@ -2265,7 +2243,7 @@ diff --git a/flist.c b/flist.c
  
  	if (unsort_ndx)
  		F_NDX(file) = stats.num_dirs;
-@@ -2053,6 +2055,9 @@ void send_extra_file_list(int f, int at_least)
+@@ -2056,6 +2058,9 @@ void send_extra_file_list(int f, int at_least)
    finish:
  	if (io_error != save_io_error && protocol_version == 30 && !ignore_errors)
  		send_msg_int(MSG_IO_ERROR, io_error);
@@ -2275,7 +2253,7 @@ diff --git a/flist.c b/flist.c
  }
  
  struct file_list *send_file_list(int f, int argc, char *argv[])
-@@ -2076,6 +2081,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2079,6 +2084,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		     | (eol_nulls || reading_remotely ? RL_EOL_NULLS : 0);
  	int implied_dot_dir = 0;
  
@@ -2289,7 +2267,7 @@ diff --git a/flist.c b/flist.c
  	rprintf(FLOG, "building file list\n");
  	if (show_filelist_p())
  		start_filelist_progress("building file list");
-@@ -2422,6 +2434,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2425,6 +2437,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  			rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
  	}
  
@@ -2314,7 +2292,7 @@ diff --git a/generator.c b/generator.c
  	   of the file time to determine whether to sync */
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
--		file_checksum(fn, sum, st->st_size);
+-		file_checksum(fn, st, sum);
 +		if (!use_db || !db_get_checksum(st, sum))
 +			file_checksum(fn, st, sum);
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
@@ -2521,7 +2499,7 @@ diff --git a/mkproto.pl b/mkproto.pl
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -80,6 +80,7 @@ int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
+@@ -82,6 +82,7 @@ int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
  int am_server = 0;
  int am_sender = 0;
  int am_starting_up = 1;
@@ -2529,7 +2507,7 @@ diff --git a/options.c b/options.c
  int relative_paths = -1;
  int implied_dirs = 1;
  int missing_args = 0; /* 0 = FERROR_XFER, 1 = ignore, 2 = delete */
-@@ -93,6 +94,7 @@ int use_qsort = 0;
+@@ -95,6 +96,7 @@ int use_qsort = 0;
  char *files_from = NULL;
  int filesfrom_fd = -1;
  char *filesfrom_host = NULL;
@@ -2537,7 +2515,7 @@ diff --git a/options.c b/options.c
  int eol_nulls = 0;
  int protect_args = -1;
  int human_readable = 1;
-@@ -100,6 +102,9 @@ int recurse = 0;
+@@ -102,6 +104,9 @@ int recurse = 0;
  int allow_inc_recurse = 1;
  int xfer_dirs = -1;
  int am_daemon = 0;
@@ -2547,7 +2525,7 @@ diff --git a/options.c b/options.c
  int connect_timeout = 0;
  int keep_partial = 0;
  int safe_symlinks = 0;
-@@ -268,6 +273,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
+@@ -270,6 +275,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
  	DEBUG_WORD(CHDIR, W_CLI|W_SRV, "Debug when the current directory changes"),
  	DEBUG_WORD(CONNECT, W_CLI, "Debug connection events (levels 1-2)"),
  	DEBUG_WORD(CMD, W_CLI, "Debug commands+options that are issued (levels 1-2)"),
@@ -2555,7 +2533,7 @@ diff --git a/options.c b/options.c
  	DEBUG_WORD(DEL, W_REC, "Debug delete actions (levels 1-3)"),
  	DEBUG_WORD(DELTASUM, W_SND|W_REC, "Debug delta-transfer checksumming (levels 1-4)"),
  	DEBUG_WORD(DUP, W_REC, "Debug weeding of duplicate names"),
-@@ -572,6 +578,7 @@ static void print_rsync_version(enum logcode f)
+@@ -574,6 +580,7 @@ static void print_rsync_version(enum logcode f)
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -2563,7 +2541,7 @@ diff --git a/options.c b/options.c
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -608,6 +615,11 @@ static void print_rsync_version(enum logcode f)
+@@ -610,6 +617,11 @@ static void print_rsync_version(enum logcode f)
  #ifdef CAN_SET_SYMLINK_TIMES
  	symtimes = "";
  #endif
@@ -2575,7 +2553,7 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -621,8 +633,8 @@ static void print_rsync_version(enum logcode f)
+@@ -623,8 +635,8 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -2586,7 +2564,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -671,6 +683,9 @@ void usage(enum logcode F)
+@@ -673,6 +685,9 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -2596,7 +2574,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -818,6 +833,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -820,6 +835,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
@@ -2604,7 +2582,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
-@@ -957,6 +973,10 @@ static struct poptOption long_options[] = {
+@@ -959,6 +975,10 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -2615,7 +2593,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1045,6 +1065,9 @@ static struct poptOption long_options[] = {
+@@ -1049,6 +1069,9 @@ static struct poptOption long_options[] = {
    {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
    {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
@@ -2625,7 +2603,7 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1098,6 +1121,50 @@ static struct poptOption long_daemon_options[] = {
+@@ -1102,6 +1125,50 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
@@ -2676,7 +2654,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1276,6 +1343,100 @@ static void create_refuse_error(int which)
+@@ -1280,6 +1347,100 @@ static void create_refuse_error(int which)
  	}
  }
  
@@ -2777,7 +2755,7 @@ diff --git a/options.c b/options.c
  
  /**
   * Process command line arguments.  Called on both local and remote.
-@@ -1293,10 +1454,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1297,10 +1458,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	int argc = *argc_p;
  	int opt;
  
@@ -2796,7 +2774,7 @@ diff --git a/options.c b/options.c
  #ifdef ICONV_OPTION
  		if (!*lp_charset(module_id))
  			set_refuse_options("iconv");
-@@ -1419,6 +1588,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1423,6 +1592,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2809,7 +2787,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1493,6 +1668,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1497,6 +1672,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -2876,7 +2854,7 @@ diff --git a/receiver.c b/receiver.c
  extern int am_root;
  extern int am_server;
  extern int inc_recurse;
-@@ -431,6 +433,11 @@ static void handle_delayed_updates(char *local_name)
+@@ -434,6 +436,11 @@ static void handle_delayed_updates(char *local_name)
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
  			} else {
@@ -2888,7 +2866,7 @@ diff --git a/receiver.c b/receiver.c
  				if (remove_source_files
  				 || (preserve_hard_links && F_IS_HLINKED(file)))
  					send_msg_int(MSG_SUCCESS, ndx);
-@@ -537,6 +544,9 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -540,6 +547,9 @@ int recv_files(int f_in, int f_out, char *local_name)
  	if (delay_updates)
  		delayed_bits = bitbag_create(cur_flist->used + 1);
  
@@ -2898,7 +2876,7 @@ diff --git a/receiver.c b/receiver.c
  	while (1) {
  		cleanup_disable();
  
-@@ -864,6 +874,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -867,6 +877,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				do_unlink(partialptr);
  				handle_partial_dir(partialptr, PDIR_DELETE);
  			}
@@ -2907,7 +2885,7 @@ diff --git a/receiver.c b/receiver.c
  		} else if (keep_partial && partialptr) {
  			if (!handle_partial_dir(partialptr, PDIR_CREATE)) {
  				rprintf(FERROR,
-@@ -877,6 +889,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -880,6 +892,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				recv_ok = -1;
  			else if (delay_updates && recv_ok) {
  				bitbag_set_bit(delayed_bits, ndx);
@@ -2939,7 +2917,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -240,12 +240,16 @@ enum msgcode {
+@@ -241,12 +241,16 @@ enum msgcode {
  	MSG_IO_ERROR=22,/* the sending side had an I/O error */
  	MSG_IO_TIMEOUT=33,/* tell client about a daemon's timeout value */
  	MSG_NOOP=42,	/* a do-nothing message (legacy protocol-30 only) */
@@ -2956,7 +2934,7 @@ diff --git a/rsync.h b/rsync.h
  #define NDX_DONE -1
  #define NDX_FLIST_EOF -2
  #define NDX_DEL_STATS -3
-@@ -1256,7 +1260,8 @@ extern short info_levels[], debug_levels[];
+@@ -1257,7 +1261,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CHDIR (DEBUG_BIND+1)
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)
@@ -2979,7 +2957,7 @@ diff --git a/rsync.yo b/rsync.yo
   -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
       --no-OPTION             turn off an implied OPTION (e.g. --no-D)
   -r, --recursive             recurse into directories
-@@ -625,6 +628,67 @@ option's before-the-transfer "Does this file need to be updated?" check.
+@@ -633,6 +636,67 @@ option's before-the-transfer "Does this file need to be updated?" check.
  For protocol 30 and beyond (first supported in 3.0.0), the checksum used is
  MD5.  For older protocols, the checksum used is MD4.
  

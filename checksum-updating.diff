@@ -365,7 +365,7 @@ diff --git a/flist.c b/flist.c
 +			if (fp->flags & FLAG_SUM_MISSING) {
 +				fp->flags &= ~FLAG_SUM_MISSING;
 +				csum_cache[slot].checksum_updates++;
-+				file_checksum(fname, stp->st_size, sum_buf);
++				file_checksum(fname, stp, sum_buf);
 +				memcpy(F_SUM(fp), sum_buf, MAX_DIGEST_LEN);
 +			} else {
 +				csum_cache[slot].checksum_matches++;
@@ -377,7 +377,7 @@ diff --git a/flist.c b/flist.c
 +		clear_file(fp);
  	}
  
- 	file_checksum(fname, stp->st_size, sum_buf);
+ 	file_checksum(fname, stp, sum_buf);
 +
 +	if (checksum_files & CSF_UPDATE) {
 +		if (basename_len < 0)
@@ -390,7 +390,7 @@ diff --git a/flist.c b/flist.c
  }
  
  /* Call this with EITHER (1) "file, NULL, 0" to chdir() to the file's
-@@ -1491,6 +1702,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1494,6 +1705,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  	if (is_excluded(thisname, S_ISDIR(st.st_mode) != 0, filter_level)) {
  		if (ignore_perishable)
  			non_perishable_cnt++;
@@ -399,7 +399,7 @@ diff --git a/flist.c b/flist.c
  		return NULL;
  	}
  
-@@ -1537,13 +1750,13 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1540,13 +1753,13 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  			lastdir[len] = '\0';
  			lastdir_len = len;
  			if (checksum_files && am_sender && flist)
@@ -415,16 +415,16 @@ diff --git a/flist.c b/flist.c
  		}
  	}
  	basename_len = strlen(basename) + 1; /* count the '\0' */
-@@ -1651,7 +1864,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1654,7 +1867,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  
  	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
  		if (flist && checksum_files)
 -			get_cached_checksum(0, thisname, file, &st, tmp_sum);
 +			get_cached_checksum(0, thisname, file, basename_len, &st, tmp_sum);
  		else
- 			file_checksum(thisname, st.st_size, tmp_sum);
+ 			file_checksum(thisname, &st, tmp_sum);
  		if (sender_keeps_checksum)
-@@ -2027,6 +2240,9 @@ static void send_directory(int f, struct file_list *flist, char *fbuf, int len,
+@@ -2030,6 +2243,9 @@ static void send_directory(int f, struct file_list *flist, char *fbuf, int len,
  
  	closedir(d);
  
@@ -434,7 +434,7 @@ diff --git a/flist.c b/flist.c
  	if (f >= 0 && recurse && !divert_dirs) {
  		int i, end = flist->used - 1;
  		/* send_if_directory() bumps flist->used, so use "end". */
-@@ -2686,6 +2902,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2689,6 +2905,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  			rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
  	}
  
@@ -462,7 +462,7 @@ diff --git a/generator.c b/generator.c
 -			get_cached_checksum(slot, fn, file, st, sum);
 +			get_cached_checksum(slot, fn, file, -1, st, sum);
  		else
- 			file_checksum(fn, st->st_size, sum);
+ 			file_checksum(fn, st, sum);
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
 @@ -1289,7 +1290,8 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  				}
@@ -547,7 +547,7 @@ diff --git a/loadparm.c b/loadparm.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -1687,7 +1687,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1680,7 +1680,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  
  		case OPT_SUMFILES:
  			arg = poptGetOptArg(pc);
@@ -575,7 +575,7 @@ diff --git a/receiver.c b/receiver.c
  extern int inplace;
  extern int allowed_lull;
  extern int delay_updates;
-@@ -431,7 +432,7 @@ static void handle_delayed_updates(char *local_name)
+@@ -434,7 +435,7 @@ static void handle_delayed_updates(char *local_name)
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
  			} else {
@@ -584,7 +584,7 @@ diff --git a/receiver.c b/receiver.c
  				 || (preserve_hard_links && F_IS_HLINKED(file)))
  					send_msg_int(MSG_SUCCESS, ndx);
  				handle_partial_dir(partialptr, PDIR_DELETE);
-@@ -892,7 +893,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -895,7 +896,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  		case 2:
  			break;
  		case 1:
@@ -596,7 +596,7 @@ diff --git a/receiver.c b/receiver.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -975,6 +975,8 @@ typedef struct {
+@@ -976,6 +976,8 @@ typedef struct {
  
  #define CSF_ENABLE (1<<1)
  #define CSF_LAX (1<<2)
@@ -608,7 +608,7 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -637,9 +637,13 @@ computed just as it would be if bf(--sumfiles) was not specified.
+@@ -645,9 +645,13 @@ computed just as it would be if bf(--sumfiles) was not specified.
  
  The MODE value is either "lax", for relaxed checking (which compares size
  and mtime), "strict" (which also compares ctime and inode), or "none" to
@@ -628,7 +628,7 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -327,13 +327,15 @@ The default is tt(/var/run/rsyncd.lock).
+@@ -334,13 +334,15 @@ The default is tt(/var/run/rsyncd.lock).
  dit(bf(checksum files)) This parameter tells rsync to make use of any cached
  checksum information it finds in per-directory .rsyncsums files when the
  current transfer is using the bf(--checksum) option.  The value can be set
