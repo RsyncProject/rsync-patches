@@ -1,0 +1,525 @@
+This patch adds a kerberos authentication method to daemon mode.
+
+NOTE: minimally munged to work with 3.1.1, but as yet untested!
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/kerberos.diff
+    ./prepare-source
+    ./configure
+    make
+
+based-on: 962f8b90045ab331fc04c9e65f80f1a53e68243b
+diff --git a/Makefile.in b/Makefile.in
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -39,7 +39,7 @@ OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
+ 	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
+ OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
+ 	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
+-OBJS3=progress.o pipe.o
++OBJS3=progress.o pipe.o gss-auth.o
+ DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
+ popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
+ 	popt/popthelp.o popt/poptparse.o
+diff --git a/clientserver.c b/clientserver.c
+--- a/clientserver.c
++++ b/clientserver.c
+@@ -131,7 +131,7 @@ int start_socket_client(char *host, int remote_argc, char *remote_argv[],
+ 	setup_iconv();
+ #endif
+ 
+-	ret = start_inband_exchange(fd, fd, user, remote_argc, remote_argv);
++	ret = start_inband_exchange(fd, fd, user, host, remote_argc, remote_argv);
+ 
+ 	return ret ? ret : client_run(fd, fd, -1, argc, argv);
+ }
+@@ -210,7 +210,7 @@ static int exchange_protocols(int f_in, int f_out, char *buf, size_t bufsiz, int
+ 	return 0;
+ }
+ 
+-int start_inband_exchange(int f_in, int f_out, const char *user, int argc, char *argv[])
++int start_inband_exchange(int f_in, int f_out, const char *user, const char *host, int argc, char *argv[])
+ {
+ 	int i, modlen;
+ 	char line[BIGPATHBUFLEN];
+@@ -296,6 +296,17 @@ int start_inband_exchange(int f_in, int f_out, const char *user, int argc, char
+ 			continue;
+ 		}
+ 
++		if (strcmp(line, "@RSYNCD: GSS") == 0) {
++#ifdef GSSAPI_OPTION
++			if (auth_gss_client(f_out, host) < 0)
++				return -1;
++			continue;
++#else
++			rprintf(FERROR, "GSSAPI is not supported\n");
++			return -1;
++#endif
++		}
++
+ 		if (strcmp(line,"@RSYNCD: OK") == 0)
+ 			break;
+ 
+@@ -568,7 +579,12 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+ 	}
+ 
+ 	read_only = lp_read_only(i); /* may also be overridden by auth_server() */
+-	auth_user = auth_server(f_in, f_out, i, host, addr, "@RSYNCD: AUTHREQD ");
++#ifdef GSSAPI_OPTION
++	if (lp_use_gssapi(i))
++		auth_user = auth_gss_server(f_in, f_out, i, host, addr, "@RSYNCD: GSS");
++	else
++#endif
++		auth_user = auth_server(f_in, f_out, i, host, addr, "@RSYNCD: AUTHREQD ");
+ 
+ 	if (!auth_user) {
+ 		io_printf(f_out, "@ERROR: auth failed on module %s\n", name);
+diff --git a/configure.ac b/configure.ac
+--- a/configure.ac
++++ b/configure.ac
+@@ -675,6 +675,31 @@ if test x"$enable_iconv" != x"no"; then
+ 	AC_DEFINE(UTF8_CHARSET, "UTF-8", [String to pass to iconv() for the UTF-8 charset.])
+ fi
+ 
++AC_ARG_WITH([gssapi],
++  [AS_HELP_STRING([--with-gssapi],
++    [support GSSAPI authentication @<:@default=check@:>@])],
++  [],
++  [with_gssapi=check])
++
++AH_TEMPLATE([GSSAPI_OPTION],
++[Define if you want GSSAPI authentication. Specifing a value will set the search path.])
++
++AS_IF([test "x$with_gssapi" != xno],
++    [AC_SEARCH_LIBS([gss_import_name], gss gssapi_krb5 ,
++      [AC_CHECK_HEADERS(gssapi/gssapi_generic.h gssapi/gssapi.h) ]
++      [ AC_DEFINE([GSSAPI_OPTION], [1]) ]
++      ,
++      [if test "x$with_gssapi" = xcheck; then
++        AC_MSG_FAILURE(
++          [--with-gssapi was given, but test for function failed])
++       fi
++       ])
++     ])
++
++if test x"$enable_gssapi" != x"no"; then
++   AC_DEFINE(GSSAPI_OPTION, 1)
++fi
++
+ AC_CACHE_CHECK([whether chown() modifies symlinks],rsync_cv_chown_modifies_symlink,[
+   AC_TRY_RUN([
+ #if HAVE_UNISTD_H
+diff --git a/gss-auth.c b/gss-auth.c
+new file mode 100644
+--- /dev/null
++++ b/gss-auth.c
+@@ -0,0 +1,342 @@
++/*
++ * GSSAPI authentication.
++ *
++ * Copyright (C) 1998-2001 Andrew Tridgell <tridge@samba.org>
++ * Copyright (C) 2001-2002 Martin Pool <mbp@samba.org>
++ * Copyright (C) 2002-2008 Wayne Davison
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program; if not, visit the http://fsf.org website.
++ */
++
++#include "rsync.h"
++
++#ifdef GSSAPI_OPTION
++
++#define RSYNC_GSS_SERVICE "host"
++
++struct init_context_data {
++	gss_cred_id_t          initiator_cred_handle;
++	gss_ctx_id_t           *context_handle;
++	gss_name_t             target_name;
++	gss_OID                mech_type;
++	OM_uint32              req_flags;
++	OM_uint32              time_req;
++	gss_channel_bindings_t input_chan_bindings;
++	gss_OID                *actual_mech_type;
++	OM_uint32              *ret_flags;
++	OM_uint32              *time_rec;
++};
++
++struct accept_context_data {
++	gss_ctx_id_t           *context_handle;
++	gss_cred_id_t          acceptor_cred_handle;
++	gss_channel_bindings_t input_chan_bindings;
++	gss_name_t             *src_name;
++	gss_OID                *mech_type;
++	OM_uint32              *ret_flags;
++	OM_uint32              *time_rec;
++	gss_cred_id_t          *delegated_cred_handle;
++};
++
++int auth_gss_client(int fd, const char *host)
++{
++	gss_ctx_id_t ctxt = GSS_C_NO_CONTEXT;
++	gss_name_t target_name = GSS_C_NO_NAME;
++	struct init_context_data cb_data;
++	char *buffer;
++	int status;
++	OM_uint32 min_stat;
++
++	buffer = new_array(char, (strlen(host) + 2 + strlen(RSYNC_GSS_SERVICE)));
++	if (!(buffer))
++		out_of_memory("auth_gss_client");
++
++	sprintf(buffer, "%s@%s", RSYNC_GSS_SERVICE, host);
++
++	import_gss_name(&target_name, buffer, GSS_C_NT_HOSTBASED_SERVICE);
++	free(buffer);
++
++	cb_data.initiator_cred_handle = GSS_C_NO_CREDENTIAL;
++	cb_data.context_handle = &ctxt;
++	cb_data.target_name = target_name;
++	cb_data.mech_type = GSS_C_NO_OID;
++	cb_data.req_flags = GSS_C_MUTUAL_FLAG | GSS_C_REPLAY_FLAG;
++	cb_data.time_req = 0;
++	cb_data.input_chan_bindings = GSS_C_NO_CHANNEL_BINDINGS;
++	cb_data.actual_mech_type = NULL;
++	cb_data.ret_flags = NULL;
++	cb_data.time_rec = NULL;
++
++	status = do_gss_dialog(fd, fd, 0, &cb_init_sec_context, (void *)&cb_data);
++	if (ctxt != GSS_C_NO_CONTEXT)
++		gss_delete_sec_context(&min_stat, &ctxt, GSS_C_NO_BUFFER);
++	free_gss_name(&target_name);
++
++	return status;
++}
++
++/*
++ * The call back function for a gss_init_sec_context dialog
++ */
++OM_uint32 cb_init_sec_context(OM_uint32 *min_statp, gss_buffer_t in_token, gss_buffer_t out_token, void *cb_data)
++{
++	struct init_context_data *context_data;
++
++	context_data = (struct init_context_data *) cb_data;
++	return gss_init_sec_context(min_statp, context_data->initiator_cred_handle, context_data->context_handle, context_data->target_name, context_data->mech_type, context_data->req_flags, context_data->time_req, context_data->input_chan_bindings, in_token, context_data->actual_mech_type, out_token, context_data->ret_flags, context_data->time_rec);
++}
++
++/* Possibly negotiate authentication with the client.  Use "leader" to
++ * start off the auth if necessary.
++ *
++ * Return NULL if authentication failed.  Return "" if anonymous access.
++ * Otherwise return username.
++ */
++char *auth_gss_server(int fd_in, int fd_out, int module, const char *host, const char *addr, const char *leader)
++{
++	struct accept_context_data cb_data;
++	gss_cred_id_t server_creds = GSS_C_NO_CREDENTIAL;
++	gss_ctx_id_t context = GSS_C_NO_CONTEXT;
++	OM_uint32 ret_flags;
++	char *users = lp_auth_users(module);
++	OM_uint32 maj_stat, min_stat;
++	gss_name_t server_name = GSS_C_NO_NAME;
++	gss_name_t client_name = GSS_C_NO_NAME;
++	gss_OID doid = GSS_C_NO_OID;
++	char *user = NULL;
++
++	/* if no auth list then allow anyone in! */
++	if (!users || !*users)
++		return "";
++
++	import_gss_name(&server_name, "host", GSS_C_NT_HOSTBASED_SERVICE);
++
++	maj_stat = gss_acquire_cred(&min_stat, server_name, GSS_C_INDEFINITE, GSS_C_NULL_OID_SET, GSS_C_ACCEPT, &server_creds, NULL, NULL);
++	if (maj_stat != GSS_S_COMPLETE) {
++		error_gss(maj_stat, min_stat, "error acquiring credentials on module %s from %s (%s)", lp_name(module), host, addr);
++		return NULL;
++	}
++
++	io_printf(fd_out, "%s\n", leader);
++
++	cb_data.context_handle = &context;
++	cb_data.acceptor_cred_handle = server_creds;
++	cb_data.input_chan_bindings = GSS_C_NO_CHANNEL_BINDINGS;
++	cb_data.src_name = &client_name;
++	cb_data.mech_type = &doid;
++	cb_data.ret_flags = &ret_flags;
++	cb_data.time_rec = NULL;
++	cb_data.delegated_cred_handle = NULL;
++
++	if (do_gss_dialog(fd_in, fd_out, -1, &cb_accept_sec_context, (void *)&cb_data) < 0)
++		return NULL;
++
++	user = get_cn(client_name, doid);
++
++	free_gss_name(&server_name);
++	free_gss_name(&client_name);
++
++	return user;
++}
++
++/*
++ * The call back function for a gss_accept_sec_context dialog
++ */
++OM_uint32 cb_accept_sec_context(OM_uint32 *min_statp, gss_buffer_t in_token, gss_buffer_t out_token, void *cb_data)
++{
++	struct accept_context_data *context_data;
++
++	context_data = (struct accept_context_data *) cb_data;
++	return gss_accept_sec_context(min_statp, context_data->context_handle, context_data->acceptor_cred_handle, in_token, context_data->input_chan_bindings, context_data->src_name, context_data->mech_type, out_token, context_data->ret_flags, context_data->time_rec, context_data->delegated_cred_handle);
++}
++
++void free_gss_buffer(gss_buffer_t gss_buffer)
++{
++	OM_uint32 maj_stat, min_stat;
++
++	if (gss_buffer->length > 0) {
++		maj_stat = gss_release_buffer(&min_stat, gss_buffer);
++		if (maj_stat != GSS_S_COMPLETE) {
++			error_gss(maj_stat, min_stat, "can't release a buffer");
++		}
++	}
++}
++
++void free_gss_name(gss_name_t *gss_buffer)
++{
++	OM_uint32 maj_stat, min_stat;
++
++	if (*gss_buffer != GSS_C_NO_NAME) {
++		maj_stat = gss_release_name(&min_stat, gss_buffer);
++		if (maj_stat != GSS_S_COMPLETE) {
++			error_gss(maj_stat, min_stat, "can't release a name");
++		}
++	}
++}
++
++void import_gss_name(gss_name_t *gss_name, const char *name, gss_OID type)
++{
++	gss_buffer_desc gssname;
++	OM_uint32 maj_stat, min_stat;
++
++	if (!(gssname.value = strdup(name)))
++		out_of_memory("import_gss_name");
++	gssname.length = strlen(name) +1 ;
++
++	maj_stat = gss_import_name(&min_stat, &gssname, type, gss_name);
++
++	if (maj_stat != GSS_S_COMPLETE)
++		error_gss(maj_stat, min_stat, "can't resolve %s", name);
++
++	free_gss_buffer(&gssname);
++}
++
++char *export_name(const gss_name_t input_name)
++{
++	OM_uint32 maj_stat, min_stat;
++	gss_buffer_desc exported_name;
++	char *exported;
++	gss_OID name_oid;
++
++	exported = NULL;
++
++	maj_stat = gss_display_name(&min_stat, input_name, &exported_name, &name_oid);
++	if (maj_stat != GSS_S_COMPLETE) {
++		error_gss(maj_stat, min_stat, "can't get display name");
++		return NULL;
++	}
++
++	if (exported_name.length > 0) {
++		if (!(exported = strdup(exported_name.value)))
++			out_of_memory("export_name");
++	}
++
++	free_gss_buffer(&exported_name);
++
++	return exported;
++}
++
++void error_gss(OM_uint32 major, OM_uint32 minor, const char *format, ...)
++{
++	OM_uint32 min_stat;
++	gss_buffer_desc gss_msg = GSS_C_EMPTY_BUFFER;
++	OM_uint32 msg_ctx;
++	va_list ap;
++	char message[BIGPATHBUFLEN];
++
++	va_start(ap, format);
++	vsnprintf(message, sizeof message, format, ap);
++	va_end(ap);
++
++	msg_ctx = 0;
++	if (major != GSS_S_FAILURE) /* Don't print unspecified failure, the message is useless */
++		do {
++			gss_display_status(&min_stat, major, GSS_C_GSS_CODE, GSS_C_NULL_OID, &msg_ctx, &gss_msg);
++			rprintf(FERROR, "GSS-API error: %s: %s\n", message, (char *) gss_msg.value);
++			free_gss_buffer(&gss_msg);
++		} while (msg_ctx != 0);
++
++	if (minor != 0) {
++		do {
++			gss_display_status(&min_stat, minor, GSS_C_MECH_CODE, GSS_C_NULL_OID, &msg_ctx, &gss_msg);
++			rprintf(FERROR, "GSS-API error: %s: %s\n",message, (char *) gss_msg.value);
++			free_gss_buffer(&gss_msg);
++		} while (msg_ctx != 0);
++	}
++}
++
++/*
++ * This function manage a gss dialog
++ * gss tokens are eaten by a call-back function and then send by this function.
++ * Argument to this function can be passed throught the cb_data argument
++ * When told to act as a server, it just begin to wait for a first token before beginning operation
++ * on it
++ */
++int do_gss_dialog(int fd_in, int fd_out, int isServer, OM_uint32 (*eat_token)(OM_uint32 *,gss_buffer_t, gss_buffer_t, void *), void *cb_data)
++{
++	OM_uint32 maj_stat, min_stat;
++	gss_buffer_desc in_token = GSS_C_EMPTY_BUFFER;
++	gss_buffer_desc out_token = GSS_C_EMPTY_BUFFER;
++
++	if (isServer)
++		recv_gss_token(fd_in, &in_token);
++
++	do {
++		maj_stat = (*eat_token)(&min_stat, &in_token, &out_token, cb_data);
++		free_gss_buffer(&in_token);
++		if (maj_stat != GSS_S_COMPLETE
++		 && maj_stat != GSS_S_CONTINUE_NEEDED) {
++			error_gss(maj_stat, min_stat, "error during dialog");
++			return -1;
++		}
++
++		if (out_token.length != 0) {
++			send_gss_token(fd_out, &out_token);
++		}
++		free_gss_buffer(&out_token);
++
++		if (maj_stat == GSS_S_CONTINUE_NEEDED) {
++			recv_gss_token(fd_in, &in_token);
++		}
++	} while (maj_stat == GSS_S_CONTINUE_NEEDED);
++
++	return 0;
++}
++
++char *get_cn(const gss_name_t input_name, const gss_OID mech_type)
++{
++	OM_uint32 maj_stat, min_stat;
++	gss_name_t output_name;
++	gss_buffer_desc exported_name;
++	char *cn;
++
++	cn = NULL;
++	maj_stat = gss_canonicalize_name(&min_stat, input_name, mech_type, &output_name);
++	if (maj_stat != GSS_S_COMPLETE) {
++		error_gss(maj_stat, min_stat, "canonizing name");
++		return NULL;
++	}
++
++	maj_stat = gss_export_name(&min_stat, output_name, &exported_name);
++	if (maj_stat != GSS_S_COMPLETE) {
++		error_gss(maj_stat, min_stat, "canonizing name");
++		return NULL;
++	}
++	if (exported_name.length > 0) {
++		if (!(cn = strdup(exported_name.value)))
++			out_of_memory("auth_server");
++	}
++
++	free_gss_name(&output_name);
++	free_gss_buffer(&exported_name);
++
++	return cn;
++}
++
++void send_gss_token(int fd, gss_buffer_t token)
++{
++	write_int(fd, token->length);
++	write_buf(fd, token->value, token->length);
++}
++
++void recv_gss_token(int fd, gss_buffer_t token)
++{
++	token->length = read_int(fd);
++	if (token->length > 0) {
++		if (!(token->value = new_array(char, token->length)))
++			out_of_memory("recv_gss_token");
++		read_buf(fd, token->value, token->length);
++	}
++}
++#endif /* GSSAPI_OPTION */
+diff --git a/loadparm.c b/loadparm.c
+--- a/loadparm.c
++++ b/loadparm.c
+@@ -151,6 +151,7 @@ typedef struct {
+ 	BOOL strict_modes;
+ 	BOOL transfer_logging;
+ 	BOOL use_chroot;
++	BOOL use_gssapi;
+ 	BOOL write_only;
+ } local_vars;
+ 
+@@ -225,6 +226,7 @@ static const all_vars Defaults = {
+  /* strict_modes; */		True,
+  /* transfer_logging; */	False,
+  /* use_chroot; */		True,
++ /* use_gssapi; */		False,
+  /* write_only; */		False,
+  }
+ };
+@@ -362,6 +364,7 @@ static struct parm_struct parm_table[] =
+  {"transfer logging",  P_BOOL,   P_LOCAL, &Vars.l.transfer_logging,    NULL,0},
+  {"uid",               P_STRING, P_LOCAL, &Vars.l.uid,                 NULL,0},
+  {"use chroot",        P_BOOL,   P_LOCAL, &Vars.l.use_chroot,          NULL,0},
++ {"use gssapi",        P_BOOL,   P_LOCAL, &Vars.l.use_gssapi,          NULL,0},
+  {"write only",        P_BOOL,   P_LOCAL, &Vars.l.write_only,          NULL,0},
+  {NULL,                P_BOOL,   P_NONE,  NULL,                        NULL,0}
+ };
+@@ -494,6 +497,7 @@ FN_LOCAL_BOOL(lp_reverse_lookup, reverse_lookup)
+ FN_LOCAL_BOOL(lp_strict_modes, strict_modes)
+ FN_LOCAL_BOOL(lp_transfer_logging, transfer_logging)
+ FN_LOCAL_BOOL(lp_use_chroot, use_chroot)
++FN_LOCAL_BOOL(lp_use_gssapi, use_gssapi)
+ FN_LOCAL_BOOL(lp_write_only, write_only)
+ 
+ /* Assign a copy of v to *s.  Handles NULL strings.  We don't worry
+diff --git a/main.c b/main.c
+--- a/main.c
++++ b/main.c
+@@ -1397,7 +1397,7 @@ static int start_client(int argc, char *argv[])
+ 	 * remote shell command, we need to do the RSYNCD protocol first */
+ 	if (daemon_over_rsh) {
+ 		int tmpret;
+-		tmpret = start_inband_exchange(f_in, f_out, shell_user, remote_argc, remote_argv);
++		tmpret = start_inband_exchange(f_in, f_out, shell_user, shell_machine, remote_argc, remote_argv);
+ 		if (tmpret < 0)
+ 			return tmpret;
+ 	}
+diff --git a/rsync.h b/rsync.h
+--- a/rsync.h
++++ b/rsync.h
+@@ -472,6 +472,15 @@ enum delret {
+ #define iconv_t int
+ #endif
+ 
++#ifdef GSSAPI_OPTION
++#ifdef HAVE_GSSAPI_GSSAPI_GENERIC_H
++#include <gssapi/gssapi_generic.h>
++#endif
++#ifdef HAVE_GSSAPI_GSSAPI_H
++#include <gssapi/gssapi.h>
++#endif
++#endif
++
+ #include <assert.h>
+ 
+ #include "lib/pool_alloc.h"
