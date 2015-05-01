@@ -4,7 +4,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: 7cb0de6326c915a72253fd103dae93308031ec3f
+based-on: 2ac35b45071c7bfd8be6be41bfd45326f1f57bce
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -182,12 +182,17 @@ diff --git a/generator.c b/generator.c
  	}
  }
  
-@@ -2050,7 +2061,7 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -2049,8 +2060,11 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+ 		if (need_retouch_dir_times) {
  			STRUCT_STAT st;
  			if (link_stat(fname, &st, 0) == 0
- 			 && cmp_time(st.st_mtime, file->modtime) != 0)
+-			 && cmp_time(st.st_mtime, file->modtime) != 0)
 -				set_modtime(fname, file->modtime, F_MOD_NSEC(file), file->mode);
-+				set_times(fname, file->modtime, F_MOD_NSEC(file), file->modtime, file->mode);
++			 && cmp_time(st.st_mtime, file->modtime) != 0) {
++				st.st_mtime = file->modtime;
++				st.ST_MTIME_NSEC = F_MOD_NSEC(file);
++				set_times(fname, &st);
++			}
  		}
  		if (counter >= loopchk_limit) {
  			if (allowed_lull)
@@ -277,15 +282,7 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -458,6 +458,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
- 	int updated = 0;
- 	stat_x sx2;
- 	int change_uid, change_gid;
-+	time_t atime, mtime;
- 	mode_t new_mode = file->mode;
- 	int inherit;
- 
-@@ -543,22 +544,40 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -543,26 +543,42 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		set_xattr(fname, file, fnamecmp, sxp);
  #endif
  
@@ -298,23 +295,25 @@ diff --git a/rsync.c b/rsync.c
 +	if (!atimes_ndx || S_ISDIR(sxp->st.st_mode))
 +		flags |= ATTRS_SKIP_ATIME;
  	if (!(flags & ATTRS_SKIP_MTIME)
- 	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
+ 	 && (sxp->st.st_mtime != file->modtime
+ #ifdef ST_MTIME_NSEC
+ 	  || (NSEC_BUMP(file) && (uint32)sxp->st.ST_MTIME_NSEC != F_MOD_NSEC(file))
+ #endif
+ 	  )) {
 -		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), sxp->st.st_mode);
-+		mtime = file->modtime;
++		sxp->st.st_mtime = file->modtime;
++		sxp->st.ST_MTIME_NSEC = F_MOD_NSEC(file);
 +		updated = 1;
-+	} else
-+		mtime = sxp->st.st_mtime;
++	}
 +	if (!(flags & ATTRS_SKIP_ATIME)) {
 +		time_t file_atime = f_atime(file);
 +		if (cmp_time(sxp->st.st_atime, file_atime) != 0) {
-+			atime = file_atime;
++			sxp->st.st_atime = file_atime;
 +			updated = 1;
-+		} else
-+			atime = sxp->st.st_atime;
++		}
 +	} else
-+		atime = sxp->st.st_atime;
 +	if (updated) {
-+		int ret = set_times(fname, mtime, F_MOD_NSEC(file), atime, sxp->st.st_mode);
++		int ret = set_times(fname, &sxp->st);
  		if (ret < 0) {
  			rsyserr(FERROR_XFER, errno, "failed to set times on %s",
  				full_fname(fname));
@@ -330,7 +329,7 @@ diff --git a/rsync.c b/rsync.c
  	}
  
  #ifdef SUPPORT_ACLS
-@@ -662,7 +681,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -666,7 +682,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
  
  	/* Change permissions before putting the file into place. */
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
@@ -339,7 +338,7 @@ diff --git a/rsync.c b/rsync.c
  
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
-@@ -687,7 +706,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -691,7 +707,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
  
    do_set_file_attrs:
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
@@ -393,7 +392,7 @@ diff --git a/rsync.yo b/rsync.yo
   -O, --omit-dir-times        omit directories from --times
   -J, --omit-link-times       omit symlinks from --times
       --super                 receiver attempts super-user activities
-@@ -1173,6 +1174,12 @@ cause the next transfer to behave as if it used bf(-I), causing all files to be
+@@ -1178,6 +1179,12 @@ cause the next transfer to behave as if it used bf(-I), causing all files to be
  updated (though rsync's delta-transfer algorithm will make the update fairly efficient
  if the files haven't actually changed, you're much better off using bf(-t)).
  
@@ -406,7 +405,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(-O, --omit-dir-times)) This tells rsync to omit directories when
  it is preserving modification times (see bf(--times)).  If NFS is sharing
  the directories on the receiving side, it is a good idea to use bf(-O).
-@@ -2130,7 +2137,10 @@ quote(itemization(
+@@ -2135,7 +2142,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
@@ -697,27 +696,28 @@ diff --git a/util.c b/util.c
  /* This returns 0 for success, 1 for a symlink if symlink time-setting
   * is not possible, or -1 for any other error. */
 -int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
-+int set_times(const char *fname, time_t modtime, uint32 mod_nsec, time_t atime, mode_t mode)
++int set_times(const char *fname, STRUCT_STAT *stp)
  {
  	static int switch_step = 0;
  
  	if (DEBUG_GTE(TIME, 1)) {
 -		rprintf(FINFO, "set modtime of %s to (%ld) %s",
+-			fname, (long)modtime,
+-			asctime(localtime(&modtime)));
 +		char mtimebuf[200];
 +
-+		strlcpy(mtimebuf, timestring(modtime), sizeof mtimebuf);
++		strlcpy(mtimebuf, timestring(stp->st_mtime), sizeof mtimebuf);
 +		rprintf(FINFO,
 +			"set modtime, atime of %s to (%ld) %s, (%ld) %s\n",
- 			fname, (long)modtime,
--			asctime(localtime(&modtime)));
-+			mtimebuf, (long)atime, timestring(atime));
++			fname, (long)stp->st_mtime,
++			mtimebuf, (long)stp->st_atime, timestring(stp->st_atime));
  	}
  
  	switch (switch_step) {
  #ifdef HAVE_UTIMENSAT
  #include "case_N.h"
 -		if (do_utimensat(fname, modtime, mod_nsec) == 0)
-+		if (do_utimensat(fname, modtime, mod_nsec, atime, 0) == 0)
++		if (do_utimensat(fname, stp->st_mtime, stp->ST_MTIME_NSEC, stp->st_atime, 0) == 0)
  			break;
  		if (errno != ENOSYS)
  			return -1;
@@ -726,20 +726,28 @@ diff --git a/util.c b/util.c
  #ifdef HAVE_LUTIMES
  #include "case_N.h"
 -		if (do_lutimes(fname, modtime, mod_nsec) == 0)
-+		if (do_lutimes(fname, modtime, mod_nsec, atime, 0) == 0)
++		if (do_lutimes(fname, stp->st_mtime, stp->ST_MTIME_NSEC, stp->st_atime, 0) == 0)
  			break;
  		if (errno != ENOSYS)
  			return -1;
-@@ -159,10 +163,10 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
+@@ -152,17 +156,17 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
+ 		switch_step++;
+ 		if (preserve_times & PRESERVE_LINK_TIMES) {
+ 			preserve_times &= ~PRESERVE_LINK_TIMES;
+-			if (S_ISLNK(mode))
++			if (S_ISLNK(stp->st_mode))
+ 				return 1;
+ 		}
+ 		/* FALLTHROUGH */
  
  #include "case_N.h"
  #ifdef HAVE_UTIMES
 -		if (do_utimes(fname, modtime, mod_nsec) == 0)
-+		if (do_utimes(fname, modtime, mod_nsec, atime, 0) == 0)
++		if (do_utimes(fname, stp->st_mtime, stp->ST_MTIME_NSEC, stp->st_atime, 0) == 0)
  			break;
  #else
 -		if (do_utime(fname, modtime, mod_nsec) == 0)
-+		if (do_utime(fname, modtime, mod_nsec, atime, 0) == 0)
++		if (do_utime(fname, stp->st_mtime, stp->ST_MTIME_NSEC, stp->st_atime, 0) == 0)
  			break;
  #endif
  
