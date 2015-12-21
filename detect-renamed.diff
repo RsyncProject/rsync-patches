@@ -38,7 +38,19 @@ TODO:
   a file that can't use it, while missing out on giving it to a file
   that could use it.
 
-based-on: f8d2ecd223eedabdf3174762b64c77cb01cc403b
+based-on: 16b49716d55a50f2e985b879b720b2c53c892a3a
+diff --git a/backup.c b/backup.c
+--- a/backup.c
++++ b/backup.c
+@@ -162,7 +162,7 @@ char *get_backup_name(const char *fname)
+ 			int ret;
+ 			if (backup_dir_len > 1)
+ 				backup_dir_buf[backup_dir_len-1] = '\0';
+-			ret = make_path(backup_dir_buf, 0);
++			ret = make_path(backup_dir_buf, ACCESSPERMS, 0);
+ 			if (backup_dir_len > 1)
+ 				backup_dir_buf[backup_dir_len-1] = '/';
+ 			if (ret < 0)
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -574,18 +586,6 @@ diff --git a/generator.c b/generator.c
  	phase++;
  	if (DEBUG_GTE(GENR, 1))
  		rprintf(FINFO, "generate_files phase=%d\n", phase);
-diff --git a/main.c b/main.c
---- a/main.c
-+++ b/main.c
-@@ -850,7 +850,7 @@ static int do_recv(int f_in, int f_out, char *local_name)
- 	}
- 
- 	if (backup_dir) {
--		int ret = make_path(backup_dir_buf, MKP_DROP_NAME); /* drops trailing slash */
-+		int ret = make_path(backup_dir_buf, ACCESSPERMS, MKP_DROP_NAME); /* drops trailing slash */
- 		if (ret < 0)
- 			exit_cleanup(RERR_SYNTAX);
- 		if (ret)
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -597,7 +597,7 @@ diff --git a/options.c b/options.c
  int implied_dirs = 1;
  int missing_args = 0; /* 0 = FERROR_XFER, 1 = ignore, 2 = delete */
  int numeric_ids = 0;
-@@ -760,6 +761,7 @@ void usage(enum logcode F)
+@@ -758,6 +759,7 @@ void usage(enum logcode F)
    rprintf(F,"     --modify-window=NUM     compare mod-times with reduced accuracy\n");
    rprintf(F," -T, --temp-dir=DIR          create temporary files in directory DIR\n");
    rprintf(F," -y, --fuzzy                 find similar file for basis if no dest file\n");
@@ -605,7 +605,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --compare-dest=DIR      also compare destination files relative to DIR\n");
    rprintf(F,"     --copy-dest=DIR         ... and include copies of unchanged files\n");
    rprintf(F,"     --link-dest=DIR         hardlink to files in DIR when unchanged\n");
-@@ -963,6 +965,7 @@ static struct poptOption long_options[] = {
+@@ -961,6 +963,7 @@ static struct poptOption long_options[] = {
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -613,7 +613,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -2248,7 +2251,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2246,7 +2249,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		inplace = 1;
  	}
  
@@ -622,7 +622,7 @@ diff --git a/options.c b/options.c
  		partial_dir = tmp_partialdir;
  
  	if (inplace) {
-@@ -2257,6 +2260,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2255,6 +2258,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			snprintf(err_buf, sizeof err_buf,
  				 "--%s cannot be used with --%s\n",
  				 append_mode ? "append" : "inplace",
@@ -630,7 +630,7 @@ diff --git a/options.c b/options.c
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -2634,6 +2638,8 @@ void server_options(char **args, int *argc_p)
+@@ -2632,6 +2636,8 @@ void server_options(char **args, int *argc_p)
  			args[ac++] = "--super";
  		if (size_only)
  			args[ac++] = "--size-only";
@@ -725,7 +725,7 @@ diff --git a/util.c b/util.c
  			ret++;
  			break;
  		}
-@@ -243,7 +243,7 @@ int make_path(char *fname, int flags)
+@@ -245,7 +245,7 @@ int make_path(char *fname, int flags)
  		p += strlen(p);
  		if (ret < 0) /* Skip mkdir on error, but keep restoring the path. */
  			continue;
@@ -734,7 +734,7 @@ diff --git a/util.c b/util.c
  			ret = -ret - 1;
  		else
  			ret++;
-@@ -1131,6 +1131,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
+@@ -1133,6 +1133,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
  	return path;
  }
  
@@ -767,7 +767,7 @@ diff --git a/util.c b/util.c
  /**
   * Return a quoted string with the full pathname of the indicated filename.
   * The string " (in MODNAME)" may also be appended.  The returned pointer
-@@ -1224,7 +1250,7 @@ int handle_partial_dir(const char *fname, int create)
+@@ -1226,7 +1252,7 @@ int handle_partial_dir(const char *fname, int create)
  			}
  			statret = -1;
  		}
