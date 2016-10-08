@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
 This patch has not yet been tested by me (Wayne), but was provided
 Darryl Dixon.  Thanks!
 
-based-on: 16b49716d55a50f2e985b879b720b2c53c892a3a
+based-on: f3873b3d88b61167b106e7b9227a20147f8f6197
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -22,7 +22,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_specials;
  extern int preserve_hard_links;
  extern int preserve_executability;
-@@ -1687,7 +1688,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1690,7 +1691,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  
  	fnamecmp_type = FNAMECMP_FNAME;
  
@@ -42,7 +42,7 @@ diff --git a/options.c b/options.c
  int preserve_links = 0;
  int preserve_hard_links = 0;
  int preserve_acls = 0;
-@@ -704,6 +705,7 @@ void usage(enum logcode F)
+@@ -705,6 +706,7 @@ void usage(enum logcode F)
    rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
    rprintf(F," -g, --group                 preserve group\n");
    rprintf(F,"     --devices               preserve device files (super-user only)\n");
@@ -50,7 +50,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve modification times\n");
-@@ -885,6 +887,7 @@ static struct poptOption long_options[] = {
+@@ -887,6 +889,7 @@ static struct poptOption long_options[] = {
    {"no-D",             0,  POPT_ARG_NONE,   0, OPT_NO_D, 0, 0 },
    {"devices",          0,  POPT_ARG_VAL,    &preserve_devices, 1, 0, 0 },
    {"no-devices",       0,  POPT_ARG_VAL,    &preserve_devices, 0, 0, 0 },
@@ -58,7 +58,7 @@ diff --git a/options.c b/options.c
    {"specials",         0,  POPT_ARG_VAL,    &preserve_specials, 1, 0, 0 },
    {"no-specials",      0,  POPT_ARG_VAL,    &preserve_specials, 0, 0, 0 },
    {"links",           'l', POPT_ARG_VAL,    &preserve_links, 1, 0, 0 },
-@@ -1785,6 +1788,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1788,6 +1791,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -70,7 +70,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2757,6 +2765,9 @@ void server_options(char **args, int *argc_p)
+@@ -2768,6 +2776,9 @@ void server_options(char **args, int *argc_p)
  	if (relative_paths && !implied_dirs && (!am_sender || protocol_version >= 30))
  		args[ac++] = "--no-implied-dirs";
  
@@ -91,7 +91,7 @@ diff --git a/receiver.c b/receiver.c
  extern int preserve_xattrs;
  extern int basis_dir_cnt;
  extern int make_backups;
-@@ -229,7 +230,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
+@@ -233,7 +234,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
  }
  
  static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
@@ -100,74 +100,40 @@ diff --git a/receiver.c b/receiver.c
  {
  	static char file_sum1[MAX_DIGEST_LEN];
  	struct map_struct *mapbuf;
-@@ -245,12 +246,12 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 	OFF_T preallocated_len = 0;
- #endif
+@@ -241,20 +242,20 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 	int checksum_len;
+ 	int32 len;
+ 	OFF_T offset = 0;
+-	OFF_T offset2;
++	OFF_T offset2, total_size = F_LENGTH(file);
+ 	char *data;
+ 	int32 i;
+ 	char *map = NULL;
  
+ #ifdef SUPPORT_PREALLOCATION
 -	if (preallocate_files && fd != -1 && total_size > 0 && (!inplace || total_size > size_r)) {
-+	if (preallocate_files && fd != -1 && F_LENGTH(file) > 0 && (!inplace || F_LENGTH(file) > size_r)) {
++	if (preallocate_files && fd != -1 && total_size > 0 && !IS_DEVICE(file->mode) && (!inplace || total_size > size_r)) {
  		/* Try to preallocate enough space for file's eventual length.  Can
  		 * reduce fragmentation on filesystems like ext4, xfs, and NTFS. */
--		if (do_fallocate(fd, 0, total_size) == 0) {
-+		if (do_fallocate(fd, 0, F_LENGTH(file)) == 0) {
- #ifdef PREALLOCATE_NEEDS_TRUNCATE
--			preallocated_len = total_size;
-+			preallocated_len = F_LENGTH(file);
- #endif
- 		} else
+ 		if ((preallocated_len = do_fallocate(fd, 0, total_size)) < 0)
  			rsyserr(FWARNING, errno, "do_fallocate %s", full_fname(fname));
-@@ -279,7 +280,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 		if (append_mode == 2 && mapbuf) {
- 			for (j = CHUNK_SIZE; j < sum.flength; j += CHUNK_SIZE) {
- 				if (INFO_GTE(PROGRESS, 1))
--					show_progress(offset, total_size);
-+					show_progress(offset, F_LENGTH(file));
- 				sum_update(map_ptr(mapbuf, offset, CHUNK_SIZE),
- 					   CHUNK_SIZE);
- 				offset = j;
-@@ -287,7 +288,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 			if (offset < sum.flength) {
- 				int32 len = (int32)(sum.flength - offset);
- 				if (INFO_GTE(PROGRESS, 1))
--					show_progress(offset, total_size);
-+					show_progress(offset, F_LENGTH(file));
- 				sum_update(map_ptr(mapbuf, offset, len), len);
- 			}
- 		}
-@@ -301,7 +302,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 
- 	while ((i = recv_token(f_in, &data)) != 0) {
- 		if (INFO_GTE(PROGRESS, 1))
--			show_progress(offset, total_size);
-+			show_progress(offset, F_LENGTH(file));
- 
- 		if (allowed_lull)
- 			maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH | MSK_ACTIVE_RECEIVER);
-@@ -371,20 +372,20 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
- 
- #ifdef HAVE_FTRUNCATE
- 	/* inplace: New data could be shorter than old data.
--	 * preallocate_files: total_size could have been an overestimate.
-+	 * preallocate_files: F_LENGTH(file) could have been an overestimate.
- 	 *     Cut off any extra preallocated zeros from dest file. */
- 	if ((inplace
- #ifdef PREALLOCATE_NEEDS_TRUNCATE
- 	  || preallocated_len > offset
+ 	} else
  #endif
--	  ) && fd != -1 && do_ftruncate(fd, offset) < 0) {
-+	  ) && fd != -1 && !IS_DEVICE(file->mode) && do_ftruncate(fd, offset) < 0) {
+-	if (inplace) {
++	if (inplace && !IS_DEVICE(file->mode)) {
+ #ifdef HAVE_FTRUNCATE
+ 		/* The most compatible way to create a sparse file is to start with no length. */
+ 		if (sparse_files > 0 && whole_file && fd >= 0 && do_ftruncate(fd, 0) == 0)
+@@ -381,7 +382,7 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+ 	/* inplace: New data could be shorter than old data.
+ 	 * preallocate_files: total_size could have been an overestimate.
+ 	 *     Cut off any extra preallocated zeros from dest file. */
+-	if ((inplace || preallocated_len > offset) && fd != -1 && do_ftruncate(fd, offset) < 0) {
++	if ((inplace || preallocated_len > offset) && fd != -1 && !IS_DEVICE(file->mode) && do_ftruncate(fd, offset) < 0) {
  		rsyserr(FERROR_XFER, errno, "ftruncate failed on %s",
  			full_fname(fname));
  	}
- #endif
- 
- 	if (INFO_GTE(PROGRESS, 1))
--		end_progress(total_size);
-+		end_progress(F_LENGTH(file));
- 
- 	if (fd != -1 && offset > 0 && sparse_end(fd, offset) != 0) {
- 	    report_write_error:
-@@ -408,9 +409,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
+@@ -404,9 +405,9 @@ static int receive_data(int f_in, char *fname_r, int fd_r, OFF_T size_r,
  }
  
  
@@ -179,7 +145,7 @@ diff --git a/receiver.c b/receiver.c
  }
  
  static void handle_delayed_updates(char *local_name)
-@@ -666,7 +667,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -662,7 +663,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  					"(Skipping batched update for%s \"%s\")\n",
  					redoing ? " resend of" : "",
  					fname);
@@ -188,7 +154,7 @@ diff --git a/receiver.c b/receiver.c
  				file->flags |= FLAG_FILE_SENT;
  				continue;
  			}
-@@ -677,13 +678,13 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -673,13 +674,13 @@ int recv_files(int f_in, int f_out, char *local_name)
  		if (!do_xfers) { /* log the transfer */
  			log_item(FCLIENT, file, iflags, NULL);
  			if (read_batch)
@@ -204,7 +170,7 @@ diff --git a/receiver.c b/receiver.c
  			if (inc_recurse)
  				send_msg_int(MSG_SUCCESS, ndx);
  			continue;
-@@ -773,7 +774,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -769,7 +770,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  		} else if (do_fstat(fd1,&st) != 0) {
  			rsyserr(FERROR_XFER, errno, "fstat %s failed",
  				full_fname(fnamecmp));
@@ -213,7 +179,7 @@ diff --git a/receiver.c b/receiver.c
  			close(fd1);
  			if (inc_recurse)
  				send_msg_int(MSG_NO_SEND, ndx);
-@@ -788,18 +789,32 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -784,18 +785,32 @@ int recv_files(int f_in, int f_out, char *local_name)
  			 */
  			rprintf(FERROR_XFER, "recv_files: %s is a directory\n",
  				full_fname(fnamecmp));
@@ -248,7 +214,7 @@ diff --git a/receiver.c b/receiver.c
  		/* If we're not preserving permissions, change the file-list's
  		 * mode based on the local permissions and some heuristics. */
  		if (!preserve_perms) {
-@@ -831,7 +846,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -827,7 +842,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  		}
  
  		if (fd2 == -1) {
@@ -257,7 +223,7 @@ diff --git a/receiver.c b/receiver.c
  			if (fd1 != -1)
  				close(fd1);
  			if (inc_recurse)
-@@ -846,8 +861,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -842,8 +857,7 @@ int recv_files(int f_in, int f_out, char *local_name)
  			rprintf(FINFO, "%s\n", fname);
  
  		/* recv file data */

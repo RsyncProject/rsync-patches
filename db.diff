@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 16b49716d55a50f2e985b879b720b2c53c892a3a
+based-on: f3873b3d88b61167b106e7b9227a20147f8f6197
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -108,9 +108,9 @@ diff --git a/Makefile.in b/Makefile.in
 +man: rsync.1 rsyncdb.1 rsyncd.conf.5 man-copy
  
  man-copy:
- 	@-if test -f rsync.1; then :; else echo 'Copying srcdir rsync.1'; cp -p $(srcdir)/rsync.1 .; fi
-+	@-if test -f rsyncdb.1; then :; else echo 'Copying srcdir rsyncdb.1'; cp -p $(srcdir)/rsyncdb.1 .; fi
- 	@-if test -f rsyncd.conf.5; then :; else echo 'Copying srcdir rsyncd.conf.5'; cp -p $(srcdir)/rsyncd.conf.5 .; fi
+ 	@if test -f rsync.1; then :; elif test -f $(srcdir)/rsync.1; then echo 'Copying srcdir rsync.1'; cp -p $(srcdir)/rsync.1 .; else echo "NOTE: rsync.1 cannot be created."; fi
++	@if test -f rsyncdb.1; then :; elif test -f $(srcdir)/rsyncdb.1; then echo 'Copying srcdir rsyncdb.1'; cp -p $(srcdir)/rsyncdb.1 .; else echo "NOTE: rsyncdb.1 cannot be created."; fi
+ 	@if test -f rsyncd.conf.5; then :; elif test -f $(srcdir)/rsyncd.conf.5; then echo 'Copying srcdir rsyncd.conf.5'; cp -p $(srcdir)/rsyncd.conf.5 .; else echo "NOTE: rsyncd.conf.5 cannot be created."; fi
  
  rsync.1: rsync.yo
  	yodl2man -o rsync.1 $(srcdir)/rsync.yo
@@ -138,29 +138,29 @@ diff --git a/checksum.c b/checksum.c
  extern int protocol_version;
  extern int proper_seed_order;
 +extern int use_db;
+ extern char *checksum_choice;
  
- /*
-   a simple 32 bit checksum that can be upadted from either end
-@@ -136,6 +137,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+ #define CSUM_NONE 0
+@@ -213,6 +214,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			md5_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		md5_result(&m, (uchar *)sum);
 +
 +		if (use_db)
 +			db_set_checksum(5, st_p, sum);
- 	} else {
- 		mdfour_begin(&m);
- 
-@@ -153,6 +157,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+ 		break;
+ 	  case CSUM_MD4:
+ 	  case CSUM_MD4_OLD:
+@@ -233,6 +237,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		mdfour_result(&m, (uchar *)sum);
 +
 +		if (use_db)
 +			db_set_checksum(4, st_p, sum);
- 	}
- 
- 	close(fd);
+ 		break;
+ 	  default:
+ 		rprintf(FERROR, "invalid checksum-choice for the --checksum option (%d)\n", checksum_type);
 diff --git a/cleanup.c b/cleanup.c
 --- a/cleanup.c
 +++ b/cleanup.c
@@ -236,7 +236,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1068,6 +1069,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1098,6 +1099,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -289,7 +289,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1913 @@
+@@ -0,0 +1,1912 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -319,7 +319,6 @@ new file mode 100644
 +extern int same_db;
 +extern int am_receiver;
 +extern int am_generator;
-+extern int checksum_len;
 +extern int db_clean, db_check, db_do_md4, db_do_md5, db_update, db_lax, db_init, db_mounts;
 +extern int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs, db_output_msgs;
 +extern int saw_db_output_opt, saw_db_sum_opt;
@@ -696,7 +695,7 @@ new file mode 100644
 +		binds[5].buffer = &bind_ctime;
 +		binds[6].buffer_type = MYSQL_TYPE_BLOB;
 +		binds[6].buffer = &bind_sum;
-+		binds[6].buffer_length = checksum_len;
++		binds[6].buffer_length = MD5_DIGEST_LEN; /* Same as MD4_DIGEST_LEN */
 +		if (!prepare_mysql(REP_SUM, binds, 7, sql))
 +			return 0;
 +
@@ -1442,7 +1441,7 @@ new file mode 100644
 +
 +		binds[0].buffer_type = MYSQL_TYPE_BLOB;
 +		binds[0].buffer = sum;
-+		binds[0].buffer_length = checksum_len;
++		binds[0].buffer_length = MD5_DIGEST_LEN;
 +		ok = fetch_mysql(binds, 1, SEL_SUM, 1, NULL);
 +		break;
 +	    }
@@ -1473,7 +1472,7 @@ new file mode 100644
 +		if (ok) {
 +			rprintf(FCLIENT, "[%s] Found DB checksum for %s,%s,%d: %s\n",
 +				who_am_i(), big_num(st_p->st_dev),
-+				big_num(st_p->st_ino), md_num, sum_as_hex(sum));
++				big_num(st_p->st_ino), md_num, sum_as_hex(md_num, sum));
 +		} else {
 +			rprintf(FCLIENT, "[%s] No DB checksum for %s,%s,%d\n",
 +				who_am_i(), big_num(st_p->st_dev),
@@ -1504,7 +1503,7 @@ new file mode 100644
 +
 +		binds[0].buffer_type = MYSQL_TYPE_BLOB;
 +		binds[0].buffer = dbsum;
-+		binds[0].buffer_length = checksum_len;
++		binds[0].buffer_length = MD5_DIGEST_LEN;
 +		binds[1].buffer_type = MYSQL_TYPE_LONG;
 +		binds[1].buffer = (char*)sum_type;
 +		binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
@@ -1527,9 +1526,9 @@ new file mode 100644
 +			if (sqlite3_step(stmt) != SQLITE_ROW)
 +				break;
 +			len = sqlite3_column_bytes(stmt, 0);
-+			if (len > checksum_len)
-+				len = checksum_len;
-+			memcpy(dbsum + checksum_len*j, sqlite3_column_blob(stmt, 0), len);
++			if (len > MD5_DIGEST_LEN)
++				len = MD5_DIGEST_LEN;
++			memcpy(dbsum + MD5_DIGEST_LEN*j, sqlite3_column_blob(stmt, 0), len);
 +			sum_type[j] = sqlite3_column_int(stmt, 1);
 +			dbsize[j] = sqlite3_column_int(stmt, 2);
 +			dbmtime[j] = sqlite3_column_int64(stmt, 3);
@@ -1552,17 +1551,18 @@ new file mode 100644
 +	for (j = 0; j < rows; j++) {
 +		if (DEBUG_GTE(DB, 3)) {
 +			rprintf(FCLIENT, "DB checksum for %s,%s,%d: %s\n",
-+				big_num(st_p->st_dev), big_num(st_p->st_ino), sum_type[j], sum_as_hex(dbsum + checksum_len*j));
++				big_num(st_p->st_dev), big_num(st_p->st_ino), sum_type[j],
++				sum_as_hex(sum_type[j], dbsum + MD5_DIGEST_LEN*j));
 +		}
 +
 +		if (sum_type[j] == 4) {
 +			if (!sum4)
 +				continue;
-+			*sum4 = dbsum + checksum_len*j;
++			*sum4 = dbsum + MD5_DIGEST_LEN*j;
 +		} else {
 +			if (!sum5)
 +				continue;
-+			*sum5 = dbsum + checksum_len*j;
++			*sum5 = dbsum + MD5_DIGEST_LEN*j;
 +		}
 +		if (st_p->st_size == dbsize[j] && st_p->st_mtime == dbmtime[j] && (db_lax || st_p->st_ctime == dbctime[j]))
 +			++*right_sum_cnt;
@@ -1615,7 +1615,7 @@ new file mode 100644
 +		bind_size = st_p->st_size;
 +		bind_mtime = st_p->st_mtime;
 +		bind_ctime = st_p->st_ctime;
-+		memcpy(bind_sum, sum, checksum_len);
++		memcpy(bind_sum, sum, MD5_DIGEST_LEN);
 +		if (exec_mysql(REP_SUM) == NULL)
 +			errmsg = mysql_error(dbh.mysql);
 +		break;
@@ -1637,7 +1637,7 @@ new file mode 100644
 +		sqlite3_bind_int64(stmt, 4, st_p->st_size);
 +		sqlite3_bind_int64(stmt, 5, st_p->st_mtime);
 +		sqlite3_bind_int64(stmt, 6, st_p->st_ctime);
-+		sqlite3_bind_blob(stmt, 7, sum, checksum_len, SQLITE_TRANSIENT);
++		sqlite3_bind_blob(stmt, 7, sum, MD5_DIGEST_LEN, SQLITE_TRANSIENT);
 +		while (1) {
 +			rc = sqlite3_step(stmt);
 +			if (rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
@@ -1659,7 +1659,7 @@ new file mode 100644
 +		if (DEBUG_GTE(DB, 2)) {
 +			rprintf(FCLIENT, "[%s] Set DB checksum for %s,%s,%d: %s\n",
 +				who_am_i(), big_num(st_p->st_dev), big_num(st_p->st_ino),
-+				md_num, sum_as_hex(sum));
++				md_num, sum_as_hex(md_num, sum));
 +		}
 +	} else {
 +		rprintf(log_code, "[%s] Failed to set checksum for %s,%s,%d: %s (%d) -- closing DB\n",
@@ -1961,7 +1961,7 @@ new file mode 100644
 +
 +static inline int sums_ne(const char *sum1, const char *sum2)
 +{
-+	return memcmp(sum1, sum2, checksum_len) != 0;
++	return memcmp(sum1, sum2, MD5_DIGEST_LEN) != 0;
 +}
 +
 +/* Returns 1 if there is a checksum change, else 0. */
@@ -1982,9 +1982,9 @@ new file mode 100644
 +		}
 +		if (db_output_sum) {
 +			if (db_do_md4)
-+				printf("%s ", sum_as_hex(sum4));
++				printf("%s ", sum_as_hex(4, sum4));
 +			if (db_do_md5)
-+				printf("%s ", sum_as_hex(sum5));
++				printf("%s ", sum_as_hex(5, sum5));
 +		}
 +		if (db_output_name) {
 +			if (db_output_sum)
@@ -2008,7 +2008,6 @@ new file mode 100644
 +	struct name_list *names;
 +	int exit_code = 0;
 +
-+	checksum_len = MD5_DIGEST_LEN; /* Same as MD4_DIGEST_LEN */
 +	protocol_version = 31;
 +
 +	need_sum_cnt = db_do_md4 + db_do_md5;
@@ -2206,7 +2205,7 @@ new file mode 100644
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -52,6 +52,7 @@ extern int preserve_devices;
+@@ -53,6 +53,7 @@ extern int preserve_devices;
  extern int preserve_specials;
  extern int delete_during;
  extern int missing_args;
@@ -2288,7 +2287,7 @@ diff --git a/generator.c b/generator.c
  extern int append_mode;
  extern int make_backups;
  extern int csum_length;
-@@ -578,7 +579,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
+@@ -582,7 +583,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
  	   of the file time to determine whether to sync */
  	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
  		char sum[MAX_DIGEST_LEN];
@@ -2298,7 +2297,7 @@ diff --git a/generator.c b/generator.c
  		return memcmp(sum, F_SUM(file), checksum_len) == 0;
  	}
  
-@@ -2223,6 +2225,13 @@ void generate_files(int f_out, const char *local_name)
+@@ -2225,6 +2227,13 @@ void generate_files(int f_out, const char *local_name)
  			: "enabled");
  	}
  
@@ -2312,7 +2311,7 @@ diff --git a/generator.c b/generator.c
  	dflt_perms = (ACCESSPERMS & ~orig_umask);
  
  	do {
-@@ -2348,6 +2357,9 @@ void generate_files(int f_out, const char *local_name)
+@@ -2350,6 +2359,9 @@ void generate_files(int f_out, const char *local_name)
  			wait_for_receiver();
  	}
  
@@ -2464,7 +2463,7 @@ diff --git a/main.c b/main.c
  extern char *shell_cmd;
  extern char *batch_name;
  extern char *password_file;
-@@ -1092,6 +1095,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+@@ -1100,6 +1103,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
  	if (am_daemon && io_timeout && protocol_version >= 31)
  		send_msg_int(MSG_IO_TIMEOUT, io_timeout);
  
@@ -2474,7 +2473,7 @@ diff --git a/main.c b/main.c
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
  		if (need_messages_from_generator)
-@@ -1373,6 +1379,9 @@ static int start_client(int argc, char *argv[])
+@@ -1381,6 +1387,9 @@ static int start_client(int argc, char *argv[])
  		}
  	}
  
@@ -2525,7 +2524,7 @@ diff --git a/options.c b/options.c
  int connect_timeout = 0;
  int keep_partial = 0;
  int safe_symlinks = 0;
-@@ -270,6 +275,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
+@@ -271,6 +276,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
  	DEBUG_WORD(CHDIR, W_CLI|W_SRV, "Debug when the current directory changes"),
  	DEBUG_WORD(CONNECT, W_CLI, "Debug connection events (levels 1-2)"),
  	DEBUG_WORD(CMD, W_CLI, "Debug commands+options that are issued (levels 1-2)"),
@@ -2533,7 +2532,7 @@ diff --git a/options.c b/options.c
  	DEBUG_WORD(DEL, W_REC, "Debug delete actions (levels 1-3)"),
  	DEBUG_WORD(DELTASUM, W_SND|W_REC, "Debug delta-transfer checksumming (levels 1-4)"),
  	DEBUG_WORD(DUP, W_REC, "Debug weeding of duplicate names"),
-@@ -572,6 +578,7 @@ static void print_rsync_version(enum logcode f)
+@@ -573,6 +579,7 @@ static void print_rsync_version(enum logcode f)
  	char const *links = "no ";
  	char const *iconv = "no ";
  	char const *ipv6 = "no ";
@@ -2541,7 +2540,7 @@ diff --git a/options.c b/options.c
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -608,6 +615,11 @@ static void print_rsync_version(enum logcode f)
+@@ -609,6 +616,11 @@ static void print_rsync_version(enum logcode f)
  #ifdef CAN_SET_SYMLINK_TIMES
  	symtimes = "";
  #endif
@@ -2553,7 +2552,7 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -621,8 +633,8 @@ static void print_rsync_version(enum logcode f)
+@@ -622,8 +634,8 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
@@ -2564,7 +2563,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -671,6 +683,9 @@ void usage(enum logcode F)
+@@ -672,6 +684,9 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -2574,7 +2573,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -818,6 +833,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -820,6 +835,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
@@ -2582,7 +2581,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
-@@ -957,6 +973,10 @@ static struct poptOption long_options[] = {
+@@ -960,6 +976,10 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -2593,7 +2592,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1047,6 +1067,9 @@ static struct poptOption long_options[] = {
+@@ -1050,6 +1070,9 @@ static struct poptOption long_options[] = {
    {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
    {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
@@ -2603,7 +2602,7 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1100,6 +1123,50 @@ static struct poptOption long_daemon_options[] = {
+@@ -1103,6 +1126,50 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
@@ -2654,7 +2653,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1278,6 +1345,100 @@ static void create_refuse_error(int which)
+@@ -1281,6 +1348,100 @@ static void create_refuse_error(int which)
  	}
  }
  
@@ -2755,7 +2754,7 @@ diff --git a/options.c b/options.c
  
  /**
   * Process command line arguments.  Called on both local and remote.
-@@ -1295,10 +1456,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1298,10 +1459,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	int argc = *argc_p;
  	int opt;
  
@@ -2774,7 +2773,7 @@ diff --git a/options.c b/options.c
  #ifdef ICONV_OPTION
  		if (!*lp_charset(module_id))
  			set_refuse_options("iconv");
-@@ -1421,6 +1590,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1424,6 +1593,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2787,7 +2786,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1495,6 +1670,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1498,6 +1673,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -2854,7 +2853,7 @@ diff --git a/receiver.c b/receiver.c
  extern int am_root;
  extern int am_server;
  extern int inc_recurse;
-@@ -435,6 +437,11 @@ static void handle_delayed_updates(char *local_name)
+@@ -431,6 +433,11 @@ static void handle_delayed_updates(char *local_name)
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
  			} else {
@@ -2866,7 +2865,7 @@ diff --git a/receiver.c b/receiver.c
  				if (remove_source_files
  				 || (preserve_hard_links && F_IS_HLINKED(file)))
  					send_msg_int(MSG_SUCCESS, ndx);
-@@ -541,6 +548,9 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -537,6 +544,9 @@ int recv_files(int f_in, int f_out, char *local_name)
  	if (delay_updates)
  		delayed_bits = bitbag_create(cur_flist->used + 1);
  
@@ -2876,7 +2875,7 @@ diff --git a/receiver.c b/receiver.c
  	while (1) {
  		cleanup_disable();
  
-@@ -869,6 +879,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -865,6 +875,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				do_unlink(partialptr);
  				handle_partial_dir(partialptr, PDIR_DELETE);
  			}
@@ -2885,7 +2884,7 @@ diff --git a/receiver.c b/receiver.c
  		} else if (keep_partial && partialptr) {
  			if (!handle_partial_dir(partialptr, PDIR_CREATE)) {
  				rprintf(FERROR,
-@@ -882,6 +894,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -878,6 +890,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				recv_ok = -1;
  			else if (delay_updates && recv_ok) {
  				bitbag_set_bit(delayed_bits, ndx);
@@ -2957,7 +2956,7 @@ diff --git a/rsync.yo b/rsync.yo
   -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
       --no-OPTION             turn off an implied OPTION (e.g. --no-D)
   -r, --recursive             recurse into directories
-@@ -638,6 +641,67 @@ option's before-the-transfer "Does this file need to be updated?" check.
+@@ -649,6 +652,67 @@ option's before-the-transfer "Does this file need to be updated?" check.
  For protocol 30 and beyond (first supported in 3.0.0), the checksum used is
  MD5.  For older protocols, the checksum used is MD4.
  

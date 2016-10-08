@@ -115,7 +115,7 @@ diff --git a/backup.c b/backup.c
  			unmake_file(file);
  		}
  
-@@ -156,7 +163,12 @@ static BOOL copy_valid_path(const char *fname)
+@@ -156,28 +163,34 @@ static BOOL copy_valid_path(const char *fname)
  /* Make a complete pathname for backup file and verify any new path elements. */
  char *get_backup_name(const char *fname)
  {
@@ -123,13 +123,27 @@ diff --git a/backup.c b/backup.c
 +	char *suffix = deleting ? backup_suffix_dels : backup_suffix;
 +
  	if (backup_dir) {
+ 		static int initialized = 0;
+-		if (!initialized) {
 +		int prefix_len = deleting ? backup_dir_dels_len : backup_dir_len;
 +		unsigned int remainder = deleting ? backup_dir_dels_remainder : backup_dir_remainder;
- 		static int initialized = 0;
- 		if (!initialized) {
++		int init_bits = deleting ? 2 : 1;
++		if (!(initialized & init_bits)) {
  			int ret;
-@@ -170,14 +182,14 @@ char *get_backup_name(const char *fname)
- 			initialized = 1;
+-			if (backup_dir_len > 1)
+-				backup_dir_buf[backup_dir_len-1] = '\0';
+-			ret = make_path(backup_dir_buf, 0);
+-			if (backup_dir_len > 1)
+-				backup_dir_buf[backup_dir_len-1] = '/';
++			if (prefix_len > 1)
++				buf[prefix_len-1] = '\0';
++			ret = make_path(buf, 0);
++			if (prefix_len > 1)
++				buf[prefix_len-1] = '/';
+ 			if (ret < 0)
+ 				return NULL;
+-			initialized = 1;
++			initialized |= init_bits;
  		}
  		/* copy fname into backup_dir_buf while validating the dirs. */
 -		if (copy_valid_path(fname))
@@ -142,12 +156,12 @@ diff --git a/backup.c b/backup.c
  
 -	if (stringjoin(backup_dir_buf, MAXPATHLEN, fname, backup_suffix, NULL) < MAXPATHLEN)
 -		return backup_dir_buf;
-+	if (stringjoin(backup_dir_buf, MAXPATHLEN, fname, suffix, NULL) < MAXPATHLEN)
++	if (stringjoin(buf, MAXPATHLEN, fname, suffix, NULL) < MAXPATHLEN)
 +		return buf;
  
  	rprintf(FERROR, "backup filename too long\n");
  	return NULL;
-@@ -352,3 +364,13 @@ int make_backup(const char *fname, BOOL prefer_rename)
+@@ -352,3 +365,13 @@ int make_backup(const char *fname, BOOL prefer_rename)
  		rprintf(FINFO, "backed up %s to %s\n", fname, buf);
  	return ret;
  }
@@ -229,7 +243,7 @@ diff --git a/options.c b/options.c
  char *sockopts = NULL;
  char *usermap = NULL;
  char *groupmap = NULL;
-@@ -680,6 +686,8 @@ void usage(enum logcode F)
+@@ -681,6 +687,8 @@ void usage(enum logcode F)
    rprintf(F,"     --backup-deleted        make backups only of deleted files\n");
    rprintf(F,"     --backup-dir=DIR        make backups into hierarchy based in DIR\n");
    rprintf(F,"     --suffix=SUFFIX         set backup suffix (default %s w/o --backup-dir)\n",BACKUP_SUFFIX);
@@ -238,7 +252,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -u, --update                skip files that are newer on the receiver\n");
    rprintf(F,"     --inplace               update destination files in-place (SEE MAN PAGE)\n");
    rprintf(F,"     --append                append data onto shorter files\n");
-@@ -996,7 +1004,9 @@ static struct poptOption long_options[] = {
+@@ -999,7 +1007,9 @@ static struct poptOption long_options[] = {
    {"backup-deleted",   0,  POPT_ARG_VAL,    &make_backups, 1, 0, 0 },
    {"no-backup",        0,  POPT_ARG_VAL,    &make_backups, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
@@ -248,7 +262,7 @@ diff --git a/options.c b/options.c
    {"list-only",        0,  POPT_ARG_VAL,    &list_only, 2, 0, 0 },
    {"read-batch",       0,  POPT_ARG_STRING, &batch_name, OPT_READ_BATCH, 0, 0 },
    {"write-batch",      0,  POPT_ARG_STRING, &batch_name, OPT_WRITE_BATCH, 0, 0 },
-@@ -2089,6 +2099,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2101,6 +2111,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0, SP_DEFAULT);
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0, SP_DEFAULT);
@@ -257,7 +271,7 @@ diff --git a/options.c b/options.c
  	}
  	if (daemon_filter_list.head && !am_sender) {
  		filter_rule_list *elp = &daemon_filter_list;
-@@ -2110,6 +2122,14 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2122,6 +2134,14 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			if (check_filter(elp, FLOG, dir, 1) < 0)
  				goto options_rejected;
  		}
@@ -272,7 +286,7 @@ diff --git a/options.c b/options.c
  	}
  
  	if (!backup_suffix)
-@@ -2121,6 +2141,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2133,6 +2153,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			backup_suffix);
  		return 0;
  	}
@@ -293,7 +307,7 @@ diff --git a/options.c b/options.c
  	if (backup_dir) {
  		size_t len;
  		while (*backup_dir == '.' && backup_dir[1] == '/')
-@@ -2156,6 +2190,34 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2168,6 +2202,34 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			"P *%s", backup_suffix);
  		parse_filter_str(&filter_list, backup_dir_buf, rule_template(0), 0);
  	}
@@ -328,7 +342,7 @@ diff --git a/options.c b/options.c
  
  	if (preserve_times) {
  		preserve_times = PRESERVE_FILE_TIMES;
-@@ -2590,6 +2652,10 @@ void server_options(char **args, int *argc_p)
+@@ -2594,6 +2656,10 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = "--backup-dir";
  		args[ac++] = backup_dir;
  	}
@@ -339,11 +353,10 @@ diff --git a/options.c b/options.c
  
  	/* Only send --suffix if it specifies a non-default value. */
  	if (strcmp(backup_suffix, backup_dir ? "" : BACKUP_SUFFIX) != 0) {
-@@ -2598,7 +2664,14 @@ void server_options(char **args, int *argc_p)
+@@ -2602,6 +2668,14 @@ void server_options(char **args, int *argc_p)
  			goto oom;
  		args[ac++] = arg;
  	}
--
 +	/* Only send --suffix-dels if it specifies a value different from the
 +	 * --suffix value, which would normally be used for deletions too. */
 +	if (strcmp(backup_suffix_dels, backup_suffix) != 0) {
@@ -352,6 +365,6 @@ diff --git a/options.c b/options.c
 +			goto oom;
 +		args[ac++] = arg;
 +	}
- 	if (am_sender) {
- 		/* A remote sender just needs the above -b option.
- 		 * A remote receiver will override that with this option. */
+ 
+ 	if (checksum_choice) {
+ 		if (asprintf(&arg, "--checksum-choice=%s", checksum_choice) < 0)

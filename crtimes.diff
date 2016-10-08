@@ -42,7 +42,7 @@ diff --git a/compat.c b/compat.c
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -54,6 +54,7 @@ extern int preserve_fileflags;
+@@ -55,6 +55,7 @@ extern int preserve_fileflags;
  extern int delete_during;
  extern int missing_args;
  extern int eol_nulls;
@@ -140,42 +140,42 @@ diff --git a/generator.c b/generator.c
  extern int preserve_hard_links;
  extern int preserve_executability;
  extern int preserve_fileflags;
-@@ -384,8 +385,15 @@ static void do_delete_pass(void)
+@@ -384,6 +385,16 @@ static void do_delete_pass(void)
  		rprintf(FINFO, "                    \r");
  }
  
--static inline int time_differs(struct file_struct *file, stat_x *sxp)
-+static inline int time_differs(struct file_struct *file, stat_x *sxp, const char *fname)
- {
-+	if (crtimes_ndx) {
-+		if (sxp->crtime == 0)
-+			sxp->crtime = get_create_time(fname);
-+		if (cmp_time(sxp->crtime, f_crtime(file)) != 0)
-+			return 1;
-+	}
++static inline int all_time_diff(stat_x *sxp, struct file_struct *file, const char *fname)
++{
++	int diff = time_diff(&sxp->st, file);
++	if (diff || !crtimes_ndx)
++		return diff;
++	if (sxp->crtime == 0)
++		sxp->crtime = get_create_time(fname);
++	return cmp_time(sxp->crtime, 0, f_crtime(file), 0);
++}
 +
- 	return cmp_time(sxp->st.st_mtime, file->modtime);
- }
- 
-@@ -443,7 +451,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+ static inline int time_diff(STRUCT_STAT *stp, struct file_struct *file)
+ {
+ #ifdef ST_MTIME_NSEC
+@@ -447,7 +458,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  {
  	if (S_ISLNK(file->mode)) {
  #ifdef CAN_SET_SYMLINK_TIMES
--		if (preserve_times & PRESERVE_LINK_TIMES && time_differs(file, sxp))
-+		if (preserve_times & PRESERVE_LINK_TIMES && time_differs(file, sxp, fname))
+-		if (preserve_times & PRESERVE_LINK_TIMES && time_diff(&sxp->st, file))
++		if (preserve_times & PRESERVE_LINK_TIMES && all_time_diff(sxp, file, fname))
  			return 0;
  #endif
  #ifdef CAN_CHMOD_SYMLINK
-@@ -463,7 +471,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -467,7 +478,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  			return 0;
  #endif
  	} else {
--		if (preserve_times && time_differs(file, sxp))
-+		if (preserve_times && time_differs(file, sxp, fname))
+-		if (preserve_times && time_diff(&sxp->st, file))
++		if (preserve_times && all_time_diff(sxp, file, fname))
  			return 0;
  		if (perms_differ(file, sxp))
  			return 0;
-@@ -506,6 +514,12 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -510,6 +521,12 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		 : iflags & (ITEM_TRANSFER|ITEM_LOCAL_CHANGE) && !(iflags & ITEM_MATCHED)
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  			iflags |= ITEM_REPORT_TIME;
@@ -188,7 +188,7 @@ diff --git a/generator.c b/generator.c
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -1130,6 +1144,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+@@ -1134,6 +1151,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -196,7 +196,7 @@ diff --git a/generator.c b/generator.c
  	int64 len;
  	int colwidth = human_readable ? 14 : 11;
  
-@@ -1145,10 +1160,12 @@ static void list_file_entry(struct file_struct *f)
+@@ -1149,10 +1167,12 @@ static void list_file_entry(struct file_struct *f)
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -212,7 +212,7 @@ diff --git a/generator.c b/generator.c
  	} else
  #endif
  	if (missing_args == 2 && f->mode == 0) {
-@@ -1156,9 +1173,12 @@ static void list_file_entry(struct file_struct *f)
+@@ -1160,9 +1180,12 @@ static void list_file_entry(struct file_struct *f)
  			colwidth + 31, "*missing",
  			f_name(f, NULL));
  	} else {
@@ -227,7 +227,7 @@ diff --git a/generator.c b/generator.c
  	}
  }
  
-@@ -1251,6 +1271,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1255,6 +1278,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			return;
  		}
  	}
@@ -270,7 +270,7 @@ diff --git a/ifuncs.h b/ifuncs.h
 diff --git a/log.c b/log.c
 --- a/log.c
 +++ b/log.c
-@@ -712,7 +712,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
+@@ -716,7 +716,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
  			c[8] = !(iflags & ITEM_REPORT_FFLAGS) ? '.' : 'f';
  			c[9] = !(iflags & ITEM_REPORT_ACL) ? '.' : 'a';
  			c[10] = !(iflags & ITEM_REPORT_XATTR) ? '.' : 'x';
@@ -291,7 +291,7 @@ diff --git a/options.c b/options.c
  int update_only = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -716,6 +717,7 @@ void usage(enum logcode F)
+@@ -717,6 +718,7 @@ void usage(enum logcode F)
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve modification times\n");
@@ -299,7 +299,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
    rprintf(F," -J, --omit-link-times       omit symlinks from --times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
-@@ -883,6 +885,9 @@ static struct poptOption long_options[] = {
+@@ -885,6 +887,9 @@ static struct poptOption long_options[] = {
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
@@ -309,7 +309,7 @@ diff --git a/options.c b/options.c
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
    {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
    {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
-@@ -2463,6 +2468,8 @@ void server_options(char **args, int *argc_p)
+@@ -2467,6 +2472,8 @@ void server_options(char **args, int *argc_p)
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
@@ -429,7 +429,7 @@ diff --git a/rsync.yo b/rsync.yo
   -O, --omit-dir-times        omit directories from --times
   -J, --omit-link-times       omit symlinks from --times
       --super                 receiver attempts super-user activities
-@@ -1208,6 +1209,9 @@ cause the next transfer to behave as if it used bf(-I), causing all files to be
+@@ -1217,6 +1218,9 @@ cause the next transfer to behave as if it used bf(-I), causing all files to be
  updated (though rsync's delta-transfer algorithm will make the update fairly efficient
  if the files haven't actually changed, you're much better off using bf(-t)).
  
@@ -439,7 +439,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(-O, --omit-dir-times)) This tells rsync to omit directories when
  it is preserving modification times (see bf(--times)).  If NFS is sharing
  the directories on the receiving side, it is a good idea to use bf(-O).
-@@ -2110,7 +2114,7 @@ with older versions of rsync, but that also turns on the output of other
+@@ -2142,7 +2146,7 @@ with older versions of rsync, but that also turns on the output of other
  verbose messages).
  
  The "%i" escape has a cryptic output that is 11 letters long.  The general
@@ -448,7 +448,7 @@ diff --git a/rsync.yo b/rsync.yo
  type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -2169,6 +2173,8 @@ quote(itemization(
+@@ -2201,6 +2205,8 @@ quote(itemization(
    it() The bf(f) means that the fileflags information changed.
    it() The bf(a) means that the ACL information changed.
    it() The bf(x) means that the extended attribute information changed.
@@ -460,7 +460,7 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/syscall.c b/syscall.c
 --- a/syscall.c
 +++ b/syscall.c
-@@ -42,6 +42,13 @@ extern int force_change;
+@@ -44,6 +44,13 @@ extern int force_change;
  extern int preserve_perms;
  extern int preserve_executability;
  
@@ -474,7 +474,7 @@ diff --git a/syscall.c b/syscall.c
  #define RETURN_ERROR_IF(x,e) \
  	do { \
  		if (x) { \
-@@ -460,6 +467,36 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
+@@ -462,6 +469,36 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
  #endif
  }
  
@@ -559,7 +559,7 @@ diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
 diff --git a/tls.c b/tls.c
 --- a/tls.c
 +++ b/tls.c
-@@ -109,6 +109,8 @@ static int stat_xattr(const char *fname, STRUCT_STAT *fst)
+@@ -111,6 +111,8 @@ static int stat_xattr(const char *fname, STRUCT_STAT *fst)
  
  #endif
  
@@ -568,7 +568,7 @@ diff --git a/tls.c b/tls.c
  static void failed(char const *what, char const *where)
  {
  	fprintf(stderr, PROGRAM ": %s %s: %s\n",
-@@ -116,16 +118,44 @@ static void failed(char const *what, char const *where)
+@@ -118,16 +120,44 @@ static void failed(char const *what, char const *where)
  	exit(1);
  }
  
@@ -615,7 +615,7 @@ diff --git a/tls.c b/tls.c
  #ifdef SUPPORT_XATTRS
  	if (am_root < 0)
  		stat_xattr(fname, &buf);
-@@ -159,30 +189,17 @@ static void list_file(const char *fname)
+@@ -161,30 +191,17 @@ static void list_file(const char *fname)
  	}
  
  	permstring(permbuf, buf.st_mode);
@@ -655,7 +655,7 @@ diff --git a/tls.c b/tls.c
  
  	/* TODO: Perhaps escape special characters in fname? */
  
-@@ -193,13 +210,14 @@ static void list_file(const char *fname)
+@@ -195,13 +212,14 @@ static void list_file(const char *fname)
  		    (long)minor(buf.st_rdev));
  	} else
  		printf("%15s", do_big_num(buf.st_size, 1, NULL));
@@ -672,7 +672,7 @@ diff --git a/tls.c b/tls.c
    {"link-times",      'l', POPT_ARG_NONE,   &link_times, 0, 0, 0 },
    {"link-owner",      'L', POPT_ARG_NONE,   &link_owner, 0, 0, 0 },
  #ifdef SUPPORT_XATTRS
-@@ -218,6 +236,7 @@ static void tls_usage(int ret)
+@@ -220,6 +238,7 @@ static void tls_usage(int ret)
    fprintf(F,"usage: " PROGRAM " [OPTIONS] FILE ...\n");
    fprintf(F,"Trivial file listing program for portably checking rsync\n");
    fprintf(F,"\nOptions:\n");
