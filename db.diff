@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: d1a1fec1340254926e17f5d83f848f7574286a33
+based-on: c4a3f55be35726d0a033996dc37b0fb248b45cb5
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -141,21 +141,19 @@ diff --git a/checksum.c b/checksum.c
  extern char *checksum_choice;
  
  #define CSUM_NONE 0
-@@ -213,6 +214,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -220,6 +221,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			md5_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		md5_result(&m, (uchar *)sum);
-+
 +		if (use_db)
 +			db_set_checksum(5, st_p, sum);
  		break;
  	  case CSUM_MD4:
  	  case CSUM_MD4_OLD:
-@@ -233,6 +237,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -241,6 +244,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		mdfour_result(&m, (uchar *)sum);
-+
 +		if (use_db)
 +			db_set_checksum(4, st_p, sum);
  		break;
@@ -204,7 +202,7 @@ diff --git a/clientserver.c b/clientserver.c
  extern char *bind_address;
  extern char *config_file;
  extern char *logfile_format;
-@@ -685,6 +688,11 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -687,6 +690,11 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  
  	log_init(1);
  
@@ -216,7 +214,7 @@ diff --git a/clientserver.c b/clientserver.c
  #ifdef HAVE_PUTENV
  	if (*lp_prexfer_exec(i) || *lp_postxfer_exec(i)) {
  		int status;
-@@ -890,6 +898,8 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -894,6 +902,8 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  
  	am_server = 1; /* Don't let someone try to be tricky. */
  	quiet = 0;
@@ -236,7 +234,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1098,6 +1099,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1099,6 +1100,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -314,11 +312,11 @@ new file mode 100644
 +#include "itypes.h"
 +#include "inums.h"
 +
-+extern int protocol_version;
 +extern int recurse;
 +extern int same_db;
 +extern int am_receiver;
 +extern int am_generator;
++extern int checksum_type;
 +extern int db_clean, db_check, db_do_md4, db_do_md5, db_update, db_lax, db_init, db_mounts;
 +extern int db_output_name, db_output_sum, db_output_info, db_output_unchanged, db_output_dirs, db_output_msgs;
 +extern int saw_db_output_opt, saw_db_sum_opt;
@@ -511,7 +509,7 @@ new file mode 100644
 +		return 0;
 +	}
 +
-+	md_num = protocol_version >= 30 ? 5 : 4;
++	md_num = checksum_type == 5 ? 5 : 4;
 +
 +	if (error_log) {
 +		if (use_db != DB_TYPE_SQLITE)
@@ -1472,7 +1470,7 @@ new file mode 100644
 +		if (ok) {
 +			rprintf(FCLIENT, "[%s] Found DB checksum for %s,%s,%d: %s\n",
 +				who_am_i(), big_num(st_p->st_dev),
-+				big_num(st_p->st_ino), md_num, sum_as_hex(md_num, sum));
++				big_num(st_p->st_ino), md_num, sum_as_hex(md_num, sum, 0));
 +		} else {
 +			rprintf(FCLIENT, "[%s] No DB checksum for %s,%s,%d\n",
 +				who_am_i(), big_num(st_p->st_dev),
@@ -1552,7 +1550,7 @@ new file mode 100644
 +		if (DEBUG_GTE(DB, 3)) {
 +			rprintf(FCLIENT, "DB checksum for %s,%s,%d: %s\n",
 +				big_num(st_p->st_dev), big_num(st_p->st_ino), sum_type[j],
-+				sum_as_hex(sum_type[j], dbsum + MD5_DIGEST_LEN*j));
++				sum_as_hex(sum_type[j], dbsum + MD5_DIGEST_LEN*j, 0));
 +		}
 +
 +		if (sum_type[j] == 4) {
@@ -1659,7 +1657,7 @@ new file mode 100644
 +		if (DEBUG_GTE(DB, 2)) {
 +			rprintf(FCLIENT, "[%s] Set DB checksum for %s,%s,%d: %s\n",
 +				who_am_i(), big_num(st_p->st_dev), big_num(st_p->st_ino),
-+				md_num, sum_as_hex(md_num, sum));
++				md_num, sum_as_hex(md_num, sum, 0));
 +		}
 +	} else {
 +		rprintf(log_code, "[%s] Failed to set checksum for %s,%s,%d: %s (%d) -- closing DB\n",
@@ -1982,9 +1980,9 @@ new file mode 100644
 +		}
 +		if (db_output_sum) {
 +			if (db_do_md4)
-+				printf("%s ", sum_as_hex(4, sum4));
++				printf("%s ", sum_as_hex(4, sum4, 0));
 +			if (db_do_md5)
-+				printf("%s ", sum_as_hex(5, sum5));
++				printf("%s ", sum_as_hex(5, sum5, 0));
 +		}
 +		if (db_output_name) {
 +			if (db_output_sum)
@@ -2008,7 +2006,7 @@ new file mode 100644
 +	struct name_list *names;
 +	int exit_code = 0;
 +
-+	protocol_version = 31;
++	checksum_type = 5;
 +
 +	need_sum_cnt = db_do_md4 + db_do_md5;
 +
@@ -2205,7 +2203,7 @@ new file mode 100644
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -53,6 +53,7 @@ extern int preserve_devices;
+@@ -54,6 +54,7 @@ extern int preserve_devices;
  extern int preserve_specials;
  extern int delete_during;
  extern int missing_args;
@@ -2213,7 +2211,7 @@ diff --git a/flist.c b/flist.c
  extern int eol_nulls;
  extern int relative_paths;
  extern int implied_dirs;
-@@ -1312,11 +1313,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1294,11 +1295,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -2227,22 +2225,22 @@ diff --git a/flist.c b/flist.c
  
  #if EXTRA_ROUNDING > 0
  	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
-@@ -1401,8 +1399,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1383,8 +1381,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		return NULL;
  	}
  
 -	if (sender_keeps_checksum && S_ISREG(st.st_mode))
--		memcpy(F_SUM(file), tmp_sum, checksum_len);
+-		memcpy(F_SUM(file), tmp_sum, flist_csum_len);
 +	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
 +		if (!use_db || !db_get_checksum(&st, tmp_sum))
 +			file_checksum(thisname, &st, tmp_sum);
 +		if (sender_keeps_checksum)
-+			memcpy(F_SUM(file), tmp_sum, checksum_len);
++			memcpy(F_SUM(file), tmp_sum, flist_csum_len);
 +	}
  
  	if (unsort_ndx)
  		F_NDX(file) = stats.num_dirs;
-@@ -2063,6 +2065,9 @@ void send_extra_file_list(int f, int at_least)
+@@ -2045,6 +2047,9 @@ void send_extra_file_list(int f, int at_least)
    finish:
  	if (io_error != save_io_error && protocol_version == 30 && !ignore_errors)
  		send_msg_int(MSG_IO_ERROR, io_error);
@@ -2252,7 +2250,7 @@ diff --git a/flist.c b/flist.c
  }
  
  struct file_list *send_file_list(int f, int argc, char *argv[])
-@@ -2086,6 +2091,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2068,6 +2073,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		     | (eol_nulls || reading_remotely ? RL_EOL_NULLS : 0);
  	int implied_dot_dir = 0;
  
@@ -2264,9 +2262,9 @@ diff --git a/flist.c b/flist.c
 +	}
 +
  	rprintf(FLOG, "building file list\n");
- 	if (show_filelist_p())
+ 	if (show_filelist_progress)
  		start_filelist_progress("building file list");
-@@ -2432,6 +2444,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2414,6 +2426,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  			rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
  	}
  
@@ -2294,7 +2292,7 @@ diff --git a/generator.c b/generator.c
 -		file_checksum(fn, st, sum);
 +		if (!use_db || !db_get_checksum(st, sum))
 +			file_checksum(fn, st, sum);
- 		return memcmp(sum, F_SUM(file), checksum_len) == 0;
+ 		return memcmp(sum, F_SUM(file), flist_csum_len) == 0;
  	}
  
 @@ -2225,6 +2227,13 @@ void generate_files(int f_out, const char *local_name)
@@ -2379,7 +2377,7 @@ diff --git a/io.c b/io.c
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -109,6 +109,7 @@ typedef struct {
+@@ -112,6 +112,7 @@ typedef struct {
  	char *auth_users;
  	char *charset;
  	char *comment;
@@ -2387,7 +2385,7 @@ diff --git a/loadparm.c b/loadparm.c
  	char *dont_compress;
  	char *exclude;
  	char *exclude_from;
-@@ -139,6 +140,7 @@ typedef struct {
+@@ -143,6 +144,7 @@ typedef struct {
  	int syslog_facility;
  	int timeout;
  
@@ -2395,7 +2393,7 @@ diff --git a/loadparm.c b/loadparm.c
  	BOOL fake_super;
  	BOOL forward_lookup;
  	BOOL ignore_errors;
-@@ -185,6 +187,7 @@ static const all_vars Defaults = {
+@@ -192,6 +194,7 @@ static const all_vars Defaults = {
   /* auth_users; */		NULL,
   /* charset; */ 		NULL,
   /* comment; */ 		NULL,
@@ -2403,7 +2401,7 @@ diff --git a/loadparm.c b/loadparm.c
   /* dont_compress; */		DEFAULT_DONT_COMPRESS,
   /* exclude; */			NULL,
   /* exclude_from; */		NULL,
-@@ -213,6 +216,7 @@ static const all_vars Defaults = {
+@@ -221,6 +224,7 @@ static const all_vars Defaults = {
   /* syslog_facility; */		LOG_DAEMON,
   /* timeout; */			0,
  
@@ -2411,7 +2409,7 @@ diff --git a/loadparm.c b/loadparm.c
   /* fake_super; */		False,
   /* forward_lookup; */		True,
   /* ignore_errors; */		False,
-@@ -322,6 +326,8 @@ static struct parm_struct parm_table[] =
+@@ -333,6 +337,8 @@ static struct parm_struct parm_table[] =
   {"auth users",        P_STRING, P_LOCAL, &Vars.l.auth_users,          NULL,0},
   {"charset",           P_STRING, P_LOCAL, &Vars.l.charset,             NULL,0},
   {"comment",           P_STRING, P_LOCAL, &Vars.l.comment,             NULL,0},
@@ -2420,7 +2418,7 @@ diff --git a/loadparm.c b/loadparm.c
   {"dont compress",     P_STRING, P_LOCAL, &Vars.l.dont_compress,       NULL,0},
   {"exclude from",      P_STRING, P_LOCAL, &Vars.l.exclude_from,        NULL,0},
   {"exclude",           P_STRING, P_LOCAL, &Vars.l.exclude,             NULL,0},
-@@ -454,6 +460,7 @@ FN_GLOBAL_INTEGER(lp_rsync_port, &Vars.g.rsync_port)
+@@ -469,6 +475,7 @@ FN_GLOBAL_INTEGER(lp_rsync_port, &Vars.g.rsync_port)
  FN_LOCAL_STRING(lp_auth_users, auth_users)
  FN_LOCAL_STRING(lp_charset, charset)
  FN_LOCAL_STRING(lp_comment, comment)
@@ -2428,7 +2426,7 @@ diff --git a/loadparm.c b/loadparm.c
  FN_LOCAL_STRING(lp_dont_compress, dont_compress)
  FN_LOCAL_STRING(lp_exclude, exclude)
  FN_LOCAL_STRING(lp_exclude_from, exclude_from)
-@@ -482,6 +489,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+@@ -498,6 +505,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
  FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
  FN_LOCAL_INTEGER(lp_timeout, timeout)
  
@@ -2463,7 +2461,7 @@ diff --git a/main.c b/main.c
  extern char *shell_cmd;
  extern char *batch_name;
  extern char *password_file;
-@@ -1100,6 +1103,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+@@ -1103,6 +1106,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
  	if (am_daemon && io_timeout && protocol_version >= 31)
  		send_msg_int(MSG_IO_TIMEOUT, io_timeout);
  
@@ -2473,7 +2471,7 @@ diff --git a/main.c b/main.c
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
  		if (need_messages_from_generator)
-@@ -1381,6 +1387,9 @@ static int start_client(int argc, char *argv[])
+@@ -1384,6 +1390,9 @@ static int start_client(int argc, char *argv[])
  		}
  	}
  
@@ -2653,7 +2651,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1281,6 +1348,100 @@ static void create_refuse_error(int which)
+@@ -1281,6 +1348,101 @@ static void create_refuse_error(int which)
  	}
  }
  
@@ -2751,12 +2749,13 @@ diff --git a/options.c b/options.c
 +	run_dbonly(poptGetArgs(pc));
 +	exit(42); /* NOT REACHED */
 +}
- 
- /**
-  * Process command line arguments.  Called on both local and remote.
-@@ -1298,10 +1459,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
- 	int argc = *argc_p;
++
+ /* This is used to make sure that --daemon & --server cannot be aliased to
+  * something else. These options have always disabled popt aliases for the
+  * parsing of a daemon or server command-line, but we have to make sure that
+@@ -1315,10 +1477,18 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	int opt;
+ 	int orig_protect_args = protect_args;
  
 +	arg = *argv + strlen(*argv);
 +	if (arg - *argv > 2 && strcmp(arg-2, "db") == 0) {
@@ -2773,7 +2772,7 @@ diff --git a/options.c b/options.c
  #ifdef ICONV_OPTION
  		if (!*lp_charset(module_id))
  			set_refuse_options("iconv");
-@@ -1424,6 +1593,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1444,6 +1614,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2786,7 +2785,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1498,6 +1673,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1518,6 +1694,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -2853,7 +2852,7 @@ diff --git a/receiver.c b/receiver.c
  extern int am_root;
  extern int am_server;
  extern int inc_recurse;
-@@ -431,6 +433,11 @@ static void handle_delayed_updates(char *local_name)
+@@ -429,6 +431,11 @@ static void handle_delayed_updates(char *local_name)
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
  			} else {
@@ -2865,7 +2864,7 @@ diff --git a/receiver.c b/receiver.c
  				if (remove_source_files
  				 || (preserve_hard_links && F_IS_HLINKED(file)))
  					send_msg_int(MSG_SUCCESS, ndx);
-@@ -537,6 +544,9 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -535,6 +542,9 @@ int recv_files(int f_in, int f_out, char *local_name)
  	if (delay_updates)
  		delayed_bits = bitbag_create(cur_flist->used + 1);
  
@@ -2875,7 +2874,7 @@ diff --git a/receiver.c b/receiver.c
  	while (1) {
  		cleanup_disable();
  
-@@ -865,6 +875,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -863,6 +873,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				do_unlink(partialptr);
  				handle_partial_dir(partialptr, PDIR_DELETE);
  			}
@@ -2884,7 +2883,7 @@ diff --git a/receiver.c b/receiver.c
  		} else if (keep_partial && partialptr) {
  			if (!handle_partial_dir(partialptr, PDIR_CREATE)) {
  				rprintf(FERROR,
-@@ -878,6 +890,8 @@ int recv_files(int f_in, int f_out, char *local_name)
+@@ -876,6 +888,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  				recv_ok = -1;
  			else if (delay_updates && recv_ok) {
  				bitbag_set_bit(delayed_bits, ndx);
@@ -2904,7 +2903,7 @@ diff --git a/rsync.c b/rsync.c
  extern int am_starting_up;
  extern int allow_8bit_chars;
  extern int protocol_version;
-@@ -742,6 +743,8 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
+@@ -748,6 +749,8 @@ struct file_list *flist_for_ndx(int ndx, const char *fatal_error_loc)
  
  const char *who_am_i(void)
  {
@@ -2933,7 +2932,7 @@ diff --git a/rsync.h b/rsync.h
  #define NDX_DONE -1
  #define NDX_FLIST_EOF -2
  #define NDX_DEL_STATS -3
-@@ -1256,7 +1260,8 @@ extern short info_levels[], debug_levels[];
+@@ -1267,7 +1271,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CHDIR (DEBUG_BIND+1)
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)
@@ -2956,7 +2955,7 @@ diff --git a/rsync.yo b/rsync.yo
   -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
       --no-OPTION             turn off an implied OPTION (e.g. --no-D)
   -r, --recursive             recurse into directories
-@@ -649,6 +652,67 @@ option's before-the-transfer "Does this file need to be updated?" check.
+@@ -650,6 +653,67 @@ option's before-the-transfer "Does this file need to be updated?" check.
  For protocol 30 and beyond (first supported in 3.0.0), the checksum used is
  MD5.  For older protocols, the checksum used is MD4.
  
@@ -2992,7 +2991,7 @@ diff --git a/rsync.yo b/rsync.yo
 +
 +For a local copy, this option affects both the source and the destination.
 +If you wish a local copy to enable this option just for the destination
-+files, specify bf(-M--db=CONFIG) (the same for bf(-M--db-lax).  If you wish
++files, specify bf(-M--db=CONFIG) (the same for bf(-M--db-lax)). If you wish
 +a local copy to enable this option just for the source files, combine
 +bf(--db=CONFIG) with bf(-M--no-db) (similarly use bf(-M--no-db-lax)).
 +
@@ -3027,7 +3026,7 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -316,6 +316,22 @@ is daemon.  This setting has no effect if the "log file" setting is a
+@@ -326,6 +326,22 @@ is daemon.  This setting has no effect if the "log file" setting is a
  non-empty string (either set in the per-modules settings, or inherited
  from the global settings).
  
@@ -3047,9 +3046,9 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 +lax (no ctime) lookups.  See the rsync manpage's section -n bf(--db-lax) for
 +some warnings about using this setting.
 +
- dit(bf(max verbosity)) This parameter allows you to control
- the maximum amount of verbose information that you'll allow the daemon to
- generate (since the information goes into the log file). The default is 1,
+ dit(bf(syslog tag)) This parameter allows you to specify the syslog
+ tag to use when logging messages from the rsync daemon. The default is
+ "rsyncd".  This setting has no effect if the "log file" setting is a
 diff --git a/rsyncdb-mountinfo b/rsyncdb-mountinfo
 new file mode 100755
 --- /dev/null

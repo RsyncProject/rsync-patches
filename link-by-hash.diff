@@ -12,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: d1a1fec1340254926e17f5d83f848f7574286a33
+based-on: c4a3f55be35726d0a033996dc37b0fb248b45cb5
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -28,7 +28,7 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
-@@ -21,10 +21,13 @@
+@@ -21,9 +21,12 @@
  
  #include "rsync.h"
  
@@ -36,13 +36,12 @@ diff --git a/checksum.c b/checksum.c
  extern int checksum_seed;
  extern int protocol_version;
  extern int proper_seed_order;
- extern char *checksum_choice;
 +extern char *link_by_hash_dir;
-+extern char link_by_hash_sum[MAX_DIGEST_LEN];
++extern char link_by_hash_extra_sum[MAX_DIGEST_LEN];
+ extern char *checksum_choice;
  
  #define CSUM_NONE 0
- #define CSUM_ARCHAIC 1
-@@ -244,7 +247,7 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -252,7 +255,7 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  }
  
  static int32 sumresidue;
@@ -51,48 +50,33 @@ diff --git a/checksum.c b/checksum.c
  static int cursum_type;
  
  void sum_init(int csum_type, int seed)
-@@ -255,6 +258,9 @@ void sum_init(int csum_type, int seed)
- 		csum_type = parse_csum_name(NULL, 0);
- 	cursum_type = csum_type;
- 
-+	if (link_by_hash_dir && cursum_type != CSUM_MD5)
-+		md5_begin(&md2);
-+
+@@ -266,6 +269,8 @@ void sum_init(int csum_type, int seed)
  	switch (csum_type) {
  	  case CSUM_MD5:
  		md5_begin(&md);
-@@ -285,6 +291,9 @@ void sum_init(int csum_type, int seed)
-  **/
- void sum_update(const char *p, int32 len)
- {
-+	if (link_by_hash_dir && cursum_type != CSUM_MD5)
-+		md5_update(&md2, (uchar *)p, len);
-+
++		if (link_by_hash_dir)
++			md5_begin(&md2);
+ 		break;
+ 	  case CSUM_MD4:
+ 		mdfour_begin(&md);
+@@ -299,6 +304,8 @@ void sum_update(const char *p, int32 len)
  	switch (cursum_type) {
  	  case CSUM_MD5:
  		md5_update(&md, (uchar *)p, len);
-@@ -315,6 +324,7 @@ void sum_update(const char *p, int32 len)
- 		sumresidue = len;
- 		if (sumresidue)
- 			memcpy(md.buffer, p, sumresidue);
-+
++		if (link_by_hash_dir)
++			md5_update(&md2, (uchar *)p, len);
  		break;
- 	  case CSUM_NONE:
- 		break;
-@@ -323,6 +333,13 @@ void sum_update(const char *p, int32 len)
- 
- int sum_end(char *sum)
- {
-+	if (link_by_hash_dir) {
-+		if (cursum_type != CSUM_MD5)
-+			md5_result(&md2, (uchar *)link_by_hash_sum);
-+		else
-+			memcpy(link_by_hash_sum, sum, sizeof link_by_hash_sum);
-+	}
-+
+ 	  case CSUM_MD4:
+ 	  case CSUM_MD4_OLD:
+@@ -344,6 +351,8 @@ int sum_end(char *sum)
  	switch (cursum_type) {
  	  case CSUM_MD5:
  		md5_result(&md, (uchar *)sum);
++		if (link_by_hash_dir)
++			md5_result(&md2, (uchar *)link_by_hash_extra_sum);
+ 		break;
+ 	  case CSUM_MD4:
+ 	  case CSUM_MD4_OLD:
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
@@ -104,7 +88,7 @@ diff --git a/clientserver.c b/clientserver.c
  extern char *logfile_format;
  extern char *files_from;
  extern char *tmpdir;
-@@ -541,6 +542,9 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -543,6 +544,9 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  		return -1;
  	}
  
@@ -129,7 +113,7 @@ diff --git a/hashlink.c b/hashlink.c
 new file mode 100644
 --- /dev/null
 +++ b/hashlink.c
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,92 @@
 +/*
 +   Copyright (C) Cronosys, LLC 2004
 +
@@ -155,8 +139,9 @@ new file mode 100644
 +
 +extern int protocol_version;
 +extern char *link_by_hash_dir;
++extern char sender_file_sum[MAX_DIGEST_LEN];
 +
-+char link_by_hash_sum[MAX_DIGEST_LEN];
++char link_by_hash_extra_sum[MAX_DIGEST_LEN]; /* Only used when md4 sums are in the transfer */
 +
 +#ifdef HAVE_LINK
 +
@@ -174,7 +159,7 @@ new file mode 100644
 +	if (F_LENGTH(file) == 0)
 +		return;
 +
-+	hex = sum_as_hex(5, link_by_hash_sum);
++	hex = sum_as_hex(5, protocol_version >= 30 ? sender_file_sum : link_by_hash_extra_sum, 0);
 +	if (asprintf(&hashname, "%s/%.3s/%.3s/%.3s/%s.%s.000000",
 +		     link_by_hash_dir, hex, hex+3, hex+6, hex+9, big_num(F_LENGTH(file))) < 0)
 +	{
@@ -224,7 +209,7 @@ new file mode 100644
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -119,6 +119,7 @@ typedef struct {
+@@ -122,6 +122,7 @@ typedef struct {
  	char *include;
  	char *include_from;
  	char *incoming_chmod;
@@ -232,7 +217,7 @@ diff --git a/loadparm.c b/loadparm.c
  	char *lock_file;
  	char *log_file;
  	char *log_format;
-@@ -195,6 +196,7 @@ static const all_vars Defaults = {
+@@ -202,6 +203,7 @@ static const all_vars Defaults = {
   /* include; */			NULL,
   /* include_from; */		NULL,
   /* incoming_chmod; */		NULL,
@@ -240,7 +225,7 @@ diff --git a/loadparm.c b/loadparm.c
   /* lock_file; */		DEFAULT_LOCK_FILE,
   /* log_file; */		NULL,
   /* log_format; */		"%o %h [%a] %m (%u) %f %l",
-@@ -336,6 +338,7 @@ static struct parm_struct parm_table[] =
+@@ -347,6 +349,7 @@ static struct parm_struct parm_table[] =
   {"include from",      P_STRING, P_LOCAL, &Vars.l.include_from,        NULL,0},
   {"include",           P_STRING, P_LOCAL, &Vars.l.include,             NULL,0},
   {"incoming chmod",    P_STRING, P_LOCAL, &Vars.l.incoming_chmod,      NULL,0},
@@ -248,7 +233,7 @@ diff --git a/loadparm.c b/loadparm.c
   {"list",              P_BOOL,   P_LOCAL, &Vars.l.list,                NULL,0},
   {"lock file",         P_STRING, P_LOCAL, &Vars.l.lock_file,           NULL,0},
   {"log file",          P_STRING, P_LOCAL, &Vars.l.log_file,            NULL,0},
-@@ -464,6 +467,7 @@ FN_LOCAL_STRING(lp_hosts_deny, hosts_deny)
+@@ -479,6 +482,7 @@ FN_LOCAL_STRING(lp_hosts_deny, hosts_deny)
  FN_LOCAL_STRING(lp_include, include)
  FN_LOCAL_STRING(lp_include_from, include_from)
  FN_LOCAL_STRING(lp_incoming_chmod, incoming_chmod)
@@ -309,7 +294,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -1313,6 +1317,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1330,6 +1334,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		iconv_opt = strdup(arg);
  #endif
  
@@ -319,7 +304,7 @@ diff --git a/options.c b/options.c
  	/* TODO: Call poptReadDefaultConfig; handle errors. */
  
  	/* The context leaks in case of an error, but if there's a
-@@ -1788,6 +1795,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1808,6 +1815,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -341,7 +326,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2099,6 +2121,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2123,6 +2145,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0, SP_DEFAULT);
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0, SP_DEFAULT);
@@ -350,7 +335,7 @@ diff --git a/options.c b/options.c
  	}
  	if (daemon_filter_list.head && !am_sender) {
  		filter_rule_list *elp = &daemon_filter_list;
-@@ -2751,6 +2775,12 @@ void server_options(char **args, int *argc_p)
+@@ -2775,6 +2799,12 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -371,10 +356,10 @@ diff --git a/rsync.c b/rsync.c
  extern int keep_dirlinks;
  extern int make_backups;
 +extern char *link_by_hash_dir;
+ extern int sanitize_paths;
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern struct chmod_mode_struct *daemon_chmod_modes;
- #ifdef ICONV_OPTION
-@@ -683,6 +684,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -689,6 +690,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	}
  	if (ret == 0) {
  		/* The file was moved into place (not copied), so it's done. */
@@ -388,7 +373,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -1265,7 +1265,8 @@ extern short info_levels[], debug_levels[];
+@@ -1276,7 +1276,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_FUZZY (DEBUG_FLIST+1)
  #define DEBUG_GENR (DEBUG_FUZZY+1)
  #define DEBUG_HASH (DEBUG_GENR+1)
@@ -409,7 +394,7 @@ diff --git a/rsync.yo b/rsync.yo
   -z, --compress              compress file data during the transfer
       --compress-level=NUM    explicitly set compression level
       --skip-compress=LIST    skip compressing files with suffix in LIST
-@@ -1913,6 +1914,48 @@ bf(--link-dest) from working properly for a non-super-user when bf(-o) was
+@@ -1944,6 +1945,48 @@ bf(--link-dest) from working properly for a non-super-user when bf(-o) was
  specified (or implied by bf(-a)).  You can work-around this bug by avoiding
  the bf(-o) option when sending to an old rsync.
  
@@ -461,7 +446,7 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
 --- a/rsyncd.conf.yo
 +++ b/rsyncd.conf.yo
-@@ -287,6 +287,21 @@ message telling them to try later.  The default is 0, which means no limit.
+@@ -297,6 +297,21 @@ message telling them to try later.  The default is 0, which means no limit.
  A negative value disables the module.
  See also the "lock file" parameter.
  

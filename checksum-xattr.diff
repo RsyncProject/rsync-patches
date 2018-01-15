@@ -8,11 +8,11 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: d1a1fec1340254926e17f5d83f848f7574286a33
+based-on: c4a3f55be35726d0a033996dc37b0fb248b45cb5
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -1313,7 +1313,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1295,7 +1295,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  #endif
  
  	if (always_checksum && am_sender && S_ISREG(st.st_mode)) {
@@ -32,7 +32,7 @@ diff --git a/generator.c b/generator.c
 -		file_checksum(fn, st, sum);
 +		if (!get_sum_xattr(fn, st, sum))
 +			file_checksum(fn, st, sum);
- 		return memcmp(sum, F_SUM(file), checksum_len) == 0;
+ 		return memcmp(sum, F_SUM(file), flist_csum_len) == 0;
  	}
  
 diff --git a/support/xsums b/support/xsums
@@ -247,16 +247,17 @@ new file mode 100755
 diff --git a/xattrs.c b/xattrs.c
 --- a/xattrs.c
 +++ b/xattrs.c
-@@ -37,6 +37,8 @@ extern int preserve_links;
+@@ -36,7 +36,9 @@ extern int preserve_xattrs;
+ extern int preserve_links;
  extern int preserve_devices;
  extern int preserve_specials;
++extern int checksum_type;
  extern int checksum_seed;
-+extern int checksum_len;
-+extern int protocol_version;
++extern int flist_csum_len;
+ extern int saw_xattr_filter;
  
  #define RSYNC_XAL_INITIAL 5
- #define RSYNC_XAL_LIST_INITIAL 100
-@@ -72,6 +74,10 @@ extern int checksum_seed;
+@@ -73,6 +75,10 @@ extern int saw_xattr_filter;
  #define XACC_ACL_ATTR RSYNC_PREFIX "%" XACC_ACL_SUFFIX
  #define XDEF_ACL_SUFFIX "dacl"
  #define XDEF_ACL_ATTR RSYNC_PREFIX "%" XDEF_ACL_SUFFIX
@@ -267,7 +268,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  typedef struct {
  	char *datum, *name;
-@@ -264,7 +270,9 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+@@ -266,7 +272,9 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
  			 || (am_root < 0
  			  && (strcmp(name+RPRE_LEN+1, XSTAT_SUFFIX) == 0
  			   || strcmp(name+RPRE_LEN+1, XACC_ACL_SUFFIX) == 0
@@ -278,14 +279,13 @@ diff --git a/xattrs.c b/xattrs.c
  				continue;
  		}
  
-@@ -1120,6 +1128,39 @@ int del_def_xattr_acl(const char *fname)
+@@ -1138,6 +1146,38 @@ int del_def_xattr_acl(const char *fname)
  }
  #endif
  
 +int get_sum_xattr(const char *fname, STRUCT_STAT *stp, char *sum)
 +{
-+	const char *mdattr = protocol_version >= 30
-+			   ? MD5_ATTR : MD4_ATTR;
++	const char *mdattr = checksum_type == 5 ? MD5_ATTR : MD4_ATTR;
 +	char buf[256];
 +	uint32 file_length, mtime;
 +	int len;
@@ -298,7 +298,7 @@ diff --git a/xattrs.c b/xattrs.c
 +			mdattr, full_fname(fname));
 +		return 0;
 +	}
-+	if (len != 4 + 4 + checksum_len) {
++	if (len != 4 + 4 + flist_csum_len) {
 +		rprintf(FERROR, "Corrupt %s xattr attached to %s -- skipping\n",
 +			mdattr, full_fname(fname));
 +		return 0;
@@ -310,7 +310,7 @@ diff --git a/xattrs.c b/xattrs.c
 +	if ((uint32)stp->st_size != file_length || (uint32)stp->st_mtime != mtime)
 +		return 0;
 +
-+	memcpy(sum, buf + 8, checksum_len);
++	memcpy(sum, buf + 8, flist_csum_len);
 +
 +	return 1;
 +}

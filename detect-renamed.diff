@@ -38,7 +38,7 @@ TODO:
   a file that can't use it, while missing out on giving it to a file
   that could use it.
 
-based-on: d1a1fec1340254926e17f5d83f848f7574286a33
+based-on: c4a3f55be35726d0a033996dc37b0fb248b45cb5
 diff --git a/backup.c b/backup.c
 --- a/backup.c
 +++ b/backup.c
@@ -132,7 +132,7 @@ diff --git a/delete.c b/delete.c
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -61,6 +61,7 @@ extern int non_perishable_cnt;
+@@ -62,6 +62,7 @@ extern int non_perishable_cnt;
  extern int prune_empty_dirs;
  extern int copy_links;
  extern int copy_unsafe_links;
@@ -140,7 +140,7 @@ diff --git a/flist.c b/flist.c
  extern int protocol_version;
  extern int sanitize_paths;
  extern int munge_symlinks;
-@@ -126,6 +127,8 @@ static int64 tmp_dev = -1, tmp_ino;
+@@ -127,6 +128,8 @@ static int64 tmp_dev = -1, tmp_ino;
  #endif
  static char tmp_sum[MAX_DIGEST_LEN];
  
@@ -148,9 +148,9 @@ diff --git a/flist.c b/flist.c
 +
  static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
- 
-@@ -292,6 +295,45 @@ static int is_excluded(const char *fname, int is_dir, int filter_level)
- 	return 0;
+ static int show_filelist_progress;
+@@ -274,6 +277,45 @@ static inline int is_excluded(const char *fname, int is_dir, int filter_level)
+ 	return name_is_excluded(fname, is_dir ? NAME_IS_DIR : NAME_IS_FILE, filter_level);
  }
  
 +static int fattr_compare(struct file_struct **file1, struct file_struct **file2)
@@ -173,7 +173,7 @@ diff --git a/flist.c b/flist.c
 +		return len1 < len2 ? -1 : 1;
 +
 +	if (always_checksum) {
-+		diff = u_memcmp(F_SUM(f1), F_SUM(f2), checksum_len);
++		diff = u_memcmp(F_SUM(f1), F_SUM(f2), flist_csum_len);
 +		if (diff)
 +			return diff;
 +	} else if (f1->modtime != f2->modtime)
@@ -195,7 +195,7 @@ diff --git a/flist.c b/flist.c
  static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len, int flags);
  
-@@ -2586,6 +2628,25 @@ struct file_list *recv_file_list(int f, int dir_ndx)
+@@ -2568,6 +2610,25 @@ struct file_list *recv_file_list(int f, int dir_ndx)
  	 * for a non-relative transfer in recv_file_entry(). */
  	flist_sort_and_clean(flist, relative_paths);
  
@@ -394,7 +394,7 @@ diff --git a/generator.c b/generator.c
 +				file_checksum(fname, &st, F_SUM(f));
 +				f->flags |= FLAG_FILE_SENT;
 +			}
-+			diff = u_memcmp(F_SUM(fmid), F_SUM(f), checksum_len);
++			diff = u_memcmp(F_SUM(fmid), F_SUM(f), flist_csum_len);
 +			if (diff) {
 +				if (diff < 0)
 +					low = mid + 1;
@@ -613,7 +613,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -2250,7 +2253,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2274,7 +2277,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		inplace = 1;
  	}
  
@@ -622,7 +622,7 @@ diff --git a/options.c b/options.c
  		partial_dir = tmp_partialdir;
  
  	if (inplace) {
-@@ -2259,6 +2262,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2283,6 +2286,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			snprintf(err_buf, sizeof err_buf,
  				 "--%s cannot be used with --%s\n",
  				 append_mode ? "append" : "inplace",
@@ -630,7 +630,7 @@ diff --git a/options.c b/options.c
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -2642,6 +2646,8 @@ void server_options(char **args, int *argc_p)
+@@ -2666,6 +2670,8 @@ void server_options(char **args, int *argc_p)
  			args[ac++] = "--super";
  		if (size_only)
  			args[ac++] = "--size-only";
@@ -642,7 +642,7 @@ diff --git a/options.c b/options.c
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
-@@ -216,7 +216,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
+@@ -214,7 +214,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
  	 * information should have been previously transferred, but that may
  	 * not be the case with -R */
  	if (fd == -1 && relative_paths && errno == ENOENT
@@ -682,7 +682,7 @@ diff --git a/rsync.yo b/rsync.yo
       --compare-dest=DIR      also compare received files relative to DIR
       --copy-dest=DIR         ... and include copies of unchanged files
       --link-dest=DIR         hardlink to files in DIR when unchanged
-@@ -1832,6 +1833,21 @@ Note that the use of the bf(--delete) option might get rid of any potential
+@@ -1863,6 +1864,21 @@ Note that the use of the bf(--delete) option might get rid of any potential
  fuzzy-match files, so either use bf(--delete-after) or specify some
  filename exclusions if you need to prevent this.
  
@@ -707,7 +707,7 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
-@@ -175,7 +175,7 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
+@@ -185,7 +185,7 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
  /* Create any necessary directories in fname.  Any missing directories are
   * created with default permissions.  Returns < 0 on error, or the number
   * of directories created. */
@@ -716,7 +716,7 @@ diff --git a/util.c b/util.c
  {
  	char *end, *p;
  	int ret = 0;
-@@ -206,7 +206,7 @@ int make_path(char *fname, int flags)
+@@ -216,7 +216,7 @@ int make_path(char *fname, int flags)
  				else
  					errno = ENOTDIR;
  			}
@@ -725,7 +725,7 @@ diff --git a/util.c b/util.c
  			ret++;
  			break;
  		}
-@@ -245,7 +245,7 @@ int make_path(char *fname, int flags)
+@@ -255,7 +255,7 @@ int make_path(char *fname, int flags)
  		p += strlen(p);
  		if (ret < 0) /* Skip mkdir on error, but keep restoring the path. */
  			continue;
@@ -734,7 +734,7 @@ diff --git a/util.c b/util.c
  			ret = -ret - 1;
  		else
  			ret++;
-@@ -1159,6 +1159,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
+@@ -1169,6 +1169,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
  	return path;
  }
  
@@ -767,7 +767,7 @@ diff --git a/util.c b/util.c
  /**
   * Return a quoted string with the full pathname of the indicated filename.
   * The string " (in MODNAME)" may also be appended.  The returned pointer
-@@ -1252,7 +1278,7 @@ int handle_partial_dir(const char *fname, int create)
+@@ -1262,7 +1288,7 @@ int handle_partial_dir(const char *fname, int create)
  			}
  			statret = -1;
  		}
