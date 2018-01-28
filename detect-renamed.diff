@@ -38,7 +38,7 @@ TODO:
   a file that can't use it, while missing out on giving it to a file
   that could use it.
 
-based-on: c4a3f55be35726d0a033996dc37b0fb248b45cb5
+based-on: d73762eea3f15f2c56bb3fa9394ad1883c25c949
 diff --git a/backup.c b/backup.c
 --- a/backup.c
 +++ b/backup.c
@@ -232,20 +232,21 @@ diff --git a/generator.c b/generator.c
  extern int whole_file;
  extern int list_only;
  extern int read_batch;
-@@ -97,10 +98,12 @@ extern char *tmpdir;
+@@ -97,11 +98,13 @@ extern char *tmpdir;
  extern char *basis_dir[MAX_BASIS_DIRS+1];
  extern struct file_list *cur_flist, *first_flist, *dir_flist;
  extern filter_rule_list filter_list, daemon_filter_list;
 +extern struct file_list the_fattr_list;
  
  int maybe_ATTRS_REPORT = 0;
+ int maybe_ATTRS_SET_NANO = 0;
  
  static dev_t dev_zero;
 +static int unexplored_dirs = 1;
  static int deldelay_size = 0, deldelay_cnt = 0;
  static char *deldelay_buf = NULL;
  static int deldelay_fd = -1;
-@@ -271,13 +274,18 @@ static void do_delayed_deletions(char *delbuf)
+@@ -272,13 +275,18 @@ static void do_delayed_deletions(char *delbuf)
   * all the --delete-WHEN options.  Note that the fbuf pointer must point to a
   * MAXPATHLEN buffer with the name of the directory in it (the functions we
   * call will append names onto the end, but the old dir value will be restored
@@ -268,7 +269,7 @@ diff --git a/generator.c b/generator.c
  
  	if (!fbuf) {
  		change_local_filter_dir(NULL, 0, 0);
-@@ -291,17 +299,22 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -292,17 +300,22 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
  		maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
  
  	if (io_error & IOERR_GENERAL && !ignore_errors) {
@@ -296,7 +297,7 @@ diff --git a/generator.c b/generator.c
  	if (one_file_system) {
  		if (file->flags & FLAG_TOP_DIR)
  			filesystem_dev = *fs_dev;
-@@ -311,6 +324,14 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -312,6 +325,14 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
  
  	dirlist = get_dirlist(fbuf, dlen, 0);
  
@@ -311,7 +312,7 @@ diff --git a/generator.c b/generator.c
  	/* If an item in dirlist is not found in flist, delete it
  	 * from the filesystem. */
  	for (i = dirlist->used; i--; ) {
-@@ -323,6 +344,10 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -324,6 +345,10 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
  					f_name(fp, NULL));
  			continue;
  		}
@@ -322,7 +323,7 @@ diff --git a/generator.c b/generator.c
  		/* Here we want to match regardless of file type.  Replacement
  		 * of a file with one of another type is handled separately by
  		 * a delete_item call with a DEL_MAKE_ROOM flag. */
-@@ -331,14 +356,19 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -332,14 +357,19 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
  			if (!(fp->mode & S_IWUSR) && !am_root && fp->flags & FLAG_OWNED_BY_US)
  				flags |= DEL_NO_UID_WRITE;
  			f_name(fp, delbuf);
@@ -346,7 +347,7 @@ diff --git a/generator.c b/generator.c
  	flist_free(dirlist);
  }
  
-@@ -374,14 +404,125 @@ static void do_delete_pass(void)
+@@ -375,14 +405,125 @@ static void do_delete_pass(void)
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
@@ -474,7 +475,7 @@ diff --git a/generator.c b/generator.c
  static inline int time_diff(STRUCT_STAT *stp, struct file_struct *file)
  {
  #ifdef ST_MTIME_NSEC
-@@ -1155,6 +1296,7 @@ static void list_file_entry(struct file_struct *f)
+@@ -1156,6 +1297,7 @@ static void list_file_entry(struct file_struct *f)
  	}
  }
  
@@ -482,7 +483,7 @@ diff --git a/generator.c b/generator.c
  static int phase = 0;
  static int dflt_perms;
  
-@@ -1277,7 +1419,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1280,7 +1422,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			 && do_stat(dn, &sx.st) < 0) {
  				if (dry_run)
  					goto parent_is_dry_missing;
@@ -491,7 +492,7 @@ diff --git a/generator.c b/generator.c
  					rsyserr(FERROR_XFER, errno,
  						"recv_generator: mkdir %s failed",
  						full_fname(dn));
-@@ -1430,7 +1572,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1433,7 +1575,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		}
  		if (real_ret != 0 && do_mkdir(fname,file->mode|added_perms) < 0 && errno != EEXIST) {
  			if (!relative_paths || errno != ENOENT
@@ -500,7 +501,7 @@ diff --git a/generator.c b/generator.c
  			 || (do_mkdir(fname, file->mode|added_perms) < 0 && errno != EEXIST)) {
  				rsyserr(FERROR_XFER, errno,
  					"recv_generator: mkdir %s failed",
-@@ -1479,9 +1621,12 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1482,9 +1624,12 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		}
  		else if (delete_during && f_out != -1 && !phase
  		    && !(file->flags & FLAG_MISSING_DIR)) {
@@ -516,7 +517,7 @@ diff --git a/generator.c b/generator.c
  				change_local_filter_dir(fname, strlen(fname), F_DEPTH(file));
  		}
  		prior_dir_file = file;
-@@ -1746,8 +1891,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1749,8 +1894,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			goto cleanup;
  		}
  #endif
@@ -532,7 +533,7 @@ diff --git a/generator.c b/generator.c
  		rsyserr(FERROR_XFER, stat_errno, "recv_generator: failed to stat %s",
  			full_fname(fname));
  		goto cleanup;
-@@ -2206,6 +2357,12 @@ void generate_files(int f_out, const char *local_name)
+@@ -2209,6 +2360,12 @@ void generate_files(int f_out, const char *local_name)
  	if (DEBUG_GTE(GENR, 1))
  		rprintf(FINFO, "generator starting pid=%d\n", (int)getpid());
  
@@ -545,7 +546,7 @@ diff --git a/generator.c b/generator.c
  	if (delete_before && !solo_file && cur_flist->used > 0)
  		do_delete_pass();
  	if (delete_during == 2) {
-@@ -2216,7 +2373,7 @@ void generate_files(int f_out, const char *local_name)
+@@ -2219,7 +2376,7 @@ void generate_files(int f_out, const char *local_name)
  	}
  	info_levels[INFO_FLIST] = info_levels[INFO_PROGRESS] = 0;
  
@@ -554,7 +555,7 @@ diff --git a/generator.c b/generator.c
  		whole_file = 0;
  	if (DEBUG_GTE(FLIST, 1)) {
  		rprintf(FINFO, "delta-transmission %s\n",
-@@ -2252,7 +2409,7 @@ void generate_files(int f_out, const char *local_name)
+@@ -2255,7 +2412,7 @@ void generate_files(int f_out, const char *local_name)
  						dirdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
  					} else
  						dirdev = MAKEDEV(0, 0);
@@ -563,7 +564,7 @@ diff --git a/generator.c b/generator.c
  				} else
  					change_local_filter_dir(fbuf, strlen(fbuf), F_DEPTH(fp));
  			}
-@@ -2299,7 +2456,21 @@ void generate_files(int f_out, const char *local_name)
+@@ -2302,7 +2459,21 @@ void generate_files(int f_out, const char *local_name)
  	} while ((cur_flist = cur_flist->next) != NULL);
  
  	if (delete_during)
@@ -654,7 +655,7 @@ diff --git a/receiver.c b/receiver.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -252,7 +252,7 @@ enum msgcode {
+@@ -253,7 +253,7 @@ enum msgcode {
  #define NDX_DEL_STATS -3
  #define NDX_FLIST_OFFSET -101
  
@@ -663,7 +664,7 @@ diff --git a/rsync.h b/rsync.h
  #define DEL_NO_UID_WRITE 	(1<<0) /* file/dir has our uid w/o write perm */
  #define DEL_RECURSE		(1<<1) /* if dir, delete all contents */
  #define DEL_DIR_IS_EMPTY	(1<<2) /* internal delete_FUNCTIONS use only */
-@@ -262,6 +262,7 @@ enum msgcode {
+@@ -263,6 +263,7 @@ enum msgcode {
  #define DEL_FOR_DEVICE		(1<<6) /* making room for a replacement device */
  #define DEL_FOR_SPECIAL 	(1<<7) /* making room for a replacement special */
  #define DEL_FOR_BACKUP	 	(1<<8) /* the delete is for a backup operation */

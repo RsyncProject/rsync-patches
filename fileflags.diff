@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: c4a3f55be35726d0a033996dc37b0fb248b45cb5
+based-on: d73762eea3f15f2c56bb3fa9394ad1883c25c949
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -234,7 +234,7 @@ diff --git a/generator.c b/generator.c
  extern int delete_mode;
  extern int delete_before;
  extern int delete_during;
-@@ -469,6 +471,10 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -470,6 +472,10 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  			return 0;
  		if (perms_differ(file, sxp))
  			return 0;
@@ -245,7 +245,7 @@ diff --git a/generator.c b/generator.c
  		if (ownership_differs(file, sxp))
  			return 0;
  #ifdef SUPPORT_ACLS
-@@ -520,6 +526,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -521,6 +527,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		if (gid_ndx && !(file->flags & FLAG_SKIP_GROUP)
  		    && sxp->st.st_gid != (gid_t)F_GROUP(file))
  			iflags |= ITEM_REPORT_GROUP;
@@ -257,7 +257,7 @@ diff --git a/generator.c b/generator.c
  #ifdef SUPPORT_ACLS
  		if (preserve_acls && !S_ISLNK(file->mode)) {
  			if (!ACL_READY(*sxp))
-@@ -1412,6 +1423,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1415,6 +1426,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			file->mode = dest_mode(file->mode, sx.st.st_mode,
  					       dflt_perms, statret == 0);
  		}
@@ -268,7 +268,7 @@ diff --git a/generator.c b/generator.c
  		if (statret != 0 && basis_dir[0] != NULL) {
  			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
  					      itemizing, code);
-@@ -1456,10 +1471,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1459,10 +1474,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		 * readable and writable permissions during the time we are
  		 * putting files within them.  This is then restored to the
  		 * former permissions after the transfer is done. */
@@ -285,7 +285,7 @@ diff --git a/generator.c b/generator.c
  				rsyserr(FERROR_XFER, errno,
  					"failed to modify permissions on %s",
  					full_fname(fname));
-@@ -1495,6 +1515,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1498,6 +1518,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		file->mode = dest_mode(file->mode, sx.st.st_mode, dflt_perms,
  				       exists);
  	}
@@ -296,7 +296,7 @@ diff --git a/generator.c b/generator.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (preserve_hard_links && F_HLINK_NOT_FIRST(file)
-@@ -2062,12 +2086,16 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -2065,12 +2089,16 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  			continue;
  		fname = f_name(file, NULL);
  		if (fix_dir_perms)
@@ -557,7 +557,7 @@ diff --git a/rsync.c b/rsync.c
  				 * or gid unless have the privilege. */
  				rsyserr(FERROR_XFER, errno, "%s %s failed",
 @@ -559,7 +593,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
- 	  || (NSEC_BUMP(file) && (uint32)sxp->st.ST_MTIME_NSEC != F_MOD_NSEC(file))
+ 	  || (flags & ATTRS_SET_NANO && NSEC_BUMP(file) && (uint32)sxp->st.ST_MTIME_NSEC != F_MOD_NSEC(file))
  #endif
  	  )) {
 -		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), sxp->st.st_mode);
@@ -598,9 +598,9 @@ diff --git a/rsync.c b/rsync.c
  
  	/* Change permissions before putting the file into place. */
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
--		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME);
+-		       ok_to_set_time ? ATTRS_SET_NANO : ATTRS_SKIP_MTIME);
 +		       ATTRS_DELAY_IMMUTABLE
-+		       | (ok_to_set_time ? 0 : ATTRS_SKIP_MTIME));
++		       | (ok_to_set_time ? ATTRS_SET_NANO : ATTRS_SKIP_MTIME));
  
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
@@ -626,15 +626,15 @@ diff --git a/rsync.h b/rsync.h
  
  /* These flags are used in the live flist data. */
  
-@@ -165,6 +166,7 @@
- 
+@@ -166,6 +167,7 @@
  #define ATTRS_REPORT		(1<<0)
  #define ATTRS_SKIP_MTIME	(1<<1)
-+#define ATTRS_DELAY_IMMUTABLE	(1<<2)
+ #define ATTRS_SET_NANO		(1<<2)
++#define ATTRS_DELAY_IMMUTABLE	(1<<4)
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -191,6 +193,7 @@
+@@ -192,6 +194,7 @@
  #define ITEM_REPORT_GROUP (1<<6)
  #define ITEM_REPORT_ACL (1<<7)
  #define ITEM_REPORT_XATTR (1<<8)
@@ -642,7 +642,7 @@ diff --git a/rsync.h b/rsync.h
  #define ITEM_BASIS_TYPE_FOLLOWS (1<<11)
  #define ITEM_XNAME_FOLLOWS (1<<12)
  #define ITEM_IS_NEW (1<<13)
-@@ -528,6 +531,28 @@ typedef unsigned int size_t;
+@@ -529,6 +532,28 @@ typedef unsigned int size_t;
  #endif
  #endif
  
@@ -671,7 +671,7 @@ diff --git a/rsync.h b/rsync.h
  /* Find a variable that is either exactly 32-bits or longer.
   * If some code depends on 32-bit truncation, it will need to
   * take special action in a "#if SIZEOF_INT32 > 4" section. */
-@@ -715,6 +740,7 @@ extern int file_extra_cnt;
+@@ -716,6 +741,7 @@ extern int file_extra_cnt;
  extern int inc_recurse;
  extern int uid_ndx;
  extern int gid_ndx;
@@ -679,7 +679,7 @@ diff --git a/rsync.h b/rsync.h
  extern int acls_ndx;
  extern int xattrs_ndx;
  
-@@ -756,6 +782,11 @@ extern int xattrs_ndx;
+@@ -757,6 +783,11 @@ extern int xattrs_ndx;
  /* When the associated option is on, all entries will have these present: */
  #define F_OWNER(f) REQ_EXTRA(f, uid_ndx)->unum
  #define F_GROUP(f) REQ_EXTRA(f, gid_ndx)->unum

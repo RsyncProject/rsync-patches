@@ -4,7 +4,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: c4a3f55be35726d0a033996dc37b0fb248b45cb5
+based-on: d73762eea3f15f2c56bb3fa9394ad1883c25c949
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -124,7 +124,7 @@ diff --git a/flist.c b/flist.c
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -504,6 +504,9 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -505,6 +505,9 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		 : iflags & (ITEM_TRANSFER|ITEM_LOCAL_CHANGE) && !(iflags & ITEM_MATCHED)
  		  && (!(iflags & ITEM_XNAME_FOLLOWS) || *xname))
  			iflags |= ITEM_REPORT_TIME;
@@ -134,7 +134,7 @@ diff --git a/generator.c b/generator.c
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -919,6 +922,8 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+@@ -920,6 +923,8 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
@@ -143,7 +143,7 @@ diff --git a/generator.c b/generator.c
  			if (preserve_hard_links && F_IS_HLINKED(file))
  				finish_hard_link(file, fname, ndx, &sxp->st, itemizing, code, j);
  			if (!maybe_ATTRS_REPORT && (INFO_GTE(NAME, 2) || stdout_format_has_i > 1)) {
-@@ -1123,6 +1128,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+@@ -1124,6 +1129,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
@@ -151,7 +151,7 @@ diff --git a/generator.c b/generator.c
  	int64 len;
  	int colwidth = human_readable ? 14 : 11;
  
-@@ -1138,10 +1144,12 @@ static void list_file_entry(struct file_struct *f)
+@@ -1139,10 +1145,12 @@ static void list_file_entry(struct file_struct *f)
  
  #ifdef SUPPORT_LINKS
  	if (preserve_links && S_ISLNK(f->mode)) {
@@ -167,7 +167,7 @@ diff --git a/generator.c b/generator.c
  	} else
  #endif
  	if (missing_args == 2 && f->mode == 0) {
-@@ -1149,9 +1157,12 @@ static void list_file_entry(struct file_struct *f)
+@@ -1150,9 +1158,12 @@ static void list_file_entry(struct file_struct *f)
  			colwidth + 31, "*missing",
  			f_name(f, NULL));
  	} else {
@@ -182,7 +182,7 @@ diff --git a/generator.c b/generator.c
  	}
  }
  
-@@ -2065,8 +2076,11 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -2068,8 +2079,11 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  			do_chmod(fname, file->mode);
  		if (need_retouch_dir_times) {
  			STRUCT_STAT st;
@@ -297,7 +297,7 @@ diff --git a/rsync.c b/rsync.c
  	if (!(flags & ATTRS_SKIP_MTIME)
  	 && (sxp->st.st_mtime != file->modtime
  #ifdef ST_MTIME_NSEC
- 	  || (NSEC_BUMP(file) && (uint32)sxp->st.ST_MTIME_NSEC != F_MOD_NSEC(file))
+ 	  || (flags & ATTRS_SET_NANO && NSEC_BUMP(file) && (uint32)sxp->st.ST_MTIME_NSEC != F_MOD_NSEC(file))
  #endif
  	  )) {
 -		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), sxp->st.st_mode);
@@ -333,8 +333,8 @@ diff --git a/rsync.c b/rsync.c
  
  	/* Change permissions before putting the file into place. */
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
--		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME);
-+		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME | ATTRS_SKIP_ATIME);
+-		       ok_to_set_time ? ATTRS_SET_NANO : ATTRS_SKIP_MTIME);
++		       ok_to_set_time ? ATTRS_SET_NANO : ATTRS_SKIP_MTIME | ATTRS_SKIP_ATIME);
  
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
@@ -342,8 +342,8 @@ diff --git a/rsync.c b/rsync.c
  
    do_set_file_attrs:
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
--		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME);
-+		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME | ATTRS_SKIP_ATIME);
+-		       ok_to_set_time ? ATTRS_SET_NANO : ATTRS_SKIP_MTIME);
++		       ok_to_set_time ? ATTRS_SET_NANO : ATTRS_SKIP_MTIME | ATTRS_SKIP_ATIME);
  
  	if (temp_copy_name) {
  		if (do_rename(fnametmp, fname) < 0) {
@@ -358,15 +358,15 @@ diff --git a/rsync.h b/rsync.h
  
  /* These flags are used in the live flist data. */
  
-@@ -165,6 +166,7 @@
- 
+@@ -166,6 +167,7 @@
  #define ATTRS_REPORT		(1<<0)
  #define ATTRS_SKIP_MTIME	(1<<1)
-+#define ATTRS_SKIP_ATIME	(1<<2)
+ #define ATTRS_SET_NANO		(1<<2)
++#define ATTRS_SKIP_ATIME	(1<<3)
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -715,12 +717,14 @@ extern int file_extra_cnt;
+@@ -716,12 +718,14 @@ extern int file_extra_cnt;
  extern int inc_recurse;
  extern int uid_ndx;
  extern int gid_ndx;
