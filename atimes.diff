@@ -4,7 +4,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: 2d0c7adba9915b8a4ae379f351775a8b314671c0
+based-on: 1c82a1e1e54eb585cd37c875604193f5b977d24e
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -46,17 +46,6 @@ diff --git a/compat.c b/compat.c
  	if (preserve_uid)
  		uid_ndx = ++file_extra_cnt;
  	if (preserve_gid)
-diff --git a/configure.ac b/configure.ac
---- a/configure.ac
-+++ b/configure.ac
-@@ -389,6 +389,7 @@ AC_CHECK_SIZEOF(int64_t)
- AC_CHECK_SIZEOF(off_t)
- AC_CHECK_SIZEOF(off64_t)
- AC_CHECK_SIZEOF(time_t)
-+AC_CHECK_SIZEOF(char*)
- 
- AC_C_INLINE
- 
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
@@ -209,11 +198,11 @@ diff --git a/generator.c b/generator.c
  		if (need_retouch_dir_times) {
  			STRUCT_STAT st;
 -			if (link_stat(fname, &st, 0) == 0 && time_diff(&st, file))
--				set_modtime(fname, file->modtime, F_MOD_NSEC(file), file->mode);
+-				set_modtime(fname, file->modtime, F_MOD_NSEC_or_0(file), file->mode);
 +			if (link_stat(fname, &st, 0) == 0 && time_diff(&st, file)) {
 +				st.st_mtime = file->modtime;
 +#ifdef ST_MTIME_NSEC
-+				st.ST_MTIME_NSEC = F_MOD_NSEC(file);
++				st.ST_MTIME_NSEC = F_MOD_NSEC_or_0(file);
 +#endif
 +				set_times(fname, &st);
 +			}
@@ -318,10 +307,10 @@ diff --git a/rsync.c b/rsync.c
  	  || (flags & ATTRS_SET_NANO && NSEC_BUMP(file) && (uint32)sxp->st.ST_MTIME_NSEC != F_MOD_NSEC(file))
  #endif
  	  )) {
--		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), sxp->st.st_mode);
+-		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC_or_0(file), sxp->st.st_mode);
 +		sx2.st.st_mtime = file->modtime;
 +#ifdef ST_MTIME_NSEC
-+		sx2.st.ST_MTIME_NSEC = F_MOD_NSEC(file);
++		sx2.st.ST_MTIME_NSEC = F_MOD_NSEC_or_0(file);
 +#endif
 +		updated |= UPDATED_MTIME;
 +	}
@@ -391,17 +380,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -54,14 +54,15 @@
- #define XMIT_SAME_TIME (1<<7)
- #define XMIT_SAME_RDEV_MAJOR (1<<8)	/* protocols 28 - now (devices only) */
- #define XMIT_NO_CONTENT_DIR (1<<8)	/* protocols 30 - now (dirs only) */
--#define XMIT_HLINKED (1<<9)		/* protocols 28 - now */
-+#define XMIT_HLINKED (1<<9)		/* protocols 28 - now (non-dirs) */
- #define XMIT_SAME_DEV_pre30 (1<<10)	/* protocols 28 - 29  */
- #define XMIT_USER_NAME_FOLLOWS (1<<10)	/* protocols 30 - now */
--#define XMIT_RDEV_MINOR_8_pre30 (1<<11)	/* protocols 28 - 29  */
-+#define XMIT_RDEV_MINOR_8_pre30 (1<<11) /* protocols 28 - 29  */
- #define XMIT_GROUP_NAME_FOLLOWS (1<<11) /* protocols 30 - now */
+@@ -62,6 +62,7 @@
  #define XMIT_HLINK_FIRST (1<<12)	/* protocols 30 - now (HLINKED files only) */
  #define XMIT_IO_ERROR_ENDLIST (1<<12)	/* protocols 31*- now (w/XMIT_EXTENDED_FLAGS) (also protocol 30 w/'f' compat flag) */
  #define XMIT_MOD_NSEC (1<<13)		/* protocols 31 - now */
@@ -491,7 +470,7 @@ diff --git a/rsync.h b/rsync.h
  #define NSEC_BUMP(f) ((f)->flags & FLAG_MOD_NSEC ? 1 : 0)
  #define LEN64_BUMP(f) ((f)->flags & FLAG_LENGTH64 ? 1 : 0)
  #define START_BUMP(f) (NSEC_BUMP(f) + LEN64_BUMP(f))
-@@ -751,10 +783,14 @@ extern int xattrs_ndx;
+@@ -752,10 +784,14 @@ extern int xattrs_ndx;
  #define F_SYMLINK(f) ((f)->basename + strlen((f)->basename) + 1)
  
  /* The sending side always has this available: */
@@ -508,7 +487,7 @@ diff --git a/rsync.h b/rsync.h
  
  /* When the associated option is on, all entries will have these present: */
  #define F_OWNER(f) REQ_EXTRA(f, uid_ndx)->unum
-@@ -762,6 +798,7 @@ extern int xattrs_ndx;
+@@ -763,6 +799,7 @@ extern int xattrs_ndx;
  #define F_ACL(f) REQ_EXTRA(f, acls_ndx)->num
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
  #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
