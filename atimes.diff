@@ -4,7 +4,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: 2a87d78f693f10fe5ad13af0bb9311bd3714077d
+based-on: 6e962ac51e3b3507d320a91c31685108266f636f
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -149,51 +149,70 @@ diff --git a/generator.c b/generator.c
  		if (link_dest) {
  			if (!hard_link_one(file, fname, cmpbuf, 1))
  				goto try_a_copy;
-+			if (atimes_ndx) /* Why? are we doing this? */
++			if (atimes_ndx)
 +				set_file_attrs(fname, file, sxp, NULL, 0);
  			if (preserve_hard_links && F_IS_HLINKED(file))
  				finish_hard_link(file, fname, ndx, &sxp->st, itemizing, code, j);
  			if (!maybe_ATTRS_REPORT && (INFO_GTE(NAME, 2) || stdout_format_has_i > 1)) {
-@@ -1120,6 +1125,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+@@ -1120,35 +1125,40 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
  static void list_file_entry(struct file_struct *f)
  {
  	char permbuf[PERMSTRING_SIZE];
-+	time_t atime = atimes_ndx ? F_ATIME(f) : 0;
- 	int64 len;
- 	int colwidth = human_readable ? 14 : 11;
+-	int64 len;
+-	int colwidth = human_readable ? 14 : 11;
++	const char *mtime_str = timestring(f->modtime);
++	int size_width = human_readable ? 14 : 11;
++	int mtime_width = 1 + strlen(mtime_str);
++	int atime_width = atimes_ndx ? mtime_width : 0;
  
-@@ -1135,10 +1141,12 @@ static void list_file_entry(struct file_struct *f)
+ 	if (!F_IS_ACTIVE(f)) {
+ 		/* this can happen if duplicate names were removed */
+ 		return;
+ 	}
  
- #ifdef SUPPORT_LINKS
- 	if (preserve_links && S_ISLNK(f->mode)) {
+-	permstring(permbuf, f->mode);
+-	len = F_LENGTH(f);
+-
+ 	/* TODO: indicate '+' if the entry has an ACL. */
+ 
+-#ifdef SUPPORT_LINKS
+-	if (preserve_links && S_ISLNK(f->mode)) {
 -		rprintf(FINFO, "%s %*s %s %s -> %s\n",
-+		rprintf(FINFO, "%s %*s %s%s%s %s -> %s\n",
- 			permbuf, colwidth, human_num(len),
+-			permbuf, colwidth, human_num(len),
 -			timestring(f->modtime), f_name(f, NULL),
 -			F_SYMLINK(f));
-+			timestring(f->modtime),
-+			atimes_ndx ? " " : "",
-+			atimes_ndx ? timestring(atime) : "",
-+			f_name(f, NULL), F_SYMLINK(f));
- 	} else
- #endif
+-	} else
+-#endif
  	if (missing_args == 2 && f->mode == 0) {
-@@ -1146,9 +1154,12 @@ static void list_file_entry(struct file_struct *f)
- 			colwidth + 31, "*missing",
+ 		rprintf(FINFO, "%-*s %s\n",
+-			colwidth + 31, "*missing",
++			10 + 1 + size_width + mtime_width + atime_width, "*missing",
  			f_name(f, NULL));
  	} else {
 -		rprintf(FINFO, "%s %*s %s %s\n",
-+		rprintf(FINFO, "%s %*s %s%s%s %s\n",
- 			permbuf, colwidth, human_num(len),
+-			permbuf, colwidth, human_num(len),
 -			timestring(f->modtime), f_name(f, NULL));
-+			timestring(f->modtime),
-+			atimes_ndx ? " " : "",
-+			atimes_ndx ? timestring(atime) : "",
-+			f_name(f, NULL));
++		const char *atime_str = atimes_ndx && !S_ISDIR(f->mode) ? timestring(F_ATIME(f)) : "";
++		const char *arrow, *lnk;
++
++		permstring(permbuf, f->mode);
++
++#ifdef SUPPORT_LINKS
++		if (preserve_links && S_ISLNK(f->mode)) {
++			arrow = " -> ";
++			lnk = F_SYMLINK(f);
++		} else
++#endif
++			arrow = lnk = "";
++
++		rprintf(FINFO, "%s %*s %s%*s %s%s%s\n",
++			permbuf, size_width, human_num(F_LENGTH(f)),
++			timestring(f->modtime), atime_width, atime_str,
++			f_name(f, NULL), arrow, lnk);
  	}
  }
  
-@@ -2064,8 +2075,13 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
+@@ -2064,8 +2074,13 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
  			do_chmod(fname, file->mode);
  		if (need_retouch_dir_times) {
  			STRUCT_STAT st;
@@ -836,7 +855,7 @@ diff --git a/tls.c b/tls.c
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
-@@ -117,14 +117,18 @@ void print_child_argv(const char *prefix, char **cmd)
+@@ -117,14 +117,15 @@ void print_child_argv(const char *prefix, char **cmd)
  
  /* This returns 0 for success, 1 for a symlink if symlink time-setting
   * is not possible, or -1 for any other error. */
@@ -849,17 +868,14 @@ diff --git a/util.c b/util.c
 -		rprintf(FINFO, "set modtime of %s to (%ld) %s",
 -			fname, (long)modtime,
 -			asctime(localtime(&modtime)));
-+		char mtimebuf[200];
-+
-+		strlcpy(mtimebuf, timestring(stp->st_mtime), sizeof mtimebuf);
 +		rprintf(FINFO,
 +			"set modtime, atime of %s to (%ld) %s, (%ld) %s\n",
 +			fname, (long)stp->st_mtime,
-+			mtimebuf, (long)stp->st_atime, timestring(stp->st_atime));
++			timestring(stp->st_mtime), (long)stp->st_atime, timestring(stp->st_atime));
  	}
  
  	switch (switch_step) {
-@@ -139,7 +143,7 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
+@@ -139,7 +140,7 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
  
  #ifdef HAVE_UTIMENSAT
  #include "case_N.h"
@@ -868,7 +884,7 @@ diff --git a/util.c b/util.c
  			break;
  		if (errno != ENOSYS)
  			return -1;
-@@ -148,7 +152,7 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
+@@ -148,7 +149,7 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
  
  #ifdef HAVE_LUTIMES
  #include "case_N.h"
@@ -877,7 +893,7 @@ diff --git a/util.c b/util.c
  			break;
  		if (errno != ENOSYS)
  			return -1;
-@@ -159,16 +163,16 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
+@@ -159,16 +160,16 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
  		switch_step++;
  		if (preserve_times & PRESERVE_LINK_TIMES) {
  			preserve_times &= ~PRESERVE_LINK_TIMES;
@@ -897,3 +913,28 @@ diff --git a/util.c b/util.c
  			break;
  #endif
  
+@@ -1332,18 +1333,14 @@ int unsafe_symlink(const char *dest, const char *src)
+ /* Return the date and time as a string.  Some callers tweak returned buf. */
+ char *timestring(time_t t)
+ {
+-	static char TimeBuf[200];
++	static int ndx = 0;
++	static char buffers[4][20]; /* We support 4 simultaneous timestring results. */
++	char *TimeBuf = buffers[ndx = (ndx + 1) % 4];
+ 	struct tm *tm = localtime(&t);
+-	char *p;
+ 
+-#ifdef HAVE_STRFTIME
+-	strftime(TimeBuf, sizeof TimeBuf - 1, "%Y/%m/%d %H:%M:%S", tm);
+-#else
+-	strlcpy(TimeBuf, asctime(tm), sizeof TimeBuf);
+-#endif
+-
+-	if ((p = strchr(TimeBuf, '\n')) != NULL)
+-		*p = '\0';
++	snprintf(TimeBuf, sizeof buffers[0], "%4d/%02d/%02d %02d:%02d:%02d",
++		     tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
++		     tm->tm_hour, tm->tm_min, tm->tm_sec);
+ 
+ 	return TimeBuf;
+ }
