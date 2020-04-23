@@ -447,7 +447,7 @@ diff --git a/rsync.h b/rsync.h
  	int32 num;
  	uint32 unum;
 +#ifdef PTRS_ARE_32
-+	const char* cchar;
++	const char* ptr;
 +#endif
 +};
 +
@@ -693,10 +693,23 @@ diff --git a/testsuite/daemon.test b/testsuite/daemon.test
  FILE_REPL='s/^\([^d][^ ]*\) *\(..........[0-9]\) /\1 \2 /'
  DIR_REPL='s/^\(d[^ ]*\)  *[0-9][.,0-9]* /\1         DIR /'
 -LS_REPL='s;[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9];####/##/## ##:##:##;'
-+LS_REPL='s;[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] ;####/##/## ##:##:## ;'
++LS_REPL='s;[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9] ;####/##/## ##:##:## ;g'
  
  build_rsyncd_conf
  
+@@ -91,3 +91,12 @@ drwxr-xr-x         DIR ####/##/## ##:##:## foo
+ EOT
+ diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
+ 
++$RSYNC -rU localhost::test-from/f* \
++    | sed "$FILE_REPL" | sed "$DIR_REPL" | sed "$LS_REPL" \
++    | tee "$outfile"
++cat <<EOT >"$chkfile"
++drwxr-xr-x         DIR ####/##/## ##:##:##                     foo
++-rw-r--r--           4 ####/##/## ##:##:## ####/##/## ##:##:## foo/one
++EOT
++diff $diffopt "$chkfile" "$outfile" || test_fail "test 3 failed"
++
 diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
 --- a/testsuite/rsync.fns
 +++ b/testsuite/rsync.fns
@@ -757,7 +770,7 @@ diff --git a/tls.c b/tls.c
 +		struct tm *mt = gmtime(&t);
 +
 +		len = snprintf(dest, destsize,
-+			"%04d-%02d-%02d %02d:%02d:%02d",
++			" %04d-%02d-%02d %02d:%02d:%02d",
 +			(int)mt->tm_year + 1900,
 +			(int)mt->tm_mon + 1,
 +			(int)mt->tm_mday,
@@ -768,7 +781,7 @@ diff --git a/tls.c b/tls.c
 +			snprintf(dest + len, destsize - len, ".%09d", nsecs);
 +	} else {
 +		int has_nsecs = nsecs >= 0 ? 1 : 0;
-+		int len = MIN(19 + 9*has_nsecs, (int)destsize - 1);
++		int len = MIN(20 + 10*has_nsecs, (int)destsize - 1);
 +		memset(dest, ' ', len);
 +		dest[len] = '\0';
 +	}
@@ -787,7 +800,20 @@ diff --git a/tls.c b/tls.c
  
  	if (do_lstat(fname, &buf) < 0)
  		failed("stat", fname);
-@@ -161,30 +188,17 @@ static void list_file(const char *fname)
+@@ -150,58 +177,47 @@ static void list_file(const char *fname)
+ 			buf.st_uid = buf.st_gid = 0;
+ 		strlcpy(linkbuf, " -> ", sizeof linkbuf);
+ 		/* const-cast required for silly UNICOS headers */
+-		len = do_readlink((char *) fname, linkbuf+4, sizeof(linkbuf) - 4);
++		len = do_readlink((char*)fname, linkbuf+4, sizeof linkbuf - 4);
+ 		if (len == -1)
+ 			failed("do_readlink", fname);
+ 		else
+ 			/* it's not nul-terminated */
+ 			linkbuf[4+len] = 0;
+ 	} else {
+-		linkbuf[0] = 0;
++		linkbuf[0] = '\0';
  	}
  
  	permstring(permbuf, buf.st_mode);
@@ -826,13 +852,18 @@ diff --git a/tls.c b/tls.c
 +		atimebuf[0] = '\0';
  
  	/* TODO: Perhaps escape special characters in fname? */
- 
-@@ -195,13 +209,14 @@ static void list_file(const char *fname)
+-
+ 	printf("%s ", permbuf);
++
+ 	if (S_ISCHR(buf.st_mode) || S_ISBLK(buf.st_mode)) {
+ 		printf("%5ld,%6ld",
+ 		    (long)major(buf.st_rdev),
  		    (long)minor(buf.st_rdev));
  	} else
  		printf("%15s", do_big_num(buf.st_size, 1, NULL));
 -	printf(" %6ld.%-6ld %6ld %s %s%s\n",
-+	printf(" %6ld.%-6ld %6ld %s%s%s%s\n",
++
++	printf(" %6ld.%-6ld %6ld%s%s %s%s\n",
  	       (long)buf.st_uid, (long)buf.st_gid, (long)buf.st_nlink,
 -	       datebuf, fname, linkbuf);
 +	       mtimebuf, atimebuf, fname, linkbuf);
@@ -844,7 +875,7 @@ diff --git a/tls.c b/tls.c
    {"link-times",      'l', POPT_ARG_NONE,   &link_times, 0, 0, 0 },
    {"link-owner",      'L', POPT_ARG_NONE,   &link_owner, 0, 0, 0 },
  #ifdef SUPPORT_XATTRS
-@@ -220,6 +235,7 @@ static void NORETURN tls_usage(int ret)
+@@ -220,6 +236,7 @@ static void NORETURN tls_usage(int ret)
    fprintf(F,"usage: " PROGRAM " [OPTIONS] FILE ...\n");
    fprintf(F,"Trivial file listing program for portably checking rsync\n");
    fprintf(F,"\nOptions:\n");
@@ -933,8 +964,8 @@ diff --git a/util.c b/util.c
 -	if ((p = strchr(TimeBuf, '\n')) != NULL)
 -		*p = '\0';
 +	snprintf(TimeBuf, sizeof buffers[0], "%4d/%02d/%02d %02d:%02d:%02d",
-+		     tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
-+		     tm->tm_hour, tm->tm_min, tm->tm_sec);
++		 (int)tm->tm_year + 1900, (int)tm->tm_mon + 1, (int)tm->tm_mday,
++		 (int)tm->tm_hour, (int)tm->tm_min, (int)tm->tm_sec);
  
  	return TimeBuf;
  }
