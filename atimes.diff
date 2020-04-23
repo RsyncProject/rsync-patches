@@ -244,41 +244,71 @@ diff --git a/log.c b/log.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -63,6 +63,7 @@ int preserve_specials = 0;
+@@ -63,7 +63,9 @@ int preserve_specials = 0;
  int preserve_uid = 0;
  int preserve_gid = 0;
  int preserve_times = 0;
 +int preserve_atimes = 0;
  int update_only = 0;
++int set_noatime = 0;
  int cvs_exclude = 0;
  int dry_run = 0;
-@@ -711,6 +712,7 @@ void usage(enum logcode F)
+ int do_xfers = 1;
+@@ -711,6 +713,8 @@ void usage(enum logcode F)
    rprintf(F,"     --specials              preserve special files\n");
    rprintf(F," -D                          same as --devices --specials\n");
    rprintf(F," -t, --times                 preserve modification times\n");
 +  rprintf(F," -U, --atimes                preserve access (last-used) times\n");
++  rprintf(F,"     --set-noatime           avoid changing the atime on accessed files\n");
    rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
    rprintf(F," -J, --omit-link-times       omit symlinks from --times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
-@@ -872,6 +874,9 @@ static struct poptOption long_options[] = {
+@@ -872,6 +876,11 @@ static struct poptOption long_options[] = {
    {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
    {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
    {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
-+  {"atimes",          'U', POPT_ARG_VAL,    &preserve_atimes, 1, 0, 0 },
++  {"atimes",          'U', POPT_ARG_NONE,   0, 'U', 0, 0 },
 +  {"no-atimes",        0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
 +  {"no-U",             0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
++  {"set-noatime",      0,  POPT_ARG_VAL,    &set_noatime, 1, 0, 0 },
++  {"no-set-noatime",   0,  POPT_ARG_VAL,    &set_noatime, 0, 0, 0 },
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
    {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
    {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
-@@ -2493,6 +2498,8 @@ void server_options(char **args, int *argc_p)
+@@ -1543,6 +1552,11 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			itemize_changes++;
+ 			break;
+ 
++		case 'U':
++			if (++preserve_atimes > 1)
++			    set_noatime = 1;
++			break;
++
+ 		case 'v':
+ 			verbose++;
+ 			break;
+@@ -2493,6 +2507,11 @@ void server_options(char **args, int *argc_p)
  		argstr[x++] = 'D';
  	if (preserve_times)
  		argstr[x++] = 't';
-+	if (preserve_atimes)
++	if (preserve_atimes) {
 +		argstr[x++] = 'U';
++		if (preserve_atimes > 1)
++			argstr[x++] = 'U';
++	}
  	if (preserve_perms)
  		argstr[x++] = 'p';
  	else if (preserve_executability && am_sender)
+@@ -2831,6 +2850,9 @@ void server_options(char **args, int *argc_p)
+ 	if (preallocate_files && am_sender)
+ 		args[ac++] = "--preallocate";
+ 
++	if (set_noatime && preserve_atimes <= 1)
++		args[ac++] = "--set-noatime";
++
+ 	if (ac > MAX_SERVER_ARGS) { /* Not possible... */
+ 		rprintf(FERROR, "argc overflow in server_options().\n");
+ 		exit_cleanup(RERR_MALLOC);
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
@@ -517,28 +547,42 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -378,6 +378,7 @@ to the detailed description below for a complete description.  verb(
+@@ -378,6 +378,8 @@ to the detailed description below for a complete description.  verb(
       --specials              preserve special files
   -D                          same as --devices --specials
   -t, --times                 preserve modification times
 + -U, --atimes                preserve access (use) times
++     --set-noatime           avoid changing the atime on accessed files
   -O, --omit-dir-times        omit directories from --times
   -J, --omit-link-times       omit symlinks from --times
       --super                 receiver attempts super-user activities
-@@ -1240,6 +1241,12 @@ cause the next transfer to behave as if it used bf(-I), causing all files to be
+@@ -1240,6 +1242,25 @@ cause the next transfer to behave as if it used bf(-I), causing all files to be
  updated (though rsync's delta-transfer algorithm will make the update fairly efficient
  if the files haven't actually changed, you're much better off using bf(-t)).
  
 +dit(bf(-U, --atimes)) This tells rsync to set the access (use) times of the
-+destination files to the same value as the source files.  Note that the
-+reading of the source file may update the atime of the source files, so
-+repeated rsync runs with --atimes may be needed if you want to force the
-+access-time values to be 100% identical on the two systems.
++destination files to the same value as the source files.
++
++If repeated, it also sets the bf(--set-noatime) option, which can help you
++to make the sending and receiving systems have the same access times on the
++transferred files without needing to run rsync an extra time after a file is
++transferred.
++
++Note that some older rsync versions (prior to 3.1.4) may have been built with
++a pre-release bf(--atimes) patch that does not imply bf(--set-noatime) when
++this option is repeated.
++
++dit(bf(--set-noatime)) This tells rsync to open files with the O_NOATIME
++flag (on systems that support it) to avoid changing the access time of the
++files that are being transferred. If your OS does not support the O_NOATIME
++flag then rsync will silently ignore this option. Note also that some
++filesystems are mounted to avoid updating the atime on read access even
++without the O_NOATIME flag being set.
 +
  dit(bf(-O, --omit-dir-times)) This tells rsync to omit directories when
  it is preserving modification times (see bf(--times)).  If NFS is sharing
  the directories on the receiving side, it is a good idea to use bf(-O).
-@@ -2263,7 +2270,10 @@ quote(itemization(
+@@ -2263,7 +2284,10 @@ quote(itemization(
    sender's value (requires bf(--owner) and super-user privileges).
    it() A bf(g) means the group is different and is being updated to the
    sender's value (requires bf(--group) and the authority to set the group).
@@ -553,7 +597,27 @@ diff --git a/rsync.yo b/rsync.yo
 diff --git a/syscall.c b/syscall.c
 --- a/syscall.c
 +++ b/syscall.c
-@@ -380,54 +380,78 @@ int do_setattrlist_times(const char *fname, time_t modtime, uint32 mod_nsec)
+@@ -42,6 +42,7 @@ extern int inplace;
+ extern int preallocate_files;
+ extern int preserve_perms;
+ extern int preserve_executability;
++extern int set_noatime;
+ 
+ #ifndef S_BLKSIZE
+ # if defined hpux || defined __hpux__ || defined __hpux
+@@ -202,6 +203,11 @@ int do_open(const char *pathname, int flags, mode_t mode)
+ 		RETURN_ERROR_IF_RO_OR_LO;
+ 	}
+ 
++#ifdef O_NOATIME
++	if (set_noatime)
++		flags |= O_NOATIME;
++#endif
++
+ 	return open(pathname, flags | O_BINARY, mode);
+ }
+ 
+@@ -380,54 +386,78 @@ int do_setattrlist_times(const char *fname, time_t modtime, uint32 mod_nsec)
  #endif
  
  #ifdef HAVE_UTIMENSAT
@@ -646,7 +710,7 @@ diff --git a/syscall.c b/syscall.c
  {
  #ifdef HAVE_STRUCT_UTIMBUF
  	struct utimbuf tbuf;
-@@ -439,12 +463,12 @@ int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec))
+@@ -439,12 +469,12 @@ int do_utime(const char *fname, time_t modtime, UNUSED(uint32 mod_nsec))
  	RETURN_ERROR_IF_RO_OR_LO;
  
  # ifdef HAVE_STRUCT_UTIMBUF
