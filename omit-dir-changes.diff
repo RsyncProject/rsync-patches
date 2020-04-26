@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                              (optional if already run)
     make
 
-based-on: 2a87d78f693f10fe5ad13af0bb9311bd3714077d
+based-on: 1c7785ab1ecfe81f7b4f257f8a2bec2f68d43d58
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -27,7 +27,7 @@ diff --git a/generator.c b/generator.c
  		int keep_time = !preserve_times ? 0
  		    : S_ISDIR(file->mode) ? preserve_times & PRESERVE_DIR_TIMES
  		    : S_ISLNK(file->mode) ? preserve_times & PRESERVE_LINK_TIMES
-@@ -517,10 +519,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -520,10 +522,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		} else if (preserve_executability
  		 && ((sxp->st.st_mode & 0111 ? 1 : 0) ^ (file->mode & 0111 ? 1 : 0)))
  			iflags |= ITEM_REPORT_PERMS;
@@ -42,7 +42,7 @@ diff --git a/generator.c b/generator.c
  			iflags |= ITEM_REPORT_GROUP;
  #ifdef SUPPORT_ACLS
  		if (preserve_acls && !S_ISLNK(file->mode)) {
-@@ -1407,7 +1410,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1417,7 +1420,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		real_ret = statret;
  		if (file->flags & FLAG_DIR_CREATED)
  			statret = -1;
@@ -54,23 +54,23 @@ diff --git a/generator.c b/generator.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -63,6 +63,7 @@ int preserve_specials = 0;
- int preserve_uid = 0;
- int preserve_gid = 0;
- int preserve_times = 0;
+@@ -76,6 +76,7 @@ int delete_before = 0;
+ int delete_after = 0;
+ int delete_excluded = 0;
+ int remove_source_files = 0;
 +int omit_dir_changes = 0;
- int update_only = 0;
- int cvs_exclude = 0;
- int dry_run = 0;
-@@ -713,6 +714,7 @@ void usage(enum logcode F)
-   rprintf(F," -t, --times                 preserve modification times\n");
+ int one_file_system = 0;
+ int protocol_version = PROTOCOL_VERSION;
+ int sparse_files = 0;
+@@ -717,6 +718,7 @@ void usage(enum logcode F)
+   rprintf(F,"     --open-noatime          avoid changing the atime on opened files\n");
    rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
    rprintf(F," -J, --omit-link-times       omit symlinks from --times\n");
 +  rprintf(F,"     --omit-dir-changes      omit directories from any attribute changes\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
  #ifdef SUPPORT_XATTRS
    rprintf(F,"     --fake-super            store/recover privileged attrs using xattrs\n");
-@@ -878,6 +880,7 @@ static struct poptOption long_options[] = {
+@@ -887,6 +889,7 @@ static struct poptOption long_options[] = {
    {"omit-link-times", 'J', POPT_ARG_VAL,    &omit_link_times, 1, 0, 0 },
    {"no-omit-link-times",0, POPT_ARG_VAL,    &omit_link_times, 0, 0, 0 },
    {"no-J",             0,  POPT_ARG_VAL,    &omit_link_times, 0, 0, 0 },
@@ -78,7 +78,7 @@ diff --git a/options.c b/options.c
    {"modify-window",   '@', POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
-@@ -2211,6 +2214,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2225,6 +2228,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		parse_filter_str(&filter_list, backup_dir_buf, rule_template(0), 0);
  	}
  
@@ -88,7 +88,7 @@ diff --git a/options.c b/options.c
  	if (preserve_times) {
  		preserve_times = PRESERVE_FILE_TIMES;
  		if (!omit_dir_times)
-@@ -2462,6 +2468,8 @@ void server_options(char **args, int *argc_p)
+@@ -2476,6 +2482,8 @@ void server_options(char **args, int *argc_p)
  			argstr[x++] = 'O';
  		if (omit_link_times)
  			argstr[x++] = 'J';
@@ -108,7 +108,7 @@ diff --git a/rsync.c b/rsync.c
  extern int am_root;
  extern int am_server;
  extern int am_daemon;
-@@ -496,9 +497,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -505,9 +506,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		get_acl(fname, sxp);
  #endif
  
@@ -125,15 +125,15 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -380,6 +380,7 @@ to the detailed description below for a complete description.  verb(
-  -t, --times                 preserve modification times
+@@ -382,6 +382,7 @@ to the detailed description below for a complete description.  verb(
+      --open-noatime          avoid changing the atime on opened files
   -O, --omit-dir-times        omit directories from --times
   -J, --omit-link-times       omit symlinks from --times
 +     --omit-dir-changes      omit directories from any attribute changes
       --super                 receiver attempts super-user activities
       --fake-super            store/recover privileged attrs using xattrs
   -S, --sparse                turn sequences of nulls into sparse blocks
-@@ -1259,6 +1260,10 @@ directories.
+@@ -1280,6 +1281,10 @@ directories.
  dit(bf(-J, --omit-link-times)) This tells rsync to omit symlinks when
  it is preserving modification times (see bf(--times)).
  
