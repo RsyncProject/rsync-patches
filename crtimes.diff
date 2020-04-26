@@ -188,7 +188,12 @@ diff --git a/generator.c b/generator.c
  
  	if (!F_IS_ACTIVE(f)) {
  		/* this can happen if duplicate names were removed */
-@@ -1154,6 +1172,7 @@ static void list_file_entry(struct file_struct *f)
+@@ -1150,10 +1168,11 @@ static void list_file_entry(struct file_struct *f)
+ 
+ 	if (missing_args == 2 && f->mode == 0) {
+ 		rprintf(FINFO, "%-*s %s\n",
+-			10 + 1 + size_width + mtime_width + atime_width, "*missing",
++			10 + 1 + size_width + mtime_width + atime_width + crtime_width, "*missing",
  			f_name(f, NULL));
  	} else {
  		const char *atime_str = atimes_ndx && !S_ISDIR(f->mode) ? timestring(F_ATIME(f)) : "";
@@ -196,9 +201,12 @@ diff --git a/generator.c b/generator.c
  		const char *arrow, *lnk;
  
  		permstring(permbuf, f->mode);
-@@ -1168,7 +1187,7 @@ static void list_file_entry(struct file_struct *f)
+@@ -1166,9 +1185,9 @@ static void list_file_entry(struct file_struct *f)
+ #endif
+ 			arrow = lnk = "";
  
- 		rprintf(FINFO, "%s %*s %s%*s %s%s%s\n",
+-		rprintf(FINFO, "%s %*s %s%*s %s%s%s\n",
++		rprintf(FINFO, "%s %*s %s%*s%*s %s%s%s\n",
  			permbuf, size_width, human_num(F_LENGTH(f)),
 -			timestring(f->modtime), atime_width, atime_str,
 +			timestring(f->modtime), atime_width, atime_str, crtime_width, crtime_str,
@@ -217,12 +225,12 @@ diff --git a/log.c b/log.c
 --- a/log.c
 +++ b/log.c
 @@ -721,7 +721,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
- 			     : S_ISLNK(file->mode) ? 'U' : 'u';
  			c[9] = !(iflags & ITEM_REPORT_ACL) ? '.' : 'a';
  			c[10] = !(iflags & ITEM_REPORT_XATTR) ? '.' : 'x';
--			c[11] = '\0';
-+			c[11] = !(iflags & ITEM_REPORT_CRTIME) ? '.' : 'n';
-+			c[12] = '\0';
+ 			c[11] = !(iflags & ITEM_REPORT_FFLAGS) ? '.' : 'f';
+-			c[12] = '\0';
++			c[12] = !(iflags & ITEM_REPORT_CRTIME) ? '.' : 'n';
++			c[13] = '\0';
  
  			if (iflags & (ITEM_IS_NEW|ITEM_MISSING_DATA)) {
  				char ch = iflags & ITEM_IS_NEW ? '+' : '?';
@@ -321,16 +329,15 @@ diff --git a/rsync.h b/rsync.h
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -188,7 +189,7 @@
- #define FNAMECMP_FUZZY		0x83
- 
- /* For use by the itemize_changes code */
--#define ITEM_REPORT_ATIME (1<<0)
-+#define ITEM_REPORT_CRTIME (1<<0)
- #define ITEM_REPORT_CHANGE (1<<1)
- #define ITEM_REPORT_SIZE (1<<2)     /* regular files only */
- #define ITEM_REPORT_TIMEFAIL (1<<2) /* symlinks only */
-@@ -767,6 +768,7 @@ struct file_struct {
+@@ -199,6 +200,7 @@
+ #define ITEM_REPORT_ACL (1<<7)
+ #define ITEM_REPORT_XATTR (1<<8)
+ #define ITEM_REPORT_FFLAGS (1<<9)
++#define ITEM_REPORT_CRTIME (1<<10)
+ #define ITEM_BASIS_TYPE_FOLLOWS (1<<11)
+ #define ITEM_XNAME_FOLLOWS (1<<12)
+ #define ITEM_IS_NEW (1<<13)
+@@ -767,6 +769,7 @@ struct file_struct {
  extern int file_extra_cnt;
  extern int inc_recurse;
  extern int atimes_ndx;
@@ -338,7 +345,7 @@ diff --git a/rsync.h b/rsync.h
  extern int pathname_ndx;
  extern int depth_ndx;
  extern int uid_ndx;
-@@ -831,6 +833,7 @@ extern int xattrs_ndx;
+@@ -831,6 +834,7 @@ extern int xattrs_ndx;
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
  #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
  #define F_ATIME(f) REQ_EXTRA64(f, atimes_ndx)->num
@@ -346,7 +353,7 @@ diff --git a/rsync.h b/rsync.h
  
  /* These items are per-entry optional: */
  #define F_HL_GNUM(f) OPT_EXTRA(f, START_BUMP(f))->num /* non-dirs */
-@@ -1073,6 +1076,7 @@ typedef struct {
+@@ -1073,6 +1077,7 @@ typedef struct {
  
  typedef struct {
      STRUCT_STAT st;
