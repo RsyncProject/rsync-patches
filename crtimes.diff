@@ -86,7 +86,16 @@ diff --git a/flist.c b/flist.c
  	static mode_t mode;
  #ifdef SUPPORT_FILEFLAGS
  	static uint32 fileflags;
-@@ -829,6 +834,16 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -791,6 +796,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ 			mode = first->mode;
+ 			if (atimes_ndx && !S_ISDIR(mode))
+ 				atime = F_ATIME(first);
++			if (crtimes_ndx)
++				crtime = F_CRTIME(first);
+ #ifdef SUPPORT_FILEFLAGS
+ 			if (preserve_fileflags)
+ 				fileflags = F_FFLAGS(first);
+@@ -831,6 +838,16 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		modtime_nsec = read_varint(f);
  	else
  		modtime_nsec = 0;
@@ -103,18 +112,18 @@ diff --git a/flist.c b/flist.c
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
  	if (atimes_ndx && !S_ISDIR(mode) && !(xflags & XMIT_SAME_ATIME)) {
-@@ -1018,6 +1033,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -1020,6 +1037,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  	}
- 	if (atimes_ndx)
+ 	if (atimes_ndx && !S_ISDIR(mode))
  		F_ATIME(file) = atime;
 +	if (crtimes_ndx)
 +		F_CRTIME(file) = crtime;
  	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
  
-@@ -1421,6 +1438,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1423,6 +1442,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		file->flags |= FLAG_OWNED_BY_US;
- 	if (atimes_ndx)
+ 	if (atimes_ndx && !S_ISDIR(file->mode))
  		F_ATIME(file) = st.st_atime;
 +	if (crtimes_ndx)
 +		F_CRTIME(file) = get_create_time(fname);
@@ -382,7 +391,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(-O, --omit-dir-times)) This tells rsync to omit directories when
  it is preserving modification times (see bf(--times)).  If NFS is sharing
  the directories on the receiving side, it is a good idea to use bf(-O).
-@@ -2257,7 +2261,7 @@ with older versions of rsync, but that also turns on the output of other
+@@ -2261,7 +2265,7 @@ with older versions of rsync, but that also turns on the output of other
  verbose messages).
  
  The "%i" escape has a cryptic output that is 11 letters long.  The general
@@ -391,7 +400,7 @@ diff --git a/rsync.yo b/rsync.yo
  type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -2319,6 +2323,8 @@ quote(itemization(
+@@ -2323,6 +2327,8 @@ quote(itemization(
    when a symlink or directory is updated.
    it() The bf(a) means that the ACL information changed.
    it() The bf(x) means that the extended attribute information changed.
