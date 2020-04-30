@@ -5,8 +5,7 @@ To use this patch, run these commands for a successful build:
 
     patch -p1 <patches/fileflags.diff
     patch -p1 <patches/crtimes.diff
-    ./prepare-source
-    ./configure
+    ./configure                         (optional if already run)
     make
 
 based-on: patch/master/fileflags
@@ -61,58 +60,67 @@ diff --git a/flist.c b/flist.c
  extern int relative_paths;
  extern int implied_dirs;
  extern int ignore_perishable;
-@@ -382,7 +383,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
- #endif
+@@ -383,6 +384,9 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  			    int ndx, int first_ndx)
  {
--	static time_t modtime, atime;
-+	static time_t modtime, atime, crtime;
+ 	static time_t modtime, atime;
++#ifdef SUPPORT_CRTIMES
++	static time_t crtime;
++#endif
  	static mode_t mode;
  #ifdef SUPPORT_FILEFLAGS
  	static uint32 fileflags;
-@@ -499,6 +500,11 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -499,6 +503,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  		else
  			atime = F_ATIME(file);
  	}
++#ifdef SUPPORT_CRTIMES
 +	if (crtimes_ndx) {
 +		crtime = F_CRTIME(file);
 +		if (crtime == modtime)
 +			xflags |= XMIT_CRTIME_EQ_MTIME;
 +	}
++#endif
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != -1) {
-@@ -586,6 +592,8 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -586,6 +597,10 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  	}
  	if (xflags & XMIT_MOD_NSEC)
  		write_varint(f, F_MOD_NSEC(file));
++#ifdef SUPPORT_CRTIMES
 +	if (crtimes_ndx && !(xflags & XMIT_CRTIME_EQ_MTIME))
 +		write_varlong(f, crtime, 4);
++#endif
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
  #ifdef SUPPORT_FILEFLAGS
-@@ -681,7 +689,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
- 
+@@ -682,6 +697,9 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  static struct file_struct *recv_file_entry(int f, struct file_list *flist, int xflags)
  {
--	static int64 modtime, atime;
-+	static int64 modtime, atime, crtime;
+ 	static int64 modtime, atime;
++#ifdef SUPPORT_CRTIMES
++	static time_t crtime;
++#endif
  	static mode_t mode;
  #ifdef SUPPORT_FILEFLAGS
  	static uint32 fileflags;
-@@ -795,6 +803,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -795,6 +813,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  			mode = first->mode;
  			if (atimes_ndx && !S_ISDIR(mode))
  				atime = F_ATIME(first);
++#ifdef SUPPORT_CRTIMES
 +			if (crtimes_ndx)
 +				crtime = F_CRTIME(first);
++#endif
  #ifdef SUPPORT_FILEFLAGS
  			if (preserve_fileflags)
  				fileflags = F_FFLAGS(first);
-@@ -835,6 +845,19 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -835,6 +857,21 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		modtime_nsec = read_varint(f);
  	else
  		modtime_nsec = 0;
++#ifdef SUPPORT_CRTIMES
 +	if (crtimes_ndx) {
 +		if (xflags & XMIT_CRTIME_EQ_MTIME)
 +			crtime = modtime;
@@ -126,24 +134,29 @@ diff --git a/flist.c b/flist.c
 +		}
 +#endif
 +	}
++#endif
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
  	if (atimes_ndx && !S_ISDIR(mode) && !(xflags & XMIT_SAME_ATIME)) {
-@@ -1024,6 +1047,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -1024,6 +1061,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  	}
  	if (atimes_ndx && !S_ISDIR(mode))
  		F_ATIME(file) = atime;
++#ifdef SUPPORT_CRTIMES
 +	if (crtimes_ndx)
 +		F_CRTIME(file) = crtime;
++#endif
  	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
  
-@@ -1427,6 +1452,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1427,6 +1468,10 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		file->flags |= FLAG_OWNED_BY_US;
  	if (atimes_ndx && !S_ISDIR(file->mode))
  		F_ATIME(file) = st.st_atime;
++#ifdef SUPPORT_CRTIMES
 +	if (crtimes_ndx)
 +		F_CRTIME(file) = get_create_time(fname);
++#endif
  
  	if (basename != thisname)
  		file->dirname = lastdir;
@@ -158,24 +171,27 @@ diff --git a/generator.c b/generator.c
  extern int preserve_hard_links;
  extern int preserve_executability;
  extern int preserve_fileflags;
-@@ -395,6 +396,16 @@ static inline int time_diff(STRUCT_STAT *stp, struct file_struct *file)
+@@ -395,6 +396,19 @@ static inline int time_diff(STRUCT_STAT *stp, struct file_struct *file)
  #endif
  }
  
-+static inline int all_time_diff(stat_x *sxp, struct file_struct *file, const char *fname)
++static inline int all_time_diff(stat_x *sxp, struct file_struct *file, UNUSED(const char *fname))
 +{
 +	int diff = time_diff(&sxp->st, file);
-+	if (diff || !crtimes_ndx)
-+		return diff;
-+	if (sxp->crtime == 0)
-+		sxp->crtime = get_create_time(fname);
-+	return cmp_time(sxp->crtime, 0, F_CRTIME(file), 0);
++#ifdef SUPPORT_CRTIMES
++	if (!diff && crtimes_ndx) {
++		if (sxp->crtime == 0)
++			sxp->crtime = get_create_time(fname);
++		diff = cmp_time(sxp->crtime, 0, F_CRTIME(file), 0);
++	}
++#endif
++	return diff;
 +}
 +
  static inline int perms_differ(struct file_struct *file, stat_x *sxp)
  {
  	if (preserve_perms)
-@@ -449,7 +460,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -449,7 +463,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  {
  	if (S_ISLNK(file->mode)) {
  #ifdef CAN_SET_SYMLINK_TIMES
@@ -184,7 +200,7 @@ diff --git a/generator.c b/generator.c
  			return 0;
  #endif
  #ifdef CAN_CHMOD_SYMLINK
-@@ -469,7 +480,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -469,7 +483,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  			return 0;
  #endif
  	} else {
@@ -193,20 +209,22 @@ diff --git a/generator.c b/generator.c
  			return 0;
  		if (perms_differ(file, sxp))
  			return 0;
-@@ -515,6 +526,12 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -515,6 +529,14 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		if (atimes_ndx && !S_ISDIR(file->mode) && !S_ISLNK(file->mode)
  		 && cmp_time(F_ATIME(file), 0, sxp->st.st_atime, 0) != 0)
  			iflags |= ITEM_REPORT_ATIME;
++#ifdef SUPPORT_CRTIMES
 +		if (crtimes_ndx) {
 +			if (sxp->crtime == 0)
 +				sxp->crtime = get_create_time(fnamecmp);
 +			if (cmp_time(sxp->crtime, 0L, F_CRTIME(file), 0L) != 0)
 +				iflags |= ITEM_REPORT_CRTIME;
 +		}
++#endif
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -1140,6 +1157,7 @@ static void list_file_entry(struct file_struct *f)
+@@ -1140,6 +1162,7 @@ static void list_file_entry(struct file_struct *f)
  	int size_width = human_readable ? 14 : 11;
  	int mtime_width = 1 + strlen(mtime_str);
  	int atime_width = atimes_ndx ? mtime_width : 0;
@@ -214,7 +232,7 @@ diff --git a/generator.c b/generator.c
  
  	if (!F_IS_ACTIVE(f)) {
  		/* this can happen if duplicate names were removed */
-@@ -1150,10 +1168,11 @@ static void list_file_entry(struct file_struct *f)
+@@ -1150,10 +1173,11 @@ static void list_file_entry(struct file_struct *f)
  
  	if (missing_args == 2 && f->mode == 0) {
  		rprintf(FINFO, "%-*s %s\n",
@@ -227,7 +245,7 @@ diff --git a/generator.c b/generator.c
  		const char *arrow, *lnk;
  
  		permstring(permbuf, f->mode);
-@@ -1166,9 +1185,9 @@ static void list_file_entry(struct file_struct *f)
+@@ -1166,9 +1190,9 @@ static void list_file_entry(struct file_struct *f)
  #endif
  			arrow = lnk = "";
  
@@ -239,7 +257,7 @@ diff --git a/generator.c b/generator.c
  			f_name(f, NULL), arrow, lnk);
  	}
  }
-@@ -1264,6 +1283,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1264,6 +1288,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			return;
  		}
  	}
@@ -271,30 +289,66 @@ diff --git a/options.c b/options.c
  int update_only = 0;
  int open_noatime = 0;
  int cvs_exclude = 0;
-@@ -724,6 +725,7 @@ void usage(enum logcode F)
+@@ -581,6 +582,7 @@ static void print_rsync_version(enum logcode f)
+ 	char const *iconv = "no ";
+ 	char const *ipv6 = "no ";
+ 	char const *fileflags = "no ";
++	char const *crtimes = "no ";
+ 	STRUCT_STAT *dumstat;
+ 
+ #if SUBPROTOCOL_VERSION != 0
+@@ -620,6 +622,9 @@ static void print_rsync_version(enum logcode f)
+ #ifdef SUPPORT_FILEFLAGS
+ 	fileflags = "";
+ #endif
++#ifdef SUPPORT_CRTIMES
++	crtimes = "";
++#endif
+ 
+ 	rprintf(f, "%s  version %s  protocol version %d%s\n",
+ 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
+@@ -633,8 +638,10 @@ static void print_rsync_version(enum logcode f)
+ 		(int)(sizeof (int64) * 8));
+ 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
+ 		got_socketpair, hardlinks, links, ipv6, have_inplace);
+-	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sfile-flags\n",
++	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sfile-flags,\n",
+ 		have_inplace, acls, xattrs, iconv, symtimes, prealloc, fileflags);
++	rprintf(f, "    %scrtimes\n",
++		crtimes);
+ 
+ #ifdef MAINTAINER_MODE
+ 	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
+@@ -724,6 +731,9 @@ void usage(enum logcode F)
    rprintf(F," -t, --times                 preserve modification times\n");
    rprintf(F," -U, --atimes                preserve access (last-used) times\n");
    rprintf(F,"     --open-noatime          avoid changing the atime on opened files\n");
++#ifdef SUPPORT_CRTIMES
 +  rprintf(F," -N, --crtimes               preserve create times (newness)\n");
++#endif
    rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
    rprintf(F," -J, --omit-link-times       omit symlinks from --times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
-@@ -899,6 +901,9 @@ static struct poptOption long_options[] = {
+@@ -899,6 +909,11 @@ static struct poptOption long_options[] = {
    {"no-U",             0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
    {"open-noatime",     0,  POPT_ARG_VAL,    &open_noatime, 1, 0, 0 },
    {"no-open-noatime",  0,  POPT_ARG_VAL,    &open_noatime, 0, 0, 0 },
++#ifdef SUPPORT_CRTIMES
 +  {"crtimes",         'N', POPT_ARG_VAL,    &preserve_crtimes, 1, 0, 0 },
 +  {"no-crtimes",       0,  POPT_ARG_VAL,    &preserve_crtimes, 0, 0, 0 },
 +  {"no-N",             0,  POPT_ARG_VAL,    &preserve_crtimes, 0, 0, 0 },
++#endif
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
    {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
    {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
-@@ -2538,6 +2543,8 @@ void server_options(char **args, int *argc_p)
+@@ -2538,6 +2553,10 @@ void server_options(char **args, int *argc_p)
  		if (preserve_atimes > 1)
  			argstr[x++] = 'U';
  	}
++#ifdef SUPPORT_CRTIMES
 +	if (preserve_crtimes)
 +		argstr[x++] = 'N';
++#endif
  	if (preserve_perms)
  		argstr[x++] = 'p';
  	else if (preserve_executability && am_sender)
@@ -311,10 +365,11 @@ diff --git a/rsync.c b/rsync.c
  	if (!(flags & ATTRS_SKIP_MTIME)
  	 && (sxp->st.st_mtime != file->modtime
  #ifdef ST_MTIME_NSEC
-@@ -638,6 +641,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -638,6 +641,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  			file->flags |= FLAG_TIME_FAILED;
  		}
  	}
++#ifdef SUPPORT_CRTIMES
 +	if (crtimes_ndx && !(flags & ATTRS_SKIP_CRTIME)) {
 +		time_t file_crtime = F_CRTIME(file);
 +		if (sxp->crtime == 0)
@@ -323,10 +378,11 @@ diff --git a/rsync.c b/rsync.c
 +		 && set_create_time(fname, file_crtime) == 0)
 +			updated = 1;
 +	}
++#endif
  
  #ifdef SUPPORT_ACLS
  	/* It's OK to call set_acl() now, even for a dir, as the generator
-@@ -757,7 +768,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -757,7 +770,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
  	/* Change permissions before putting the file into place. */
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
  		       ATTRS_DELAY_IMMUTABLE
@@ -335,7 +391,7 @@ diff --git a/rsync.c b/rsync.c
  
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
-@@ -786,7 +797,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -786,7 +799,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
  
    do_set_file_attrs:
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
@@ -372,7 +428,18 @@ diff --git a/rsync.h b/rsync.h
  #define ITEM_BASIS_TYPE_FOLLOWS (1<<11)
  #define ITEM_XNAME_FOLLOWS (1<<12)
  #define ITEM_IS_NEW (1<<13)
-@@ -773,6 +775,7 @@ struct file_struct {
+@@ -567,6 +569,10 @@ typedef unsigned int size_t;
+ #define ST_FLAGS(st) NO_FFLAGS
+ #endif
+ 
++#ifdef HAVE_GETATTRLIST
++#define SUPPORT_CRTIMES 1
++#endif
++
+ /* Find a variable that is either exactly 32-bits or longer.
+  * If some code depends on 32-bit truncation, it will need to
+  * take special action in a "#if SIZEOF_INT32 > 4" section. */
+@@ -773,6 +779,7 @@ struct file_struct {
  extern int file_extra_cnt;
  extern int inc_recurse;
  extern int atimes_ndx;
@@ -380,7 +447,7 @@ diff --git a/rsync.h b/rsync.h
  extern int pathname_ndx;
  extern int depth_ndx;
  extern int uid_ndx;
-@@ -837,6 +840,7 @@ extern int xattrs_ndx;
+@@ -837,6 +844,7 @@ extern int xattrs_ndx;
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
  #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
  #define F_ATIME(f) REQ_EXTRA64(f, atimes_ndx)->num
@@ -388,7 +455,7 @@ diff --git a/rsync.h b/rsync.h
  
  /* These items are per-entry optional: */
  #define F_HL_GNUM(f) OPT_EXTRA(f, START_BUMP(f))->num /* non-dirs */
-@@ -1079,6 +1083,7 @@ typedef struct {
+@@ -1079,6 +1087,7 @@ typedef struct {
  
  typedef struct {
      STRUCT_STAT st;
@@ -452,10 +519,29 @@ diff --git a/syscall.c b/syscall.c
  #define RETURN_ERROR_IF(x,e) \
  	do { \
  		if (x) { \
-@@ -497,6 +504,36 @@ int do_setattrlist_times(const char *fname, STRUCT_STAT *stp)
+@@ -173,8 +180,6 @@ int do_lchown(const char *path, uid_t owner, gid_t group, UNUSED(mode_t mode), U
+ 		}
+ 		errno = EPERM;
+ 	}
+-#else
+-	mode = fileflags = 0; /* avoid compiler warning */
+ #endif
+ 	return -1;
+ }
+@@ -306,8 +311,6 @@ int do_chmod(const char *path, mode_t mode, UNUSED(uint32 fileflags))
+ 		}
+ 		errno = EPERM;
+ 	}
+-#else
+-	fileflags = 0; /* avoid compiler warning */
+ #endif
+ 	if (code != 0 && (preserve_perms || preserve_executability))
+ 		return code;
+@@ -497,6 +500,40 @@ int do_setattrlist_times(const char *fname, STRUCT_STAT *stp)
  }
  #endif
  
++#ifdef SUPPORT_CRTIMES
 +time_t get_create_time(const char *path)
 +{
 +	static struct create_time attrBuf;
@@ -468,7 +554,9 @@ diff --git a/syscall.c b/syscall.c
 +		return 0;
 +	return attrBuf.crtime.tv_sec;
 +}
++#endif
 +
++#ifdef SUPPORT_CRTIMES
 +int set_create_time(const char *path, time_t crtime)
 +{
 +	struct attrlist attrList;
@@ -485,6 +573,7 @@ diff --git a/syscall.c b/syscall.c
 +	attrList.commonattr = ATTR_CMN_CRTIME;
 +	return setattrlist(path, &attrList, &ts, sizeof ts, FSOPT_NOFOLLOW);
 +}
++#endif
 +
  #ifdef HAVE_UTIMENSAT
  int do_utimensat(const char *fname, STRUCT_STAT *stp)
@@ -493,12 +582,14 @@ diff --git a/testsuite/crtimes.test b/testsuite/crtimes.test
 new file mode 100644
 --- /dev/null
 +++ b/testsuite/crtimes.test
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,26 @@
 +#! /bin/sh
 +
 +# Test rsync copying create times
 +
 +. "$suitedir/rsync.fns"
++
++$RSYNC --version | grep "  crtimes" >/dev/null || test_skipped "Rsync is configured without crtimes support"
 +
 +# Setting an older time via touch sets the create time to the mtime.
 +# Setting it to a newer time affects just the mtime.
@@ -537,19 +628,23 @@ diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
 diff --git a/tls.c b/tls.c
 --- a/tls.c
 +++ b/tls.c
-@@ -108,6 +108,7 @@ static int stat_xattr(const char *fname, STRUCT_STAT *fst)
+@@ -108,6 +108,9 @@ static int stat_xattr(const char *fname, STRUCT_STAT *fst)
  #endif
  
  static int display_atimes = 0;
++#ifdef SUPPORT_CRTIMES
 +static int display_crtimes = 0;
++#endif
  
  static void failed(char const *what, char const *where)
  {
-@@ -143,14 +144,18 @@ static void storetime(char *dest, size_t destsize, time_t t, int nsecs)
+@@ -143,14 +146,22 @@ static void storetime(char *dest, size_t destsize, time_t t, int nsecs)
  static void list_file(const char *fname)
  {
  	STRUCT_STAT buf;
++#ifdef SUPPORT_CRTIMES
 +	time_t crtime = 0;
++#endif
  	char permbuf[PERMSTRING_SIZE];
  	char mtimebuf[50];
  	char atimebuf[50];
@@ -559,23 +654,27 @@ diff --git a/tls.c b/tls.c
  
  	if (do_lstat(fname, &buf) < 0)
  		failed("stat", fname);
++#ifdef SUPPORT_CRTIMES
 +	if (display_crtimes && (crtime = get_create_time(fname)) == 0)
 +		failed("get_create_time", fname);
++#endif
  #ifdef SUPPORT_XATTRS
  	if (am_root < 0)
  		stat_xattr(fname, &buf);
-@@ -195,6 +200,10 @@ static void list_file(const char *fname)
+@@ -195,6 +206,12 @@ static void list_file(const char *fname)
  		storetime(atimebuf, sizeof atimebuf, S_ISDIR(buf.st_mode) ? 0 : buf.st_atime, -1);
  	else
  		atimebuf[0] = '\0';
++#ifdef SUPPORT_CRTIMES
 +	if (display_crtimes)
 +		storetime(crtimebuf, sizeof crtimebuf, crtime, -1);
 +	else
++#endif
 +		crtimebuf[0] = '\0';
  
  	/* TODO: Perhaps escape special characters in fname? */
  	printf("%s ", permbuf);
-@@ -206,14 +215,15 @@ static void list_file(const char *fname)
+@@ -206,14 +223,17 @@ static void list_file(const char *fname)
  	} else
  		printf("%15s", do_big_num(buf.st_size, 1, NULL));
  
@@ -589,15 +688,19 @@ diff --git a/tls.c b/tls.c
  static struct poptOption long_options[] = {
    /* longName, shortName, argInfo, argPtr, value, descrip, argDesc */
    {"atimes",          'U', POPT_ARG_NONE,   &display_atimes, 0, 0, 0},
++#ifdef SUPPORT_CRTIMES
 +  {"crtimes",         'N', POPT_ARG_NONE,   &display_crtimes, 0, 0, 0},
++#endif
    {"link-times",      'l', POPT_ARG_NONE,   &link_times, 0, 0, 0 },
    {"link-owner",      'L', POPT_ARG_NONE,   &link_owner, 0, 0, 0 },
  #ifdef SUPPORT_XATTRS
-@@ -233,6 +243,7 @@ static void NORETURN tls_usage(int ret)
+@@ -233,6 +253,9 @@ static void NORETURN tls_usage(int ret)
    fprintf(F,"Trivial file listing program for portably checking rsync\n");
    fprintf(F,"\nOptions:\n");
    fprintf(F," -U, --atimes                display access (last-used) times\n");
++#ifdef SUPPORT_CRTIMES
 +  fprintf(F," -N, --crtimes               display create times (newness)\n");
++#endif
    fprintf(F," -l, --link-times            display the time on a symlink\n");
    fprintf(F," -L, --link-owner            display the owner+group on a symlink\n");
  #ifdef SUPPORT_XATTRS
