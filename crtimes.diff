@@ -13,7 +13,7 @@ based-on: patch/master/fileflags
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
-@@ -50,6 +50,7 @@ extern int protect_args;
+@@ -51,6 +51,7 @@ extern int protect_args;
  extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_atimes;
@@ -21,7 +21,7 @@ diff --git a/compat.c b/compat.c
  extern int preserve_acls;
  extern int preserve_xattrs;
  extern int preserve_fileflags;
-@@ -68,7 +69,7 @@ extern char *iconv_opt;
+@@ -70,7 +71,7 @@ extern char *iconv_opt;
  #endif
  
  /* These index values are for the file-list's extra-attribute array. */
@@ -30,7 +30,7 @@ diff --git a/compat.c b/compat.c
  
  int receiver_symlink_times = 0; /* receiver can set the time on a symlink */
  int sender_symlink_iconv = 0;	/* sender should convert symlink content */
-@@ -146,6 +147,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -150,6 +151,8 @@ void setup_protocol(int f_out,int f_in)
  	 * aligned for direct int64-pointer memory access. */
  	if (preserve_atimes)
  		atimes_ndx = (file_extra_cnt += EXTRA64_CNT);
@@ -39,6 +39,17 @@ diff --git a/compat.c b/compat.c
  	if (am_sender) /* This is most likely in the in64 union as well. */
  		pathname_ndx = (file_extra_cnt += PTR_EXTRA_CNT);
  	else
+@@ -303,6 +306,10 @@ void setup_protocol(int f_out,int f_in)
+ 		want_xattr_optim = protocol_version >= 31 && !(compat_flags & CF_AVOID_XATTR_OPTIM);
+ 		proper_seed_order = compat_flags & CF_CHKSUM_SEED_FIX ? 1 : 0;
+ 		xfer_flags_as_varint = compat_flags & CF_VARINT_FLIST_FLAGS ? 1 : 0;
++		if (!xfer_flags_as_varint && preserve_crtimes) {
++			fprintf(stderr, "Both rsync versions must be at least 3.2.0 for --crtimes.\n");
++			exit_cleanup(RERR_PROTOCOL);
++		}
+ 		if (!xfer_flags_as_varint && preserve_fileflags) {
+ 			fprintf(stderr, "Both rsync versions must be at least 3.2.0 for --fileflags.\n");
+ 			exit_cleanup(RERR_PROTOCOL);
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
@@ -50,7 +61,7 @@ diff --git a/flist.c b/flist.c
  extern int relative_paths;
  extern int implied_dirs;
  extern int ignore_perishable;
-@@ -381,7 +382,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -382,7 +383,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  #endif
  			    int ndx, int first_ndx)
  {
@@ -59,25 +70,28 @@ diff --git a/flist.c b/flist.c
  	static mode_t mode;
  #ifdef SUPPORT_FILEFLAGS
  	static uint32 fileflags;
-@@ -498,6 +499,8 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -499,6 +500,11 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  		else
  			atime = F_ATIME(file);
  	}
-+	if (crtimes_ndx)
++	if (crtimes_ndx) {
 +		crtime = F_CRTIME(file);
++		if (crtime == modtime)
++			xflags |= XMIT_CRTIME_EQ_MTIME;
++	}
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != -1) {
-@@ -582,6 +585,8 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -586,6 +592,8 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  	}
  	if (xflags & XMIT_MOD_NSEC)
  		write_varint(f, F_MOD_NSEC(file));
-+	if (crtimes_ndx)
++	if (crtimes_ndx && !(xflags & XMIT_CRTIME_EQ_MTIME))
 +		write_varlong(f, crtime, 4);
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
  #ifdef SUPPORT_FILEFLAGS
-@@ -677,7 +682,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -681,7 +689,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  
  static struct file_struct *recv_file_entry(int f, struct file_list *flist, int xflags)
  {
@@ -86,7 +100,7 @@ diff --git a/flist.c b/flist.c
  	static mode_t mode;
  #ifdef SUPPORT_FILEFLAGS
  	static uint32 fileflags;
-@@ -791,6 +796,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -795,6 +803,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  			mode = first->mode;
  			if (atimes_ndx && !S_ISDIR(mode))
  				atime = F_ATIME(first);
@@ -95,12 +109,15 @@ diff --git a/flist.c b/flist.c
  #ifdef SUPPORT_FILEFLAGS
  			if (preserve_fileflags)
  				fileflags = F_FFLAGS(first);
-@@ -831,6 +838,16 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -835,6 +845,19 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		modtime_nsec = read_varint(f);
  	else
  		modtime_nsec = 0;
 +	if (crtimes_ndx) {
-+		crtime = read_varlong(f, 4);
++		if (xflags & XMIT_CRTIME_EQ_MTIME)
++			crtime = modtime;
++		else
++			crtime = read_varlong(f, 4);
 +#if SIZEOF_TIME_T < SIZEOF_INT64
 +		if (!am_generator && (int64)(time_t)crtime != crtime) {
 +			rprintf(FERROR_XFER,
@@ -112,7 +129,7 @@ diff --git a/flist.c b/flist.c
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
  	if (atimes_ndx && !S_ISDIR(mode) && !(xflags & XMIT_SAME_ATIME)) {
-@@ -1020,6 +1037,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -1024,6 +1047,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  	}
  	if (atimes_ndx && !S_ISDIR(mode))
  		F_ATIME(file) = atime;
@@ -121,7 +138,7 @@ diff --git a/flist.c b/flist.c
  	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
  
-@@ -1423,6 +1442,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1427,6 +1452,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		file->flags |= FLAG_OWNED_BY_US;
  	if (atimes_ndx && !S_ISDIR(file->mode))
  		F_ATIME(file) = st.st_atime;
@@ -330,7 +347,15 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -172,6 +172,7 @@
+@@ -69,6 +69,7 @@
+ /* The following XMIT flags require an rsync that uses a varint for the flag values */
+ 
+ #define XMIT_SAME_FLAGS (1<<16) 	/* any protocol - restricted by command-line option */
++#define XMIT_CRTIME_EQ_MTIME (1<<17)	/* any protocol - restricted by command-line option */
+ 
+ /* These flags are used in the live flist data. */
+ 
+@@ -177,6 +178,7 @@
  #define ATTRS_SET_NANO		(1<<2)
  #define ATTRS_SKIP_ATIME	(1<<3)
  #define ATTRS_DELAY_IMMUTABLE	(1<<4)
@@ -338,7 +363,7 @@ diff --git a/rsync.h b/rsync.h
  
  #define FULL_FLUSH	1
  #define NORMAL_FLUSH	0
-@@ -199,6 +200,7 @@
+@@ -204,6 +206,7 @@
  #define ITEM_REPORT_ACL (1<<7)
  #define ITEM_REPORT_XATTR (1<<8)
  #define ITEM_REPORT_FFLAGS (1<<9)
@@ -346,7 +371,7 @@ diff --git a/rsync.h b/rsync.h
  #define ITEM_BASIS_TYPE_FOLLOWS (1<<11)
  #define ITEM_XNAME_FOLLOWS (1<<12)
  #define ITEM_IS_NEW (1<<13)
-@@ -767,6 +769,7 @@ struct file_struct {
+@@ -772,6 +775,7 @@ struct file_struct {
  extern int file_extra_cnt;
  extern int inc_recurse;
  extern int atimes_ndx;
@@ -354,7 +379,7 @@ diff --git a/rsync.h b/rsync.h
  extern int pathname_ndx;
  extern int depth_ndx;
  extern int uid_ndx;
-@@ -831,6 +834,7 @@ extern int xattrs_ndx;
+@@ -836,6 +840,7 @@ extern int xattrs_ndx;
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
  #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
  #define F_ATIME(f) REQ_EXTRA64(f, atimes_ndx)->num
@@ -362,7 +387,7 @@ diff --git a/rsync.h b/rsync.h
  
  /* These items are per-entry optional: */
  #define F_HL_GNUM(f) OPT_EXTRA(f, START_BUMP(f))->num /* non-dirs */
-@@ -1073,6 +1077,7 @@ typedef struct {
+@@ -1078,6 +1083,7 @@ typedef struct {
  
  typedef struct {
      STRUCT_STAT st;
