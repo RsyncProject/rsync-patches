@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 6242786158d8d29a168292ce4fead19f4c8d28d2
+based-on: f7746d0000ac5c72974ad90a8d746561dc8cd10a
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -230,7 +230,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1111,6 +1112,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1112,6 +1113,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -283,7 +283,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1912 @@
+@@ -0,0 +1,1925 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -318,8 +318,7 @@ new file mode 100644
 +extern int saw_db_output_opt, saw_db_sum_opt;
 +extern char *db_config;
 +
-+/* TODO: make this configurable */
-+#define RSYNCDB_MOUNTS "/usr/sbin/rsyncdb-mountinfo"
++#define MOUNT_HELPER_SCRIPT "/usr/sbin/rsyncdb-mountinfo"
 +
 +#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
 +#define USE_MYSQL
@@ -404,6 +403,7 @@ new file mode 100644
 +#endif
 +static char bind_thishost[128+1], bind_mount_uniq[128+1];
 +static unsigned long bind_thishost_len, bind_mount_uniq_len;
++static char *mount_helper_script = NULL;
 +
 +static char *error_log;
 +#if defined USE_SQLITE && defined SQLITE_CONFIG_LOG
@@ -464,6 +464,8 @@ new file mode 100644
 +			dbport = atoi(cp);
 +		else if (strcasecmp(buf, "transaction") == 0)
 +			transaction_state = atoi(cp) ? 0 : -1;
++		else if (strcasecmp(buf, "mountHelper") == 0)
++			mount_helper_script = strdup(cp);
 +		else if (strcasecmp(buf, "errlog") == 0)
 +			error_log = strdup(cp);
 +		else if (strcasecmp(buf, "thishost") == 0)
@@ -515,6 +517,9 @@ new file mode 100644
 +			rprintf(log_code, "Your sqlite doesn't support SQLITE_CONFIG_LOG.\n");
 +#endif
 +	}
++
++	if (!mount_helper_script)
++		mount_helper_script = MOUNT_HELPER_SCRIPT;
 +
 +	return 1;
 +}
@@ -655,7 +660,7 @@ new file mode 100644
 +			sql="SELECT checksum"
 +			    " FROM inode_map"
 +			    " WHERE disk_id = ? AND ino = ? AND sum_type = %d"
-+			    "   AND size = ? AND mtime = ? %s";
++			    "   AND size = ? AND mtime = ? %s"; /* optional: AND ctime = ? */
 +			binds[2].buffer_type = MYSQL_TYPE_LONGLONG;
 +			binds[2].buffer = &bind_size;
 +			binds[3].buffer_type = MYSQL_TYPE_LONGLONG;
@@ -664,7 +669,7 @@ new file mode 100644
 +				binds[4].buffer_type = MYSQL_TYPE_LONGLONG;
 +				binds[4].buffer = &bind_ctime;
 +			}
-+			if (!prepare_mysql(SEL_SUM, binds, 4 + !db_lax, sql,	md_num, db_lax ? "" : "AND ctime = ?"))
++			if (!prepare_mysql(SEL_SUM, binds, 4 + !db_lax, sql, md_num, db_lax ? "" : "AND ctime = ?"))
 +				return 0;
 +		}
 +
@@ -1221,8 +1226,8 @@ new file mode 100644
 +	int pid, status;
 +
 +	if (DEBUG_GTE(DB, 2))
-+		printf("Running %s to grab mount info\n", RSYNCDB_MOUNTS);
-+	argv[0] = RSYNCDB_MOUNTS;
++		printf("Running %s to grab mount info\n", mount_helper_script);
++	argv[0] = mount_helper_script;
 +	argv[1] = NULL;
 +	pid = piped_child(argv, &f_from, &f_to);
 +	close(f_to);
@@ -1238,7 +1243,7 @@ new file mode 100644
 +		mount_uniq = strtok(buf, "\t");
 +		path = mount_uniq ? strtok(NULL, "\r\n") : NULL;
 +		if (!path) {
-+			fprintf(stderr, "Failed to parse line from %s output\n", RSYNCDB_MOUNTS);
++			fprintf(stderr, "Failed to parse line from %s output\n", mount_helper_script);
 +			exit_cleanup(RERR_SYNTAX);
 +		}
 +
@@ -1366,7 +1371,7 @@ new file mode 100644
 +	}
 +}
 +
-+unsigned int get_disk_id(int64 devno)
++static unsigned int get_disk_id(int64 devno)
 +{
 +	static unsigned int prior_disk_id = 0;
 +	static int64 prior_devno = 0;
@@ -1709,7 +1714,7 @@ new file mode 100644
 +	return 0;
 +}
 +
-+int db_clean_init(void)
++static int db_clean_init(void)
 +{
 +	switch (use_db) {
 +#ifdef USE_MYSQL
@@ -1721,13 +1726,12 @@ new file mode 100644
 +			"CREATE TEMPORARY TABLE inode_present ("
 +			" disk_id integer unsigned NOT NULL,"
 +			" ino bigint unsigned NOT NULL,"
-+			" present tinyint NOT NULL default '1',"
 +			" PRIMARY KEY (disk_id,ino)"
 +			") ENGINE=MEMORY"
 +			);
 +
 +		sql="INSERT IGNORE INTO inode_present"
-+		    " SET disk_id = ?, ino = ?, present = 1";
++		    " SET disk_id = ?, ino = ?";
 +		memset(binds, 0, sizeof binds);
 +		binds[0].buffer_type = MYSQL_TYPE_LONG;
 +		binds[0].buffer = &bind_disk_id;
@@ -1738,14 +1742,16 @@ new file mode 100644
 +
 +		sql="DELETE m.*"
 +		    " FROM inode_map AS m"
-+		    " LEFT JOIN inode_present USING(disk_id, ino)"
++		    " LEFT JOIN inode_present AS p USING(disk_id, ino)"
 +		    " JOIN disk AS d ON(m.disk_id = d.disk_id)"
-+		    " WHERE host = ? AND devno != 0 AND present IS NULL";
++		    " WHERE host = ? AND devno != 0 AND p.disk_id IS NULL AND ctime < ?";
 +		memset(binds, 0, sizeof binds);
 +		binds[0].buffer_type = MYSQL_TYPE_STRING;
 +		binds[0].buffer = &bind_thishost;
 +		binds[0].buffer_length = bind_thishost_len;
-+		if (!prepare_mysql(DEL_SUMS, binds, 1, sql))
++		binds[1].buffer_type = MYSQL_TYPE_LONGLONG;
++		binds[1].buffer = &bind_ctime;
++		if (!prepare_mysql(DEL_SUMS, binds, 2, sql))
 +			exit_cleanup(RERR_SYNTAX);
 +
 +		return 1;
@@ -1761,15 +1767,14 @@ new file mode 100644
 +		sql="CREATE TABLE aux1.inode_present ("
 +		    " disk_id integer NOT NULL,"
 +		    " ino bigint NOT NULL,"
-+		    " present tinyint NOT NULL default '1',"
 +		    " PRIMARY KEY (disk_id,ino)"
 +		    ")";
 +		if (!run_sql(sql))
 +			exit_cleanup(RERR_IPC);
 +
 +		sql="INSERT OR IGNORE INTO aux1.inode_present"
-+		    " (disk_id, ino, present)"
-+		    " VALUES (?, ?, 1)";
++		    " (disk_id, ino)"
++		    " VALUES (?, ?)";
 +		if (!prepare_sqlite(INS_PRESENT, sql))
 +			exit_cleanup(RERR_IPC);
 +
@@ -1777,9 +1782,9 @@ new file mode 100644
 +		    " WHERE ROWID IN ("
 +		    "  SELECT m.ROWID"
 +		    "  FROM inode_map AS m"
-+		    "  LEFT JOIN aux1.inode_present USING(disk_id, ino)"
++		    "  LEFT JOIN aux1.inode_present AS p USING(disk_id, ino)"
 +		    "  JOIN disk AS d ON(m.disk_id = d.disk_id)"
-+		    "  WHERE host = ? AND devno != 0 AND present IS NULL"
++		    "  WHERE host = ? AND devno != 0 AND p.disk_id IS NULL AND ctime < ?"
 +		    " )";
 +		if (!prepare_sqlite(DEL_SUMS, sql))
 +			exit_cleanup(RERR_IPC);
@@ -1794,7 +1799,7 @@ new file mode 100644
 +	return 0;
 +}
 +
-+int db_note_present(int disk_id, int64 ino)
++static int db_note_present(int disk_id, int64 ino)
 +{
 +	switch (use_db) {
 +#ifdef USE_MYSQL
@@ -1821,14 +1826,18 @@ new file mode 100644
 +
 +/* This function requires the user to have populated all disk_id+inode pairs
 + * into the inode_present table. */
-+int db_clean_inodes(void)
++static int db_clean_inodes(time_t start_time)
 +{
 +	int del_cnt = 0;
 +
++	/* The extra ctime < start_time check ensures that brand-new checksums that
++	 * were added after the start of our cleaning run are not removed. */
 +	switch (use_db) {
 +#ifdef USE_MYSQL
 +	case DB_TYPE_MYSQL: {
-+		MYSQL_STMT *stmt = exec_mysql(DEL_SUMS);
++		MYSQL_STMT *stmt;
++		bind_ctime = start_time;
++		stmt = exec_mysql(DEL_SUMS);
 +		if (stmt != NULL)
 +			del_cnt = mysql_affected_rows(dbh.mysql);
 +		break;
@@ -1839,6 +1848,7 @@ new file mode 100644
 +		int rc;
 +		sqlite3_stmt *stmt = statements[DEL_SUMS].sqlite;
 +		sqlite3_bind_text(stmt, 1, bind_thishost, bind_thishost_len, SQLITE_STATIC);
++		sqlite3_bind_int64(stmt, 2, start_time);
 +		rc = sqlite3_step(stmt);
 +		if (rc == SQLITE_DONE)
 +			del_cnt = sqlite3_changes(dbh.sqlite);
@@ -2000,6 +2010,7 @@ new file mode 100644
 +	int need_sum_cnt, start_dir_len;
 +	struct name_list *prior_dir;
 +	struct name_list *names;
++	time_t clean_start = 0;
 +	int exit_code = 0;
 +
 +	checksum_type = 5;
@@ -2009,8 +2020,10 @@ new file mode 100644
 +	if (!db_read_config(FERROR, db_config) || !db_connect(1))
 +		exit_cleanup(RERR_FILEIO);
 +
-+	if (db_clean)
++	if (db_clean) {
++		clean_start = time(NULL);
 +		db_clean_init();
++	}
 +
 +	if (getcwd(start_dir, sizeof start_dir - 1) == NULL) {
 +		rsyserr(FERROR, errno, "getcwd()");
@@ -2188,7 +2201,7 @@ new file mode 100644
 +		free((void*)prior_dir);
 +
 +	if (db_clean) {
-+		int rows = db_clean_inodes();
++		int rows = db_clean_inodes(clean_start);
 +		if (db_output_msgs)
 +			printf("Cleaned out %d old inode%s.\n", rows, rows == 1 ? "" : "s");
 +	}
@@ -2381,7 +2394,15 @@ diff --git a/loadparm.c b/loadparm.c
  	char *dont_compress;
  	char *exclude;
  	char *exclude_from;
-@@ -178,6 +179,7 @@ typedef struct {
+@@ -149,6 +150,7 @@ typedef struct {
+ 	BOOL auth_users_EXP;
+ 	BOOL charset_EXP;
+ 	BOOL comment_EXP;
++	BOOL db_config_EXP;
+ 	BOOL dont_compress_EXP;
+ 	BOOL exclude_EXP;
+ 	BOOL exclude_from_EXP;
+@@ -178,6 +180,7 @@ typedef struct {
  	int syslog_facility;
  	int timeout;
  
@@ -2389,7 +2410,7 @@ diff --git a/loadparm.c b/loadparm.c
  	BOOL fake_super;
  	BOOL forward_lookup;
  	BOOL ignore_errors;
-@@ -235,6 +237,7 @@ static const all_vars Defaults = {
+@@ -235,6 +238,7 @@ static const all_vars Defaults = {
   /* auth_users; */		NULL,
   /* charset; */ 		NULL,
   /* comment; */ 		NULL,
@@ -2397,7 +2418,15 @@ diff --git a/loadparm.c b/loadparm.c
   /* dont_compress; */		DEFAULT_DONT_COMPRESS,
   /* exclude; */			NULL,
   /* exclude_from; */		NULL,
-@@ -291,6 +294,7 @@ static const all_vars Defaults = {
+@@ -262,6 +266,7 @@ static const all_vars Defaults = {
+  /* auth_users_EXP; */		False,
+  /* charset_EXP; */		False,
+  /* comment_EXP; */		False,
++ /* db_config; */		False,
+  /* dont_compress_EXP; */	False,
+  /* exclude_EXP; */		False,
+  /* exclude_from_EXP; */	False,
+@@ -291,6 +296,7 @@ static const all_vars Defaults = {
   /* syslog_facility; */		LOG_DAEMON,
   /* timeout; */			0,
  
@@ -2405,7 +2434,7 @@ diff --git a/loadparm.c b/loadparm.c
   /* fake_super; */		False,
   /* forward_lookup; */		True,
   /* ignore_errors; */		False,
-@@ -403,6 +407,8 @@ static struct parm_struct parm_table[] =
+@@ -403,6 +409,8 @@ static struct parm_struct parm_table[] =
   {"auth users",        P_STRING, P_LOCAL, &Vars.l.auth_users,          NULL,0},
   {"charset",           P_STRING, P_LOCAL, &Vars.l.charset,             NULL,0},
   {"comment",           P_STRING, P_LOCAL, &Vars.l.comment,             NULL,0},
@@ -2414,7 +2443,7 @@ diff --git a/loadparm.c b/loadparm.c
   {"dont compress",     P_STRING, P_LOCAL, &Vars.l.dont_compress,       NULL,0},
   {"exclude from",      P_STRING, P_LOCAL, &Vars.l.exclude_from,        NULL,0},
   {"exclude",           P_STRING, P_LOCAL, &Vars.l.exclude,             NULL,0},
-@@ -542,6 +548,7 @@ FN_GLOBAL_INTEGER(lp_rsync_port, rsync_port)
+@@ -542,6 +550,7 @@ FN_GLOBAL_INTEGER(lp_rsync_port, rsync_port)
  FN_LOCAL_STRING(lp_auth_users, auth_users)
  FN_LOCAL_STRING(lp_charset, charset)
  FN_LOCAL_STRING(lp_comment, comment)
@@ -2422,7 +2451,7 @@ diff --git a/loadparm.c b/loadparm.c
  FN_LOCAL_STRING(lp_dont_compress, dont_compress)
  FN_LOCAL_STRING(lp_exclude, exclude)
  FN_LOCAL_STRING(lp_exclude_from, exclude_from)
-@@ -571,6 +578,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+@@ -571,6 +580,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
  FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
  FN_LOCAL_INTEGER(lp_timeout, timeout)
  
@@ -2635,7 +2664,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1298,6 +1365,101 @@ static void create_refuse_error(int which)
+@@ -1298,6 +1365,102 @@ static void create_refuse_error(int which)
  	}
  }
  
@@ -2720,10 +2749,11 @@ diff --git a/options.c b/options.c
 +		exit_cleanup(RERR_SYNTAX);
 +	}
 +
-+	if (db_check)
-+		db_output_info = 1;
-+	if (!saw_db_output_opt && !quiet)
++	if (!saw_db_output_opt && !quiet) {
 +		db_output_dirs = db_output_name = 1;
++		if (db_check)
++			db_output_info = 1;
++	}
 +	if (!quiet)
 +		db_output_msgs = 1;
 +	if (!saw_db_sum_opt)
@@ -2737,7 +2767,7 @@ diff --git a/options.c b/options.c
  /* This is used to make sure that --daemon & --server cannot be aliased to
   * something else. These options have always disabled popt aliases for the
   * parsing of a daemon or server command-line, but we have to make sure that
-@@ -1336,10 +1498,19 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1336,10 +1499,19 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		strlcpy(err_buf, "argc is zero!\n", sizeof err_buf);
  		return 0;
  	}
@@ -2757,7 +2787,7 @@ diff --git a/options.c b/options.c
  #ifdef ICONV_OPTION
  		if (!*lp_charset(module_id))
  			set_refuse_options("iconv");
-@@ -1466,6 +1637,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1466,6 +1638,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2770,7 +2800,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1540,6 +1717,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1540,6 +1718,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -3038,7 +3068,7 @@ diff --git a/rsyncdb-mountinfo b/rsyncdb-mountinfo
 new file mode 100755
 --- /dev/null
 +++ b/rsyncdb-mountinfo
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,82 @@
 +#!/usr/bin/perl
 +
 +# This script outputs data for rsyncdb --mounts.  It must output a complete
@@ -3051,12 +3081,14 @@ new file mode 100755
 +# MOUNT_UNIQ is a unique string that identifies the mount on this host.
 +# This cannot be the devnum (st_dev) because that can vary depending on the
 +# mount order or be reused for different mounts if they are not mounted at
-+# the same time.  By default the value is "Mount of $devname", which should
-+# be adequate for situations that don't want removable media in the DB
-+# (though you may need to take steps to weed-out removable media from the
-+# list to ensure that such inodes stay out of the DB).
++# the same time.  Ideally this would be its UUID value, if that is available
++# on this OS.  This script looks in /dev/disk/by-uuid for the current UUID
++# mappings).  If the UUID is not found, the fallback default is the string
++# "Mount of $devname", which should be adequate for situations that don't
++# use removable media (though you may need to take steps to weed-out removable
++# mounts).
 +#
-+# You can override the MOUNT_UNIQ value by putting a .rsyndb_mount_uniq
++# You can override the MOUNT_UNIQ value by putting a .rsyncdb_mount_uniq
 +# file in the root directory of any mount, at which point it is up to you
 +# to make sure that the value stays unique (note that all sequences of
 +# whitespace are transformed into a single space, and leading/trailing
@@ -3067,43 +3099,63 @@ new file mode 100755
 +#
 +# The maximum size for MOUNT_UNIQ is 256 characters.
 +#
-+# If this script doesn't meet your needs, feel free to edit it and choose
-+# some other method of finding a unique value for each mount.  If you come
-+# up with a good idiom that might be useful to others, please share it back
-+# to me.
++# If this script doesn't meet your needs, feel free to edit/replace it and
++# choose some other method of finding a unique value for each mount.  If you
++# come up with a good idiom that might be useful to others, please share it
++# with the rsync mailing list.
 +
 +use strict;
 +use warnings;
++use Cwd 'abs_path';
 +
-+my $MOUNT_FILE = '/etc/mtab';
-+my $VALID_DEVICE_REGEX = qr{^/dev};
++my @MOUNT_FILES = qw( /proc/mounts /etc/mtab );
++my $VALID_DEVICE_REGEX = qr{^/dev|^rootfs$};
++my $UUID_DIR = '/dev/disk/by-uuid';
++my $OVERRIDE_FILE = '.rsyncdb_mount_uniq';
 +
-+my %hash;
++my (%hash, %uuid);
 +
-+open MOUNTS, $MOUNT_FILE or die "Unable to open $MOUNT_FILE: $!\n";
-+while (<MOUNTS>) {
-+    my ($devname, $path) = (split)[0,1];
-+    next unless $devname =~ /$VALID_DEVICE_REGEX/;
-+
-+    my ($devno) = (stat($path))[0];
-+    next unless defined $devno; # Skip if mount is invalid.
-+    next if $hash{$devno}++; # SKip if we've seen this devno earlier.
-+
-+    my $mount_uniq = "Mount of $devname";
-+    if (open UNIQ, '<', "$path/.rsyndb_mount_uniq") {
-+	$mount_uniq = <UNIQ>;
-+	close UNIQ;
-+	$mount_uniq =~ s/\s+/ /g; # This ensures no tab, CR, nor LF.
-+	$mount_uniq =~ s/^ | $//g; # .. and no leading or trailing whitespace.
++if (-d $UUID_DIR) {
++    foreach my $uuid (glob "$UUID_DIR/*") {
++	my $lnk = readlink($uuid);
++	if ($lnk !~ m{^/}) {
++	    $lnk = abs_path("$UUID_DIR/$lnk");
++	}
++	$uuid =~ s{.*/}{};
++	$uuid{$lnk} = $uuid;
 +    }
-+    print $mount_uniq, "\t", $path, "\n";
 +}
-+close MOUNTS;
++
++foreach my $mount_file (@MOUNT_FILES) {
++    if (open MOUNTS, $mount_file) {
++	while (<MOUNTS>) {
++	    my ($devname, $path) = (split)[0,1];
++	    next unless $devname =~ /$VALID_DEVICE_REGEX/;
++
++	    my ($devno) = (stat($path))[0];
++	    next unless defined $devno; # Skip if mount is invalid.
++	    next if $hash{$devno}++; # SKip if we've seen this devno earlier.
++
++	    my $mount_uniq = $uuid{$devname} ? $uuid{$devname} : "Mount of $devname";
++	    if (open UNIQ, '<', "$path/$OVERRIDE_FILE") {
++		$mount_uniq = <UNIQ>;
++		close UNIQ;
++		$mount_uniq =~ s/\s+/ /g; # This ensures no tab, CR, nor LF.
++		$mount_uniq =~ s/^ | $//g; # .. and no leading or trailing whitespace.
++	    }
++	    print $mount_uniq, "\t", $path, "\n";
++	}
++	close MOUNTS;
++	exit;
++    }
++}
++
++die "Failed to to open any mount files: @MOUNT_FILES\n";
 diff --git a/rsyncdb.yo b/rsyncdb.yo
 new file mode 100644
 --- /dev/null
 +++ b/rsyncdb.yo
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,194 @@
 +mailto(rsync-bugs@samba.org)
 +manpage(rsync)(1)(23 Jun 2013)()()
 +manpagename(rsyncdb)(Maintain an rsync checksum DB)
@@ -3151,7 +3203,7 @@ new file mode 100644
 +
 +The following command will output MD5 sums for all the files found in the
 +directories mentioned, even if they are unchanged (due to the
-+bf(--output=u) option):
++bf(--output=us) option):
 +
 +verb(    rsyncdb --db=/etc/db.conf -rous /dir* >/tmp/md5sums.txt)
 +
@@ -3165,7 +3217,7 @@ new file mode 100644
 +
 +The bf(--init) option should only be used once (unless you want to
 +destroy existing data).  The bf(--mounts) option may need to be used
-+periodically.
++periodically, and makes use of a helper script (see below).
 +
 +manpagesection(OPTIONS SUMMARY)
 +
@@ -3174,9 +3226,9 @@ new file mode 100644
 +     --db-lax        Ignore ctime changes (use with CAUTION).
 +     --no-recursive  Avoid the default --recursive (-r) scanning behavior.
 + -s, --sums=SUMS     List which checksums to update (default: md5).
-+ -o, --output=STR    One or more letters of what to output (default is nothing).
++ -o, --output=STR    One or more letters of what to output (default: dn).
 + -c, --check         Check the checksums (by reading the files) and fix any
-+                     issues.  Enables --output=i.
++                     issues.  Makes --output default to "dni".
 +     --clean         Note all inodes in the DIRS and remove DB extras.
 + -N, --no-update     Avoids updating/adding info with --check and/or --clean.
 +     --init          Initialize a DB by (re-)creating its tables.
@@ -3216,17 +3268,20 @@ new file mode 100644
 +if "-o s" is enabled, so bf(-s5,4) is the same as bf(-s4,5).
 +
 +dit(bf(--output=STR, -o)) The output option lets you specify one or more
-+letters indicating what information should be output.  The default is to
-+output "d" and "n" if bf(--output) is not specified.
++letters indicating what information should be output.  If bf(--output) is not
++specified, the default is either "dn" or (with bf(--check)) "dni".
 +
-+The following letters are accepted:
++The following letters are accepted in the string:
 +
 +quote(itemization(
 +  it() bf(d) outputs "... dir_name ..." lines for each directory in our scan.
-+  it() bf(n) outputs the names of files with changes (implied by all but "d").
-+  it() bf(s) outputs checksum info for changes (implies bf(n)).
-+  it() bf(u) outputs unchanged files too (implies bf(n)).
-+  it() bf(i) outputs prefixed change info.  The output strings are:
++       if "d" is omitted, then this progress indictor is not output.
++  it() bf(n) includes the file's name in the per-file output. These lines are
++       only output for changed files unless "u" is given.  The "n" option is
++       implied by every other output option letter except "d".
++  it() bf(s) includes the checksum info in the per-file output.
++  it() bf(c) is a synonym for 's'.
++  it() bf(i) includes itemized change info in the per-file output.
 +  quote(itemization(
 +    it() bf(!i) indicates that the time and/or size is wrong.
 +    it() bf(+4) indicates the MD4 sum is missing.
@@ -3238,10 +3293,11 @@ new file mode 100644
 +    info was requested.
 +    it() bf(?5) indicates an unknown MD5 difference.
 +  ))
++  it() bf(u) includes unchanged files in the per-file output lines.
 +))
 +
 +dit(bf(--check, -c)) Check the checksums (forcing the reading of all the
-+files) and fix any issues that are found.  Forces bf(--output=ni) on.
++files) and fix any issues that are found.  Makes bf(--output) default to "dni".
 +
 +dit(bf(--clean)) Makes a temp-DB of all the inodes that we find in all the
 +listed directories and removes any extraneous checksums from the DB.  You
@@ -3250,8 +3306,6 @@ new file mode 100644
 +unvisited directories will be discarded from the DB.  If you want to just
 +--clean without adding or updating the info of new or changed files,
 +specify bf(--no-update) as well.
-+
-+See the bf(--mount)
 +
 +dit(bf(--no-update, -N)) Avoids updating/adding info with bf(--check)
 +and/or bf(--clean).
@@ -3264,8 +3318,8 @@ new file mode 100644
 +dit(bf(--init)) Create the tables in the DB.  If it is used on an existing
 +DB, all the existing tables are dropped and re-created.
 +
-+This option disables scanning for checksum information, but may be combined
-+with bf(--mounts).
++This option cannot be combined with the updating or reporting of checksum
++information, but may be combined with bf(--mounts).
 +
 +dit(bf(--mounts)) Populate the "disk" DB with the available device numbers
 +and change any mounted/unmount information for devices.  This should be run
@@ -3273,11 +3327,17 @@ new file mode 100644
 +the DB.  Rsyncdb will not save any checksums for a device that is not
 +listed in the "disk" table.
 +
++The helper script "rsyncdb-mountinfo" is used as the source of the mount
++information on the host, which it derives from various system files and UUID
++directories (if available).  That script supports the use of an override file
++named ".rsyncdb_mount_uniq" in the root of the mount as one way to manually
++assign unique values to a shared (mountable) device's various disks.
++
 +Some advanced users may want to maintain the disk table themselves in order
 +to support mounting a drive in different (or multiple) locations, etc.
 +
-+This option disables scanning for checksum information, but may be combined
-+with bf(--init).
++Specifying the bf(--mounts) option cannot be combined with updating or
++reporting of checksum information, but may be combined with bf(--init).
 +
 +dit(bf(--help, -h)) Display a summary of the options.
 +
