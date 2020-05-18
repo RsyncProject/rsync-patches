@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: f7746d0000ac5c72974ad90a8d746561dc8cd10a
+based-on: 3b36bde9536614737bb73eaac5aa1e9c039472a3
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -2664,7 +2664,16 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1298,6 +1365,102 @@ static void create_refuse_error(int which)
+@@ -1245,6 +1312,8 @@ static void set_refuse_options(void)
+ 			parse_one_refuse_match(0, "iconv", list_end);
+ #endif
+ 		parse_one_refuse_match(0, "log-file*", list_end);
++		parse_one_refuse_match(0, "db", list_end);
++		parse_one_refuse_match(0, "db-lax", list_end);
+ 	}
+ 
+ 	/* Now we use the descrip values to actually mark the options for refusal. */
+@@ -1369,6 +1438,102 @@ static void create_refuse_error(int which)
  	}
  }
  
@@ -2767,27 +2776,20 @@ diff --git a/options.c b/options.c
  /* This is used to make sure that --daemon & --server cannot be aliased to
   * something else. These options have always disabled popt aliases for the
   * parsing of a daemon or server command-line, but we have to make sure that
-@@ -1336,10 +1499,19 @@ int parse_arguments(int *argc_p, const char ***argv_p)
- 		strlcpy(err_buf, "argc is zero!\n", sizeof err_buf);
+@@ -1407,6 +1572,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		return 0;
  	}
-+
+ 
 +	arg = *argv + strlen(*argv);
 +	if (arg - *argv > 2 && strcmp(arg-2, "db") == 0) {
 +		parse_dbonly_args(argc, argv);
 +		/* NOT REACHED */
 +	}
 +
- 	if (ref && *ref)
- 		set_refuse_options(ref);
- 	if (am_daemon) {
- 		set_refuse_options("log-file*");
-+		set_refuse_options("db");
-+		set_refuse_options("db-lax");
+ 	set_refuse_options();
+ 
  #ifdef ICONV_OPTION
- 		if (!*lp_charset(module_id))
- 			set_refuse_options("iconv");
-@@ -1466,6 +1638,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1528,6 +1699,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2800,7 +2802,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1540,6 +1718,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1602,6 +1779,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -3064,6 +3066,17 @@ diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
  dit(bf(syslog tag)) This parameter allows you to specify the syslog
  tag to use when logging messages from the rsync daemon. The default is
  "rsyncd".  This setting has no effect if the "log file" setting is a
+@@ -801,8 +817,8 @@ If you are un-refusing the compress option, you probably want to match
+ "!compress*" so that you also accept the bf(--compress-level) option.
+ 
+ Note that the "write-devices" option is refused by default, but can be
+-explicitly accepted with "!write-devices".  The options "log-file" and
+-"log-file-format" are forcibly refused and cannot be accepted.
++explicitly accepted with "!write-devices".  The options "db", "db-lax",
++"log-file", and "log-file-format" are forcibly refused and cannot be accepted.
+ 
+ Here are all the options that are not matched by wild-cards:
+ 
 diff --git a/rsyncdb-mountinfo b/rsyncdb-mountinfo
 new file mode 100755
 --- /dev/null
