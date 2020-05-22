@@ -1,5 +1,4 @@
-This patch adds the "xxhash" checksum method and adds a new
-negotation method that lets it be the default.
+This patch adds the "xxhash" checksum method.
 
 Based on a patch by Bill Wichser.
 
@@ -9,11 +8,11 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 70c6b408dc299f7aa00dd3452ae82b56d6c17f80
+based-on: 4f6c8c6652c74b958c631ca9a16f450c6ce6a23c
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
-@@ -20,7 +20,12 @@
+@@ -20,6 +20,9 @@
   */
  
  #include "rsync.h"
@@ -21,52 +20,22 @@ diff --git a/checksum.c b/checksum.c
 +#include "xxhash.h"
 +#endif
  
-+extern int am_server;
-+extern int local_server;
- extern int checksum_seed;
- extern int protocol_version;
- extern int proper_seed_order;
-@@ -32,28 +37,25 @@ extern char *checksum_choice;
+ extern int am_server;
+ extern int local_server;
+@@ -36,8 +39,12 @@ extern char *checksum_choice;
  #define CSUM_MD4_OLD 3
  #define CSUM_MD4 4
  #define CSUM_MD5 5
 +#define CSUM_XXHASH 6
-+
-+const char *default_checksum_list =
+ 
+ const char *default_checksum_list =
 +#ifdef SUPPORT_XXHASH
 +	"xxhash "
 +#endif
-+	"md5 md4";
-+
-+#define MAX_CHECKSUM_LIST 1024
+ 	"md5 md4";
  
- int xfersum_type = 0; /* used for the file transfer checksums */
- int checksum_type = 0; /* used for the pre-transfer (--checksum) checksums */
- 
--/* Returns 1 if --whole-file must be enabled. */
--int parse_checksum_choice(void)
--{
--	char *cp = checksum_choice ? strchr(checksum_choice, ',') : NULL;
--	if (cp) {
--		xfersum_type = parse_csum_name(checksum_choice, cp - checksum_choice);
--		checksum_type = parse_csum_name(cp+1, -1);
--	} else
--		xfersum_type = checksum_type = parse_csum_name(checksum_choice, -1);
--	return xfersum_type == CSUM_NONE;
--}
--
--int parse_csum_name(const char *name, int len)
-+static int parse_csum_name(const char *name, int len, int allow_auto)
- {
- 	if (len < 0 && name)
- 		len = strlen(name);
- 
--	if (!name || (len == 4 && strncasecmp(name, "auto", 4) == 0)) {
-+	if (!name || (allow_auto && len == 4 && strncasecmp(name, "auto", 4) == 0)) {
- 		if (protocol_version >= 30)
- 			return CSUM_MD5;
- 		if (protocol_version >= 27)
-@@ -66,10 +68,69 @@ int parse_csum_name(const char *name, int len)
+ #define MAX_CHECKSUM_LIST 1024
+@@ -64,6 +71,10 @@ static int parse_csum_name(const char *name, int len, int allow_auto)
  		return CSUM_MD4;
  	if (len == 3 && strncasecmp(name, "md5", 3) == 0)
  		return CSUM_MD5;
@@ -77,67 +46,7 @@ diff --git a/checksum.c b/checksum.c
  	if (len == 4 && strncasecmp(name, "none", 4) == 0)
  		return CSUM_NONE;
  
--	rprintf(FERROR, "unknown checksum name: %s\n", name);
-+	if (allow_auto) {
-+		rprintf(FERROR, "unknown checksum name: %s\n", name);
-+		exit_cleanup(RERR_UNSUPPORTED);
-+	}
-+
-+	return -1;
-+}
-+
-+/* Returns 1 if --whole-file must be enabled. */
-+int parse_checksum_choice(void)
-+{
-+	char *cp = checksum_choice ? strchr(checksum_choice, ',') : NULL;
-+	if (cp) {
-+		xfersum_type = parse_csum_name(checksum_choice, cp - checksum_choice, 1);
-+		checksum_type = parse_csum_name(cp+1, -1, 1);
-+	} else
-+		xfersum_type = checksum_type = parse_csum_name(checksum_choice, -1, 1);
-+	return xfersum_type == CSUM_NONE;
-+}
-+
-+void negotiate_checksum(int f_in, int f_out, const char *csum_list)
-+{
-+	char *tok, sumbuf[MAX_CHECKSUM_LIST];
-+	int sum_type, len;
-+
-+	if (!am_server || local_server) {
-+		if (!csum_list || !*csum_list)
-+			csum_list = default_checksum_list;
-+		len = strlen(csum_list);
-+		if (len >= (int)sizeof sumbuf) {
-+			rprintf(FERROR, "The checksum list is too long.\n");
-+			exit_cleanup(RERR_UNSUPPORTED);
-+		}
-+		if (!local_server)
-+			write_vstring(f_out, csum_list, len);
-+	}
-+
-+	if (local_server)
-+		memcpy(sumbuf, csum_list, len+1);
-+	else
-+		len = read_vstring(f_in, sumbuf, sizeof sumbuf);
-+
-+	if (len > 0) {
-+		for (tok = strtok(sumbuf, " \t"); tok; tok = strtok(NULL, " \t")) {
-+			len = strlen(tok);
-+			sum_type = parse_csum_name(tok, len, 0);
-+			if (sum_type >= CSUM_MD4) {
-+				xfersum_type = checksum_type = sum_type;
-+				if (am_server && !local_server)
-+					write_vstring(f_out, tok, len);
-+				return;
-+			}
-+		}
-+	}
-+
-+	rprintf(FERROR, "Failed to negotiate a common checksum\n");
- 	exit_cleanup(RERR_UNSUPPORTED);
- }
- 
-@@ -88,6 +149,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
+@@ -144,6 +155,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
  		return MD4_DIGEST_LEN;
  	  case CSUM_MD5:
  		return MD5_DIGEST_LEN;
@@ -148,7 +57,7 @@ diff --git a/checksum.c b/checksum.c
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
  	}
-@@ -186,6 +251,11 @@ void get_checksum2(char *buf, int32 len, char *sum)
+@@ -242,6 +257,11 @@ void get_checksum2(char *buf, int32 len, char *sum)
  		mdfour_result(&m, (uchar *)sum);
  		break;
  	  }
@@ -160,7 +69,7 @@ diff --git a/checksum.c b/checksum.c
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
  	}
-@@ -242,6 +312,34 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -298,6 +318,34 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  
  		mdfour_result(&m, (uchar *)sum);
  		break;
@@ -195,7 +104,7 @@ diff --git a/checksum.c b/checksum.c
  	  default:
  		rprintf(FERROR, "invalid checksum-choice for the --checksum option (%d)\n", checksum_type);
  		exit_cleanup(RERR_UNSUPPORTED);
-@@ -254,13 +352,16 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -310,6 +358,9 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  static int32 sumresidue;
  static md_context md;
  static int cursum_type;
@@ -205,15 +114,7 @@ diff --git a/checksum.c b/checksum.c
  
  void sum_init(int csum_type, int seed)
  {
- 	char s[4];
- 
- 	if (csum_type < 0)
--		csum_type = parse_csum_name(NULL, 0);
-+		csum_type = parse_csum_name(NULL, 0, 1);
- 	cursum_type = csum_type;
- 
- 	switch (csum_type) {
-@@ -279,6 +380,19 @@ void sum_init(int csum_type, int seed)
+@@ -335,6 +386,19 @@ void sum_init(int csum_type, int seed)
  		SIVAL(s, 0, seed);
  		sum_update(s, 4);
  		break;
@@ -233,7 +134,7 @@ diff --git a/checksum.c b/checksum.c
  	  case CSUM_NONE:
  		break;
  	  default: /* paranoia to prevent missing case values */
-@@ -328,6 +442,14 @@ void sum_update(const char *p, int32 len)
+@@ -384,6 +448,14 @@ void sum_update(const char *p, int32 len)
  		if (sumresidue)
  			memcpy(md.buffer, p, sumresidue);
  		break;
@@ -248,7 +149,7 @@ diff --git a/checksum.c b/checksum.c
  	  case CSUM_NONE:
  		break;
  	  default: /* paranoia to prevent missing case values */
-@@ -356,6 +478,11 @@ int sum_end(char *sum)
+@@ -412,6 +484,11 @@ int sum_end(char *sum)
  			mdfour_update(&md, (uchar *)md.buffer, sumresidue);
  		mdfour_result(&md, (uchar *)sum);
  		break;
@@ -260,64 +161,6 @@ diff --git a/checksum.c b/checksum.c
  	  case CSUM_NONE:
  		*sum = '\0';
  		break;
-diff --git a/compat.c b/compat.c
---- a/compat.c
-+++ b/compat.c
-@@ -60,6 +60,7 @@ extern char *partial_dir;
- extern char *dest_option;
- extern char *files_from;
- extern char *filesfrom_host;
-+extern char *checksum_choice;
- extern filter_rule_list filter_list;
- extern int need_unsorted_flist;
- #ifdef ICONV_OPTION
-@@ -84,7 +85,7 @@ int filesfrom_convert = 0;
- #define CF_AVOID_XATTR_OPTIM (1<<4)
- #define CF_CHKSUM_SEED_FIX (1<<5)
- #define CF_INPLACE_PARTIAL_DIR (1<<6)
--#define CF_VARINT_FLIST_FLAGS (1<<7)
-+#define CF_VARINT_AND_CSUM_EXCHANGE (1<<7)
- 
- static const char *client_info;
- 
-@@ -289,16 +290,16 @@ void setup_protocol(int f_out,int f_in)
- 				compat_flags |= CF_CHKSUM_SEED_FIX;
- 			if (local_server || strchr(client_info, 'I') != NULL)
- 				compat_flags |= CF_INPLACE_PARTIAL_DIR;
--			if (local_server || strchr(client_info, 'V') != NULL)
--				compat_flags |= CF_VARINT_FLIST_FLAGS;
--			write_byte(f_out, compat_flags);
-+			if (local_server || strchr(client_info, 'v') != NULL)
-+				compat_flags |= CF_VARINT_AND_CSUM_EXCHANGE;
-+			write_varint(f_out, compat_flags);
- 		} else
--			compat_flags = read_byte(f_in);
-+			compat_flags = read_varint(f_in);
- 		/* The inc_recurse var MUST be set to 0 or 1. */
- 		inc_recurse = compat_flags & CF_INC_RECURSE ? 1 : 0;
- 		want_xattr_optim = protocol_version >= 31 && !(compat_flags & CF_AVOID_XATTR_OPTIM);
- 		proper_seed_order = compat_flags & CF_CHKSUM_SEED_FIX ? 1 : 0;
--		xfer_flags_as_varint = compat_flags & CF_VARINT_FLIST_FLAGS ? 1 : 0;
-+		xfer_flags_as_varint = compat_flags & CF_VARINT_AND_CSUM_EXCHANGE ? 1 : 0;
- 		if (am_sender) {
- 			receiver_symlink_times = am_server
- 			    ? strchr(client_info, 'L') != NULL
-@@ -358,5 +359,15 @@ void setup_protocol(int f_out,int f_in)
- 		checksum_seed = read_int(f_in);
- 	}
- 
-+	if (!checksum_choice) {
-+		const char *rcl = getenv("RSYNC_CHECKSUM_LIST");
-+		if (compat_flags & CF_VARINT_AND_CSUM_EXCHANGE)
-+			negotiate_checksum(f_in, f_out, rcl);
-+		else if (!am_server && rcl && *rcl && strstr(rcl, "FAIL")) {
-+			rprintf(FERROR, "Remote rsync is too old for checksum negotation\n");
-+			exit_cleanup(RERR_UNSUPPORTED);
-+		}
-+	}
-+
- 	init_flist();
- }
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
@@ -344,18 +187,6 @@ diff --git a/configure.ac b/configure.ac
  AC_CACHE_CHECK([if makedev takes 3 args],rsync_cv_MAKEDEV_TAKES_3_ARGS,[
  AC_RUN_IFELSE([AC_LANG_SOURCE([[
  #include <sys/types.h>
-diff --git a/io.c b/io.c
---- a/io.c
-+++ b/io.c
-@@ -2368,7 +2368,7 @@ void start_write_batch(int fd)
- 	 * is involved. */
- 	write_int(batch_fd, protocol_version);
- 	if (protocol_version >= 30)
--		write_byte(batch_fd, compat_flags);
-+		write_varint(batch_fd, compat_flags);
- 	write_int(batch_fd, checksum_seed);
- 
- 	if (am_sender)
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -388,75 +219,25 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -2642,7 +2646,8 @@ void server_options(char **args, int *argc_p)
- 		eFlags[x++] = 'x'; /* xattr hardlink optimization not desired */
- 		eFlags[x++] = 'C'; /* support checksum seed order fix */
- 		eFlags[x++] = 'I'; /* support inplace_partial behavior */
--		eFlags[x++] = 'V'; /* use varint for flist flags */
-+		eFlags[x++] = 'v'; /* use varint for flist & compat flags; negotiate checksum */
-+		/* NOTE: Avoid using 'V' -- it was the high bit of a write_byte() that became write_varint(). */
- #undef eFlags
- 	}
- 
 diff --git a/rsync.yo b/rsync.yo
 --- a/rsync.yo
 +++ b/rsync.yo
-@@ -657,8 +657,9 @@ checksum that is generated as the file is transferred, but that
- automatic after-the-transfer verification has nothing to do with this
- option's before-the-transfer "Does this file need to be updated?" check.
+@@ -1376,7 +1376,7 @@ and (assuming bf(--checksum) is specified) the pre-transfer checksums. If two
+ comma-separated names are supplied, the first name affects the transfer
+ checksums, and the second name affects the pre-transfer checksums (bf(-c)).
  
--For protocol 30 and beyond (first supported in 3.0.0), the checksum used is
--MD5.  For older protocols, the checksum used is MD4.
-+The checksum used is auto-negotiated between the client and the server, but
-+can be overridden using either the bf(--checksum-choice) option or an
-+environment variable that is discussed in that option's section.
+-The algorithm choices are "auto", "MD5", "MD4", and "none".
++The algorithm choices are "auto", "xxhash", "MD5", "MD4", and "none".
  
- dit(bf(-a, --archive)) This is equivalent to bf(-rlptgoD). It is a quick
- way of saying you want recursion and want to preserve almost
-@@ -1371,16 +1372,36 @@ batch-writing option is in effect.
- 
- dit(bf(--checksum-choice=STR)) This option overrides the checksum algorithms.
- If one algorithm name is specified, it is used for both the transfer checksums
--and (assuming bf(--checksum) is specified) the pre-transfer checksumming. If two
--comma-separated names are supplied, the first name affects the transfer
--checksums, and the second name affects the pre-transfer checksumming.
--
--The algorithm choices are "auto", "md4", "md5", and "none".  If "none" is
--specified for the first name, the bf(--whole-file) option is forced on and no
--checksum verification is performed on the transferred data.  If "none" is
--specified for the second name, the bf(--checksum) option cannot be used. The
--"auto" option is the default, where rsync bases its algorithm choice on the
--protocol version (for backward compatibility with older rsync versions).
-+and (assuming bf(--checksum) is specified) the pre-transfer checksums. If two
-+comma-separated names are supplied, the first name affects the transfer's
-+checksums, and the second name affects the pre-transfer checksums (bf(-c)).
-+
-+The algorithm choices are "auto", "xxhash", "MD5", "MD4", and "none".  If
-+"none" is specified for the first (or only) name, the bf(--whole-file) option
-+is forced on and no checksum verification is performed on the transferred data.
-+If "none" is specified for the second (or only) name, the bf(--checksum) option
-+cannot be used.
-+
-+The "auto" option is the default, where rsync bases its algorithm choice on a
-+negotation between the client and the server as follows:
-+
-+If both the client and the server are at least version 3.2.0, they will
-+exchange a list of checksum names and choose the first one in the list that
-+they have in common.  This typically means that they will choose xxhash if they
-+both support it and fall back to MD5.  If one side of the transfer is not new
-+enough to support this checksum negotation, then a value is chosen based on the
-+protocol version (which chooses between MD5 and MD4).
-+
-+You can also override the checksum using the RSYNC_CHECKSUM_LIST environment
-+variable by setting it to a space-separated list of checksum names that you
-+consider acceptable. If no common checksum is found, the client exits with an
-+error. This method does not allow you to specify the transfer checksum
-+separately from the pre-transfer checksum, and it ignores "none", "auto", and
-+all unknown checksum names.  If the remote rsync is not new enough to handle a
-+checksum negotiation list, the list is silently ignored unless it contains the
-+string "FAIL" in it.
-+
-+The use of the bf(--checksum-choice) option overrides this environment list.
- 
- dit(bf(-x, --one-file-system)) This tells rsync to avoid crossing a
- filesystem boundary when recursing.  This does not limit the user's ability
+ If "none" is specified for the first (or only) name, the bf(--whole-file) option
+ is forced on and no checksum verification is performed on the transferred data.
+@@ -1389,7 +1389,8 @@ negotation between the client and the server as follows:
+ If both the client and the server are at least version 3.2.0, they will
+ exchange a list of checksum names and choose the first one in the list that
+ they have in common.
+-This typically means that they will choose MD5.
++This typically means that they will choose xxhash if they both support it
++and fall back to MD5.
+ If one side of the transfer is not new enough to support this checksum
+ negotation, then a value is chosen based on the protocol version (which
+ chooses between MD5 and various flavors of MD4 based on protocol age).
