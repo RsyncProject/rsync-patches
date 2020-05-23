@@ -12,7 +12,7 @@ based-on: patch/master/fileflags
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
-@@ -51,6 +51,7 @@ extern int protect_args;
+@@ -52,6 +52,7 @@ extern int protect_args;
  extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_atimes;
@@ -20,8 +20,8 @@ diff --git a/compat.c b/compat.c
  extern int preserve_acls;
  extern int preserve_xattrs;
  extern int preserve_fileflags;
-@@ -70,7 +71,7 @@ extern char *iconv_opt;
- #endif
+@@ -73,7 +74,7 @@ extern char *iconv_opt;
+ extern const char *negotiated_csum_name;
  
  /* These index values are for the file-list's extra-attribute array. */
 -int pathname_ndx, depth_ndx, atimes_ndx, uid_ndx, gid_ndx, fileflags_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
@@ -29,7 +29,7 @@ diff --git a/compat.c b/compat.c
  
  int receiver_symlink_times = 0; /* receiver can set the time on a symlink */
  int sender_symlink_iconv = 0;	/* sender should convert symlink content */
-@@ -150,6 +151,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -155,6 +156,8 @@ void setup_protocol(int f_out,int f_in)
  	 * aligned for direct int64-pointer memory access. */
  	if (preserve_atimes)
  		atimes_ndx = (file_extra_cnt += EXTRA64_CNT);
@@ -38,7 +38,7 @@ diff --git a/compat.c b/compat.c
  	if (am_sender) /* This is most likely in the in64 union as well. */
  		pathname_ndx = (file_extra_cnt += PTR_EXTRA_CNT);
  	else
-@@ -303,6 +306,10 @@ void setup_protocol(int f_out,int f_in)
+@@ -320,6 +323,10 @@ void setup_protocol(int f_out,int f_in)
  		want_xattr_optim = protocol_version >= 31 && !(compat_flags & CF_AVOID_XATTR_OPTIM);
  		proper_seed_order = compat_flags & CF_CHKSUM_SEED_FIX ? 1 : 0;
  		xfer_flags_as_varint = compat_flags & CF_VARINT_FLIST_FLAGS ? 1 : 0;
@@ -289,15 +289,15 @@ diff --git a/options.c b/options.c
  int update_only = 0;
  int open_noatime = 0;
  int cvs_exclude = 0;
-@@ -582,6 +583,7 @@ static void print_rsync_version(enum logcode f)
- 	char const *ipv6 = "no ";
- 	char const *sse2 = "no ";
+@@ -584,6 +585,7 @@ static void print_rsync_version(enum logcode f)
+ 	char const *simd = "no ";
+ 	char const *xxhash = "no ";
  	char const *fileflags = "no ";
 +	char const *crtimes = "no ";
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -624,6 +626,9 @@ static void print_rsync_version(enum logcode f)
+@@ -629,6 +631,9 @@ static void print_rsync_version(enum logcode f)
  #ifdef SUPPORT_FILEFLAGS
  	fileflags = "";
  #endif
@@ -307,10 +307,10 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -639,8 +644,8 @@ static void print_rsync_version(enum logcode f)
+@@ -644,8 +649,8 @@ static void print_rsync_version(enum logcode f)
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
- 	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %ssse2,\n",
- 		have_inplace, acls, xattrs, iconv, symtimes, prealloc, sse2);
+ 	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sSIMD, %sxxhash,\n",
+ 		have_inplace, acls, xattrs, iconv, symtimes, prealloc, simd, xxhash);
 -	rprintf(f, "    %sfile-flags\n",
 -		fileflags);
 +	rprintf(f, "    %sfile-flags, %scrtimes\n",
@@ -318,7 +318,7 @@ diff --git a/options.c b/options.c
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -730,6 +735,9 @@ void usage(enum logcode F)
+@@ -735,6 +740,9 @@ void usage(enum logcode F)
    rprintf(F," -t, --times                 preserve modification times\n");
    rprintf(F," -U, --atimes                preserve access (last-used) times\n");
    rprintf(F,"     --open-noatime          avoid changing the atime on opened files\n");
@@ -328,7 +328,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
    rprintf(F," -J, --omit-link-times       omit symlinks from --times\n");
    rprintf(F,"     --super                 receiver attempts super-user activities\n");
-@@ -905,6 +913,11 @@ static struct poptOption long_options[] = {
+@@ -910,6 +918,11 @@ static struct poptOption long_options[] = {
    {"no-U",             0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
    {"open-noatime",     0,  POPT_ARG_VAL,    &open_noatime, 1, 0, 0 },
    {"no-open-noatime",  0,  POPT_ARG_VAL,    &open_noatime, 0, 0, 0 },
@@ -340,7 +340,7 @@ diff --git a/options.c b/options.c
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
    {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
    {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
-@@ -2604,6 +2617,10 @@ void server_options(char **args, int *argc_p)
+@@ -2608,6 +2621,10 @@ void server_options(char **args, int *argc_p)
  		if (preserve_atimes > 1)
  			argstr[x++] = 'U';
  	}
@@ -473,7 +473,7 @@ diff --git a/rsync.yo b/rsync.yo
   -O, --omit-dir-times        omit directories from --times
   -J, --omit-link-times       omit symlinks from --times
       --super                 receiver attempts super-user activities
-@@ -1289,6 +1290,9 @@ flag then rsync will silently ignore this option. Note also that some
+@@ -1290,6 +1291,9 @@ flag then rsync will silently ignore this option. Note also that some
  filesystems are mounted to avoid updating the atime on read access even
  without the O_NOATIME flag being set.
  
@@ -483,7 +483,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(-O, --omit-dir-times)) This tells rsync to omit directories when
  it is preserving modification times (see bf(--times)).  If NFS is sharing
  the directories on the receiving side, it is a good idea to use bf(-O).
-@@ -2261,7 +2265,7 @@ with older versions of rsync, but that also turns on the output of other
+@@ -2285,7 +2289,7 @@ with older versions of rsync, but that also turns on the output of other
  verbose messages).
  
  The "%i" escape has a cryptic output that is 11 letters long.  The general
@@ -492,7 +492,7 @@ diff --git a/rsync.yo b/rsync.yo
  type of update being done, bf(X) is replaced by the file-type, and the
  other letters represent attributes that may be output if they are being
  modified.
-@@ -2323,6 +2327,8 @@ quote(itemization(
+@@ -2347,6 +2351,8 @@ quote(itemization(
    when a symlink or directory is updated.
    it() The bf(a) means that the ACL information changed.
    it() The bf(x) means that the extended attribute information changed.

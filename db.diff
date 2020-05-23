@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 70c6b408dc299f7aa00dd3452ae82b56d6c17f80
+based-on: a28bc3ebf672113cdd90432ef0270782d8ab6c2c
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -44,25 +44,25 @@ diff --git a/Makefile.in b/Makefile.in
  mandir=@mandir@
  
  LIBS=@LIBS@
-@@ -31,7 +32,7 @@ VERSION=@RSYNC_VERSION@
- .SUFFIXES:
- .SUFFIXES: .c .o
+@@ -33,7 +34,7 @@ VERSION=@RSYNC_VERSION@
+ 
+ SIMD_x86_64=simd-checksum-x86_64.o
  
 -GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync-ssl.1 rsyncd.conf.5
 +GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync-ssl.1 rsyncdb.1 rsyncd.conf.5
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h ifuncs.h itypes.h inums.h \
  	lib/pool_alloc.h
  LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
-@@ -41,7 +42,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
+@@ -43,7 +44,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
 -	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
 +	fileio.o batch.o clientname.o chmod.o db.o acls.o xattrs.o
  OBJS3=progress.o pipe.o
- CXXOBJ=@CXXOBJ@
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
-@@ -66,17 +67,20 @@ CHECK_OBJS=tls.o testrun.o getgroups.o getfsdev.o t_stub.o t_unsafe.o trimslash.
+ popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
+@@ -67,17 +68,20 @@ CHECK_OBJS=tls.o testrun.o getgroups.o getfsdev.o t_stub.o t_unsafe.o trimslash.
  	$(CC) -I. -I$(srcdir) $(CFLAGS) $(CPPFLAGS) -c $< @CC_SHOBJ_FLAG@
  @OBJ_RESTORE@
  
@@ -85,7 +85,7 @@ diff --git a/Makefile.in b/Makefile.in
  	if test -f rsyncd.conf.5; then ${INSTALLMAN} -m 644 rsyncd.conf.5 ${DESTDIR}${mandir}/man5; fi
  
  install-ssl-daemon: stunnel-rsyncd.conf
-@@ -94,6 +98,9 @@ install-strip:
+@@ -95,6 +99,9 @@ install-strip:
  rsync$(EXEEXT): $(OBJS)
  	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
  
@@ -95,7 +95,7 @@ diff --git a/Makefile.in b/Makefile.in
  $(OBJS): $(HEADERS)
  $(CHECK_OBJS): $(HEADERS)
  options.o: latest-year.h
-@@ -209,10 +216,10 @@ proto.h: proto.h-tstamp
+@@ -210,10 +217,10 @@ proto.h: proto.h-tstamp
  proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
  	awk -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c
  
@@ -108,7 +108,7 @@ diff --git a/Makefile.in b/Makefile.in
  	    if test -f $$fn; then \
  		: ; \
  	    elif test -f $(srcdir)/$$fn; then \
-@@ -231,12 +238,16 @@ rsync-ssl.1: rsync-ssl.yo
+@@ -232,12 +239,16 @@ rsync-ssl.1: rsync-ssl.yo
  	yodl2man -o rsync-ssl.1 $(srcdir)/rsync-ssl.yo
  	-$(srcdir)/tweak_manpage rsync-ssl.1
  
@@ -129,7 +129,7 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
-@@ -24,6 +24,7 @@
+@@ -31,6 +31,7 @@ extern int read_batch;
  extern int checksum_seed;
  extern int protocol_version;
  extern int proper_seed_order;
@@ -137,7 +137,7 @@ diff --git a/checksum.c b/checksum.c
  extern char *checksum_choice;
  
  #define CSUM_NONE 0
-@@ -221,6 +222,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -396,6 +397,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			md5_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		md5_result(&m, (uchar *)sum);
@@ -146,15 +146,15 @@ diff --git a/checksum.c b/checksum.c
  		break;
  	  case CSUM_MD4:
  	  case CSUM_MD4_OLD:
-@@ -241,6 +244,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -416,6 +419,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		mdfour_result(&m, (uchar *)sum);
 +		if (use_db)
 +			db_set_checksum(4, st_p, sum);
  		break;
- 	  default:
- 		rprintf(FERROR, "invalid checksum-choice for the --checksum option (%d)\n", checksum_type);
+ #ifdef SUPPORT_XXHASH
+ 	  case CSUM_XXHASH: {
 diff --git a/cleanup.c b/cleanup.c
 --- a/cleanup.c
 +++ b/cleanup.c
@@ -222,7 +222,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -367,6 +367,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
+@@ -378,6 +378,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
      unistd.h utime.h grp.h compat.h sys/param.h ctype.h sys/wait.h \
      sys/ioctl.h sys/filio.h string.h stdlib.h sys/socket.h sys/mode.h \
      sys/un.h sys/attr.h mcheck.h arpa/inet.h arpa/nameser.h locale.h \
@@ -230,7 +230,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1132,6 +1133,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1155,6 +1156,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -2535,25 +2535,25 @@ diff --git a/options.c b/options.c
  int connect_timeout = 0;
  int keep_partial = 0;
  int safe_symlinks = 0;
-@@ -276,6 +281,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
- 	DEBUG_WORD(CHDIR, W_CLI|W_SRV, "Debug when the current directory changes"),
+@@ -277,6 +282,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
  	DEBUG_WORD(CONNECT, W_CLI, "Debug connection events (levels 1-2)"),
  	DEBUG_WORD(CMD, W_CLI, "Debug commands+options that are issued (levels 1-2)"),
+ 	DEBUG_WORD(CSUM, W_CLI|W_SRV, "Debug checksum negotiation"),
 +	DEBUG_WORD(DB, W_SND|W_REC, "Debug DB operations (levels 1-5)"),
  	DEBUG_WORD(DEL, W_REC, "Debug delete actions (levels 1-3)"),
  	DEBUG_WORD(DELTASUM, W_SND|W_REC, "Debug delta-transfer checksumming (levels 1-4)"),
  	DEBUG_WORD(DUP, W_REC, "Debug weeding of duplicate names"),
-@@ -579,6 +585,7 @@ static void print_rsync_version(enum logcode f)
- 	char const *iconv = "no ";
+@@ -581,6 +587,7 @@ static void print_rsync_version(enum logcode f)
  	char const *ipv6 = "no ";
- 	char const *sse2 = "no ";
+ 	char const *simd = "no ";
+ 	char const *xxhash = "no ";
 +	char const *db = "no ";
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -618,6 +625,12 @@ static void print_rsync_version(enum logcode f)
- #ifdef ENABLE_SSE2
- 	sse2 = "";
+@@ -623,6 +630,12 @@ static void print_rsync_version(enum logcode f)
+ #ifdef SUPPORT_XXHASH
+ 	xxhash = "";
  #endif
 +#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
 +	db = "";
@@ -2564,19 +2564,19 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -631,8 +644,10 @@ static void print_rsync_version(enum logcode f)
+@@ -636,8 +649,10 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
--	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %ssse2\n",
-+	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %ssse2,\n",
- 		have_inplace, acls, xattrs, iconv, symtimes, prealloc, sse2);
-+	rprintf(f, "    %sdb\n",
+-	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sSIMD, %sxxhash\n",
++	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sSIMD, %sxxhash,\n",
+ 		have_inplace, acls, xattrs, iconv, symtimes, prealloc, simd, xxhash);
++	rprintf(f, "    %sDB\n",
 +		db);
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -681,6 +696,9 @@ void usage(enum logcode F)
+@@ -686,6 +701,9 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -2586,7 +2586,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -833,6 +851,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -838,6 +856,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
@@ -2594,7 +2594,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
  
-@@ -980,6 +999,10 @@ static struct poptOption long_options[] = {
+@@ -985,6 +1004,10 @@ static struct poptOption long_options[] = {
    {"checksum",        'c', POPT_ARG_VAL,    &always_checksum, 1, 0, 0 },
    {"no-checksum",      0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
@@ -2605,7 +2605,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1071,6 +1094,9 @@ static struct poptOption long_options[] = {
+@@ -1076,6 +1099,9 @@ static struct poptOption long_options[] = {
    {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
    {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
@@ -2615,7 +2615,7 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1124,6 +1150,50 @@ static struct poptOption long_daemon_options[] = {
+@@ -1129,6 +1155,50 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
@@ -2666,7 +2666,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1247,6 +1317,8 @@ static void set_refuse_options(void)
+@@ -1252,6 +1322,8 @@ static void set_refuse_options(void)
  			parse_one_refuse_match(0, "iconv", list_end);
  #endif
  		parse_one_refuse_match(0, "log-file*", list_end);
@@ -2675,7 +2675,7 @@ diff --git a/options.c b/options.c
  	}
  
  	/* Now we use the descrip values to actually mark the options for refusal. */
-@@ -1371,6 +1443,102 @@ static void create_refuse_error(int which)
+@@ -1376,6 +1448,102 @@ static void create_refuse_error(int which)
  	}
  }
  
@@ -2778,7 +2778,7 @@ diff --git a/options.c b/options.c
  /* This is used to make sure that --daemon & --server cannot be aliased to
   * something else. These options have always disabled popt aliases for the
   * parsing of a daemon or server command-line, but we have to make sure that
-@@ -1409,6 +1577,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1414,6 +1582,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		return 0;
  	}
  
@@ -2791,7 +2791,7 @@ diff --git a/options.c b/options.c
  	set_refuse_options();
  
  #ifdef ICONV_OPTION
-@@ -1530,6 +1704,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1535,6 +1709,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2804,7 +2804,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1604,6 +1784,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1609,6 +1789,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -2951,12 +2951,12 @@ diff --git a/rsync.h b/rsync.h
  #define NDX_DONE -1
  #define NDX_FLIST_EOF -2
  #define NDX_DEL_STATS -3
-@@ -1317,7 +1321,8 @@ extern short info_levels[], debug_levels[];
- #define DEBUG_CHDIR (DEBUG_BIND+1)
+@@ -1318,7 +1322,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)
--#define DEBUG_DEL (DEBUG_CMD+1)
-+#define DEBUG_DB (DEBUG_CMD+1)
+ #define DEBUG_CSUM (DEBUG_CMD+1)
+-#define DEBUG_DEL (DEBUG_CSUM+1)
++#define DEBUG_DB (DEBUG_CSUM+1)
 +#define DEBUG_DEL (DEBUG_DB+1)
  #define DEBUG_DELTASUM (DEBUG_DEL+1)
  #define DEBUG_DUP (DEBUG_DELTASUM+1)
@@ -2974,9 +2974,9 @@ diff --git a/rsync.yo b/rsync.yo
   -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
       --no-OPTION             turn off an implied OPTION (e.g. --no-D)
   -r, --recursive             recurse into directories
-@@ -660,6 +663,67 @@ option's before-the-transfer "Does this file need to be updated?" check.
- For protocol 30 and beyond (first supported in 3.0.0), the checksum used is
- MD5.  For older protocols, the checksum used is MD4.
+@@ -661,6 +664,67 @@ The checksum used is auto-negotiated between the client and the server, but
+ can be overridden using either the bf(--checksum-choice) option or an
+ environment variable that is discussed in that option's section.
  
 +dit(bf(--db=CONFIG_FILE))  This option specifies a CONFIG_FILE to read
 +that holds connection details for a database of checksum information.

@@ -7,11 +7,11 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 70c6b408dc299f7aa00dd3452ae82b56d6c17f80
+based-on: a28bc3ebf672113cdd90432ef0270782d8ab6c2c
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
-@@ -46,12 +46,14 @@ extern int checksum_seed;
+@@ -47,12 +47,14 @@ extern int checksum_seed;
  extern int basis_dir_cnt;
  extern int prune_empty_dirs;
  extern int protocol_version;
@@ -26,8 +26,8 @@ diff --git a/compat.c b/compat.c
  extern int xfer_flags_as_varint;
  extern int need_messages_from_generator;
  extern int delete_mode, delete_before, delete_during, delete_after;
-@@ -68,7 +70,7 @@ extern char *iconv_opt;
- #endif
+@@ -71,7 +73,7 @@ extern char *iconv_opt;
+ extern const char *negotiated_csum_name;
  
  /* These index values are for the file-list's extra-attribute array. */
 -int pathname_ndx, depth_ndx, atimes_ndx, uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
@@ -35,7 +35,7 @@ diff --git a/compat.c b/compat.c
  
  int receiver_symlink_times = 0; /* receiver can set the time on a symlink */
  int sender_symlink_iconv = 0;	/* sender should convert symlink content */
-@@ -156,6 +158,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -161,6 +163,8 @@ void setup_protocol(int f_out,int f_in)
  		uid_ndx = ++file_extra_cnt;
  	if (preserve_gid)
  		gid_ndx = ++file_extra_cnt;
@@ -44,7 +44,7 @@ diff --git a/compat.c b/compat.c
  	if (preserve_acls && !am_sender)
  		acls_ndx = ++file_extra_cnt;
  	if (preserve_xattrs)
-@@ -299,6 +303,10 @@ void setup_protocol(int f_out,int f_in)
+@@ -316,6 +320,10 @@ void setup_protocol(int f_out,int f_in)
  		want_xattr_optim = protocol_version >= 31 && !(compat_flags & CF_AVOID_XATTR_OPTIM);
  		proper_seed_order = compat_flags & CF_CHKSUM_SEED_FIX ? 1 : 0;
  		xfer_flags_as_varint = compat_flags & CF_VARINT_FLIST_FLAGS ? 1 : 0;
@@ -380,17 +380,17 @@ diff --git a/options.c b/options.c
  int io_timeout = 0;
  int prune_empty_dirs = 0;
  int use_qsort = 0;
-@@ -579,6 +581,7 @@ static void print_rsync_version(enum logcode f)
- 	char const *iconv = "no ";
+@@ -581,6 +583,7 @@ static void print_rsync_version(enum logcode f)
  	char const *ipv6 = "no ";
- 	char const *sse2 = "no ";
+ 	char const *simd = "no ";
+ 	char const *xxhash = "no ";
 +	char const *fileflags = "no ";
  	STRUCT_STAT *dumstat;
  
  #if SUBPROTOCOL_VERSION != 0
-@@ -618,6 +621,9 @@ static void print_rsync_version(enum logcode f)
- #ifdef ENABLE_SSE2
- 	sse2 = "";
+@@ -623,6 +626,9 @@ static void print_rsync_version(enum logcode f)
+ #ifdef SUPPORT_XXHASH
+ 	xxhash = "";
  #endif
 +#ifdef SUPPORT_FILEFLAGS
 +	fileflags = "";
@@ -398,19 +398,19 @@ diff --git a/options.c b/options.c
  
  	rprintf(f, "%s  version %s  protocol version %d%s\n",
  		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -631,8 +637,10 @@ static void print_rsync_version(enum logcode f)
+@@ -636,8 +642,10 @@ static void print_rsync_version(enum logcode f)
  		(int)(sizeof (int64) * 8));
  	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
  		got_socketpair, hardlinks, links, ipv6, have_inplace);
--	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %ssse2\n",
-+	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %ssse2,\n",
- 		have_inplace, acls, xattrs, iconv, symtimes, prealloc, sse2);
+-	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sSIMD, %sxxhash\n",
++	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sSIMD, %sxxhash,\n",
+ 		have_inplace, acls, xattrs, iconv, symtimes, prealloc, simd, xxhash);
 +	rprintf(f, "    %sfile-flags\n",
 +		fileflags);
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -703,6 +711,9 @@ void usage(enum logcode F)
+@@ -708,6 +716,9 @@ void usage(enum logcode F)
    rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
    rprintf(F," -H, --hard-links            preserve hard links\n");
    rprintf(F," -p, --perms                 preserve permissions\n");
@@ -420,7 +420,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -E, --executability         preserve the file's executability\n");
    rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
  #ifdef SUPPORT_ACLS
-@@ -752,7 +763,12 @@ void usage(enum logcode F)
+@@ -757,7 +768,12 @@ void usage(enum logcode F)
    rprintf(F,"     --ignore-missing-args   ignore missing source args without error\n");
    rprintf(F,"     --delete-missing-args   delete missing source args from destination\n");
    rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
@@ -434,7 +434,7 @@ diff --git a/options.c b/options.c
    rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
    rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
    rprintf(F,"     --min-size=SIZE         don't transfer any file smaller than SIZE\n");
-@@ -870,6 +886,10 @@ static struct poptOption long_options[] = {
+@@ -875,6 +891,10 @@ static struct poptOption long_options[] = {
    {"perms",           'p', POPT_ARG_VAL,    &preserve_perms, 1, 0, 0 },
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
@@ -445,7 +445,7 @@ diff --git a/options.c b/options.c
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
-@@ -963,6 +983,14 @@ static struct poptOption long_options[] = {
+@@ -968,6 +988,14 @@ static struct poptOption long_options[] = {
    {"remove-source-files",0,POPT_ARG_VAL,    &remove_source_files, 1, 0, 0 },
    {"force",            0,  POPT_ARG_VAL,    &force_delete, 1, 0, 0 },
    {"no-force",         0,  POPT_ARG_VAL,    &force_delete, 0, 0, 0 },
@@ -460,7 +460,7 @@ diff --git a/options.c b/options.c
    {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
    {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
-@@ -2680,6 +2708,9 @@ void server_options(char **args, int *argc_p)
+@@ -2685,6 +2713,9 @@ void server_options(char **args, int *argc_p)
  	if (xfer_dirs && !recurse && delete_mode && am_sender)
  		args[ac++] = "--no-r";
  
@@ -470,7 +470,7 @@ diff --git a/options.c b/options.c
  	if (do_compression && def_compress_level != Z_DEFAULT_COMPRESSION) {
  		if (asprintf(&arg, "--compress-level=%d", def_compress_level) < 0)
  			goto oom;
-@@ -2773,6 +2804,16 @@ void server_options(char **args, int *argc_p)
+@@ -2778,6 +2809,16 @@ void server_options(char **args, int *argc_p)
  			args[ac++] = "--delete-excluded";
  		if (force_delete)
  			args[ac++] = "--force";
@@ -697,7 +697,7 @@ diff --git a/rsync.yo b/rsync.yo
       --max-delete=NUM        don't delete more than NUM files
       --max-size=SIZE         don't transfer any file larger than SIZE
       --min-size=SIZE         don't transfer any file smaller than SIZE
-@@ -668,7 +672,8 @@ specified, in which case bf(-r) is not implied.
+@@ -669,7 +673,8 @@ specified, in which case bf(-r) is not implied.
  
  Note that bf(-a) bf(does not preserve hardlinks), because
  finding multiply-linked files is expensive.  You must separately
@@ -707,7 +707,7 @@ diff --git a/rsync.yo b/rsync.yo
  
  dit(--no-OPTION) You may turn off one or more implied options by prefixing
  the option name with "no-".  Not all options may be prefixed with a "no-":
-@@ -981,7 +986,7 @@ they would be using bf(--copy-links).
+@@ -982,7 +987,7 @@ they would be using bf(--copy-links).
  Without this option, if the sending side has replaced a directory with a
  symlink to a directory, the receiving side will delete anything that is in
  the way of the new symlink, including a directory hierarchy (as long as
@@ -716,7 +716,7 @@ diff --git a/rsync.yo b/rsync.yo
  
  See also bf(--keep-dirlinks) for an analogous option for the receiving
  side.
-@@ -1165,6 +1170,29 @@ Note that the bf(-X) option does not copy rsync's special xattr values (e.g.
+@@ -1166,6 +1171,29 @@ Note that the bf(-X) option does not copy rsync's special xattr values (e.g.
  those used by bf(--fake-super)) unless you repeat the option (e.g. -XX).
  This "copy all xattrs" mode cannot be used with bf(--fake-super).
  
@@ -746,7 +746,7 @@ diff --git a/rsync.yo b/rsync.yo
  dit(bf(--chmod)) This option tells rsync to apply one or more
  comma-separated "chmod" modes to the permission of the files in the
  transfer.  The resulting value is treated as though it were the permissions
-@@ -1549,12 +1577,13 @@ display as a "*missing" entry in the bf(--list-only) output.
+@@ -1573,12 +1601,13 @@ display as a "*missing" entry in the bf(--list-only) output.
  dit(bf(--ignore-errors)) Tells bf(--delete) to go ahead and delete files
  even when there are I/O errors.
  
@@ -763,7 +763,7 @@ diff --git a/rsync.yo b/rsync.yo
  bf(--recursive) option was also enabled.
  
  dit(bf(--max-delete=NUM)) This tells rsync not to delete more than NUM
-@@ -2232,7 +2261,7 @@ with older versions of rsync, but that also turns on the output of other
+@@ -2256,7 +2285,7 @@ with older versions of rsync, but that also turns on the output of other
  verbose messages).
  
  The "%i" escape has a cryptic output that is 11 letters long.  The general
