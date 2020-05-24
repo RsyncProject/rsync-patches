@@ -12,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: a28bc3ebf672113cdd90432ef0270782d8ab6c2c
+based-on: 4f92fd8ddd07a94424e496384dadc98da8c3f8f7
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -28,7 +28,7 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
-@@ -28,9 +28,12 @@ extern int am_server;
+@@ -39,9 +39,12 @@ extern int am_server;
  extern int local_server;
  extern int whole_file;
  extern int read_batch;
@@ -41,42 +41,42 @@ diff --git a/checksum.c b/checksum.c
  extern char *checksum_choice;
  
  #define CSUM_NONE 0
-@@ -455,7 +458,7 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
- }
- 
- static int32 sumresidue;
--static md_context md;
-+static md_context md, md2;
- static int cursum_type;
+@@ -540,7 +543,7 @@ static union {
+ 	MD4_CTX m4;
+ #endif
+ 	MD5_CTX m5;
+-} ctx;
++} ctx, ctx2;
  #ifdef SUPPORT_XXHASH
- XXH64_state_t* xxh64_state = NULL;
-@@ -472,6 +475,8 @@ void sum_init(int csum_type, int seed)
+ static XXH64_state_t* xxh64_state;
+ #endif
+@@ -557,6 +560,8 @@ void sum_init(int csum_type, int seed)
  	switch (csum_type) {
  	  case CSUM_MD5:
- 		md5_begin(&md);
+ 		MD5_Init(&ctx.m5);
 +		if (link_by_hash_dir)
-+			md5_begin(&md2);
++			MD5_Init(&ctx2.m5);
  		break;
  	  case CSUM_MD4:
- 		mdfour_begin(&md);
-@@ -518,6 +523,8 @@ void sum_update(const char *p, int32 len)
+ #ifdef USE_OPENSSL
+@@ -607,6 +612,8 @@ void sum_update(const char *p, int32 len)
  	switch (cursum_type) {
  	  case CSUM_MD5:
- 		md5_update(&md, (uchar *)p, len);
+ 		MD5_Update(&ctx.m5, (uchar *)p, len);
 +		if (link_by_hash_dir)
-+			md5_update(&md2, (uchar *)p, len);
++			MD5_Update(&ctx2.m5, (uchar *)p, len);
  		break;
  	  case CSUM_MD4:
- 	  case CSUM_MD4_OLD:
-@@ -571,6 +578,8 @@ int sum_end(char *sum)
+ #ifdef USE_OPENSSL
+@@ -664,6 +671,8 @@ int sum_end(char *sum)
  	switch (cursum_type) {
  	  case CSUM_MD5:
- 		md5_result(&md, (uchar *)sum);
+ 		MD5_Final((uchar *)sum, &ctx.m5);
 +		if (link_by_hash_dir)
-+			md5_result(&md2, (uchar *)link_by_hash_extra_sum);
++			MD5_Final((uchar *)link_by_hash_extra_sum, &ctx2.m5);
  		break;
  	  case CSUM_MD4:
- 	  case CSUM_MD4_OLD:
+ #ifdef USE_OPENSSL
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c

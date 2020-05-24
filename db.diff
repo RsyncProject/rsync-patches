@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: a28bc3ebf672113cdd90432ef0270782d8ab6c2c
+based-on: 4f92fd8ddd07a94424e496384dadc98da8c3f8f7
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -46,7 +46,7 @@ diff --git a/Makefile.in b/Makefile.in
  LIBS=@LIBS@
 @@ -33,7 +34,7 @@ VERSION=@RSYNC_VERSION@
  
- SIMD_x86_64=simd-checksum-x86_64.o
+ SIMD_x86_64=simd-checksum-x86_64.o lib/md5-asm-x86_64.o
  
 -GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync-ssl.1 rsyncd.conf.5
 +GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync-ssl.1 rsyncdb.1 rsyncd.conf.5
@@ -95,7 +95,7 @@ diff --git a/Makefile.in b/Makefile.in
  $(OBJS): $(HEADERS)
  $(CHECK_OBJS): $(HEADERS)
  options.o: latest-year.h
-@@ -210,10 +217,10 @@ proto.h: proto.h-tstamp
+@@ -213,10 +220,10 @@ proto.h: proto.h-tstamp
  proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
  	awk -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c
  
@@ -108,7 +108,7 @@ diff --git a/Makefile.in b/Makefile.in
  	    if test -f $$fn; then \
  		: ; \
  	    elif test -f $(srcdir)/$$fn; then \
-@@ -232,12 +239,16 @@ rsync-ssl.1: rsync-ssl.yo
+@@ -235,12 +242,16 @@ rsync-ssl.1: rsync-ssl.yo
  	yodl2man -o rsync-ssl.1 $(srcdir)/rsync-ssl.yo
  	-$(srcdir)/tweak_manpage rsync-ssl.1
  
@@ -129,7 +129,7 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
-@@ -31,6 +31,7 @@ extern int read_batch;
+@@ -42,6 +42,7 @@ extern int read_batch;
  extern int checksum_seed;
  extern int protocol_version;
  extern int proper_seed_order;
@@ -137,24 +137,24 @@ diff --git a/checksum.c b/checksum.c
  extern char *checksum_choice;
  
  #define CSUM_NONE 0
-@@ -396,6 +397,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
- 			md5_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
+@@ -454,6 +455,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+ 			MD5_Update(&m5, (uchar *)map_ptr(buf, i, remainder), remainder);
  
- 		md5_result(&m, (uchar *)sum);
+ 		MD5_Final((uchar *)sum, &m5);
 +		if (use_db)
 +			db_set_checksum(5, st_p, sum);
  		break;
+ 	  }
  	  case CSUM_MD4:
- 	  case CSUM_MD4_OLD:
-@@ -416,6 +419,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -493,6 +496,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		mdfour_result(&m, (uchar *)sum);
 +		if (use_db)
 +			db_set_checksum(4, st_p, sum);
  		break;
+ 	  }
  #ifdef SUPPORT_XXHASH
- 	  case CSUM_XXHASH: {
 diff --git a/cleanup.c b/cleanup.c
 --- a/cleanup.c
 +++ b/cleanup.c
@@ -230,7 +230,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1155,6 +1156,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1169,6 +1170,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
