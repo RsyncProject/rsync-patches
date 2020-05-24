@@ -1,0 +1,208 @@
+This patch adds the current XXH3 checksum algorithms to rsync. They
+are not yet finalized, so do NOT use this in a distributed rsync yet!
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/xxhash.diff
+    ./configure                         (optional if already run)
+    make
+
+based-on: 4f92fd8ddd07a94424e496384dadc98da8c3f8f7
+diff --git a/checksum.c b/checksum.c
+--- a/checksum.c
++++ b/checksum.c
+@@ -28,6 +28,7 @@
+ 
+ #include "rsync.h"
+ #ifdef SUPPORT_XXHASH
++#include "xxh3.h"
+ #include "xxhash.h"
+ #endif
+ #ifdef USE_OPENSSL
+@@ -51,8 +52,10 @@ extern char *checksum_choice;
+ #define CSUM_MD4 4
+ #define CSUM_MD5 5
+ #define CSUM_XXH64 6
++#define CSUM_XXH3_64 7
++#define CSUM_XXH3_128 8
+ 
+-#define CSUM_COUNT 7
++#define CSUM_COUNT 9
+ 
+ struct csum_struct {
+ 	int num;
+@@ -61,6 +64,9 @@ struct csum_struct {
+ #ifdef SUPPORT_XXHASH
+ 	{ CSUM_XXH64, "xxhash", NULL },
+ 	{ CSUM_XXH64, "xxh64", NULL },
++	{ CSUM_XXH3_64, "xxh3", NULL },
++	{ CSUM_XXH3_64, "xxh3-64", NULL },
++	{ CSUM_XXH3_128, "xxh3-128", NULL },
+ #endif
+ 	{ CSUM_MD5, "md5", NULL },
+ 	{ CSUM_MD4, "md4", NULL },
+@@ -301,7 +307,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
+ 		return MD5_DIGEST_LEN;
+ #ifdef SUPPORT_XXHASH
+ 	  case CSUM_XXH64:
++	  case CSUM_XXH3_64:
+ 		return 64/8;
++	  case CSUM_XXH3_128:
++		return 128/8;
+ #endif
+ 	  default: /* paranoia to prevent missing case values */
+ 		exit_cleanup(RERR_UNSUPPORTED);
+@@ -419,6 +428,15 @@ void get_checksum2(char *buf, int32 len, char *sum)
+ 	  case CSUM_XXH64:
+ 		SIVAL64(sum, 0, XXH64(buf, len, checksum_seed));
+ 		break;
++	  case CSUM_XXH3_64:
++		SIVAL64(sum, 0, XXH3_64bits_withSeed(buf, len, checksum_seed));
++		break;
++	  case CSUM_XXH3_128: {
++		XXH128_hash_t digest = XXH3_128bits_withSeed(buf, len, checksum_seed);
++		SIVAL64(sum, 0, digest.low64);
++		SIVAL64(sum, 8, digest.high64);
++		break;
++	  }
+ #endif
+ 	  default: /* paranoia to prevent missing case values */
+ 		exit_cleanup(RERR_UNSUPPORTED);
+@@ -523,6 +541,65 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+ 		XXH64_freeState(state);
+ 		break;
+ 	  }
++	  case CSUM_XXH3_64: {
++		XXH3_state_t* state = XXH3_createState();
++		if (state == NULL)
++			out_of_memory("file_checksum xxh3");
++
++		if (XXH3_64bits_reset(state) == XXH_ERROR) {
++			rprintf(FERROR, "error resetting xxh3");
++			exit_cleanup(RERR_STREAMIO);
++		}
++
++		for (i = 0; i + CSUM_CHUNK <= len; i += CSUM_CHUNK) {
++			XXH_errorcode const updateResult =
++			    XXH3_64bits_update(state, (uchar *)map_ptr(buf, i, CSUM_CHUNK), CSUM_CHUNK);
++			if (updateResult == XXH_ERROR) {
++				rprintf(FERROR, "error computing XXH3 hash");
++				exit_cleanup(RERR_STREAMIO);
++			}
++		}
++
++		remainder = (int32)(len - i);
++		if (remainder > 0)
++			XXH3_64bits_update(state, (uchar *)map_ptr(buf, i, CSUM_CHUNK), remainder);
++
++		SIVAL64(sum, 0, XXH3_64bits_digest(state));
++
++		XXH3_freeState(state);
++		break;
++	  }
++	  case CSUM_XXH3_128: {
++		XXH3_state_t* state = XXH3_createState();
++		XXH128_hash_t digest;
++		if (state == NULL)
++			out_of_memory("file_checksum xxh3");
++
++		if (XXH3_128bits_reset(state) == XXH_ERROR) {
++			rprintf(FERROR, "error resetting xxh3");
++			exit_cleanup(RERR_STREAMIO);
++		}
++
++		for (i = 0; i + CSUM_CHUNK <= len; i += CSUM_CHUNK) {
++			XXH_errorcode const updateResult =
++			    XXH3_128bits_update(state, (uchar *)map_ptr(buf, i, CSUM_CHUNK), CSUM_CHUNK);
++			if (updateResult == XXH_ERROR) {
++				rprintf(FERROR, "error computing XXH3 hash");
++				exit_cleanup(RERR_STREAMIO);
++			}
++		}
++
++		remainder = (int32)(len - i);
++		if (remainder > 0)
++			XXH3_128bits_update(state, (uchar *)map_ptr(buf, i, CSUM_CHUNK), remainder);
++
++		digest = XXH3_128bits_digest(state);
++		SIVAL64(sum, 0, digest.low64);
++		SIVAL64(sum, 8, digest.high64);
++
++		XXH3_freeState(state);
++		break;
++	  }
+ #endif
+ 	  default:
+ 		rprintf(FERROR, "invalid checksum-choice for the --checksum option (%d)\n", checksum_type);
+@@ -543,6 +620,7 @@ static union {
+ } ctx;
+ #ifdef SUPPORT_XXHASH
+ static XXH64_state_t* xxh64_state;
++static XXH3_state_t* xxh3_state;
+ #endif
+ static int cursum_type;
+ 
+@@ -586,6 +664,28 @@ void sum_init(int csum_type, int seed)
+ 			exit_cleanup(RERR_STREAMIO);
+ 		}
+ 		break;
++	  case CSUM_XXH3_64:
++		if (xxh3_state == NULL) {
++			xxh3_state = XXH3_createState();
++			if (xxh3_state == NULL)
++				out_of_memory("sum_init xxh3");
++		}
++		if (XXH3_64bits_reset(xxh3_state) == XXH_ERROR) {
++			rprintf(FERROR, "error resetting xxh3 state");
++			exit_cleanup(RERR_STREAMIO);
++		}
++		break;
++	  case CSUM_XXH3_128:
++		if (xxh3_state == NULL) {
++			xxh3_state = XXH3_createState();
++			if (xxh3_state == NULL)
++				out_of_memory("sum_init xxh3");
++		}
++		if (XXH3_128bits_reset(xxh3_state) == XXH_ERROR) {
++			rprintf(FERROR, "error resetting xxh3 state");
++			exit_cleanup(RERR_STREAMIO);
++		}
++		break;
+ #endif
+ 	  case CSUM_NONE:
+ 		break;
+@@ -647,6 +747,18 @@ void sum_update(const char *p, int32 len)
+ 			exit_cleanup(RERR_STREAMIO);
+ 		}
+ 		break;
++	  case CSUM_XXH3_64:
++		if (XXH3_64bits_update(xxh3_state, p, len) == XXH_ERROR) {
++			rprintf(FERROR, "error computing xxh3 hash");
++			exit_cleanup(RERR_STREAMIO);
++		}
++		break;
++	  case CSUM_XXH3_128:
++		if (XXH3_128bits_update(xxh3_state, p, len) == XXH_ERROR) {
++			rprintf(FERROR, "error computing xxh3 hash");
++			exit_cleanup(RERR_STREAMIO);
++		}
++		break;
+ #endif
+ 	  case CSUM_NONE:
+ 		break;
+@@ -684,6 +796,15 @@ int sum_end(char *sum)
+ 	  case CSUM_XXH64:
+ 		SIVAL64(sum, 0, XXH64_digest(xxh64_state));
+ 		break;
++	  case CSUM_XXH3_64:
++		SIVAL64(sum, 0, XXH3_64bits_digest(xxh3_state));
++		break;
++	  case CSUM_XXH3_128: {
++		XXH128_hash_t digest = XXH3_128bits_digest(xxh3_state);
++		SIVAL64(sum, 0, digest.low64);
++		SIVAL64(sum, 8, digest.high64);
++		break;
++	  }
+ #endif
+ 	  case CSUM_NONE:
+ 		*sum = '\0';
