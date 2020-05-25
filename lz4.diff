@@ -6,11 +6,11 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 5ac353d84580e64d71a6516b72898b59916007c0
+based-on: abef92c03767d0c5dc9070eba15805f0f7075e6c
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
-@@ -89,6 +89,10 @@ int filesfrom_convert = 0;
+@@ -88,6 +88,10 @@ int filesfrom_convert = 0;
  
  struct name_num_obj valid_compressions = {
  	"compress", NULL, NULL, 0, 0, {
@@ -33,7 +33,7 @@ diff --git a/configure.ac b/configure.ac
  AC_HEADER_MAJOR_FIXED
  
  AC_MSG_CHECKING([whether to enable use of openssl crypto library])
-@@ -410,6 +410,19 @@ else
+@@ -408,6 +408,18 @@ else
      AC_MSG_RESULT(no)
  fi
  
@@ -44,8 +44,7 @@ diff --git a/configure.ac b/configure.ac
 +[Undefine if you do not want LZ4 compression.  By default this is defined.])
 +if test x"$enable_lz4" != x"no" && test x"$ac_cv_header_lz4_h" = x"yes"; then
 +    AC_MSG_RESULT(yes)
-+    AC_SEARCH_LIBS(LZ4_compress, lz4)
-+    AC_DEFINE(SUPPORT_LZ4)
++    AC_SEARCH_LIBS(LZ4_compress, lz4, [AC_DEFINE(SUPPORT_LZ4)])
 +else
 +    AC_MSG_RESULT(no)
 +fi
@@ -53,17 +52,6 @@ diff --git a/configure.ac b/configure.ac
  AC_CACHE_CHECK([if makedev takes 3 args],rsync_cv_MAKEDEV_TAKES_3_ARGS,[
  AC_RUN_IFELSE([AC_LANG_SOURCE([[
  #include <sys/types.h>
-diff --git a/rsync.h b/rsync.h
---- a/rsync.h
-+++ b/rsync.h
-@@ -1064,6 +1064,7 @@ typedef struct {
- #define CPRES_NONE 0
- #define CPRES_ZLIB 1
- #define CPRES_ZLIBX 2
-+#define CPRES_LZ4 3
- 
- struct name_num_item {
- 	int num;
 diff --git a/token.c b/token.c
 --- a/token.c
 +++ b/token.c
@@ -77,9 +65,24 @@ diff --git a/token.c b/token.c
  
  extern int do_compression;
  extern int protocol_version;
-@@ -295,6 +298,84 @@ static char *obuf;
- #define OBUF_SIZE	AVAIL_OUT_SIZE(CHUNK_SIZE)
- #endif
+@@ -58,6 +61,14 @@ void init_compression_level(void)
+ 		if (do_compression_level == Z_DEFAULT_COMPRESSION)
+ 			do_compression_level = def_level;
+ 		break;
++#ifdef SUPPORT_LZ4
++	case CPRES_LZ4:
++		min_level = 0;
++		max_level = 0;
++		def_level = 0;
++		off_level = CLVL_NOT_SPECIFIED;
++		break;
++#endif
+ 	default: /* paranoia to prevent missing case values */
+ 		exit_cleanup(RERR_UNSUPPORTED);
+ 	}
+@@ -648,6 +659,209 @@ static void see_deflate_token(char *buf, int32 len)
+ 	} while (len || rx_strm.avail_out == 0);
+ }
  
 +#ifdef SUPPORT_LZ4
 +static void
@@ -157,16 +160,7 @@ diff --git a/token.c b/token.c
 +		/* end of file - clean up */
 +		write_byte(f, END_FLAG);
 +}
-+#endif
 +
- /* Send a deflated token */
- static void
- send_deflated_token(int f, int32 token, struct map_struct *buf, OFF_T offset,
-@@ -442,6 +523,88 @@ static char *dbuf;
- static int32 rx_token;
- static int32 rx_run;
- 
-+#ifdef SUPPORT_LZ4
 +static int32 recv_compressed_token(int f, char **data)
 +{
 +	static int32 saved_flag;
@@ -246,16 +240,8 @@ diff --git a/token.c b/token.c
 +	}
 +
 +}
-+#endif
 +
- /* Receive a deflated token and inflate it */
- static int32 recv_deflated_token(int f, char **data)
- {
-@@ -571,6 +734,51 @@ static int32 recv_deflated_token(int f, char **data)
- 	}
- }
- 
-+#if 0 /*ifdef SUPPORT_LZ4*/
++# if 0
 +static void see_uncompressed_token(char *buf, int32 len)
 +{
 +	static const char *next_in;
@@ -298,12 +284,13 @@ diff --git a/token.c b/token.c
 +
 +	} while (len);
 +}
++# endif
 +#endif
 +
- /*
-  * put the data corresponding to a token that we've just returned
-  * from recv_deflated_token into the decompressor's history buffer.
-@@ -626,6 +834,10 @@ void send_token(int f, int32 token, struct map_struct *buf, OFF_T offset,
+ /**
+  * Transmit a verbatim buffer of length @p n followed by a token.
+  * If token == -1 then we have reached EOF
+@@ -658,6 +872,10 @@ void send_token(int f, int32 token, struct map_struct *buf, OFF_T offset,
  {
  	if (!do_compression)
  		simple_send_token(f, token, buf, offset, n);
@@ -314,7 +301,7 @@ diff --git a/token.c b/token.c
  	else
  		send_deflated_token(f, token, buf, offset, n, toklen);
  }
-@@ -642,6 +854,10 @@ int32 recv_token(int f, char **data)
+@@ -674,6 +892,10 @@ int32 recv_token(int f, char **data)
  
  	if (!do_compression)
  		tok = simple_recv_token(f,data);
@@ -325,7 +312,7 @@ diff --git a/token.c b/token.c
  	else /* CPRES_ZLIB & CPRES_ZLIBX */
  		tok = recv_deflated_token(f, data);
  	return tok;
-@@ -654,4 +870,8 @@ void see_token(char *data, int32 toklen)
+@@ -686,4 +908,8 @@ void see_token(char *data, int32 toklen)
  {
  	if (do_compression == CPRES_ZLIB)
  		see_deflate_token(data, toklen);
