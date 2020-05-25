@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: faecd066a6b523713299e659d8295eb8e308f9ed
+based-on: 97e8c55ee8aa9e59d0a2f6f92cb9e04dcc426057
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
@@ -19,7 +19,7 @@ diff --git a/checksum.c b/checksum.c
  #include "xxhash.h"
  #endif
  #ifdef USE_OPENSSL
-@@ -51,10 +52,15 @@ extern char *checksum_choice;
+@@ -49,10 +50,15 @@ extern char *checksum_choice;
  #define CSUM_MD4 4
  #define CSUM_MD5 5
  #define CSUM_XXH64 6
@@ -35,7 +35,7 @@ diff --git a/checksum.c b/checksum.c
  		{ CSUM_XXH64, "xxh64", NULL },
  		{ CSUM_XXH64, "xxhash", NULL },
  #endif
-@@ -157,7 +163,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
+@@ -155,7 +161,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
  		return MD5_DIGEST_LEN;
  #ifdef SUPPORT_XXHASH
  	  case CSUM_XXH64:
@@ -46,7 +46,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
-@@ -275,6 +284,15 @@ void get_checksum2(char *buf, int32 len, char *sum)
+@@ -273,6 +282,15 @@ void get_checksum2(char *buf, int32 len, char *sum)
  	  case CSUM_XXH64:
  		SIVAL64(sum, 0, XXH64(buf, len, checksum_seed));
  		break;
@@ -62,7 +62,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
-@@ -379,6 +397,65 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -377,6 +395,65 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  		XXH64_freeState(state);
  		break;
  	  }
@@ -76,9 +76,9 @@ diff --git a/checksum.c b/checksum.c
 +			exit_cleanup(RERR_STREAMIO);
 +		}
 +
-+		for (i = 0; i + CSUM_CHUNK <= len; i += CSUM_CHUNK) {
++		for (i = 0; i + CHUNK_SIZE <= len; i += CHUNK_SIZE) {
 +			XXH_errorcode const updateResult =
-+			    XXH3_64bits_update(state, (uchar *)map_ptr(buf, i, CSUM_CHUNK), CSUM_CHUNK);
++			    XXH3_64bits_update(state, (uchar *)map_ptr(buf, i, CHUNK_SIZE), CHUNK_SIZE);
 +			if (updateResult == XXH_ERROR) {
 +				rprintf(FERROR, "error computing XXH3 hash");
 +				exit_cleanup(RERR_STREAMIO);
@@ -87,7 +87,7 @@ diff --git a/checksum.c b/checksum.c
 +
 +		remainder = (int32)(len - i);
 +		if (remainder > 0)
-+			XXH3_64bits_update(state, (uchar *)map_ptr(buf, i, CSUM_CHUNK), remainder);
++			XXH3_64bits_update(state, (uchar *)map_ptr(buf, i, remainder), remainder);
 +
 +		SIVAL64(sum, 0, XXH3_64bits_digest(state));
 +
@@ -105,9 +105,9 @@ diff --git a/checksum.c b/checksum.c
 +			exit_cleanup(RERR_STREAMIO);
 +		}
 +
-+		for (i = 0; i + CSUM_CHUNK <= len; i += CSUM_CHUNK) {
++		for (i = 0; i + CHUNK_SIZE <= len; i += CHUNK_SIZE) {
 +			XXH_errorcode const updateResult =
-+			    XXH3_128bits_update(state, (uchar *)map_ptr(buf, i, CSUM_CHUNK), CSUM_CHUNK);
++			    XXH3_128bits_update(state, (uchar *)map_ptr(buf, i, CHUNK_SIZE), CHUNK_SIZE);
 +			if (updateResult == XXH_ERROR) {
 +				rprintf(FERROR, "error computing XXH3 hash");
 +				exit_cleanup(RERR_STREAMIO);
@@ -116,7 +116,7 @@ diff --git a/checksum.c b/checksum.c
 +
 +		remainder = (int32)(len - i);
 +		if (remainder > 0)
-+			XXH3_128bits_update(state, (uchar *)map_ptr(buf, i, CSUM_CHUNK), remainder);
++			XXH3_128bits_update(state, (uchar *)map_ptr(buf, i, remainder), remainder);
 +
 +		digest = XXH3_128bits_digest(state);
 +		SIVAL64(sum, 0, digest.low64);
@@ -128,7 +128,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  default:
  		rprintf(FERROR, "Invalid checksum-choice for --checksum: %s (%d)\n",
-@@ -400,6 +477,7 @@ static union {
+@@ -398,6 +475,7 @@ static union {
  } ctx;
  #ifdef SUPPORT_XXHASH
  static XXH64_state_t* xxh64_state;
@@ -136,7 +136,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  static int cursum_type;
  
-@@ -443,6 +521,28 @@ void sum_init(int csum_type, int seed)
+@@ -441,6 +519,28 @@ void sum_init(int csum_type, int seed)
  			exit_cleanup(RERR_STREAMIO);
  		}
  		break;
@@ -165,7 +165,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  case CSUM_NONE:
  		break;
-@@ -504,6 +604,18 @@ void sum_update(const char *p, int32 len)
+@@ -502,6 +602,18 @@ void sum_update(const char *p, int32 len)
  			exit_cleanup(RERR_STREAMIO);
  		}
  		break;
@@ -184,7 +184,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  case CSUM_NONE:
  		break;
-@@ -541,6 +653,15 @@ int sum_end(char *sum)
+@@ -539,6 +651,15 @@ int sum_end(char *sum)
  	  case CSUM_XXH64:
  		SIVAL64(sum, 0, XXH64_digest(xxh64_state));
  		break;
