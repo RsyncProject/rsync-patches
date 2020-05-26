@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: abef92c03767d0c5dc9070eba15805f0f7075e6c
+based-on: 23a37ecac4bba997948fa30e72eb4aa8e317e394
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -134,10 +134,10 @@ diff --git a/checksum.c b/checksum.c
  extern int protocol_version;
  extern int proper_seed_order;
 +extern int use_db;
- extern char *checksum_choice;
+ extern const char *checksum_choice;
  
  #define CSUM_NONE 0
-@@ -308,6 +309,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -307,6 +308,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			MD5_Update(&m5, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		MD5_Final((uchar *)sum, &m5);
@@ -146,7 +146,7 @@ diff --git a/checksum.c b/checksum.c
  		break;
  	  }
  	  case CSUM_MD4:
-@@ -347,6 +350,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -346,6 +349,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		mdfour_result(&m, (uchar *)sum);
@@ -230,7 +230,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1167,6 +1168,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1191,6 +1192,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -283,7 +283,7 @@ diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
 +++ b/db.c
-@@ -0,0 +1,1925 @@
+@@ -0,0 +1,1943 @@
 +/*
 + * Routines to access extended file info via DB.
 + *
@@ -307,6 +307,10 @@ new file mode 100644
 +#include "ifuncs.h"
 +#include "itypes.h"
 +#include "inums.h"
++#ifdef USE_OPENSSL
++#include "openssl/md4.h"
++#include "openssl/md5.h"
++#endif
 +
 +extern int recurse;
 +extern int same_db;
@@ -338,6 +342,13 @@ new file mode 100644
 +#endif
 +#define MAX_LOCK_FAILURES 10
 +#define LOCK_FAIL_MSLEEP 100
++#endif
++
++#ifndef USE_OPENSSL
++#define MD5_CTX md_context
++#define MD5_Init md5_begin
++#define MD5_Update md5_update
++#define MD5_Final(digest, cptr) md5_result(cptr, digest)
 +#endif
 +
 +#define DB_TYPE_NONE 0
@@ -398,21 +409,25 @@ new file mode 100644
 +static char bind_sum[MAX_DIGEST_LEN];
 +static unsigned long result_length[MAX_RESULT_BINDS];
 +static my_bool result_is_null[MAX_RESULT_BINDS], result_error[MAX_RESULT_BINDS];
-+#else
++#elif defined USE_SQLITE
 +static int64 bind_mtime;
 +#endif
-+static char bind_thishost[128+1], bind_mount_uniq[128+1];
-+static unsigned long bind_thishost_len, bind_mount_uniq_len;
++static char bind_thishost[128+1];
++static unsigned long bind_thishost_len;
 +static char *mount_helper_script = NULL;
 +
 +static char *error_log;
 +#if defined USE_SQLITE && defined SQLITE_CONFIG_LOG
++static char bind_mount_uniq[128+1];
++static char bind_mount_uniq_len;
 +static FILE *error_log_fp;
 +#endif
 +
 +#define PTR_SIZE (sizeof (struct file_struct *))
 +
++#if defined USE_MYSQL || defined USE_SQLITE
 +static void update_mounts(void);
++#endif
 +
 +struct name_list {
 +	struct name_list *next;
@@ -1218,6 +1233,7 @@ new file mode 100644
 +}
 +#endif
 +
++#if defined USE_MYSQL || defined USE_SQLITE
 +static void update_mounts(void)
 +{
 +	char buf[2048], *argv[2];
@@ -1370,6 +1386,7 @@ new file mode 100644
 +#endif
 +	}
 +}
++#endif
 +
 +static unsigned int get_disk_id(int64 devno)
 +{
@@ -1673,7 +1690,7 @@ new file mode 100644
 +/* For a delayed-update copy, we set the checksum on the file when it was
 + * inside the partial-dir.  Since renaming the file changes its ctime, we need
 + * to update the ctime to its new value (we can skip this in db_lax mode). */
-+int db_update_ctime(int mdnum, const STRUCT_STAT *st_p)
++int db_update_ctime(UNUSED(int mdnum), const STRUCT_STAT *st_p)
 +{
 +	unsigned int disk_id = get_disk_id(st_p->st_dev);
 +
@@ -1799,7 +1816,7 @@ new file mode 100644
 +	return 0;
 +}
 +
-+static int db_note_present(int disk_id, int64 ino)
++static int db_note_present(UNUSED(int disk_id), UNUSED(int64 ino))
 +{
 +	switch (use_db) {
 +#ifdef USE_MYSQL
@@ -1826,7 +1843,7 @@ new file mode 100644
 +
 +/* This function requires the user to have populated all disk_id+inode pairs
 + * into the inode_present table. */
-+static int db_clean_inodes(time_t start_time)
++static int db_clean_inodes(UNUSED(time_t start_time))
 +{
 +	int del_cnt = 0;
 +
@@ -2132,7 +2149,8 @@ new file mode 100644
 +			if (db_update || (db_check && right_sum_cnt) || db_output_sum) {
 +				uchar *data;
 +				int32 remainder;
-+				md_context m4, m5;
++				md_context m4;
++				MD5_CTX m5;
 +				struct map_struct *buf;
 +				OFF_T off, len = st.st_size;
 +				int fd = do_open(name, O_RDONLY, 0);
@@ -2145,7 +2163,7 @@ new file mode 100644
 +				if (db_do_md4)
 +					mdfour_begin(&m4);
 +				if (db_do_md5)
-+					md5_begin(&m5);
++					MD5_Init(&m5);
 +
 +				buf = map_file(fd, len, MAX_MAP_SIZE, CSUM_CHUNK);
 +
@@ -2154,7 +2172,7 @@ new file mode 100644
 +					if (db_do_md4)
 +						mdfour_update(&m4, data, CSUM_CHUNK);
 +					if (db_do_md5)
-+						md5_update(&m5, data, CSUM_CHUNK);
++						MD5_Update(&m5, data, CSUM_CHUNK);
 +				}
 +
 +				remainder = (int32)(len - off);
@@ -2164,8 +2182,8 @@ new file mode 100644
 +					mdfour_result(&m4, (uchar*)(sum4 = sumbuf4));
 +				}
 +				if (db_do_md5) {
-+					md5_update(&m5, data, remainder);
-+					md5_result(&m5, (uchar*)(sum5 = sumbuf5));
++					MD5_Update(&m5, data, remainder);
++					MD5_Final((uchar*)(sum5 = sumbuf5), &m5);
 +				}
 +
 +				close(fd);
@@ -2220,7 +2238,7 @@ diff --git a/flist.c b/flist.c
  extern int eol_nulls;
  extern int atimes_ndx;
  extern int relative_paths;
-@@ -1322,11 +1323,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1320,11 +1321,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -2234,7 +2252,7 @@ diff --git a/flist.c b/flist.c
  
  #if EXTRA_ROUNDING > 0
  	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
-@@ -1413,8 +1411,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1411,8 +1409,12 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		return NULL;
  	}
  
@@ -2249,7 +2267,7 @@ diff --git a/flist.c b/flist.c
  
  	if (unsort_ndx)
  		F_NDX(file) = stats.num_dirs;
-@@ -2089,6 +2091,9 @@ void send_extra_file_list(int f, int at_least)
+@@ -2087,6 +2089,9 @@ void send_extra_file_list(int f, int at_least)
    finish:
  	if (io_error != save_io_error && protocol_version == 30 && !ignore_errors)
  		send_msg_int(MSG_IO_ERROR, io_error);
@@ -2259,7 +2277,7 @@ diff --git a/flist.c b/flist.c
  }
  
  struct file_list *send_file_list(int f, int argc, char *argv[])
-@@ -2112,6 +2117,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2110,6 +2115,13 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  		     | (eol_nulls || reading_remotely ? RL_EOL_NULLS : 0);
  	int implied_dot_dir = 0;
  
@@ -2273,7 +2291,7 @@ diff --git a/flist.c b/flist.c
  	rprintf(FLOG, "building file list\n");
  	if (show_filelist_progress)
  		start_filelist_progress("building file list");
-@@ -2457,6 +2469,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
+@@ -2455,6 +2467,9 @@ struct file_list *send_file_list(int f, int argc, char *argv[])
  			rprintf(FINFO, "[%s] flist_eof=1\n", who_am_i());
  	}
  
@@ -2340,8 +2358,8 @@ diff --git a/io.c b/io.c
  extern int inc_recurse;
 +extern int same_db;
  extern int io_error;
+ extern int batch_fd;
  extern int eol_nulls;
- extern int flist_eof;
 @@ -1481,6 +1483,32 @@ static void read_a_msg(void)
  		if (am_sender)
  			maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
@@ -2486,7 +2504,7 @@ diff --git a/main.c b/main.c
  extern char *shell_cmd;
  extern char *batch_name;
  extern char *password_file;
-@@ -1199,6 +1202,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+@@ -1201,6 +1204,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
  	if (am_daemon && io_timeout && protocol_version >= 31)
  		send_msg_int(MSG_IO_TIMEOUT, io_timeout);
  
@@ -2496,7 +2514,7 @@ diff --git a/main.c b/main.c
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
  		if (need_messages_from_generator)
-@@ -1492,6 +1498,9 @@ static int start_client(int argc, char *argv[])
+@@ -1494,6 +1500,9 @@ static int start_client(int argc, char *argv[])
  	else
  		env_port = rsync_port;
  
@@ -2543,40 +2561,26 @@ diff --git a/options.c b/options.c
  	DEBUG_WORD(DEL, W_REC, "Debug delete actions (levels 1-3)"),
  	DEBUG_WORD(DELTASUM, W_SND|W_REC, "Debug delta-transfer checksumming (levels 1-4)"),
  	DEBUG_WORD(DUP, W_REC, "Debug weeding of duplicate names"),
-@@ -582,6 +588,7 @@ static void print_rsync_version(enum logcode f)
- 	char const *ipv6 = "no ";
- 	char const *simd = "no ";
- 	char const *xxhash = "no ";
-+	char const *db = "no ";
- 	STRUCT_STAT *dumstat;
- 
- #if SUBPROTOCOL_VERSION != 0
-@@ -624,6 +631,12 @@ static void print_rsync_version(enum logcode f)
- #ifdef SUPPORT_XXHASH
- 	xxhash = "";
+@@ -665,6 +671,18 @@ static void print_capabilities(enum logcode f)
  #endif
-+#if defined HAVE_MYSQL_MYSQL_H && defined HAVE_LIBMYSQLCLIENT
-+	db = "";
-+#endif
-+#elif defined HAVE_SQLITE3_H && defined HAVE_LIBSQLITE3
-+	db = "";
-+#endif
+ 	 "SIMD");
  
- 	rprintf(f, "%s  version %s  protocol version %d%s\n",
- 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
-@@ -637,8 +650,10 @@ static void print_rsync_version(enum logcode f)
- 		(int)(sizeof (int64) * 8));
- 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
- 		got_socketpair, hardlinks, links, ipv6, have_inplace);
--	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sSIMD, %sxxhash\n",
-+	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sSIMD, %sxxhash,\n",
- 		have_inplace, acls, xattrs, iconv, symtimes, prealloc, simd, xxhash);
-+	rprintf(f, "    %sDB\n",
-+		db);
++	add(
++#if !defined HAVE_MYSQL_MYSQL_H || !defined HAVE_LIBMYSQLCLIENT
++	 "no "
++#endif
++	 "MySQL");
++
++	add(
++#if !defined HAVE_SQLITE3_H || !defined HAVE_LIBSQLITE3
++	 "no "
++#endif
++	 "SQLite");
++
+ 	add(NULL);
  
- 	rprintf(f,"\n");
- 	
-@@ -695,6 +710,9 @@ void usage(enum logcode F)
+ #undef add
+@@ -754,6 +772,9 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -2586,7 +2590,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -847,6 +865,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -906,6 +927,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
@@ -2594,7 +2598,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
-@@ -996,6 +1015,10 @@ static struct poptOption long_options[] = {
+@@ -1055,6 +1077,10 @@ static struct poptOption long_options[] = {
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"checksum-choice",  0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
    {"cc",               0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
@@ -2605,7 +2609,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1089,6 +1112,9 @@ static struct poptOption long_options[] = {
+@@ -1148,6 +1174,9 @@ static struct poptOption long_options[] = {
    {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
    {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
@@ -2615,7 +2619,7 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1142,6 +1168,50 @@ static struct poptOption long_daemon_options[] = {
+@@ -1201,6 +1230,50 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
@@ -2666,7 +2670,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1265,6 +1335,8 @@ static void set_refuse_options(void)
+@@ -1324,6 +1397,8 @@ static void set_refuse_options(void)
  			parse_one_refuse_match(0, "iconv", list_end);
  #endif
  		parse_one_refuse_match(0, "log-file*", list_end);
@@ -2675,7 +2679,7 @@ diff --git a/options.c b/options.c
  	}
  
  	/* Now we use the descrip values to actually mark the options for refusal. */
-@@ -1389,6 +1461,102 @@ static void create_refuse_error(int which)
+@@ -1448,6 +1523,102 @@ static void create_refuse_error(int which)
  	}
  }
  
@@ -2778,7 +2782,7 @@ diff --git a/options.c b/options.c
  /* This is used to make sure that --daemon & --server cannot be aliased to
   * something else. These options have always disabled popt aliases for the
   * parsing of a daemon or server command-line, but we have to make sure that
-@@ -1427,6 +1595,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1486,6 +1657,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		return 0;
  	}
  
@@ -2791,7 +2795,7 @@ diff --git a/options.c b/options.c
  	set_refuse_options();
  
  #ifdef ICONV_OPTION
-@@ -1548,6 +1722,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1607,6 +1784,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2804,7 +2808,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1622,6 +1802,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1681,6 +1864,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
