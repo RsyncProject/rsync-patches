@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 8809f65b1394de9027fa73a0bc4dad84a8e036fd
+based-on: d7521f54282fe7dc7c259a52624a0ac75ccb8f11
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
@@ -19,7 +19,7 @@ diff --git a/checksum.c b/checksum.c
  #include "xxhash.h"
  #endif
  #ifdef USE_OPENSSL
-@@ -49,10 +50,16 @@ extern const char *checksum_choice;
+@@ -49,10 +50,14 @@ extern const char *checksum_choice;
  #define CSUM_MD4 4
  #define CSUM_MD5 5
  #define CSUM_XXH64 6
@@ -30,13 +30,11 @@ diff --git a/checksum.c b/checksum.c
  	"checksum", NULL, NULL, 0, 0, {
  #ifdef SUPPORT_XXHASH
 +		{ CSUM_XXH3_128, "xxh128", NULL },
-+		{ CSUM_XXH3_128, "xxh3-128", NULL },
 +		{ CSUM_XXH3_64, "xxh3", NULL },
-+		{ CSUM_XXH3_64, "xxh3-64", NULL },
  		{ CSUM_XXH64, "xxh64", NULL },
  		{ CSUM_XXH64, "xxhash", NULL },
  #endif
-@@ -154,7 +161,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
+@@ -154,7 +159,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
  		return MD5_DIGEST_LEN;
  #ifdef SUPPORT_XXHASH
  	  case CSUM_XXH64:
@@ -47,7 +45,16 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
-@@ -272,6 +282,15 @@ void get_checksum2(char *buf, int32 len, char *sum)
+@@ -179,6 +187,8 @@ int canonical_checksum(int csum_type)
+ 		return -1;
+ #ifdef SUPPORT_XXHASH
+ 	  case CSUM_XXH64:
++	  case CSUM_XXH3_64:
++	  case CSUM_XXH3_128:
+ 		return 1;
+ #endif
+ 	  default: /* paranoia to prevent missing case values */
+@@ -292,6 +302,15 @@ void get_checksum2(char *buf, int32 len, char *sum)
  	  case CSUM_XXH64:
  		SIVAL64(sum, 0, XXH64(buf, len, checksum_seed));
  		break;
@@ -63,7 +70,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
-@@ -376,6 +395,65 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -396,6 +415,65 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  		XXH64_freeState(state);
  		break;
  	  }
@@ -129,7 +136,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  default:
  		rprintf(FERROR, "Invalid checksum-choice for --checksum: %s (%d)\n",
-@@ -397,6 +475,7 @@ static union {
+@@ -417,6 +495,7 @@ static union {
  } ctx;
  #ifdef SUPPORT_XXHASH
  static XXH64_state_t* xxh64_state;
@@ -137,7 +144,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  static int cursum_type;
  
-@@ -440,6 +519,28 @@ void sum_init(int csum_type, int seed)
+@@ -460,6 +539,28 @@ void sum_init(int csum_type, int seed)
  			exit_cleanup(RERR_STREAMIO);
  		}
  		break;
@@ -166,7 +173,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  case CSUM_NONE:
  		break;
-@@ -501,6 +602,18 @@ void sum_update(const char *p, int32 len)
+@@ -521,6 +622,18 @@ void sum_update(const char *p, int32 len)
  			exit_cleanup(RERR_STREAMIO);
  		}
  		break;
@@ -185,7 +192,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  case CSUM_NONE:
  		break;
-@@ -538,6 +651,15 @@ int sum_end(char *sum)
+@@ -558,6 +671,15 @@ int sum_end(char *sum)
  	  case CSUM_XXH64:
  		SIVAL64(sum, 0, XXH64_digest(xxh64_state));
  		break;
