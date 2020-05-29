@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 23a37ecac4bba997948fa30e72eb4aa8e317e394
+based-on: 364d302bca6b9701ccf731feb1d5e91febdd9277
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -137,7 +137,7 @@ diff --git a/checksum.c b/checksum.c
  extern const char *checksum_choice;
  
  #define CSUM_NONE 0
-@@ -307,6 +308,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -346,6 +347,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			MD5_Update(&m5, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		MD5_Final((uchar *)sum, &m5);
@@ -146,7 +146,7 @@ diff --git a/checksum.c b/checksum.c
  		break;
  	  }
  	  case CSUM_MD4:
-@@ -346,6 +349,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -385,6 +388,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  			mdfour_update(&m, (uchar *)map_ptr(buf, i, remainder), remainder);
  
  		mdfour_result(&m, (uchar *)sum);
@@ -154,19 +154,19 @@ diff --git a/checksum.c b/checksum.c
 +			db_set_checksum(4, st_p, sum);
  		break;
  	  }
- #ifdef SUPPORT_XXHASH
+ 	  default:
 diff --git a/cleanup.c b/cleanup.c
 --- a/cleanup.c
 +++ b/cleanup.c
-@@ -27,6 +27,7 @@ extern int am_server;
- extern int am_daemon;
+@@ -28,6 +28,7 @@ extern int am_daemon;
  extern int am_receiver;
+ extern int am_sender;
  extern int io_error;
 +extern int use_db;
  extern int keep_partial;
  extern int got_xfer_error;
  extern int protocol_version;
-@@ -142,6 +143,12 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
+@@ -143,6 +144,12 @@ NORETURN void _exit_cleanup(int code, const char *file, int line)
  #include "case_N.h"
  		switch_step++;
  
@@ -2561,26 +2561,24 @@ diff --git a/options.c b/options.c
  	DEBUG_WORD(DEL, W_REC, "Debug delete actions (levels 1-3)"),
  	DEBUG_WORD(DELTASUM, W_SND|W_REC, "Debug delta-transfer checksumming (levels 1-4)"),
  	DEBUG_WORD(DUP, W_REC, "Debug weeding of duplicate names"),
-@@ -665,6 +671,18 @@ static void print_capabilities(enum logcode f)
+@@ -647,6 +653,16 @@ static void print_capabilities(enum logcode f)
  #endif
- 	 "SIMD");
+ 			"SIMD",
  
-+	add(
 +#if !defined HAVE_MYSQL_MYSQL_H || !defined HAVE_LIBMYSQLCLIENT
-+	 "no "
++		"no "
 +#endif
-+	 "MySQL");
++			"MySQL",
 +
-+	add(
 +#if !defined HAVE_SQLITE3_H || !defined HAVE_LIBSQLITE3
-+	 "no "
++		"no "
 +#endif
-+	 "SQLite");
++			"SQLite",
 +
- 	add(NULL);
+ 		NULL
+ 	};
  
- #undef add
-@@ -754,6 +772,9 @@ void usage(enum logcode F)
+@@ -735,6 +751,9 @@ void usage(enum logcode F)
    rprintf(F," -q, --quiet                 suppress non-error messages\n");
    rprintf(F,"     --no-motd               suppress daemon-mode MOTD (see manpage caveat)\n");
    rprintf(F," -c, --checksum              skip based on checksum, not mod-time & size\n");
@@ -2590,7 +2588,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -906,6 +927,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -887,6 +906,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
@@ -2598,7 +2596,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
-@@ -1055,6 +1077,10 @@ static struct poptOption long_options[] = {
+@@ -1036,6 +1056,10 @@ static struct poptOption long_options[] = {
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"checksum-choice",  0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
    {"cc",               0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
@@ -2609,7 +2607,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1148,6 +1174,9 @@ static struct poptOption long_options[] = {
+@@ -1129,6 +1153,9 @@ static struct poptOption long_options[] = {
    {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
    {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
@@ -2619,7 +2617,7 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1201,6 +1230,50 @@ static struct poptOption long_daemon_options[] = {
+@@ -1182,6 +1209,50 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
@@ -2670,7 +2668,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1324,6 +1397,8 @@ static void set_refuse_options(void)
+@@ -1305,6 +1376,8 @@ static void set_refuse_options(void)
  			parse_one_refuse_match(0, "iconv", list_end);
  #endif
  		parse_one_refuse_match(0, "log-file*", list_end);
@@ -2679,7 +2677,7 @@ diff --git a/options.c b/options.c
  	}
  
  	/* Now we use the descrip values to actually mark the options for refusal. */
-@@ -1448,6 +1523,102 @@ static void create_refuse_error(int which)
+@@ -1429,6 +1502,102 @@ static void create_refuse_error(int which)
  	}
  }
  
@@ -2782,7 +2780,7 @@ diff --git a/options.c b/options.c
  /* This is used to make sure that --daemon & --server cannot be aliased to
   * something else. These options have always disabled popt aliases for the
   * parsing of a daemon or server command-line, but we have to make sure that
-@@ -1486,6 +1657,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1467,6 +1636,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		return 0;
  	}
  
@@ -2795,7 +2793,7 @@ diff --git a/options.c b/options.c
  	set_refuse_options();
  
  #ifdef ICONV_OPTION
-@@ -1607,6 +1784,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1588,6 +1763,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2808,7 +2806,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1681,6 +1864,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1662,6 +1843,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -2938,7 +2936,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -253,12 +253,16 @@ enum msgcode {
+@@ -254,12 +254,16 @@ enum msgcode {
  	MSG_IO_ERROR=22,/* the sending side had an I/O error */
  	MSG_IO_TIMEOUT=33,/* tell client about a daemon's timeout value */
  	MSG_NOOP=42,	/* a do-nothing message (legacy protocol-30 only) */
@@ -2955,7 +2953,7 @@ diff --git a/rsync.h b/rsync.h
  #define NDX_DONE -1
  #define NDX_FLIST_EOF -2
  #define NDX_DEL_STATS -3
-@@ -1339,7 +1343,8 @@ extern short info_levels[], debug_levels[];
+@@ -1340,7 +1344,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CHDIR (DEBUG_BIND+1)
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)
