@@ -16,11 +16,11 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: 364d302bca6b9701ccf731feb1d5e91febdd9277
+based-on: 37350027514026d410515e90fe7d94b8444c95c1
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
-@@ -42,6 +42,8 @@ extern int numeric_ids;
+@@ -43,6 +43,8 @@ extern int numeric_ids;
  extern int filesfrom_fd;
  extern int remote_protocol;
  extern int protocol_version;
@@ -29,7 +29,7 @@ diff --git a/clientserver.c b/clientserver.c
  extern int io_timeout;
  extern int no_detach;
  extern int write_batch;
-@@ -906,6 +908,9 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -909,6 +911,9 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  	} else if (am_root < 0) /* Treat --fake-super from client as --super. */
  		am_root = 2;
  
@@ -514,28 +514,55 @@ diff --git a/generator.c b/generator.c
  #ifdef SUPPORT_ACLS
  			if (!preserve_perms)
  				dflt_perms = default_perms_for_dir(dn);
-@@ -1315,7 +1320,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1315,6 +1320,24 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		}
  		parent_dirname = dn;
  
--		if (need_fuzzy_dirlist && S_ISREG(file->mode)) {
 +		if (need_new_dirscan && S_ISREG(file->mode)) {
- 			int i;
- 			strlcpy(fnamecmpbuf, dn, sizeof fnamecmpbuf);
- 			for (i = 0; i < fuzzy_basis; i++) {
-@@ -1327,7 +1332,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 					fuzzy_dirlist[i] = NULL;
- 				}
- 			}
--			need_fuzzy_dirlist = 0;
++			int i;
++			strlcpy(fnamecmpbuf, dn, sizeof fnamecmpbuf);
++			for (i = 0; i < fuzzy_basis; i++) {
++				if (i && pathjoin(fnamecmpbuf, MAXPATHLEN, basis_dir[i-1], dn) >= MAXPATHLEN)
++					continue;
++				fuzzy_dirlist[i] = get_dirlist(fnamecmpbuf, -1, GDL_IGNORE_FILTER_RULES | GDL_PERHAPS_DIR);
++				if (fuzzy_dirlist[i] && fuzzy_dirlist[i]->used == 0) {
++					flist_free(fuzzy_dirlist[i]);
++					fuzzy_dirlist[i] = NULL;
++				}
++			}
 +			if (checksum_files) {
 +				reset_checksum_cache();
 +			}
 +			need_new_dirscan = 0;
- 		}
- 
++		}
++
  		statret = link_stat(fname, &sx.st, keep_dirlinks && is_dir);
-@@ -1772,7 +1780,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		stat_errno = errno;
+ 	}
+@@ -1725,22 +1748,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		partialptr = NULL;
+ 
+ 	if (statret != 0 && fuzzy_basis) {
+-		if (need_fuzzy_dirlist && S_ISREG(file->mode)) {
+-			const char *dn = file->dirname ? file->dirname : ".";
+-			int i;
+-			strlcpy(fnamecmpbuf, dn, sizeof fnamecmpbuf);
+-			for (i = 0; i < fuzzy_basis; i++) {
+-				if (i && pathjoin(fnamecmpbuf, MAXPATHLEN, basis_dir[i-1], dn) >= MAXPATHLEN)
+-					continue;
+-				fuzzy_dirlist[i] = get_dirlist(fnamecmpbuf, -1, GDL_IGNORE_FILTER_RULES | GDL_PERHAPS_DIR);
+-				if (fuzzy_dirlist[i] && fuzzy_dirlist[i]->used == 0) {
+-					flist_free(fuzzy_dirlist[i]);
+-					fuzzy_dirlist[i] = NULL;
+-				}
+-			}
+-			need_fuzzy_dirlist = 0;
+-		}
+-
+ 		/* Sets fnamecmp_type to FNAMECMP_FUZZY or above. */
+ 		fuzzy_file = find_fuzzy(file, fuzzy_dirlist, &fnamecmp_type);
+ 		if (fuzzy_file) {
+@@ -1773,7 +1780,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		;
  	else if (fnamecmp_type >= FNAMECMP_FUZZY)
  		;
@@ -649,7 +676,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
        OPT_SERVER, OPT_REFUSED_BASE = 9000};
-@@ -1036,6 +1038,7 @@ static struct poptOption long_options[] = {
+@@ -1037,6 +1039,7 @@ static struct poptOption long_options[] = {
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"checksum-choice",  0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
    {"cc",               0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
@@ -657,7 +684,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1858,6 +1861,23 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1859,6 +1862,23 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			}
  			break;
  
@@ -681,7 +708,7 @@ diff --git a/options.c b/options.c
  		case OPT_INFO:
  			arg = poptGetOptArg(pc);
  			parse_output_words(info_words, info_levels, arg, USER_PRIORITY);
-@@ -2127,6 +2147,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2128,6 +2148,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	}
  #endif
  
@@ -730,7 +757,7 @@ diff --git a/rsync.yo b/rsync.yo
   -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
       --no-OPTION             turn off an implied OPTION (e.g. --no-D)
   -r, --recursive             recurse into directories
-@@ -645,9 +646,9 @@ uses a "quick check" that (by default) checks if each file's size and time
+@@ -650,9 +651,9 @@ uses a "quick check" that (by default) checks if each file's size and time
  of last modification match between the sender and receiver.  This option
  changes this to compare a 128-bit checksum for each file that has a
  matching size.  Generating the checksums means that both sides will expend
@@ -743,7 +770,7 @@ diff --git a/rsync.yo b/rsync.yo
  
  The sending side generates its checksums while it is doing the file-system
  scan that builds the list of the available files.  The receiver generates
-@@ -655,6 +656,8 @@ its checksums when it is scanning for changed files, and will checksum any
+@@ -660,6 +661,8 @@ its checksums when it is scanning for changed files, and will checksum any
  file that has the same size as the corresponding sender's file:  files with
  either a changed size or a changed checksum are selected for transfer.
  
@@ -752,7 +779,7 @@ diff --git a/rsync.yo b/rsync.yo
  Note that rsync always verifies that each em(transferred) file was
  correctly reconstructed on the receiving side by checking a whole-file
  checksum that is generated as the file is transferred, but that
-@@ -665,6 +668,36 @@ The checksum used is auto-negotiated between the client and the server, but
+@@ -670,6 +673,36 @@ The checksum used is auto-negotiated between the client and the server, but
  can be overridden using either the bf(--checksum-choice) option or an
  environment variable that is discussed in that option's section.
  
