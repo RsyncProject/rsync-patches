@@ -334,6 +334,47 @@ diff --git a/options.c b/options.c
  	if (preserve_perms)
  		argstr[x++] = 'p';
  	else if (preserve_executability && am_sender)
+diff --git a/rsync.1.md b/rsync.1.md
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -370,6 +370,7 @@ detailed description below for a complete description.
+ --times, -t                 preserve modification times
+ --atimes, -U                preserve access (use) times
+ --open-noatime              avoid changing the atime on opened files
++--crtimes, -N               preserve create times (newness)
+ --omit-dir-times, -O        omit directories from --times
+ --omit-link-times, -J       omit symlinks from --times
+ --super                     receiver attempts super-user activities
+@@ -1360,6 +1361,11 @@ your home directory (remove the '=' for that).
+     mounted to avoid updating the atime on read access even without the
+     O_NOATIME flag being set.
+ 
++0.  `--crtimes`, `-N,`
++
++    This tells rsync to set the create times (newness) of +the destination
++    files to the same value as the source files.
++
+ 0.  `--omit-dir-times`, `-O`
+ 
+     This tells rsync to omit directories when it is preserving modification
+@@ -2521,7 +2527,7 @@ your home directory (remove the '=' for that).
+     output of other verbose messages).
+ 
+     The "%i" escape has a cryptic output that is 11 letters long.  The general
+-    format is like the string `YXcstpoguaxf`, where **Y** is replaced by the type
++    format is like the string `YXcstpoguaxfn`, where **Y** is replaced by the type
+     of update being done, **X** is replaced by the file-type, and the other
+     letters represent attributes that may be output if they are being modified.
+ 
+@@ -2578,6 +2584,8 @@ your home directory (remove the '=' for that).
+       happens when a symlink or directory is updated.
+     - The `a` means that the ACL information changed.
+     - The `x` means that the extended attribute information changed.
++    - A `n` means the create time (newness) is different and is being updated
++      to the sender's value (requires `--crtimes`).
+ 
+     One other output is possible: when deleting files, the "%i" will output the
+     string "`*deleting`" for each item that is being removed (assuming that you
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
@@ -445,45 +486,6 @@ diff --git a/rsync.h b/rsync.h
  #ifdef SUPPORT_ACLS
      struct rsync_acl *acc_acl; /* access ACL */
      struct rsync_acl *def_acl; /* default ACL */
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -381,6 +381,7 @@ to the detailed description below for a complete description.  verb(
-  -t, --times                 preserve modification times
-  -U, --atimes                preserve access (use) times
-      --open-noatime          avoid changing the atime on opened files
-+ -N, --crtimes               preserve create times (newness)
-  -O, --omit-dir-times        omit directories from --times
-  -J, --omit-link-times       omit symlinks from --times
-      --super                 receiver attempts super-user activities
-@@ -1299,6 +1300,9 @@ flag then rsync will silently ignore this option. Note also that some
- filesystems are mounted to avoid updating the atime on read access even
- without the O_NOATIME flag being set.
- 
-+dit(bf(-N, --crtimes)) This tells rsync to set the create times (newness) of
-+the destination files to the same value as the source files.
-+
- dit(bf(-O, --omit-dir-times)) This tells rsync to omit directories when
- it is preserving modification times (see bf(--times)).  If NFS is sharing
- the directories on the receiving side, it is a good idea to use bf(-O).
-@@ -2315,7 +2319,7 @@ with older versions of rsync, but that also turns on the output of other
- verbose messages).
- 
- The "%i" escape has a cryptic output that is 11 letters long.  The general
--format is like the string bf(YXcstpogfax), where bf(Y) is replaced by the
-+format is like the string bf(YXcstpogfaxn), where bf(Y) is replaced by the
- type of update being done, bf(X) is replaced by the file-type, and the
- other letters represent attributes that may be output if they are being
- modified.
-@@ -2377,6 +2381,8 @@ quote(itemization(
-   when a symlink or directory is updated.
-   it() The bf(a) means that the ACL information changed.
-   it() The bf(x) means that the extended attribute information changed.
-+  it() A bf(n) means the create time (newness) is different and is being
-+  updated to the sender's value (requires bf(--crtimes)).
- ))
- 
- One other output is possible:  when deleting files, the "%i" will output
 diff --git a/syscall.c b/syscall.c
 --- a/syscall.c
 +++ b/syscall.c

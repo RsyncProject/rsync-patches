@@ -12,11 +12,11 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 37350027514026d410515e90fe7d94b8444c95c1
+based-on: 5b19cf787515fc2388dd070a85e86ced5d80510b
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
-@@ -44,7 +44,7 @@ OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
+@@ -45,7 +45,7 @@ OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
  	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
@@ -84,7 +84,7 @@ diff --git a/clientserver.c b/clientserver.c
  extern char *logfile_format;
  extern char *files_from;
  extern char *tmpdir;
-@@ -544,6 +545,9 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -545,6 +546,9 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  		return -1;
  	}
  
@@ -278,7 +278,7 @@ diff --git a/options.c b/options.c
    rprintf(F," -z, --compress              compress file data during the transfer\n");
    rprintf(F,"     --compress-level=NUM    explicitly set compression level\n");
    rprintf(F,"     --skip-compress=LIST    skip compressing files with a suffix in LIST\n");
-@@ -886,7 +889,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -886,7 +889,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -286,7 +286,7 @@ diff --git a/options.c b/options.c
 +      OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG, OPT_LINK_BY_HASH,
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
-       OPT_SERVER, OPT_REFUSED_BASE = 9000};
+       OPT_REFUSED_BASE = 9000};
 @@ -1041,6 +1044,7 @@ static struct poptOption long_options[] = {
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
@@ -349,6 +349,68 @@ diff --git a/options.c b/options.c
  	if (files_from && (!am_sender || filesfrom_host)) {
  		if (filesfrom_host) {
  			args[ac++] = "--files-from";
+diff --git a/rsync.1.md b/rsync.1.md
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -418,6 +418,7 @@ detailed description below for a complete description.
+ --compare-dest=DIR          also compare received files relative to DIR
+ --copy-dest=DIR             ... and include copies of unchanged files
+ --link-dest=DIR             hardlink to files in DIR when unchanged
++--link-by-hash=DIR          create hardlinks by hash into DIR
+ --compress, -z              compress file data during the transfer
+ --compress-level=NUM        explicitly set compression level
+ --skip-compress=LIST        skip compressing files with suffix in LIST
+@@ -2234,6 +2235,50 @@ your home directory (remove the '=' for that).
+     specified (or implied by `-a`).  You can work-around this bug by avoiding
+     the `-o` option when sending to an old rsync.
+ 
++0.  `--link-by-hash=DIR`
++
++    This option hard links the destination files into `DIR`, a link farm
++    arranged by MD5 file hash. The result is that the system will only store
++    (usually) one copy of the unique contents of each file, regardless of the
++    file's name (it will use extra files if the links overflow the available
++    maximum).
++
++    This patch does not take into account file permissions, extended
++    attributes, or ACLs when linking things together, so you should only use
++    this if you don't care about preserving those extra file attributes (or if
++    they are always the same for identical files).
++
++    The DIR is relative to the destination directory, so either specify a full
++    path to the hash hierarchy, or specify a relative path that puts the links
++    outside the destination (e.g. "../links").
++
++    Keep in mind that the hierarchy is never pruned, so if you need to reclaim
++    space, you should remove any files that have just one link (since they are
++    not linked into any destination dirs anymore):
++
++    >     find $DIR -links 1 -delete
++
++    The link farm's directory hierarchy is determined by the file's (32-char)
++    MD5 hash and the file-length.  The hash is split up into directory shards.
++    For example, if a file is 54321 bytes long, it could be stored like this:
++
++    >     $DIR/123/456/789/01234567890123456789012.54321.0
++
++    Note that the directory layout in this patch was modified for version
++    3.1.0, so anyone using an older version of this patch should move their
++    existing link hierarchy out of the way and then use the newer rsync to copy
++    the saved hierarchy into its new layout.  Assuming that no files have
++    overflowed their link limits, this would work:
++
++    >     mv $DIR $DIR.old
++    >     rsync -aiv --link-by-hash=$DIR $DIR.old/ $DIR.tmp/
++    >     rm -rf $DIR.tmp
++    >     rm -rf $DIR.old
++
++    If some of your files are at their link limit, you'd be better of using a
++    script to calculate the md5 sum of each file in the hierarchy and move it
++    to its new location.
++
+ 0.  `--compress`, `-z`
+ 
+     With this option, rsync compresses the file data as it is sent to the
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
@@ -384,88 +446,30 @@ diff --git a/rsync.h b/rsync.h
  #define DEBUG_ICONV (DEBUG_HLINK+1)
  #define DEBUG_IO (DEBUG_ICONV+1)
  #define DEBUG_NSTR (DEBUG_IO+1)
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -429,6 +429,7 @@ to the detailed description below for a complete description.  verb(
-      --compare-dest=DIR      also compare received files relative to DIR
-      --copy-dest=DIR         ... and include copies of unchanged files
-      --link-dest=DIR         hardlink to files in DIR when unchanged
-+     --link-by-hash=DIR      create hardlinks by hash into DIR
-  -z, --compress              compress file data during the transfer
-      --compress-level=NUM    explicitly set compression level
-      --skip-compress=LIST    skip compressing files with suffix in LIST
-@@ -2061,6 +2062,48 @@ bf(--link-dest) from working properly for a non-super-user when bf(-o) was
- specified (or implied by bf(-a)).  You can work-around this bug by avoiding
- the bf(-o) option when sending to an old rsync.
+diff --git a/rsyncd.conf.5.md b/rsyncd.conf.5.md
+--- a/rsyncd.conf.5.md
++++ b/rsyncd.conf.5.md
+@@ -315,6 +315,23 @@ the values of parameters.  See the GLOBAL PARAMETERS section for more details.
+     is 0, which means no limit.  A negative value disables the module.  See
+     also the "lock file" parameter.
  
-+dit(bf(--link-by-hash=DIR)) This option hard links the destination files into
-+em(DIR), a link farm arranged by MD5 file hash. The result is that the system
-+will only store (usually) one copy of the unique contents of each file,
-+regardless of the file's name (it will use extra files if the links overflow
-+the available maximum).
++0.  `link by hash dir`
 +
-+This patch does not take into account file permissions, extended attributes,
-+or ACLs when linking things together, so you should only use this if you
-+don't care about preserving those extra file attributes (or if they are
-+always the same for identical files).
++    When the "link by hash dir" parameter is set to a non-empty string,
++    received files will be hard linked into **DIR**, a link farm arranged by
++    MD5 file hash. See the `--link-by-hash` option for a full explanation.
 +
-+The DIR is relative to the destination directory, so either specify a full
-+path to the hash hierarchy, or specify a relative path that puts the links
-+outside the destination (e.g. "../links").
++    The **DIR** must be accessible inside any chroot restrictions for the
++    module, but can exist outside the transfer location if there is an
++    inside-the-chroot path to the module (see "use chroot").  Note that a
++    user-specified option does not allow this outside-the-transfer-area
++    placement.
 +
-+Keep in mind that the hierarchy is never pruned, so if you need to reclaim
-+space, you should remove any files that have just one link (since they are not
-+linked into any destination dirs anymore):
-+
-+    find $DIR -links 1 -delete
-+
-+The link farm's directory hierarchy is determined by the file's (32-char) MD5
-+hash and the file-length.  The hash is split up into directory shards.  For
-+example, if a file is 54321 bytes long, it could be stored like this:
-+
-+    $DIR/123/456/789/01234567890123456789012.54321.0
-+
-+Note that the directory layout in this patch was modified for version 3.1.0,
-+so anyone using an older version of this patch should move their existing
-+link hierarchy out of the way and then use the newer rsync to copy the saved
-+hierarchy into its new layout.  Assuming that no files have overflowed their
-+link limits, this would work:
-+
-+    mv $DIR $DIR.old
-+    rsync -aiv --link-by-hash=$DIR $DIR.old/ $DIR.tmp/
-+    rm -rf $DIR.tmp
-+    rm -rf $DIR.old
-+
-+If some of your files are at their link limit, you'd be better of using a
-+script to calculate the md5 sum of each file in the hierarchy and move it
-+to its new location.
-+
- dit(bf(-z, --compress)) With this option, rsync compresses the file data
- as it is sent to the destination machine, which reduces the amount of data
- being transmitted -- something that is useful over a slow connection.
-diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
---- a/rsyncd.conf.yo
-+++ b/rsyncd.conf.yo
-@@ -297,6 +297,21 @@ message telling them to try later.  The default is 0, which means no limit.
- A negative value disables the module.
- See also the "lock file" parameter.
- 
-+dit(bf(link by hash dir)) When the "link by hash dir" parameter is set to a
-+non-empty string, received files will be hard linked into em(DIR), a link farm
-+arranged by MD5 file hash. See the bf(--link-by-hash) option for a full
-+explanation.
-+
-+The em(DIR) must be accessible inside any chroot restrictions for the module,
-+but can exist outside the transfer location if there is an inside-the-chroot
-+path to the module (see "use chroot").  Note that a user-specified option does
-+not allow this outside-the-transfer-area placement.
-+
-+If this parameter is set, it will disable the bf(--link-by-hash) command-line
-+option for copies into the module.
++    If this parameter is set, it will disable the `--link-by-hash` command-line
++    option for copies into the module.
 +
 +The default is for this parameter to be unset.
 +
- dit(bf(log file)) When the "log file" parameter is set to a non-empty
- string, the rsync daemon will log messages to the indicated file rather
- than using syslog. This is particularly useful on systems (such as AIX)
+ 0.  `log file`
+ 
+     When the "log file" parameter is set to a non-empty string, the rsync

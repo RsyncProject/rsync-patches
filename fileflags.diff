@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 37350027514026d410515e90fe7d94b8444c95c1
+based-on: 5b19cf787515fc2388dd070a85e86ced5d80510b
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -338,7 +338,7 @@ diff --git a/main.c b/main.c
  extern int file_total;
  extern int recurse;
  extern int xfer_dirs;
-@@ -946,6 +950,22 @@ static int do_recv(int f_in, int f_out, char *local_name)
+@@ -945,6 +949,22 @@ static int do_recv(int f_in, int f_out, char *local_name)
  	 * points to an identical file won't be replaced by the referent. */
  	copy_links = copy_dirlinks = copy_unsafe_links = 0;
  
@@ -469,6 +469,116 @@ diff --git a/options.c b/options.c
  		if (write_batch < 0)
  			args[ac++] = "--only-write-batch=X";
  		if (am_root > 1)
+diff --git a/rsync.1.md b/rsync.1.md
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -357,6 +357,7 @@ detailed description below for a complete description.
+ --keep-dirlinks, -K         treat symlinked dir on receiver as dir
+ --hard-links, -H            preserve hard links
+ --perms, -p                 preserve permissions
++--fileflags                 preserve file-flags (aka chflags)
+ --executability, -E         preserve executability
+ --chmod=CHMOD               affect file and/or directory permissions
+ --acls, -A                  preserve ACLs (implies -p)
+@@ -396,7 +397,10 @@ detailed description below for a complete description.
+ --ignore-missing-args       ignore missing source args without error
+ --delete-missing-args       delete missing source args from destination
+ --ignore-errors             delete even if there are I/O errors
+---force                     force deletion of dirs even if not empty
++--force-delete              force deletion of dirs even if not empty
++--force-change              affect user/system immutable files/dirs
++--force-uchange             affect user-immutable files/dirs
++--force-schange             affect system-immutable files/dirs
+ --max-delete=NUM            don't delete more than NUM files
+ --max-size=SIZE             don't transfer any file larger than SIZE
+ --min-size=SIZE             don't transfer any file smaller than SIZE
+@@ -692,6 +696,8 @@ your home directory (remove the '=' for that).
+ 
+     Note that `-a` **does not preserve hardlinks**, because finding
+     multiply-linked files is expensive.  You must separately specify `-H`.
++    Note also that for backward compatibility, `-a` currently does **not**
++    imply the `--fileflags` option.
+ 
+ 0.  `--no-OPTION`
+ 
+@@ -1030,7 +1036,7 @@ your home directory (remove the '=' for that).
+     Without this option, if the sending side has replaced a directory with a
+     symlink to a directory, the receiving side will delete anything that is in
+     the way of the new symlink, including a directory hierarchy (as long as
+-    `--force` or `--delete` is in effect).
++    `--force-delete` or `--delete` is in effect).
+ 
+     See also `--keep-dirlinks` for an analogous option for the receiving side.
+ 
+@@ -1216,6 +1222,29 @@ your home directory (remove the '=' for that).
+     those used by `--fake-super`) unless you repeat the option (e.g. `-XX`).
+     This "copy all xattrs" mode cannot be used with `--fake-super`.
+ 
++0.  `--fileflags` This option causes rsync to update the file-flags to be the
++    same as the source files and directories (if your OS supports the
++    **chflags**(2) system call).   Some flags can only be altered by the
++    super-user and some might only be unset below a certain secure-level
++    (usually single-user mode). It will not make files alterable that are set
++    to immutable on the receiver.  To do that, see `--force-change`,
++    `--force-uchange`, and `--force-schange`.
++
++0.  `--force-change` This option causes rsync to disable both user-immutable
++    and system-immutable flags on files and directories that are being updated
++    or deleted on the receiving side.  This option overrides `--force-uchange`
++    and `--force-schange`.
++
++0.  `--force-uchange` This option causes rsync to disable user-immutable flags
++    on files and directories that are being updated or deleted on the receiving
++    side.  It does not try to affect system flags.  This option overrides
++    `--force-change` and `--force-schange`.
++
++0.  `--force-schange` This option causes rsync to disable system-immutable
++    flags on files and directories that are being updated or deleted on the
++    receiving side.  It does not try to affect user flags.  This option
++    overrides `--force-change` and `--force-uchange`.
++
+ 0.  `--chmod`
+ 
+     This option tells rsync to apply one or more comma-separated "chmod" modes
+@@ -1670,7 +1699,7 @@ your home directory (remove the '=' for that).
+     option a step farther: each missing arg will become a deletion request of
+     the corresponding destination file on the receiving side (should it exist).
+     If the destination file is a non-empty directory, it will only be
+-    successfully deleted if `--force` or `--delete` are in effect.  Other than
++    successfully deleted if `--force-delee` or `--delete` are in effect.  Other than
+     that, this option is independent of any other type of delete processing.
+ 
+     The missing source files are represented by special file-list entries which
+@@ -1681,15 +1710,16 @@ your home directory (remove the '=' for that).
+     Tells `--delete` to go ahead and delete files even when there are I/O
+     errors.
+ 
+-0.  `--force`
++0.  `--force-delee`
+ 
+     This option tells rsync to delete a non-empty directory when it is to be
+     replaced by a non-directory.  This is only relevant if deletions are not
+     active (see `--delete` for details).
+ 
+-    Note for older rsync versions: `--force` used to still be required when
+-    using `--delete-after`, and it used to be non-functional unless the
+-    `--recursive` option was also enabled.
++    This option can be abbreviated `--force` for backward compatibility.  Note
++    that some older rsync versions used to still require `--force` when using
++    `--delete-after`, and it used to be non-functional unless the `--recursive`
++    option was also enabled.
+ 
+ 0.  `--max-delete=NUM`
+ 
+@@ -2491,7 +2521,7 @@ your home directory (remove the '=' for that).
+     output of other verbose messages).
+ 
+     The "%i" escape has a cryptic output that is 11 letters long.  The general
+-    format is like the string `YXcstpoguax`, where **Y** is replaced by the type
++    format is like the string `YXcstpoguaxf`, where **Y** is replaced by the type
+     of update being done, **X** is replaced by the file-type, and the other
+     letters represent attributes that may be output if they are being modified.
+ 
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
@@ -656,104 +766,6 @@ diff --git a/rsync.h b/rsync.h
  #define F_ACL(f) REQ_EXTRA(f, acls_ndx)->num
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
  #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -368,6 +368,7 @@ to the detailed description below for a complete description.  verb(
-  -K, --keep-dirlinks         treat symlinked dir on receiver as dir
-  -H, --hard-links            preserve hard links
-  -p, --perms                 preserve permissions
-+     --fileflags             preserve file-flags (aka chflags)
-  -E, --executability         preserve executability
-      --chmod=CHMOD           affect file and/or directory permissions
-  -A, --acls                  preserve ACLs (implies -p)
-@@ -407,7 +408,10 @@ to the detailed description below for a complete description.  verb(
-      --ignore-missing-args   ignore missing source args without error
-      --delete-missing-args   delete missing source args from destination
-      --ignore-errors         delete even if there are I/O errors
--     --force                 force deletion of dirs even if not empty
-+     --force-delete          force deletion of dirs even if not empty
-+     --force-change          affect user/system immutable files/dirs
-+     --force-uchange         affect user-immutable files/dirs
-+     --force-schange         affect system-immutable files/dirs
-      --max-delete=NUM        don't delete more than NUM files
-      --max-size=SIZE         don't transfer any file larger than SIZE
-      --min-size=SIZE         don't transfer any file smaller than SIZE
-@@ -678,7 +682,8 @@ specified, in which case bf(-r) is not implied.
- 
- Note that bf(-a) bf(does not preserve hardlinks), because
- finding multiply-linked files is expensive.  You must separately
--specify bf(-H).
-+specify bf(-H).  Note also that for backward compatibility, bf(-a)
-+currently does bf(not) imply the bf(--fileflags) option.
- 
- dit(--no-OPTION) You may turn off one or more implied options by prefixing
- the option name with "no-".  Not all options may be prefixed with a "no-":
-@@ -991,7 +996,7 @@ they would be using bf(--copy-links).
- Without this option, if the sending side has replaced a directory with a
- symlink to a directory, the receiving side will delete anything that is in
- the way of the new symlink, including a directory hierarchy (as long as
--bf(--force) or bf(--delete) is in effect).
-+bf(--force-delete) or bf(--delete) is in effect).
- 
- See also bf(--keep-dirlinks) for an analogous option for the receiving
- side.
-@@ -1175,6 +1180,29 @@ Note that the bf(-X) option does not copy rsync's special xattr values (e.g.
- those used by bf(--fake-super)) unless you repeat the option (e.g. -XX).
- This "copy all xattrs" mode cannot be used with bf(--fake-super).
- 
-+dit(bf(--fileflags)) This option causes rsync to update the file-flags to be
-+the same as the source files and directories (if your OS supports the
-+bf(chflags)(2) system call).   Some flags can only be altered by the super-user
-+and some might only be unset below a certain secure-level (usually single-user
-+mode). It will not make files alterable that are set to immutable on the
-+receiver.  To do that, see bf(--force-change), bf(--force-uchange), and
-+bf(--force-schange).
-+
-+dit(bf(--force-change)) This option causes rsync to disable both user-immutable
-+and system-immutable flags on files and directories that are being updated or
-+deleted on the receiving side.  This option overrides bf(--force-uchange) and
-+bf(--force-schange).
-+
-+dit(bf(--force-uchange)) This option causes rsync to disable user-immutable
-+flags on files and directories that are being updated or deleted on the
-+receiving side.  It does not try to affect system flags.  This option overrides
-+bf(--force-change) and bf(--force-schange).
-+
-+dit(bf(--force-schange)) This option causes rsync to disable system-immutable
-+flags on files and directories that are being updated or deleted on the
-+receiving side.  It does not try to affect user flags.  This option overrides
-+bf(--force-change) and bf(--force-uchange).
-+
- dit(bf(--chmod)) This option tells rsync to apply one or more
- comma-separated "chmod" modes to the permission of the files in the
- transfer.  The resulting value is treated as though it were the permissions
-@@ -1582,12 +1610,13 @@ display as a "*missing" entry in the bf(--list-only) output.
- dit(bf(--ignore-errors)) Tells bf(--delete) to go ahead and delete files
- even when there are I/O errors.
- 
--dit(bf(--force)) This option tells rsync to delete a non-empty directory
-+dit(bf(--force-delete)) This option tells rsync to delete a non-empty directory
- when it is to be replaced by a non-directory.  This is only relevant if
- deletions are not active (see bf(--delete) for details).
- 
--Note for older rsync versions: bf(--force) used to still be required when
--using bf(--delete-after), and it used to be non-functional unless the
-+This option can be abbreviated bf(--force) for backward compatibility.
-+Note that some older rsync versions used to still require bf(--force)
-+when using bf(--delete-after), and it used to be non-functional unless the
- bf(--recursive) option was also enabled.
- 
- dit(bf(--max-delete=NUM)) This tells rsync not to delete more than NUM
-@@ -2286,7 +2315,7 @@ with older versions of rsync, but that also turns on the output of other
- verbose messages).
- 
- The "%i" escape has a cryptic output that is 11 letters long.  The general
--format is like the string bf(YXcstpoguax), where bf(Y) is replaced by the
-+format is like the string bf(YXcstpogfax), where bf(Y) is replaced by the
- type of update being done, bf(X) is replaced by the file-type, and the
- other letters represent attributes that may be output if they are being
- modified.
 diff --git a/syscall.c b/syscall.c
 --- a/syscall.c
 +++ b/syscall.c

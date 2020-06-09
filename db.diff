@@ -21,11 +21,11 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 37350027514026d410515e90fe7d94b8444c95c1
+based-on: 5b19cf787515fc2388dd070a85e86ced5d80510b
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -24,6 +24,7 @@ aclocal.m4
+@@ -25,6 +25,7 @@ aclocal.m4
  /getgroups
  /gmon.out
  /rsync
@@ -36,24 +36,26 @@ diff --git a/.gitignore b/.gitignore
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
-@@ -6,6 +6,7 @@ datarootdir=@datarootdir@
+@@ -5,6 +5,7 @@ prefix=@prefix@
+ datarootdir=@datarootdir@
  exec_prefix=@exec_prefix@
- stunnel4=@STUNNEL4@
  bindir=@bindir@
 +sbindir=@sbindir@
+ libdir=@libdir@/rsync
  mandir=@mandir@
  
- LIBS=@LIBS@
-@@ -33,7 +34,7 @@ VERSION=@RSYNC_VERSION@
+@@ -33,8 +34,9 @@ VERSION=@RSYNC_VERSION@
  
  SIMD_x86_64=simd-checksum-x86_64.o lib/md5-asm-x86_64.o
  
--GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync-ssl.1 rsyncd.conf.5
-+GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync-ssl.1 rsyncdb.1 rsyncd.conf.5
++GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync-ssl.1
+ GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync.1.html \
+-	 rsync-ssl.1 rsync-ssl.1.html rsyncd.conf.5 rsyncd.conf.5.html
++	 rsync-ssl.1 rsync-ssl.1.html rsyncd.conf.5 rsyncd.conf.5.html rsyncdb.1 rsyncdb.1.html
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h ifuncs.h itypes.h inums.h \
  	lib/pool_alloc.h
  LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
-@@ -43,7 +44,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
+@@ -44,7 +46,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
@@ -62,21 +64,11 @@ diff --git a/Makefile.in b/Makefile.in
  OBJS3=progress.o pipe.o
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
-@@ -67,17 +68,20 @@ CHECK_OBJS=tls.o testrun.o getgroups.o getfsdev.o t_stub.o t_unsafe.o trimslash.
- 	$(CC) -I. -I$(srcdir) $(CFLAGS) $(CPPFLAGS) -c $< @CC_SHOBJ_FLAG@
- @OBJ_RESTORE@
- 
--all: Makefile rsync$(EXEEXT) stunnel-rsyncd.conf @MAKE_MAN@
-+all: Makefile rsync$(EXEEXT) rsyncdb$(EXEEXT) stunnel-rsyncd.conf @MAKE_MAN@
- 
- install: all
--	-${MKDIR_P} ${DESTDIR}${bindir}
-+	-${MKDIR_P} ${DESTDIR}${bindir} ${DESTDIR}${sbindir}
+@@ -76,10 +78,12 @@ install: all
  	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsync$(EXEEXT) ${DESTDIR}${bindir}
  	${INSTALLCMD} -m 755 rsync-ssl ${DESTDIR}${bindir}
- 	${INSTALLCMD} -m 755 rsync-ssl-rsh ${DESTDIR}${bindir}
+ 	${INSTALLCMD} -m 755 ssl-rsh ${DESTDIR}${libdir}
 +	rsync -ilt rsyncdb$(EXEEXT) ${DESTDIR}${bindir}/
-+	${INSTALLCMD} -m 755 rsyncdb-mountinfo ${DESTDIR}${sbindir}
  	-${MKDIR_P} ${DESTDIR}${mandir}/man1
  	-${MKDIR_P} ${DESTDIR}${mandir}/man5
  	if test -f rsync.1; then ${INSTALLMAN} -m 644 rsync.1 ${DESTDIR}${mandir}/man1; fi
@@ -85,7 +77,7 @@ diff --git a/Makefile.in b/Makefile.in
  	if test -f rsyncd.conf.5; then ${INSTALLMAN} -m 644 rsyncd.conf.5 ${DESTDIR}${mandir}/man5; fi
  
  install-ssl-daemon: stunnel-rsyncd.conf
-@@ -95,6 +99,9 @@ install-strip:
+@@ -97,6 +101,9 @@ install-strip:
  rsync$(EXEEXT): $(OBJS)
  	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
  
@@ -95,31 +87,22 @@ diff --git a/Makefile.in b/Makefile.in
  $(OBJS): $(HEADERS)
  $(CHECK_OBJS): $(HEADERS)
  options.o: latest-year.h
-@@ -213,10 +220,10 @@ proto.h: proto.h-tstamp
+@@ -215,7 +222,7 @@ proto.h: proto.h-tstamp
  proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
  	awk -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c
  
--man: rsync.1 rsync-ssl.1 rsyncd.conf.5 man-copy
-+man: rsync.1 rsync-ssl.1 rsyncdb.1 rsyncd.conf.5 man-copy
+-man: rsync.1 rsync-ssl.1 rsyncd.conf.5
++man: rsync.1 rsync-ssl.1 rsyncd.conf.5 rsyncdb.1
  
- man-copy:
--	@for fn in rsync.1 rsync-ssl.1 rsyncd.conf.5; do \
-+	@for fn in rsync.1 rsync-ssl.1 rsyncdb.1 rsyncd.conf.5; do \
- 	    if test -f $$fn; then \
- 		: ; \
- 	    elif test -f $(srcdir)/$$fn; then \
-@@ -235,12 +242,16 @@ rsync-ssl.1: rsync-ssl.yo
- 	yodl2man -o rsync-ssl.1 $(srcdir)/rsync-ssl.yo
- 	-$(srcdir)/tweak_manpage rsync-ssl.1
+ rsync.1: rsync.1.md md2man latest-year.h Makefile
+ 	@$(srcdir)/maybe-make-man $(srcdir) rsync.1.md
+@@ -226,8 +233,11 @@ rsync-ssl.1: rsync-ssl.1.md md2man latest-year.h Makefile
+ rsyncd.conf.5: rsyncd.conf.5.md md2man latest-year.h Makefile
+ 	@$(srcdir)/maybe-make-man $(srcdir) rsyncd.conf.5.md
  
-+rsyncdb.1: rsyncdb.yo
-+	yodl2man -o rsyncdb.1 $(srcdir)/rsyncdb.yo
-+	-$(srcdir)/tweak_manpage rsyncdb.1
++rsyncdb.1: rsyncdb.1.md md2man latest-year.h Makefile
++	@$(srcdir)/maybe-make-man $(srcdir) rsyncdb.1.md
 +
- rsyncd.conf.5: rsyncd.conf.yo
- 	yodl2man -o rsyncd.conf.5 $(srcdir)/rsyncd.conf.yo
- 	-$(srcdir)/tweak_manpage rsyncd.conf.5
- 
  clean: cleantests
 -	rm -f *~ $(OBJS) $(CHECK_PROGS) $(CHECK_OBJS) $(CHECK_SYMLINKS) \
 +	rm -f *~ $(OBJS) $(CHECK_PROGS) $(CHECK_OBJS) $(CHECK_SYMLINKS) rsyncdb$(EXEEXT) \
@@ -198,7 +181,7 @@ diff --git a/clientserver.c b/clientserver.c
  extern char *bind_address;
  extern char *config_file;
  extern char *logfile_format;
-@@ -688,6 +691,11 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -689,6 +692,11 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  
  	log_init(1);
  
@@ -210,7 +193,7 @@ diff --git a/clientserver.c b/clientserver.c
  #ifdef HAVE_PUTENV
  	if ((*lp_prexfer_exec(i) || *lp_postxfer_exec(i)) && !getenv("RSYNC_NO_XFER_EXEC")) {
  		int status;
-@@ -897,6 +905,8 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
+@@ -898,6 +906,8 @@ static int rsync_module(int f_in, int f_out, int i, const char *addr, const char
  
  	am_server = 1; /* Don't let someone try to be tricky. */
  	quiet = 0;
@@ -222,7 +205,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -378,6 +378,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
+@@ -371,6 +371,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
      unistd.h utime.h grp.h compat.h sys/param.h ctype.h sys/wait.h \
      sys/ioctl.h sys/filio.h string.h stdlib.h sys/socket.h sys/mode.h \
      sys/un.h sys/attr.h mcheck.h arpa/inet.h arpa/nameser.h locale.h \
@@ -230,7 +213,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1191,6 +1192,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1184,6 +1185,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -2360,7 +2343,7 @@ diff --git a/io.c b/io.c
  extern int io_error;
  extern int batch_fd;
  extern int eol_nulls;
-@@ -1481,6 +1483,32 @@ static void read_a_msg(void)
+@@ -1490,6 +1492,32 @@ static void read_a_msg(void)
  		if (am_sender)
  			maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
  		break;
@@ -2393,7 +2376,7 @@ diff --git a/io.c b/io.c
  	case MSG_DELETED:
  		if (msg_bytes >= sizeof data)
  			goto overflow;
-@@ -1632,6 +1660,7 @@ static void read_a_msg(void)
+@@ -1641,6 +1669,7 @@ static void read_a_msg(void)
  		 * with a duplicate exit message. */
  		_exit_cleanup(val, __FILE__, 0 - __LINE__);
  	default:
@@ -2502,9 +2485,9 @@ diff --git a/main.c b/main.c
  extern char *rsync_path;
 +extern char *db_config;
  extern char *shell_cmd;
- extern char *batch_name;
  extern char *password_file;
-@@ -1201,6 +1204,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+ extern char *backup_dir;
+@@ -1200,6 +1203,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
  	if (am_daemon && io_timeout && protocol_version >= 31)
  		send_msg_int(MSG_IO_TIMEOUT, io_timeout);
  
@@ -2514,7 +2497,7 @@ diff --git a/main.c b/main.c
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
  		if (need_messages_from_generator)
-@@ -1494,6 +1500,9 @@ static int start_client(int argc, char *argv[])
+@@ -1493,6 +1499,9 @@ static int start_client(int argc, char *argv[])
  	else
  		env_port = rsync_port;
  
@@ -2588,14 +2571,14 @@ diff --git a/options.c b/options.c
    rprintf(F," -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)\n");
    rprintf(F,"     --no-OPTION             turn off an implied OPTION (e.g. --no-D)\n");
    rprintf(F," -r, --recursive             recurse into directories\n");
-@@ -887,6 +906,7 @@ enum {OPT_VERSION = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -887,6 +906,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
 +      OPT_NO_DB, OPT_DBONLY,
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
-       OPT_SERVER, OPT_REFUSED_BASE = 9000};
+       OPT_REFUSED_BASE = 9000};
 @@ -1037,6 +1057,10 @@ static struct poptOption long_options[] = {
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"checksum-choice",  0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
@@ -2963,124 +2946,6 @@ diff --git a/rsync.h b/rsync.h
  #define DEBUG_DELTASUM (DEBUG_DEL+1)
  #define DEBUG_DUP (DEBUG_DELTASUM+1)
  #define DEBUG_EXIT (DEBUG_DUP+1)
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -346,6 +346,9 @@ to the detailed description below for a complete description.  verb(
-  -q, --quiet                 suppress non-error messages
-      --no-motd               suppress daemon-mode MOTD (see caveat)
-  -c, --checksum              skip based on checksum, not mod-time & size
-+     --db=CONFIG_FILE        specify a CONFIG_FILE for DB checksums
-+     --db-only=CONFIG_FILE   Behave like rsyncdb (see that manpage).
-+     --db-lax                Ignore ctime changes (use with CAUTION).
-  -a, --archive               archive mode; equals -rlptgoD (no -H,-A,-X)
-      --no-OPTION             turn off an implied OPTION (e.g. --no-D)
-  -r, --recursive             recurse into directories
-@@ -670,6 +673,67 @@ The checksum used is auto-negotiated between the client and the server, but
- can be overridden using either the bf(--checksum-choice) option or an
- environment variable that is discussed in that option's section.
- 
-+dit(bf(--db=CONFIG_FILE))  This option specifies a CONFIG_FILE to read
-+that holds connection details for a database of checksum information.
-+When combined with the bf(--checksum) (bf(-c)) option, rsync will try to
-+use cached checksum information from the DB, and will update it if it is
-+missing.
-+
-+The currently supported DB choices are MySQL and SQLite.  For example, a
-+MySQL configuration might look like this:
-+
-+verb(    dbtype: mysql
-+    dbhost: 127.0.0.1
-+    dbname: rsyncdb
-+    dbuser: rsyncuser
-+    dbpass: somepass
-+    port: 3306
-+    thishost: hostname )
-+
-+And a SQLite configuration might look like this:
-+
-+verb(    dbtype: SQLite
-+    dbname: /var/cache/rsync/sum.db
-+    transaction: 1)
-+
-+Both the bf(--db) and bf(--db-lax) options only affect the side where the
-+option is used.  To affect the remote side of a remote-shell connection,
-+use the bf(--remote-option) (bf(-M)) option.  For example, to specify the
-+same options on both sides, you could specify something like this:
-+
-+verb(    rsync -avc {-M,}--db=/etc/rsyncdb.conf src/ host:dest/ )
-+
-+For a local copy, this option affects both the source and the destination.
-+If you wish a local copy to enable this option just for the destination
-+files, specify bf(-M--db=CONFIG) (the same for bf(-M--db-lax)). If you wish
-+a local copy to enable this option just for the source files, combine
-+bf(--db=CONFIG) with bf(-M--no-db) (similarly use bf(-M--no-db-lax)).
-+
-+See the perl script "rsyncdb" in the support directory of the source code
-+(which may also be installed in /usr/bin) for a way to create the tables,
-+populate the mounted-disk information, check files against their checksums,
-+and update both the MD4 and MD5 checksums for files at the same time (since
-+an rsync copy will only update one or the other).
-+
-+You can use a single MySQL DB for all your hosts if you give each one
-+their own "thishost" name and setup their device-mapping data.  Or feel
-+free to use separate databases, separate servers, etc.  See the rsync
-+daemon's "db config" parameter for how to configure a daemon to use a DB
-+(since a client cannot control this parameter on a daemon).
-+
-+dit(bf(--db-lax)) This option can be used to modify the inode-matching
-+algorithm used by bf(--db) to one that ignores the ctime.  This can be very
-+DANGEROUS unless your files are known to ALWAYS be updated in a safe manner.
-+If unsure, don't use it.
-+
-+The reason you might want to use it is that the ctime (inode change time) is
-+changed by an added hard-link, or the file being moving around.  To use this
-+option safely you must be CERTAIN that either rsync w/--db is the only program
-+adding files into the cached hierarchies, OR that all new files will have new
-+modify times (never a historical mtime that might match an orphaned inode).
-+So, for certain applications, such as mirrors of new tar releases, this option
-+can save a lot of unneeded checksum re-computation due to ctime changes.
-+
- dit(bf(-a, --archive)) This is equivalent to bf(-rlptgoD). It is a quick
- way of saying you want recursion and want to preserve almost
- everything (with -H being a notable omission).
-diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
---- a/rsyncd.conf.yo
-+++ b/rsyncd.conf.yo
-@@ -326,6 +326,22 @@ is daemon.  This setting has no effect if the "log file" setting is a
- non-empty string (either set in the per-modules settings, or inherited
- from the global settings).
- 
-+dit(bf(db config)) This parameter specifies a config file to read that
-+holds connection details for a database of checksum information.
-+
-+The config file will be read-in prior to any chroot restrictions, but
-+the connection occurs from inside the chroot.  This means that you
-+should use a socket connection (e.g. 127.0.0.1 rather than localhost)
-+for a MySQL config from inside a chroot.  For SQLite, the DB file must
-+be placed inside the chroot (though it can be placed outside the
-+transfer dir if you configured an inside-chroot path).
-+
-+See the bf(--db=CONFIG_FILE) option for full details.
-+
-+dit(bf(db lax)) This parameter specifies that a "db config" setup should use
-+lax (no ctime) lookups.  See the rsync manpage's section -n bf(--db-lax) for
-+some warnings about using this setting.
-+
- dit(bf(syslog tag)) This parameter allows you to specify the syslog
- tag to use when logging messages from the rsync daemon. The default is
- "rsyncd".  This setting has no effect if the "log file" setting is a
-@@ -801,8 +817,8 @@ If you are un-refusing the compress option, you probably want to match
- "!compress*" so that you also accept the bf(--compress-level) option.
- 
- Note that the "write-devices" option is refused by default, but can be
--explicitly accepted with "!write-devices".  The options "log-file" and
--"log-file-format" are forcibly refused and cannot be accepted.
-+explicitly accepted with "!write-devices".  The options "db", "db-lax",
-+"log-file", and "log-file-format" are forcibly refused and cannot be accepted.
- 
- Here are all the options that are not matched by wild-cards:
- 
 diff --git a/rsyncdb-mountinfo b/rsyncdb-mountinfo
 new file mode 100755
 --- /dev/null
@@ -3168,24 +3033,27 @@ new file mode 100755
 +}
 +
 +die "Failed to to open any mount files: @MOUNT_FILES\n";
-diff --git a/rsyncdb.yo b/rsyncdb.yo
+diff --git a/rsyncdb.1.md b/rsyncdb.1.md
 new file mode 100644
 --- /dev/null
-+++ b/rsyncdb.yo
-@@ -0,0 +1,194 @@
-+mailto(rsync-bugs@samba.org)
-+manpage(rsync)(1)(23 Jun 2013)()()
-+manpagename(rsyncdb)(Maintain an rsync checksum DB)
-+manpagesynopsis()
++++ b/rsyncdb.1.md
+@@ -0,0 +1,215 @@
++# NAME
 +
-+verb(rsyncdb --db=CONFIG [OPTION...] [DIR...])
++rsyncdb - Maintain an rsync checksum DB
 +
-+manpagedescription()
++# SYNOPSIS
++
++```
++rsyncdb --db=CONFIG [OPTION...] [DIR...]
++```
++
++# DESCRIPTION
 +
 +Rsyncdb can maintain a checksum-caching DB that rsync can use to make its
-+bf(--checksum) option more optimal.  You must specify a config file via
-+the bf(--db=CONFIG_FILE) option in order for rsyncdb to know what DB to
-+manipulate.  See the rsync manpage's bf(--db) option for full details on
++`--checksum` option more optimal.  You must specify a config file via
++the `--db=CONFIG_FILE` option in order for rsyncdb to know what DB to
++manipulate.  See the rsync manpage's `--db` option for full details on
 +the file's format.
 +
 +You can specify one or more directory args for rsyncdb to scan.  If no
@@ -3194,66 +3062,69 @@ new file mode 100644
 +
 +Note that the rsyncdb program is usually just a symlink to the rsync program.
 +You can force rsync to behave as rsyncdb either by having a symlink (or
-+hardlink) name that ends with "db" or by bf(starting) the rsync args with
-+bf(--db-only=CONFIG) (and that option works just like bf(--db=CONFIG) to
++hardlink) name that ends with "db" or by `starting` the rsync args with
++`--db-only=CONFIG` (and that option works just like `--db=CONFIG` to
 +a program named rsyncdb).
 +
-+manpagesection(EXAMPLES)
++# EXAMPLES
 +
 +The following command will update checksum information in the database
 +described in the /etc/db.conf file:
 +
-+verb(    rsyncdb --db=/etc/db.conf -o n --clean /dir1 /dir2)
++>     rsyncdb --db=/etc/db.conf -o n --clean /dir1 /dir2
 +
 +It scans 2 directory hierarchies (/dir1 & /dir2) and cleans out any
 +checksums whose inodes are no longer found in those directories (so that
 +directory args are presumed to be complete for this host's DB contents).
 +
 +The following command will scan all the files in the /dir2 directory (without
-+recursive scanning, due to the bf(--no-r) option) and check them against
++recursive scanning, due to the `--no-r` option) and check them against
 +the DB:
 +
-+verb(    rsyncdb --db=/etc/db.conf --check --no-r /dir2)
++>     rsyncdb --db=/etc/db.conf --check --no-r /dir2
 +
 +Any errors found are output as well as being fixed in the DB.  (See
-+bf(--no-update) for how to check without updating.)
++`--no-update` for how to check without updating.)
 +
 +The following command will output MD5 sums for all the files found in the
 +directories mentioned, even if they are unchanged (due to the
-+bf(--output=us) option):
++`--output=us` option):
 +
-+verb(    rsyncdb --db=/etc/db.conf -rous /dir* >/tmp/md5sums.txt)
++>     rsyncdb --db=/etc/db.conf -rous /dir* >/tmp/md5sums.txt
 +
 +This is just like running md5sum, only faster.  Unlike md5sum, you can't
-+specify a single file, so use bf(--no-r) and grep the output if you just
++specify a single file, so use `--no-r` and grep the output if you just
 +want to see a single file's value.
 +
 +The following command initializes a new DB, and is required for any new DB:
 +
-+verb(    rsyncdb --db=/etc/db.conf --init --mounts)
++>     rsyncdb --db=/etc/db.conf --init --mounts
 +
-+The bf(--init) option should only be used once (unless you want to
-+destroy existing data).  The bf(--mounts) option may need to be used
++The `--init` option should only be used once (unless you want to
++destroy existing data).  The `--mounts` option may need to be used
 +periodically, and makes use of a helper script (see below).
 +
-+manpagesection(OPTIONS SUMMARY)
++# OPTIONS SUMMARY
 +
-+Rsyncdb accepts the following options: verb(
-+     --db=CONFIG     Specify the CONFIG file to read for the DB info.
-+     --db-lax        Ignore ctime changes (use with CAUTION).
-+     --no-recursive  Avoid the default --recursive (-r) scanning behavior.
-+ -s, --sums=SUMS     List which checksums to update (default: md5).
-+ -o, --output=STR    One or more letters of what to output (default: dn).
-+ -c, --check         Check the checksums (by reading the files) and fix any
-+                     issues.  Makes --output default to "dni".
-+     --clean         Note all inodes in the DIRS and remove DB extras.
-+ -N, --no-update     Avoids updating/adding info with --check and/or --clean.
-+     --init          Initialize a DB by (re-)creating its tables.
-+     --mounts        Scan for mounted filesystems and update the DB.
-+ -q, --quiet         Disables the default non-error output.
-+ -h, --help          Display this help message.)
++Rsyncdb accepts the following options:
 +
-+manpageoptions()
++```
++--db=CONFIG         Specify the CONFIG file to read for the DB info.
++--db-lax            Ignore ctime changes (use with CAUTION).
++--no-recursive      Avoid the default --recursive (-r) scanning behavior.
++--sums=SUMS, -s     List which checksums to update (default: md5).
++--output=STR, -o    One or more letters of what to output (default: dn).
++--check, -c         Check the checksums (by reading the files) and fix any
++                    issues.  Makes --output default to "dni".
++--clean             Note all inodes in the DIRS and remove DB extras.
++--no-update, -N     Avoids updating/adding info with --check and/or --clean.
++--init              Initialize a DB by (re-)creating its tables.
++--mounts            Scan for mounted filesystems and update the DB.
++--quiet, -q         Disables the default non-error output.
++--help, -h          Display this help message.)
++```
++
++# OPTIONS
 +
 +Rsyncdb accepts both long (double-dash + word) and short (single-dash + letter)
 +options.  The full list of the available options are described below.  If an
@@ -3265,105 +3136,120 @@ new file mode 100644
 +parameter may need to be quoted in some manner for it to survive the shell's
 +command-line parsing.
 +
-+startdit()
-+dit(bf(--db=CONFIG_FILE)) This tells rsyncdb what DB-config file to read
-+for the DB setup.  This is the same as the option in rsync, so refer to
-+that manpage for full details.
++0.  `--db=CONFIG_FILE`
 +
-+dit(bf(--db-lax)) This option works just like it does in rsync, so refer to
-+that manpage for full details.
++    This tells rsyncdb what DB-config file to read for the DB setup.  This is
++    the same as the option in rsync, so refer to that manpage for full details.
 +
-+dit(bf(--no-recursive, --no-r)) This disables the default recursive
-+directory scan that is performed on the listed directory args.  The
-+options bf(--recursive) and bf(-r) are also accepted, if someone wants
-+to override an earlier bf(--no-r) override.
++0.  `--db-lax`
 +
-+dit(bf(--sums=SUMS, -s)) Only output/update the listed checksum types. By
-+default we deal with just the newer md5 checksums (i.e.  bf(--sums=5)).
++    This option works just like it does in rsync, so refer to that manpage for
++    full details.
 +
-+Note that this option does NOT affect the order that checksums are output
-+if "-o s" is enabled, so bf(-s5,4) is the same as bf(-s4,5).
++0.  `--no-recursive, --no-r`
 +
-+dit(bf(--output=STR, -o)) The output option lets you specify one or more
-+letters indicating what information should be output.  If bf(--output) is not
-+specified, the default is either "dn" or (with bf(--check)) "dni".
++    This disables the default recursive directory scan that is performed on the
++    listed directory args.  The options `--recursive` and `-r` are also
++    accepted, if someone wants to override an earlier `--no-r` override.
 +
-+The following letters are accepted in the string:
++0.  `--sums=SUMS, -s`
 +
-+quote(itemization(
-+  it() bf(d) outputs "... dir_name ..." lines for each directory in our scan.
-+       if "d" is omitted, then this progress indictor is not output.
-+  it() bf(n) includes the file's name in the per-file output. These lines are
-+       only output for changed files unless "u" is given.  The "n" option is
-+       implied by every other output option letter except "d".
-+  it() bf(s) includes the checksum info in the per-file output.
-+  it() bf(c) is a synonym for 's'.
-+  it() bf(i) includes itemized change info in the per-file output.
-+  quote(itemization(
-+    it() bf(!i) indicates that the time and/or size is wrong.
-+    it() bf(+4) indicates the MD4 sum is missing.
-+    it() bf(+5) indicates the MD5 sum is missing.
-+    it() bf(!4) indicates the MD4 sum is wrong.
-+    it() bf(!5) indicates the MD5 sum is wrong.
-+    it() bf(?4) indicates an unknown MD4 difference.  This can happen if we
-+    didn't need to read the file; i.e. if the time/size is wrong and no sum
-+    info was requested.
-+    it() bf(?5) indicates an unknown MD5 difference.
-+  ))
-+  it() bf(u) includes unchanged files in the per-file output lines.
-+))
++    Only output/update the listed checksum types. By default we deal with just
++    the newer md5 checksums (i.e.  `--sums=5`).
 +
-+dit(bf(--check, -c)) Check the checksums (forcing the reading of all the
-+files) and fix any issues that are found.  Makes bf(--output) default to "dni".
++    Note that this option does NOT affect the order that checksums are output
++    if "-o s" is enabled, so `-s5,4` is the same as `-s4,5`.
 +
-+dit(bf(--clean)) Makes a temp-DB of all the inodes that we find in all the
-+listed directories and removes any extraneous checksums from the DB.  You
-+will need to specify all the mounted directories that are present (and
-+listed as mounted) in the DB on this host or else the checksums from the
-+unvisited directories will be discarded from the DB.  If you want to just
-+--clean without adding or updating the info of new or changed files,
-+specify bf(--no-update) as well.
++0.  `--output=STR, -o`
 +
-+dit(bf(--no-update, -N)) Avoids updating/adding info with bf(--check)
-+and/or bf(--clean).
++    The output option lets you specify one or more letters indicating what
++    information should be output.  If `--output` is not specified, the default
++    is either "dn" or (with `--check`) "dni".
 +
-+dit(bf(--quiet, -q)) Disable the default (non-error) output settings.  This
-+turns off the messages that bf(--init), bf(--mount), and bf(--clean) output,
-+and makes the default for bf(--output) be nothing (though an explicit
-+bf(--output) option is not affected).
++    The following letters are accepted in the string:
 +
-+dit(bf(--init)) Create the tables in the DB.  If it is used on an existing
-+DB, all the existing tables are dropped and re-created.
++    - `d` outputs "... dir_name ..." lines for each directory in our scan.  if
++      "d" is omitted, then this progress indictor is not output.
++    - `n` includes the file's name in the per-file output. These lines are only
++      output for changed files unless "u" is given.  The "n" option is implied
++      by every other output option letter except "d".
++    - `s` includes the checksum info in the per-file output.
++    - `c` is a synonym for 's'.
++    - `i` includes itemized change info in the per-file output.
++      - `!i` indicates that the time and/or size is wrong.
++      - `+4` indicates the MD4 sum is missing.
++      - `+5` indicates the MD5 sum is missing.
++      - `!4` indicates the MD4 sum is wrong.
++      - `!5` indicates the MD5 sum is wrong.
++      - `?4` indicates an unknown MD4 difference.  This can happen if we didn't
++	need to read the file; i.e. if the time/size is wrong and no sum info
++	was requested.
++      - `?5` indicates an unknown MD5 difference.
++    - `u` includes unchanged files in the per-file output lines.
++
++0.  `--check, -c`
++
++    Check the checksums (forcing the reading of all the files) and fix any
++    issues that are found.  Makes `--output` default to "dni".
++
++0.  `--clean`
++
++    Makes a temp-DB of all the inodes that we find in all the listed
++    directories and removes any extraneous checksums from the DB.  You will
++    need to specify all the mounted directories that are present (and listed as
++    mounted) in the DB on this host or else the checksums from the unvisited
++    directories will be discarded from the DB.  If you want to just --clean
++    without adding or updating the info of new or changed files, specify
++    `--no-update` as well.
++
++0.  `--no-update, -N`
++
++    Avoids updating/adding info with `--check` and/or `--clean`.
++
++0.  `--quiet, -q`
++
++    Disable the default (non-error) output settings.  This turns off the
++    messages that `--init`, `--mount`, and `--clean` output, and makes the
++    default for `--output` be nothing (though an explicit `--output` option is
++    not affected).
++
++0.  `--init`
++
++    Create the tables in the DB.  If it is used on an existing DB, all the
++    existing tables are dropped and re-created.
 +
 +This option cannot be combined with the updating or reporting of checksum
-+information, but may be combined with bf(--mounts).
++information, but may be combined with `--mounts`.
 +
-+dit(bf(--mounts)) Populate the "disk" DB with the available device numbers
-+and change any mounted/unmount information for devices.  This should be run
-+every time a mount-change happens that may affect a directory hierarchy in
-+the DB.  Rsyncdb will not save any checksums for a device that is not
-+listed in the "disk" table.
++0.  `--mounts`
 +
-+The helper script "rsyncdb-mountinfo" is used as the source of the mount
-+information on the host, which it derives from various system files and UUID
-+directories (if available).  That script supports the use of an override file
-+named ".rsyncdb_mount_uniq" in the root of the mount as one way to manually
-+assign unique values to a shared (mountable) device's various disks.
++    Populate the "disk" DB with the available device numbers and change any
++    mounted/unmount information for devices.  This should be run every time a
++    mount-change happens that may affect a directory hierarchy in the DB.
++    Rsyncdb will not save any checksums for a device that is not listed in the
++    "disk" table.
 +
-+Some advanced users may want to maintain the disk table themselves in order
-+to support mounting a drive in different (or multiple) locations, etc.
++    The helper script "rsyncdb-mountinfo" is used as the source of the mount
++    information on the host, which it derives from various system files and
++    UUID directories (if available).  That script supports the use of an
++    override file named ".rsyncdb_mount_uniq" in the root of the mount as one
++    way to manually assign unique values to a shared (mountable) device's
++    various disks.
 +
-+Specifying the bf(--mounts) option cannot be combined with updating or
-+reporting of checksum information, but may be combined with bf(--init).
++    Some advanced users may want to maintain the disk table themselves in order
++    to support mounting a drive in different (or multiple) locations, etc.
 +
-+dit(bf(--help, -h)) Display a summary of the options.
++    Specifying the `--mounts` option cannot be combined with updating or
++    reporting of checksum information, but may be combined with `--init`.
 +
-+enddit()
++0.  `--help, -h`
 +
-+manpageseealso()
++    Display a summary of the options.
 +
-+bf(rsync)(1)
++# SEE ALSO
 +
-+manpageauthor()
++**rsync**(1)
++
++# AUTHOR
 +
 +Rsyncdb was written by Wayne Davison.

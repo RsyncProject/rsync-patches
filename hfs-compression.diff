@@ -162,7 +162,7 @@ diff --git a/main.c b/main.c
  extern int protocol_version;
  extern int force_change;
  extern int file_total;
-@@ -111,6 +116,7 @@ int daemon_over_rsh = 0;
+@@ -110,6 +115,7 @@ int daemon_over_rsh = 0;
  mode_t orig_umask = 0;
  int batch_gen_fd = -1;
  int sender_keeps_checksum = 0;
@@ -170,7 +170,7 @@ diff --git a/main.c b/main.c
  int raw_argc, cooked_argc;
  char **raw_argv, **cooked_argv;
  
-@@ -661,6 +667,43 @@ static pid_t do_cmd(char *cmd, char *machine, char *user, char **remote_argv, in
+@@ -660,6 +666,43 @@ static pid_t do_cmd(char *cmd, char *machine, char *user, char **remote_argv, in
  	return 0; /* not reached */
  }
  
@@ -214,7 +214,7 @@ diff --git a/main.c b/main.c
  /* The receiving side operates in one of two modes:
   *
   * 1. it receives any number of files into a destination directory,
-@@ -719,6 +762,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
+@@ -718,6 +761,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
  				exit_cleanup(RERR_FILESELECT);
  			}
  			filesystem_dev = st.st_dev; /* ensures --force works right w/-x */
@@ -224,7 +224,7 @@ diff --git a/main.c b/main.c
  			return NULL;
  		}
  		if (file_total > 1) {
-@@ -779,7 +825,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
+@@ -778,7 +824,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
  				full_fname(dest_path));
  			exit_cleanup(RERR_FILESELECT);
  		}
@@ -235,7 +235,7 @@ diff --git a/main.c b/main.c
  		return NULL;
  	}
  
-@@ -799,6 +847,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
+@@ -798,6 +846,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
  			full_fname(dest_path));
  		exit_cleanup(RERR_FILESELECT);
  	}
@@ -308,6 +308,66 @@ diff --git a/options.c b/options.c
  	if (do_compression && do_compression_level != CLVL_NOT_SPECIFIED) {
  		if (asprintf(&arg, "--compress-level=%d", do_compression_level) < 0)
  			goto oom;
+diff --git a/rsync.1.md b/rsync.1.md
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -362,6 +362,8 @@ detailed description below for a complete description.
+ --chmod=CHMOD               affect file and/or directory permissions
+ --acls, -A                  preserve ACLs (implies -p)
+ --xattrs, -X                preserve extended attributes
++--hfs-compression           preserve HFS compression if supported
++--protect-decmpfs           preserve HFS compression as xattrs
+ --owner, -o                 preserve owner (super-user only)
+ --group, -g                 preserve group
+ --devices                   preserve device files (super-user only)
+@@ -1246,6 +1248,47 @@ your home directory (remove the '=' for that).
+     receiving side.  It does not try to affect user flags.  This option
+     overrides `--force-change` and `--force-uchange`.
+ 
++0.  `--hfs-compression`
++
++    This option causes rsync to preserve HFS+ compression if the destination
++    filesystem supports it.  If the destination does not support it, rsync will
++    exit with an error.
++
++    Filesystem compression was introduced to HFS+ in Mac OS 10.6. A file that
++    is compressed has no data in its data fork. Rather, the compressed data is
++    stored in an extended attribute named com.apple.decmpfs and a file flag is
++    set to indicate that the file is compressed (UF_COMPRESSED). HFS+
++    decompresses this data "on-the-fly" and presents it to the operating system
++    as a normal file.  Normal attempts to copy compressed files (e.g. in the
++    Finder, via cp, ditto, etc.) will copy the file's decompressed contents,
++    remove the UF_COMPRESSED file flag, and discard the com.apple.decmpfs
++    extended attribute. This option will preserve the data in the
++    com.apple.decmpfs extended attribute and ignore the synthesized data in the
++    file contents.
++
++    This option implies both `--fileflags` and (--xattrs).
++
++0.  `--protect-decmpfs`
++
++    The com.apple.decmpfs extended attribute is hidden by default from list/get
++    xattr calls, therefore normal attempts to copy compressed files will
++    functionally decompress those files. While this is desirable behavior when
++    copying files to filesystems that do not support HFS+ compression, it has
++    serious performance and capacity impacts when backing up or restoring the
++    Mac OS X filesystem.
++
++    This option will transfer the com.apple.decmpfs extended attribute
++    regardless of support on the destination. If a source file is compressed
++    and an existing file on the destination is not compressed, the data fork of
++    the destination file will be truncated and the com.apple.decmpfs xattr will
++    be transferred instead. Note that compressed files will not be readable to
++    the operating system of the destination if that operating system does not
++    support HFS+ compression. Once restored (with or without this option) to an
++    operating system that supports HFS+ compression, however, these files will
++    be accessible as usual.
++
++    This option implies `--fileflags` and `--xattrs`.
++
+ 0.  `--chmod`
+ 
+     This option tells rsync to apply one or more comma-separated "chmod" modes
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
@@ -375,61 +435,6 @@ diff --git a/rsync.h b/rsync.h
  #ifdef HAVE_GETATTRLIST
  #define SUPPORT_CRTIMES 1
  #endif
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -373,6 +373,8 @@ to the detailed description below for a complete description.  verb(
-      --chmod=CHMOD           affect file and/or directory permissions
-  -A, --acls                  preserve ACLs (implies -p)
-  -X, --xattrs                preserve extended attributes
-+     --hfs-compression       preserve HFS compression if supported
-+     --protect-decmpfs       preserve HFS compression as xattrs
-  -o, --owner                 preserve owner (super-user only)
-  -g, --group                 preserve group
-      --devices               preserve device files (super-user only)
-@@ -1204,6 +1206,42 @@ flags on files and directories that are being updated or deleted on the
- receiving side.  It does not try to affect user flags.  This option overrides
- bf(--force-change) and bf(--force-uchange).
- 
-+dit(bf(--hfs-compression)) This option causes rsync to preserve HFS+
-+compression if the destination filesystem supports it.  If the destination
-+does not support it, rsync will exit with an error.
-+
-+Filesystem compression was introduced to HFS+ in Mac OS 10.6. A file that is
-+compressed has no data in its data fork. Rather, the compressed data is stored
-+in an extended attribute named com.apple.decmpfs and a file flag is set to
-+indicate that the file is compressed (UF_COMPRESSED). HFS+ decompresses this
-+data "on-the-fly" and presents it to the operating system as a normal file.
-+Normal attempts to copy compressed files (e.g. in the Finder, via cp, ditto,
-+etc.) will copy the file's decompressed contents, remove the UF_COMPRESSED file
-+flag, and discard the com.apple.decmpfs extended attribute. This option will
-+preserve the data in the com.apple.decmpfs extended attribute and ignore the
-+synthesized data in the file contents.
-+
-+This option implies both bf(--fileflags) and (--xattrs).
-+
-+dit(bf(--protect-decmpfs)) The com.apple.decmpfs extended attribute is hidden
-+by default from list/get xattr calls, therefore normal attempts to copy
-+compressed files will functionally decompress those files. While this is
-+desirable behavior when copying files to filesystems that do not support HFS+
-+compression, it has serious performance and capacity impacts when backing up
-+or restoring the Mac OS X filesystem.
-+
-+This option will transfer the com.apple.decmpfs extended attribute regardless
-+of support on the destination. If a source file is compressed and an existing
-+file on the destination is not compressed, the data fork of the destination
-+file will be truncated and the com.apple.decmpfs xattr will be transferred
-+instead. Note that compressed files will not be readable to the operating
-+system of the destination if that operating system does not support HFS+
-+compression. Once restored (with or without this option) to an operating system
-+that supports HFS+ compression, however, these files will be accessible as
-+usual.
-+
-+This option implies bf(--fileflags) and bf(--xattrs).
-+
- dit(bf(--chmod)) This option tells rsync to apply one or more
- comma-separated "chmod" modes to the permission of the files in the
- transfer.  The resulting value is treated as though it were the permissions
 diff --git a/t_stub.c b/t_stub.c
 --- a/t_stub.c
 +++ b/t_stub.c

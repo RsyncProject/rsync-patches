@@ -9,7 +9,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 37350027514026d410515e90fe7d94b8444c95c1
+based-on: 5b19cf787515fc2388dd070a85e86ced5d80510b
 diff --git a/exclude.c b/exclude.c
 --- a/exclude.c
 +++ b/exclude.c
@@ -334,6 +334,60 @@ diff --git a/flist.c b/flist.c
  	}
  
  	if (reenable_multiplex >= 0)
+diff --git a/rsync.1.md b/rsync.1.md
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -1239,7 +1239,9 @@ your home directory (remove the '=' for that).
+     >     --chmod=D2775,F664
+ 
+     It is also legal to specify multiple `--chmod` options, as each additional
+-    option is just appended to the list of changes to make.
++    option is just appended to the list of changes to make.  To change
++    permissions of files matching a pattern, use an include filter with the `m`
++    modifier, which takes effect before any `--chmod` options.
+ 
+     See the `--perms` and `--executability` options for how the resulting
+     permission value can be applied to the files in the transfer.
+@@ -2428,6 +2430,10 @@ your home directory (remove the '=' for that).
+     If you specify "--chown=foo:bar, this is exactly the same as specifying
+     "`--usermap=*:foo --groupmap=*:bar`", only easier.
+ 
++    To change ownership of files matching a pattern, use an include filter with
++    the `o` and `g` modifiers, which take effect before uid/gid mapping and
++    therefore em(can) be mixed with `--usermap` and `--groupmap`.
++
+ 0.  `--timeout=TIMEOUT`
+ 
+     This option allows you to set a maximum I/O timeout in seconds.  If no data
+@@ -3351,6 +3357,15 @@ The following modifiers are accepted after a "`+`" or "`-`":
+   rules that exclude things like "CVS" and "`*.o`" are marked as perishable,
+   and will not prevent a directory that was removed on the source from being
+   deleted on the destination.
++- An `m+nop()(CHMOD)` on an include rule tweaks the permissions of matching
++  source files in the same way as `--chmod`.  This happens before any tweaks
++  requested via `--chmod` options.
++- An `o+nop()(USER)` on an include rule pretends that matching source files are
++  owned by `USER` (a name or numeric uid).  This happens before any uid mapping
++  by name or `--usermap`.
++- A `g+nop()(GROUP)` on an include rule pretends that matching source files are
++  owned by `GROUP` (a name or numeric gid).  This happens before any gid
++  mapping by name or `--groupmap`.
+ - An `x` indicates that a rule affects xattr names in xattr copy/delete
+   operations (and is thus ignored when matching file/dir names).  If no
+   xattr-matching rules are specified, a default xattr filtering rule is used
+@@ -3408,6 +3423,12 @@ The following modifiers are accepted after a merge or dir-merge rule:
+   rules in the file must not specify sides (via a modifier or a rule prefix
+   such as `hide`).
+ 
++The attribute-affecting modifiers `m`, `o`, and `g` work only in client filters
++(not in daemon filters), and only the modifiers of the first matching rule are
++applied.  As an example, assuming `--super` is enabled, the rule
++"`+o+nop()(root)g+nop()(root)m+nop()(go=) *~`" would ensure that all "backup"
++files belong to root and are not accessible to anyone else.
++
+ Per-directory rules are inherited in all subdirectories of the directory where
+ the merge-file was found unless the 'n' modifier was used.  Each subdirectory's
+ rules are prefixed to the inherited per-directory rules from its parents, which
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
@@ -387,58 +441,6 @@ diff --git a/rsync.h b/rsync.h
  } filter_rule;
  
  typedef struct filter_list_struct {
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -1197,6 +1197,8 @@ quote(--chmod=D2775,F664)
- 
- It is also legal to specify multiple bf(--chmod) options, as each
- additional option is just appended to the list of changes to make.
-+To change permissions of files matching a pattern, use an include filter with
-+the bf(m) modifier, which takes effect before any bf(--chmod) options.
- 
- See the bf(--perms) and bf(--executability) options for how the resulting
- permission value can be applied to the files in the transfer.
-@@ -2236,6 +2238,10 @@ be omitted, but if USER is empty, a leading colon must be supplied.
- If you specify "--chown=foo:bar, this is exactly the same as specifying
- "--usermap=*:foo --groupmap=*:bar", only easier.
- 
-+To change ownership of files matching a pattern, use an include filter with
-+the bf(o) and bf(g) modifiers, which take effect before uid/gid mapping and
-+therefore em(can) be mixed with bf(--usermap) and bf(--groupmap).
-+
- dit(bf(--timeout=TIMEOUT)) This option allows you to set a maximum I/O
- timeout in seconds. If no data is transferred for the specified time
- then rsync will exit. The default is 0, which means no timeout.
-@@ -3130,6 +3136,15 @@ itemization(
-   option's default rules that exclude things like "CVS" and "*.o" are
-   marked as perishable, and will not prevent a directory that was removed
-   on the source from being deleted on the destination.
-+  it() An bf(m+nop()(CHMOD)) on an include rule tweaks the permissions of matching
-+  source files in the same way as bf(--chmod).  This happens before any
-+  tweaks requested via bf(--chmod) options.
-+  it() An bf(o+nop()(USER)) on an include rule pretends that matching source files
-+  are owned by bf(USER) (a name or numeric uid).  This happens before any uid
-+  mapping by name or bf(--usermap).
-+  it() A bf(g+nop()(GROUP)) on an include rule pretends that matching source files
-+  are owned by bf(GROUP) (a name or numeric gid).  This happens before any gid
-+  mapping by name or bf(--groupmap).
-   it() An bf(x) indicates that a rule affects xattr names in xattr copy/delete
-   operations (and is thus ignored when matching file/dir names). If no
-   xattr-matching rules are specified, a default xattr filtering rule is
-@@ -3195,6 +3210,12 @@ itemization(
-   a rule prefix such as bf(hide)).
- )
- 
-+The attribute-affecting modifiers bf(m), bf(o), and bf(g) work only in client
-+filters (not in daemon filters), and only the modifiers of the first matching
-+rule are applied.  As an example, assuming bf(--super) is enabled, the
-+rule "+o+nop()(root)g+nop()(root)m+nop()(go=) *~" would ensure that all "backup" files belong to
-+root and are not accessible to anyone else.
-+
- Per-directory rules are inherited in all subdirectories of the directory
- where the merge-file was found unless the 'n' modifier was used.  Each
- subdirectory's rules are prefixed to the inherited per-directory rules
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c

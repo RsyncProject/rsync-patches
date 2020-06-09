@@ -38,7 +38,7 @@ TODO:
   a file that can't use it, while missing out on giving it to a file
   that could use it.
 
-based-on: 37350027514026d410515e90fe7d94b8444c95c1
+based-on: 5b19cf787515fc2388dd070a85e86ced5d80510b
 diff --git a/backup.c b/backup.c
 --- a/backup.c
 +++ b/backup.c
@@ -652,6 +652,40 @@ diff --git a/receiver.c b/receiver.c
  		/* Get back to name with XXXXXX in it. */
  		get_tmpname(fnametmp, fname, False);
  		fd = do_mkstemp(fnametmp, (file->mode|added_perms) & INITACCESSPERMS);
+diff --git a/rsync.1.md b/rsync.1.md
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -415,6 +415,7 @@ detailed description below for a complete description.
+ --modify-window=NUM, -@     set the accuracy for mod-time comparisons
+ --temp-dir=DIR, -T          create temporary files in directory DIR
+ --fuzzy, -y                 find similar file for basis if no dest file
++--detect-renamed            try to find renamed files to speed the xfer
+ --compare-dest=DIR          also compare received files relative to DIR
+ --copy-dest=DIR             ... and include copies of unchanged files
+ --link-dest=DIR             hardlink to files in DIR when unchanged
+@@ -2150,6 +2151,22 @@ your home directory (remove the '=' for that).
+     fuzzy-match files, so either use `--delete-after` or specify some filename
+     exclusions if you need to prevent this.
+ 
++0.  `--detect-renamed`
++
++    With this option, for each new source file (call it `src/S`), rsync looks
++    for a file `dest/D` anywhere in the destination that passes the quick check
++    with `src/S`.  If such a `dest/D` is found, rsync uses it as an alternate
++    basis for transferring `S`.  The idea is that if `src/S` was renamed from
++    `src/D` (as opposed to `src/S` passing the quick check with `dest/D` by
++    coincidence), the delta-transfer algorithm will find that all the data
++    matches between `src/S` and `dest/D`, and the transfer will be really fast.
++
++    By default, alternate-basis files are hard-linked into a directory named
++    ".~tmp~" in each file's destination directory, but if you've specified the
++    `--partial-dir` option, that directory will be used instead.  These
++    otential alternate-basis files will be removed as the transfer progresses.
++    This option conflicts with `--inplace` and `--append`.
++
+ 0.  `--compare-dest=DIR`
+ 
+     This option instructs rsync to use _DIR_ on the destination machine as an
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
@@ -672,39 +706,6 @@ diff --git a/rsync.h b/rsync.h
  
  #define DEL_MAKE_ROOM (DEL_FOR_FILE|DEL_FOR_DIR|DEL_FOR_SYMLINK|DEL_FOR_DEVICE|DEL_FOR_SPECIAL)
  
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -426,6 +426,7 @@ to the detailed description below for a complete description.  verb(
-  -@, --modify-window=NUM     set the accuracy for mod-time comparisons
-  -T, --temp-dir=DIR          create temporary files in directory DIR
-  -y, --fuzzy                 find similar file for basis if no dest file
-+     --detect-renamed        try to find renamed files to speed the xfer
-      --compare-dest=DIR      also compare received files relative to DIR
-      --copy-dest=DIR         ... and include copies of unchanged files
-      --link-dest=DIR         hardlink to files in DIR when unchanged
-@@ -1980,6 +1981,21 @@ Note that the use of the bf(--delete) option might get rid of any potential
- fuzzy-match files, so either use bf(--delete-after) or specify some
- filename exclusions if you need to prevent this.
- 
-+dit(bf(--detect-renamed)) With this option, for each new source file
-+(call it em(src/S)), rsync looks for a file em(dest/D) anywhere in the
-+destination that passes the quick check with em(src/S).  If such a em(dest/D)
-+is found, rsync uses it as an alternate basis for transferring em(S).  The
-+idea is that if em(src/S) was renamed from em(src/D) (as opposed to em(src/S)
-+passing the quick check with em(dest/D) by coincidence), the delta-transfer
-+algorithm will find that all the data matches between em(src/S) and em(dest/D),
-+and the transfer will be really fast.
-+
-+By default, alternate-basis files are hard-linked into a directory named
-+".~tmp~" in each file's destination directory, but if you've specified
-+the bf(--partial-dir) option, that directory will be used instead.  These
-+potential alternate-basis files will be removed as the transfer progresses.
-+This option conflicts with bf(--inplace) and bf(--append).
-+
- dit(bf(--compare-dest=DIR)) This option instructs rsync to use em(DIR) on
- the destination machine as an additional hierarchy to compare destination
- files against doing transfers (if the files are missing in the destination
 diff --git a/util.c b/util.c
 --- a/util.c
 +++ b/util.c
@@ -735,7 +736,7 @@ diff --git a/util.c b/util.c
  			ret = -ret - 1;
  		else
  			ret++;
-@@ -1172,6 +1172,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
+@@ -1174,6 +1174,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
  	return path;
  }
  
@@ -768,7 +769,7 @@ diff --git a/util.c b/util.c
  /**
   * Return a quoted string with the full pathname of the indicated filename.
   * The string " (in MODNAME)" may also be appended.  The returned pointer
-@@ -1265,7 +1291,7 @@ int handle_partial_dir(const char *fname, int create)
+@@ -1267,7 +1293,7 @@ int handle_partial_dir(const char *fname, int create)
  			}
  			statret = -1;
  		}

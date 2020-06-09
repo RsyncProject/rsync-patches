@@ -520,7 +520,7 @@ diff --git a/io.c b/io.c
  extern int protocol_version;
  extern int remove_source_files;
  extern int preserve_hard_links;
-@@ -1050,6 +1051,9 @@ static void got_flist_entry_status(enum festatus status, int ndx)
+@@ -1059,6 +1060,9 @@ static void got_flist_entry_status(enum festatus status, int ndx)
  				if (inc_recurse)
  					flist->in_progress++;
  			}
@@ -593,6 +593,26 @@ diff --git a/receiver.c b/receiver.c
  			 || (preserve_hard_links && F_IS_HLINKED(file)))
  				send_msg_int(MSG_SUCCESS, ndx);
  			break;
+diff --git a/rsync.1.md b/rsync.1.md
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -697,9 +697,13 @@ your home directory (remove the '=' for that).
+ 
+     The MODE value is either "lax", for relaxed checking (which compares size
+     and mtime), "strict" (which also compares ctime and inode), or "none" to
+-    ignore any .rsyncsums files ("none" is the default).  Rsync does not create
+-    or update these files, but there is a perl script in the support directory
+-    named "rsyncsums" that can be used for that.
++    ignore any .rsyncsums files ("none" is the default).
++    If you want rsync to create and/or update these files, specify a prefixed
++    plus ("+lax" or "+strict").  Adding a second prefixed '+' causes the
++    checksum-file updates to happen even when the transfer is in `--dry-run`
++    mode ("++lax" or "++strict").  There is also a perl script in the support
++    directory named "rsyncsums" that can be used to update the .rsyncsums
++    files.
+ 
+     This option has no effect unless `--checksum`, `-c` was also specified.  It
+     also only affects the current side of the transfer, so if you want the
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
@@ -605,46 +625,26 @@ diff --git a/rsync.h b/rsync.h
  
  #define CSF_IGNORE_FILES 0
  #define CSF_LAX_MODE (CSF_ENABLE|CSF_LAX)
-diff --git a/rsync.yo b/rsync.yo
---- a/rsync.yo
-+++ b/rsync.yo
-@@ -682,9 +682,13 @@ computed just as it would be if bf(--sumfiles) was not specified.
+diff --git a/rsyncd.conf.5.md b/rsyncd.conf.5.md
+--- a/rsyncd.conf.5.md
++++ b/rsyncd.conf.5.md
+@@ -385,13 +385,15 @@ the values of parameters.  See the GLOBAL PARAMETERS section for more details.
+     This parameter tells rsync to make use of any cached checksum information
+     it finds in per-directory .rsyncsums files when the current transfer is
+     using the `--checksum` option.  The value can be set to either "lax",
+-    "strict", or "none" -- see the client's `--sumfiles` option for what these
+-    choices do.
++    "strict", "+lax", "+strict", "++lax", "++strict", or +"none".  See the
++    client's `--sumfiles` option for what these choices do.
  
- The MODE value is either "lax", for relaxed checking (which compares size
- and mtime), "strict" (which also compares ctime and inode), or "none" to
--ignore any .rsyncsums files ("none" is the default).  Rsync does not create
--or update these files, but there is a perl script in the support directory
--named "rsyncsums" that can be used for that.
-+ignore any .rsyncsums files ("none" is the default).
-+If you want rsync to create and/or update these files, specify a prefixed
-+plus ("+lax" or "+strict").
-+Adding a second prefixed '+' causes the checksum-file updates to happen
-+even when the transfer is in bf(--dry-run) mode ("++lax" or "++strict").
-+There is also a perl script in the support directory named "rsyncsums"
-+that can be used to update the .rsyncsums files.
+     Note also that the client's command-line option, `--sumfiles`, has no
+     effect on a daemon.  A daemon will only access checksum files if this
+-    config option tells it to.  See also the `exclude` directive for a way to
+-    hide the .rsyncsums files from the user.
++    config option tells it to.  You can configure updating of the .rsyncsums
++    files even if the module itself is configured to be read-only.  See also
++    the `exclude` directive for a way to hide the .rsyncsums files from the
++    user.
  
- This option has no effect unless bf(--checksum, -c) was also specified.  It
- also only affects the current side of the transfer, so if you want the
-diff --git a/rsyncd.conf.yo b/rsyncd.conf.yo
---- a/rsyncd.conf.yo
-+++ b/rsyncd.conf.yo
-@@ -358,13 +358,15 @@ The default is tt(/var/run/rsyncd.lock).
- dit(bf(checksum files)) This parameter tells rsync to make use of any cached
- checksum information it finds in per-directory .rsyncsums files when the
- current transfer is using the bf(--checksum) option.  The value can be set
--to either "lax", "strict", or "none" -- see the client's bf(--sumfiles)
--option for what these choices do.
-+to either "lax", "strict", "+lax", "+strict", "++lax", "++strict", or
-+"none".  See the client's bf(--sumfiles) option for what these choices do.
+ 0.  `read only`
  
- Note also that the client's command-line option, bf(--sumfiles), has no
- effect on a daemon.  A daemon will only access checksum files if this
--config option tells it to.  See also the bf(exclude) directive for a way
--to hide the .rsyncsums files from the user.
-+config option tells it to.  You can configure updating of the .rsyncsums
-+files even if the module itself is configured to be read-only.  See also
-+the bf(exclude) directive for a way to hide the .rsyncsums files from the
-+user.
- 
- dit(bf(read only)) This parameter determines whether clients
- will be able to upload files or not. If "read only" is true then any
