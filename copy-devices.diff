@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: 5b19cf787515fc2388dd070a85e86ced5d80510b
+based-on: a61ffbafe5682b65d4a2a8846e9ec20298ba7e17
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -29,6 +29,27 @@ diff --git a/generator.c b/generator.c
  		if (solo_file)
  			fname = f_name(file, NULL);
  		rprintf(FINFO, "skipping non-regular file \"%s\"\n", fname);
+@@ -1876,6 +1877,20 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		fnamecmp_type = FNAMECMP_BACKUP;
+ 	}
+ 
++	/* On Linux systems (at least), st_size is typically 0 for devices.
++	 * If so, try to determine the actual device size. */
++	if (IS_DEVICE(sx.st.st_mode) && sx.st.st_size == 0) {
++		OFF_T off = lseek(fd, 0, SEEK_END);
++		if (off == (OFF_T) -1)
++			rsyserr(FERROR, errno, "failed to seek to end of %s to determine size", fnamecmp);
++		else {
++			sx.st.st_size = off;
++			off = lseek(fd, 0, SEEK_SET);
++			if (off != 0)
++				rsyserr(FERROR, errno, "failed to seek back to beginning of %s to read it", fnamecmp);
++		}
++	}
++
+ 	if (DEBUG_GTE(DELTASUM, 3)) {
+ 		rprintf(FINFO, "gen mapped %s of size %s\n",
+ 			fnamecmp, big_num(sx.st.st_size));
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
