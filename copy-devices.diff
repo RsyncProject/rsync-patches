@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: a3377921ebe651cb7d2b969853cb9fe0e135ff75
+based-on: c117fa4bf9976f3e5e284b87a2304398e4428208
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -29,23 +29,12 @@ diff --git a/generator.c b/generator.c
  		if (solo_file)
  			fname = f_name(file, NULL);
  		rprintf(FINFO, "skipping non-regular file \"%s\"\n", fname);
-@@ -1876,6 +1877,20 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1876,6 +1877,9 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		fnamecmp_type = FNAMECMP_BACKUP;
  	}
  
-+	/* On Linux systems (at least), st_size is typically 0 for devices.
-+	 * If so, try to determine the actual device size. */
-+	if (IS_DEVICE(sx.st.st_mode) && sx.st.st_size == 0) {
-+		OFF_T off = lseek(fd, 0, SEEK_END);
-+		if (off == (OFF_T) -1)
-+			rsyserr(FERROR, errno, "failed to seek to end of %s to determine size", fnamecmp);
-+		else {
-+			sx.st.st_size = off;
-+			off = lseek(fd, 0, SEEK_SET);
-+			if (off != 0)
-+				rsyserr(FERROR, errno, "failed to seek back to beginning of %s to read it", fnamecmp);
-+		}
-+	}
++	if (IS_DEVICE(sx.st.st_mode) && sx.st.st_size == 0)
++		sx.st.st_size = get_device_size(fd, fnamecmp);
 +
  	if (DEBUG_GTE(DELTASUM, 3)) {
  		rprintf(FINFO, "gen mapped %s of size %s\n",
@@ -77,7 +66,19 @@ diff --git a/options.c b/options.c
    {"write-devices",    0,  POPT_ARG_VAL,    &write_devices, 1, 0, 0 },
    {"no-write-devices", 0,  POPT_ARG_VAL,    &write_devices, 0, 0, 0 },
    {"specials",         0,  POPT_ARG_VAL,    &preserve_specials, 1, 0, 0 },
-@@ -2981,6 +2984,9 @@ void server_options(char **args, int *argc_p)
+@@ -1281,8 +1284,10 @@ static void set_refuse_options(void)
+ 	}
+ 	assert(list_end != NULL);
+ 
+-	if (am_daemon) /* Refused by default, but can be accepted via "!write-devices" */
++	if (am_daemon) { /* Refused by default, but can be accepted via negated (!) rules. */
++		parse_one_refuse_match(0, "copy-devices", list_end);
+ 		parse_one_refuse_match(0, "write-devices", list_end);
++	}
+ 
+ 	while (1) {
+ 		while (*ref == ' ') ref++;
+@@ -2981,6 +2986,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -108,26 +109,32 @@ diff --git a/rsync.c b/rsync.c
  			rprintf(FERROR,
  				"received request to transfer non-regular file: %d [%s]\n",
  				ndx, who_am_i());
+diff --git a/rsyncd.conf.5.md b/rsyncd.conf.5.md
+--- a/rsyncd.conf.5.md
++++ b/rsyncd.conf.5.md
+@@ -898,9 +898,10 @@ the values of parameters.  See the GLOBAL PARAMETERS section for more details.
+     If you are un-refusing the compress option, you probably want to match
+     "`!compress*`" so that you also accept the `--compress-level` option.
+ 
+-    Note that the "write-devices" option is refused by default, but can be
+-    explicitly accepted with "!write-devices".  The options "log-file" and
+-    "log-file-format" are forcibly refused and cannot be accepted.
++    Note that the "copy-devices" & "write-devices" options are refused by
++    default, but they can be explicitly accepted with "!copy-devices" and/or
++    "!write-devices".  The options "log-file" and "log-file-format" are
++    forcibly refused and cannot be accepted.
+ 
+     Here are all the options that are not matched by wild-cards:
+ 
 diff --git a/sender.c b/sender.c
 --- a/sender.c
 +++ b/sender.c
-@@ -370,6 +370,20 @@ void send_files(int f_in, int f_out)
+@@ -370,6 +370,9 @@ void send_files(int f_in, int f_out)
  			exit_cleanup(RERR_FILEIO);
  		}
  
-+		/* On Matt's computer, st_size is falsely 0 for most devices.
-+		 * If this happens, try harder to determine the actual device size. */
-+		if (IS_DEVICE(st.st_mode) && st.st_size == 0) {
-+			OFF_T off = lseek(fd, 0, SEEK_END);
-+			if (off == (OFF_T) -1)
-+				rsyserr(FERROR, errno, "failed to seek to end of %s to determine size", fname);
-+			else {
-+				st.st_size = off;
-+				off = lseek(fd, 0, SEEK_SET);
-+				if (off != 0)
-+					rsyserr(FERROR, errno, "failed to seek back to beginning of %s to read it", fname);
-+			}
-+		}
++		if (IS_DEVICE(st.st_mode) && st.st_size == 0)
++			st.st_size = get_device_size(fd, fname);
 +
  		if (st.st_size) {
  			int32 read_size = MAX(s->blength * 3, MAX_MAP_SIZE);
