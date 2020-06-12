@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: 34141954c7179438f3b3c5e11f55089e5aee5a8e
+based-on: d4fc18f3755987ccea6e7f43609f862aa0254c5a
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -392,33 +392,44 @@ diff --git a/options.c b/options.c
  		NULL
  	};
  
-@@ -779,6 +786,10 @@ static struct poptOption long_options[] = {
+@@ -779,6 +786,8 @@ static struct poptOption long_options[] = {
    {"perms",           'p', POPT_ARG_VAL,    &preserve_perms, 1, 0, 0 },
    {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
    {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
-+#ifdef SUPPORT_FILEFLAGS
 +  {"fileflags",        0,  POPT_ARG_VAL,    &preserve_fileflags, 1, 0, 0 },
 +  {"no-fileflags",     0,  POPT_ARG_VAL,    &preserve_fileflags, 0, 0, 0 },
-+#endif
    {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
    {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
    {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
-@@ -872,6 +883,14 @@ static struct poptOption long_options[] = {
+@@ -872,6 +881,12 @@ static struct poptOption long_options[] = {
    {"remove-source-files",0,POPT_ARG_VAL,    &remove_source_files, 1, 0, 0 },
    {"force",            0,  POPT_ARG_VAL,    &force_delete, 1, 0, 0 },
    {"no-force",         0,  POPT_ARG_VAL,    &force_delete, 0, 0, 0 },
 +  {"force-delete",     0,  POPT_ARG_VAL,    &force_delete, 1, 0, 0 },
 +  {"no-force-delete",  0,  POPT_ARG_VAL,    &force_delete, 0, 0, 0 },
-+#ifdef SUPPORT_FORCE_CHANGE
 +  {"force-change",     0,  POPT_ARG_VAL,    &force_change, ALL_IMMUTABLE, 0, 0 },
 +  {"no-force-change",  0,  POPT_ARG_VAL,    &force_change, 0, 0, 0 },
 +  {"force-uchange",    0,  POPT_ARG_VAL,    &force_change, USR_IMMUTABLE, 0, 0 },
 +  {"force-schange",    0,  POPT_ARG_VAL,    &force_change, SYS_IMMUTABLE, 0, 0 },
-+#endif
    {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
    {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
-@@ -2582,6 +2601,9 @@ void server_options(char **args, int *argc_p)
+@@ -1152,6 +1167,14 @@ static void set_refuse_options(void)
+ #ifndef HAVE_SETVBUF
+ 	parse_one_refuse_match(0, "outbuf", list_end);
+ #endif
++#ifndef SUPPORT_FILEFLAGS
++	parse_one_refuse_match(0, "fileflags", list_end);
++#endif
++#ifndef SUPPORT_FORCE_CHANGE
++	parse_one_refuse_match(0, "force-change", list_end);
++	parse_one_refuse_match(0, "force-uchange", list_end);
++	parse_one_refuse_match(0, "force-schange", list_end);
++#endif
+ 
+ 	/* Now we use the descrip values to actually mark the options for refusal. */
+ 	for (op = long_options; op != list_end; op++) {
+@@ -2591,6 +2614,9 @@ void server_options(char **args, int *argc_p)
  	if (xfer_dirs && !recurse && delete_mode && am_sender)
  		args[ac++] = "--no-r";
  
@@ -428,7 +439,7 @@ diff --git a/options.c b/options.c
  	if (do_compression && do_compression_level != CLVL_NOT_SPECIFIED) {
  		if (asprintf(&arg, "--compress-level=%d", do_compression_level) < 0)
  			goto oom;
-@@ -2685,6 +2707,16 @@ void server_options(char **args, int *argc_p)
+@@ -2694,6 +2720,16 @@ void server_options(char **args, int *argc_p)
  			args[ac++] = "--delete-excluded";
  		if (force_delete)
  			args[ac++] = "--force";
@@ -516,7 +527,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  0.  `--chmod`
  
      This option tells rsync to apply one or more comma-separated "chmod" modes
-@@ -1672,7 +1701,7 @@ your home directory (remove the '=' for that).
+@@ -1677,7 +1706,7 @@ your home directory (remove the '=' for that).
      option a step farther: each missing arg will become a deletion request of
      the corresponding destination file on the receiving side (should it exist).
      If the destination file is a non-empty directory, it will only be
@@ -525,7 +536,7 @@ diff --git a/rsync.1.md b/rsync.1.md
      that, this option is independent of any other type of delete processing.
  
      The missing source files are represented by special file-list entries which
-@@ -1683,15 +1712,16 @@ your home directory (remove the '=' for that).
+@@ -1688,15 +1717,16 @@ your home directory (remove the '=' for that).
      Tells `--delete` to go ahead and delete files even when there are I/O
      errors.
  
@@ -546,7 +557,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  
  0.  `--max-delete=NUM`
  
-@@ -2493,7 +2523,7 @@ your home directory (remove the '=' for that).
+@@ -2504,7 +2534,7 @@ your home directory (remove the '=' for that).
      output of other verbose messages).
  
      The "%i" escape has a cryptic output that is 11 letters long.  The general
