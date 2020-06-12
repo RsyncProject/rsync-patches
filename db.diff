@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: d4fc18f3755987ccea6e7f43609f862aa0254c5a
+based-on: e3437244b56c4d74effe437702c1b6a8dc7b3cb9
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -77,7 +77,7 @@ diff --git a/Makefile.in b/Makefile.in
  	if test -f rsyncd.conf.5; then ${INSTALLMAN} -m 644 rsyncd.conf.5 ${DESTDIR}${mandir}/man5; fi
  
  install-ssl-daemon: stunnel-rsyncd.conf
-@@ -97,6 +101,9 @@ install-strip:
+@@ -97,9 +101,12 @@ install-strip:
  rsync$(EXEEXT): $(OBJS)
  	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
  
@@ -86,8 +86,29 @@ diff --git a/Makefile.in b/Makefile.in
 +
  $(OBJS): $(HEADERS)
  $(CHECK_OBJS): $(HEADERS)
- options.o: latest-year.h help-rsync.h help-rsyncd.h
-@@ -240,7 +247,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
+-options.o: latest-year.h help-rsync.h help-rsyncd.h
++options.o: latest-year.h help-rsync.h help-rsyncd.h help-rsyncdb.h
+ 
+ flist.o: rounding.h
+ 
+@@ -113,6 +120,16 @@ help-rsync.h help-rsyncd.h: rsync.1.md
+ 	    <"$(srcdir)/$<" >$@
+ 	@if ! test -s $@; then rm -f $@ ; echo "The Makefile generated an empty file: $@" ; exit 1 ; fi
+ 
++help-rsyncdb.h: rsyncdb.1.md
++	@sed -e '1,/^\[comment\].*$@/d' \
++	    -e '1,/^```/d' \
++	    -e '/^```/,$$d' \
++	    -e 's/"/\\"/g' \
++	    -e 's/^/  rprintf(F,"/' \
++	    -e 's/$$/\\n");/' \
++	    <"$(srcdir)/$<" >$@
++	@if ! test -s $@; then rm -f $@ ; echo "The Makefile generated an empty file: $@" ; exit 1 ; fi
++
+ rounding.h: rounding.c rsync.h proto.h
+ 	@for r in 0 1 3; do \
+ 	    if $(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o rounding -DEXTRA_ROUNDING=$$r -I. $(srcdir)/rounding.c >rounding.out 2>&1; then \
+@@ -230,7 +247,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
  	awk -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c
  
  .PHONY: man
@@ -96,7 +117,7 @@ diff --git a/Makefile.in b/Makefile.in
  
  rsync.1: rsync.1.md md2man NEWS.md Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsync.1.md
-@@ -251,9 +258,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man NEWS.md Makefile
+@@ -241,9 +258,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man NEWS.md Makefile
  rsyncd.conf.5: rsyncd.conf.5.md md2man NEWS.md Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsyncd.conf.5.md
  
@@ -2591,7 +2612,7 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1019,6 +1043,50 @@ static struct poptOption long_daemon_options[] = {
+@@ -1019,6 +1043,39 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
@@ -2600,18 +2621,7 @@ diff --git a/options.c b/options.c
 +  rprintf(F,"Usage: rsyncdb --db=CONFIG_FILE [OPTIONS] [DIRS]\n");
 +  rprintf(F,"\n");
 +  rprintf(F,"Options:\n");
-+  rprintf(F,"    --db=CONFIG   Specify the CONFIG file to read for the DB info.\n");
-+  rprintf(F,"    --db-lax      Ignore ctime changes (use with CAUTION).\n");
-+  rprintf(F,"-r, --recursive   Scan files in subdirs (the default w/o --no-recursive).\n");
-+  rprintf(F,"-s, --sums=SUMS   List which checksums to update (default: 4,5).\n");
-+  rprintf(F,"-o, --output=STR  One or more letters of what to output (default is nothing).\n");
-+  rprintf(F,"-c, --check       Check the checksums (by reading the files) and fix issues.\n");
-+  rprintf(F,"    --clean       Note all inodes in the DIRS and remove DB extras.\n");
-+  rprintf(F,"-N, --no-update   Avoids updating/adding info with --check and/or --clean.\n");
-+  rprintf(F,"    --init        Initialize a DB by (re-)creating its tables.\n");
-+  rprintf(F,"    --mounts      Scan for mounted filesystems and update the DB.\n");
-+  rprintf(F,"-q, --quiet       Disable the default non-error output.\n");
-+  rprintf(F,"-h, --help        Display this help message.\n");
++#include "help-rsyncdb.h"
 +}
 +
 +static struct poptOption long_dbonly_options[] = {
@@ -2642,7 +2652,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1144,6 +1212,8 @@ static void set_refuse_options(void)
+@@ -1144,6 +1201,8 @@ static void set_refuse_options(void)
  			parse_one_refuse_match(0, "iconv", list_end);
  #endif
  		parse_one_refuse_match(0, "log-file*", list_end);
@@ -2651,7 +2661,7 @@ diff --git a/options.c b/options.c
  	}
  
  #ifndef ICONV_OPTION
-@@ -1279,6 +1349,102 @@ static void create_refuse_error(int which)
+@@ -1279,6 +1338,102 @@ static void create_refuse_error(int which)
  		snprintf(err_buf + n, sizeof err_buf - n, " (-%c)\n", op->shortName);
  }
  
@@ -2754,7 +2764,7 @@ diff --git a/options.c b/options.c
  /* This is used to make sure that --daemon & --server cannot be aliased to
   * something else. These options have always disabled popt aliases for the
   * parsing of a daemon or server command-line, but we have to make sure that
-@@ -1317,6 +1483,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1317,6 +1472,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		return 0;
  	}
  
@@ -2767,7 +2777,7 @@ diff --git a/options.c b/options.c
  	set_refuse_options();
  
  #ifdef ICONV_OPTION
-@@ -1438,6 +1610,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1438,6 +1599,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2780,7 +2790,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1512,6 +1690,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1512,6 +1679,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -2890,7 +2900,7 @@ diff --git a/receiver.c b/receiver.c
 diff --git a/rsync.1.md b/rsync.1.md
 --- a/rsync.1.md
 +++ b/rsync.1.md
-@@ -381,6 +381,9 @@ detailed description below for a complete description.
+@@ -382,6 +382,9 @@ detailed description below for a complete description.
  --dry-run, -n            perform a trial run with no changes made
  --whole-file, -W         copy files whole (w/o delta-xfer algorithm)
  --checksum-choice=STR    choose the checksum algorithms
@@ -3041,7 +3051,7 @@ diff --git a/rsyncdb.1.md b/rsyncdb.1.md
 new file mode 100644
 --- /dev/null
 +++ b/rsyncdb.1.md
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,217 @@
 +# NAME
 +
 +rsyncdb - Maintain an rsync checksum DB
@@ -3112,20 +3122,22 @@ new file mode 100644
 +
 +Rsyncdb accepts the following options:
 +
++[comment]: # (help-rsyncdb.h)
++
 +```
-+--db=CONFIG         Specify the CONFIG file to read for the DB info.
-+--db-lax            Ignore ctime changes (use with CAUTION).
-+--no-recursive      Avoid the default --recursive (-r) scanning behavior.
-+--sums=SUMS, -s     List which checksums to update (default: md5).
-+--output=STR, -o    One or more letters of what to output (default: dn).
-+--check, -c         Check the checksums (by reading the files) and fix any
-+                    issues.  Makes --output default to "dni".
-+--clean             Note all inodes in the DIRS and remove DB extras.
-+--no-update, -N     Avoids updating/adding info with --check and/or --clean.
-+--init              Initialize a DB by (re-)creating its tables.
-+--mounts            Scan for mounted filesystems and update the DB.
-+--quiet, -q         Disables the default non-error output.
-+--help, -h          Display this help message.)
++--db=CONFIG       Specify the CONFIG file to read for the DB info
++--db-lax          Ignore ctime changes (use with CAUTION)
++--recursive, -r   Scan files in subdirs (the default w/o --no-recursive)
++--sums=SUMS, -s   List which checksums to update (default: 4,5)
++--output=STR, -o  One or more letters of what to output (default: "")
++--check, -c       Check checksums (by reading the files) and fix any
++                  issues.  Makes --output default to "dni".
++--clean           Note all inodes in the DIRS and remove DB extras
++--no-update, -N   Avoids updating/adding info w/--check and/or --clean
++--init            Initialize a DB by (re-)creating its tables
++--mounts          Scan for mounted filesystems and update the DB
++--quiet, -q       Disable the default non-error output
++--help, -h        Display this help message
 +```
 +
 +# OPTIONS
