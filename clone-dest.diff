@@ -1,0 +1,203 @@
+This patch adds the --clone-dest option that works link --link-dest
+but without requiring the metadata of the files to match in order
+to be able to share the file's data.
+
+NOTE: this patch is mostly untested because I don't currently have
+a btrfs mount to test it out on.  I still need to make sure that a
+cloned file gets its destination attributes set correctly after the
+clone, for instance.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/clone-dest.diff
+    ./configure                         (optional if already run)
+    make
+
+based-on: 1d6c9676f9a11f9d6e8a1a77b9c00333c0e6f11e
+diff --git a/generator.c b/generator.c
+--- a/generator.c
++++ b/generator.c
+@@ -896,7 +896,7 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+ 			best_match = j;
+ 			match_level = 2;
+ 		}
+-		if (unchanged_attrs(cmpbuf, file, sxp)) {
++		if (alt_dest_type == CLONE_DEST || unchanged_attrs(cmpbuf, file, sxp)) {
+ 			best_match = j;
+ 			match_level = 3;
+ 			break;
+@@ -936,7 +936,12 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+ 			}
+ 		} else
+ #endif
+-		{
++		if (alt_dest_type == CLONE_DEST) {
++			if (do_clone(cmpbuf, fname, file->mode) < 0) {
++				rsyserr(FERROR_XFER, errno, "failed to clone %s to %s", cmpbuf, fname);
++				exit_cleanup(RERR_UNSUPPORTED);
++			}
++		} else {
+ 			if (itemizing)
+ 				itemize(cmpbuf, file, ndx, 0, sxp, 0, 0, NULL);
+ 		}
+@@ -1092,7 +1097,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+ 
+ 	if (match_level == 3) {
+ #ifdef SUPPORT_HARD_LINKS
+-		if (alt_dest_type == LINK_DEST
++		if ((alt_dest_type == LINK_DEST || alt_dest_type == CLONE_DEST)
+ #ifndef CAN_HARDLINK_SYMLINK
+ 		 && !S_ISLNK(file->mode)
+ #endif
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -737,7 +737,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+       OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
+       OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
+       OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
+-      OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
++      OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT, OPT_CLONE_DEST,
+       OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
+       OPT_REFUSED_BASE = 9000};
+ 
+@@ -891,6 +891,7 @@ static struct poptOption long_options[] = {
+   {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
+   {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
+   {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
++  {"clone-dest",       0,  POPT_ARG_STRING, 0, OPT_CLONE_DEST, 0, 0 },
+   {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
+   {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
+   {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
+@@ -1146,6 +1147,9 @@ static void set_refuse_options(void)
+ #ifndef SUPPORT_HARD_LINKS
+ 	parse_one_refuse_match(0, "link-dest", list_end);
+ #endif
++#ifndef FICLONE
++	parse_one_refuse_match(0, "clone-dest", list_end);
++#endif
+ #ifndef ICONV_OPTION
+ 	parse_one_refuse_match(0, "iconv", list_end);
+ #endif
+@@ -1309,6 +1313,8 @@ char *alt_dest_name(int type)
+ 		return "--copy-dest";
+ 	case LINK_DEST:
+ 		return "--link-dest";
++	case CLONE_DEST:
++		return "--clone-dest";
+ 	default:
+ 		assert(0);
+ 	}
+@@ -1688,6 +1694,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			want_dest_type = LINK_DEST;
+ 			goto set_dest_dir;
+ 
++		case OPT_CLONE_DEST:
++			want_dest_type = CLONE_DEST;
++			goto set_dest_dir;
++
+ 		case OPT_COPY_DEST:
+ 			want_dest_type = COPY_DEST;
+ 			goto set_dest_dir;
+diff --git a/rsync.1.md b/rsync.1.md
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -421,6 +421,7 @@ detailed description below for a complete description.
+ --compare-dest=DIR       also compare destination files relative to DIR
+ --copy-dest=DIR          ... and include copies of unchanged files
+ --link-dest=DIR          hardlink to files in DIR when unchanged
++--clone-dest=DIR         clone (reflink) files from DIR when unchanged
+ --compress, -z           compress file data during the transfer
+ --compress-level=NUM     explicitly set compression level
+ --skip-compress=LIST     skip compressing files with suffix in LIST
+@@ -2244,6 +2245,17 @@ your home directory (remove the '=' for that).
+     specified (or implied by `-a`).  You can work-around this bug by avoiding
+     the `-o` option when sending to an old rsync.
+ 
++0.  `--clone-dest=DIR`
++
++    This option behaves like `--link-dest`, but unchanged files are reflinked
++    from _DIR_ to the destination directory.  The files do not need to match
++    in attributes, as the data is cloned separately from the attributes.
++
++    If _DIR_ is a relative path, it is relative to the destination directory.
++    See also `--compare-dest` and `--copy-dest`.
++
++    All non-regular files are hard-linked (when possible).
++
+ 0.  `--compress`, `-z`
+ 
+     With this option, rsync compresses the file data as it is sent to the
+diff --git a/rsync.h b/rsync.h
+--- a/rsync.h
++++ b/rsync.h
+@@ -164,6 +164,11 @@
+ #define COMPARE_DEST 1
+ #define COPY_DEST 2
+ #define LINK_DEST 3
++#define CLONE_DEST 4
++
++#if !defined FICLONE && defined __linux__
++#define FICLONE _IOW(0x94, 9, int)
++#endif
+ 
+ #define MPLEX_BASE 7
+ 
+diff --git a/syscall.c b/syscall.c
+--- a/syscall.c
++++ b/syscall.c
+@@ -129,6 +129,54 @@ int do_link(const char *old_path, const char *new_path)
+ }
+ #endif
+ 
++int do_clone(const char *old_path, const char *new_path, mode_t mode)
++{
++#ifdef FICLONE
++	int ifd, ofd, ret, save_errno;
++
++	if (dry_run) return 0;
++	RETURN_ERROR_IF_RO_OR_LO;
++
++	if ((ifd = do_open(old_path, O_RDONLY, 0)) < 0) {
++		save_errno = errno;
++		rsyserr(FERROR_XFER, errno, "open %s", full_fname(old_path));
++		errno = save_errno;
++		return -1;
++	}
++
++	if (robust_unlink(new_path) && errno != ENOENT) {
++		save_errno = errno;
++		rsyserr(FERROR_XFER, errno, "unlink %s", full_fname(new_path));
++		close(ifd);
++		errno = save_errno;
++		return -1;
++	}
++
++	mode &= INITACCESSPERMS;
++	if ((ofd = do_open(new_path, O_WRONLY | O_CREAT | O_TRUNC | O_EXCL, mode)) < 0) {
++		save_errno = errno;
++		rsyserr(FERROR_XFER, save_errno, "open %s", full_fname(new_path));
++		close(ifd);
++		errno = save_errno;
++		return -1;
++	}
++
++	ret = ioctl(ofd, FICLONE, ifd);
++	save_errno = errno;
++	close(ifd);
++	close(ofd);
++	if (ret < 0)
++		unlink(new_path);
++	errno = save_errno;
++	return ret;
++#else
++	(void)old_path;
++	(void)new_path;
++	errno = ENOTSUP;
++	return -1;
++#endif
++}
++
+ int do_lchown(const char *path, uid_t owner, gid_t group)
+ {
+ 	if (dry_run) return 0;
