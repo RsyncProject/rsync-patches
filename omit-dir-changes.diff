@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                              (optional if already run)
     make
 
-based-on: cdf58a7aba23e31653661c950c2c870b96de08fa
+based-on: 1d1c0f14e16a98ecbf0d11b46e13859076b69ffa
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -19,7 +19,7 @@ diff --git a/generator.c b/generator.c
  extern int delete_mode;
  extern int delete_before;
  extern int delete_during;
-@@ -497,6 +498,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -494,6 +495,7 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  	     const char *xname)
  {
  	if (statret >= 0) { /* A from-dest-dir statret can == 1! */
@@ -27,30 +27,27 @@ diff --git a/generator.c b/generator.c
  		int keep_time = !preserve_times ? 0
  		    : S_ISDIR(file->mode) ? preserve_times & PRESERVE_DIR_TIMES
  		    : S_ISLNK(file->mode) ? preserve_times & PRESERVE_LINK_TIMES
-@@ -526,10 +528,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -523,9 +525,9 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		} else if (preserve_executability
  		 && ((sxp->st.st_mode & 0111 ? 1 : 0) ^ (file->mode & 0111 ? 1 : 0)))
  			iflags |= ITEM_REPORT_PERMS;
 -		if (uid_ndx && am_root && (uid_t)F_OWNER(file) != sxp->st.st_uid)
-+		if (uid_ndx && am_root && !omit_changes
-+		 && (uid_t)F_OWNER(file) != sxp->st.st_uid)
++		if (uid_ndx && am_root && !omit_changes && (uid_t)F_OWNER(file) != sxp->st.st_uid)
  			iflags |= ITEM_REPORT_OWNER;
--		if (gid_ndx && !(file->flags & FLAG_SKIP_GROUP)
--		    && sxp->st.st_gid != (gid_t)F_GROUP(file))
-+		if (gid_ndx && !omit_changes
-+		 && !(file->flags & FLAG_SKIP_GROUP) && sxp->st.st_gid != (gid_t)F_GROUP(file))
+-		if (gid_ndx && !(file->flags & FLAG_SKIP_GROUP) && sxp->st.st_gid != (gid_t)F_GROUP(file))
++		if (gid_ndx && !omit_changes && !(file->flags & FLAG_SKIP_GROUP) && sxp->st.st_gid != (gid_t)F_GROUP(file))
  			iflags |= ITEM_REPORT_GROUP;
  #ifdef SUPPORT_ACLS
  		if (preserve_acls && !S_ISLNK(file->mode)) {
-@@ -1414,7 +1417,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1410,7 +1412,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		real_ret = statret;
  		if (file->flags & FLAG_DIR_CREATED)
  			statret = -1;
 -		if (!preserve_perms) { /* See comment in non-dir code below. */
 +		if (!preserve_perms || omit_dir_changes) { /* See comment in non-dir code below. */
- 			file->mode = dest_mode(file->mode, sx.st.st_mode,
- 					       dflt_perms, statret == 0);
+ 			file->mode = dest_mode(file->mode, sx.st.st_mode, dflt_perms, statret == 0);
  		}
+ 		if (statret != 0 && basis_dir[0] != NULL) {
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -62,7 +59,7 @@ diff --git a/options.c b/options.c
  int one_file_system = 0;
  int protocol_version = PROTOCOL_VERSION;
  int sparse_files = 0;
-@@ -797,6 +798,7 @@ static struct poptOption long_options[] = {
+@@ -796,6 +797,7 @@ static struct poptOption long_options[] = {
    {"omit-link-times", 'J', POPT_ARG_VAL,    &omit_link_times, 1, 0, 0 },
    {"no-omit-link-times",0, POPT_ARG_VAL,    &omit_link_times, 0, 0, 0 },
    {"no-J",             0,  POPT_ARG_VAL,    &omit_link_times, 0, 0, 0 },
@@ -70,7 +67,7 @@ diff --git a/options.c b/options.c
    {"modify-window",   '@', POPT_ARG_INT,    &modify_window, OPT_MODIFY_WINDOW, 0, 0 },
    {"super",            0,  POPT_ARG_VAL,    &am_root, 2, 0, 0 },
    {"no-super",         0,  POPT_ARG_VAL,    &am_root, 0, 0, 0 },
-@@ -2209,6 +2211,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2204,6 +2206,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		parse_filter_str(&filter_list, backup_dir_buf, rule_template(0), 0);
  	}
  
@@ -80,7 +77,7 @@ diff --git a/options.c b/options.c
  	if (preserve_times) {
  		preserve_times = PRESERVE_FILE_TIMES;
  		if (!omit_dir_times)
-@@ -2461,6 +2466,8 @@ void server_options(char **args, int *argc_p)
+@@ -2456,6 +2461,8 @@ void server_options(char **args, int *argc_p)
  			argstr[x++] = 'O';
  		if (omit_link_times)
  			argstr[x++] = 'J';
@@ -123,7 +120,7 @@ diff --git a/rsync.c b/rsync.c
  extern int am_root;
  extern int am_server;
  extern int am_daemon;
-@@ -520,9 +521,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -519,9 +520,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		get_acl(fname, sxp);
  #endif
  
