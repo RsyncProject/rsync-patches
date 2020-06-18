@@ -21,11 +21,11 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 0b2d5fe4940211ba25a89f18a9889b9ab55d38ef
+based-on: b5e539fc5aa52b94608dbb976981930c03213a78
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -27,6 +27,7 @@ aclocal.m4
+@@ -29,6 +29,7 @@ aclocal.m4
  /getgroups
  /gmon.out
  /rsync
@@ -77,7 +77,7 @@ diff --git a/Makefile.in b/Makefile.in
  	if test -f rsyncd.conf.5; then ${INSTALLMAN} -m 644 rsyncd.conf.5 ${DESTDIR}${mandir}/man5; fi
  
  install-ssl-daemon: stunnel-rsyncd.conf
-@@ -97,15 +101,21 @@ install-strip:
+@@ -97,9 +101,12 @@ install-strip:
  rsync$(EXEEXT): $(OBJS)
  	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
  
@@ -88,19 +88,20 @@ diff --git a/Makefile.in b/Makefile.in
  $(CHECK_OBJS): $(HEADERS)
 -options.o: latest-year.h help-rsync.h help-rsyncd.h
 +options.o: latest-year.h help-rsync.h help-rsyncd.h help-rsyncdb.h
+ exclude.o: default-cvsignore.h
+ loadparm.o: default-dont-compress.h
  
- flist.o: rounding.h
- 
+@@ -111,6 +118,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
  help-rsync.h help-rsyncd.h: rsync.1.md help-from-md.awk
- 	awk -f $(srcdir)/help-from-md.awk -v helpfile=$@ $(srcdir)/rsync.1.md
+ 	awk -f $(srcdir)/help-from-md.awk -v hfile=$@ $(srcdir)/rsync.1.md
  
 +help-rsyncdb.h: rsyncdb.1.md help-from-md.awk
-+	awk -f $(srcdir)/help-from-md.awk -v helpfile=$@ $(srcdir)/rsyncdb.1.md
++	awk -f $(srcdir)/help-from-md.awk -v hfile=$@ $(srcdir)/rsyncdb.1.md
 +
  rounding.h: rounding.c rsync.h proto.h
  	@for r in 0 1 3; do \
  	    if $(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o rounding -DEXTRA_ROUNDING=$$r -I. $(srcdir)/rounding.c >rounding.out 2>&1; then \
-@@ -223,7 +233,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
+@@ -228,7 +238,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
  	awk -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c
  
  .PHONY: man
@@ -109,7 +110,7 @@ diff --git a/Makefile.in b/Makefile.in
  
  rsync.1: rsync.1.md md2man NEWS.md Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsync.1.md
-@@ -234,9 +244,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man NEWS.md Makefile
+@@ -239,9 +249,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man NEWS.md Makefile
  rsyncd.conf.5: rsyncd.conf.5.md md2man NEWS.md Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsyncd.conf.5.md
  
@@ -219,7 +220,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -409,6 +409,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
+@@ -412,6 +412,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
      unistd.h utime.h grp.h compat.h sys/param.h ctype.h sys/wait.h \
      sys/ioctl.h sys/filio.h string.h stdlib.h sys/socket.h sys/mode.h \
      sys/un.h sys/attr.h mcheck.h arpa/inet.h arpa/nameser.h locale.h \
@@ -227,7 +228,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1258,6 +1259,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1261,6 +1262,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  
@@ -2401,7 +2402,7 @@ diff --git a/io.c b/io.c
 diff --git a/loadparm.c b/loadparm.c
 --- a/loadparm.c
 +++ b/loadparm.c
-@@ -123,6 +123,7 @@ typedef struct {
+@@ -119,6 +119,7 @@ typedef struct {
  	char *auth_users;
  	char *charset;
  	char *comment;
@@ -2409,7 +2410,7 @@ diff --git a/loadparm.c b/loadparm.c
  	char *dont_compress;
  	char *early_exec;
  	char *exclude;
-@@ -152,6 +153,7 @@ typedef struct {
+@@ -148,6 +149,7 @@ typedef struct {
  	BOOL auth_users_EXP;
  	BOOL charset_EXP;
  	BOOL comment_EXP;
@@ -2417,7 +2418,7 @@ diff --git a/loadparm.c b/loadparm.c
  	BOOL dont_compress_EXP;
  	BOOL early_exec_EXP;
  	BOOL exclude_EXP;
-@@ -182,6 +184,7 @@ typedef struct {
+@@ -178,6 +180,7 @@ typedef struct {
  	int syslog_facility;
  	int timeout;
  
@@ -2425,7 +2426,7 @@ diff --git a/loadparm.c b/loadparm.c
  	BOOL fake_super;
  	BOOL forward_lookup;
  	BOOL ignore_errors;
-@@ -241,6 +244,7 @@ static const all_vars Defaults = {
+@@ -237,6 +240,7 @@ static const all_vars Defaults = {
   /* auth_users; */		NULL,
   /* charset; */ 		NULL,
   /* comment; */ 		NULL,
@@ -2433,7 +2434,7 @@ diff --git a/loadparm.c b/loadparm.c
   /* dont_compress; */		DEFAULT_DONT_COMPRESS,
   /* early_exec; */		NULL,
   /* exclude; */ 		NULL,
-@@ -269,6 +273,7 @@ static const all_vars Defaults = {
+@@ -265,6 +269,7 @@ static const all_vars Defaults = {
   /* auth_users_EXP; */		False,
   /* charset_EXP; */		False,
   /* comment_EXP; */		False,
@@ -2441,7 +2442,7 @@ diff --git a/loadparm.c b/loadparm.c
   /* dont_compress_EXP; */	False,
   /* early_exec_EXP; */		False,
   /* exclude_EXP; */		False,
-@@ -299,6 +304,7 @@ static const all_vars Defaults = {
+@@ -295,6 +300,7 @@ static const all_vars Defaults = {
   /* syslog_facility; */		LOG_DAEMON,
   /* timeout; */			0,
  
@@ -2449,7 +2450,7 @@ diff --git a/loadparm.c b/loadparm.c
   /* fake_super; */		False,
   /* forward_lookup; */		True,
   /* ignore_errors; */		False,
-@@ -412,6 +418,8 @@ static struct parm_struct parm_table[] =
+@@ -408,6 +414,8 @@ static struct parm_struct parm_table[] =
   {"auth users",        P_STRING, P_LOCAL, &Vars.l.auth_users,          NULL,0},
   {"charset",           P_STRING, P_LOCAL, &Vars.l.charset,             NULL,0},
   {"comment",           P_STRING, P_LOCAL, &Vars.l.comment,             NULL,0},
@@ -2458,7 +2459,7 @@ diff --git a/loadparm.c b/loadparm.c
   {"dont compress",     P_STRING, P_LOCAL, &Vars.l.dont_compress,       NULL,0},
   {"early exec",        P_STRING, P_LOCAL, &Vars.l.early_exec,          NULL,0},
   {"exclude from",      P_STRING, P_LOCAL, &Vars.l.exclude_from,        NULL,0},
-@@ -554,6 +562,7 @@ FN_GLOBAL_BOOL(lp_proxy_protocol, proxy_protocol)
+@@ -550,6 +558,7 @@ FN_GLOBAL_BOOL(lp_proxy_protocol, proxy_protocol)
  FN_LOCAL_STRING(lp_auth_users, auth_users)
  FN_LOCAL_STRING(lp_charset, charset)
  FN_LOCAL_STRING(lp_comment, comment)
@@ -2466,7 +2467,7 @@ diff --git a/loadparm.c b/loadparm.c
  FN_LOCAL_STRING(lp_dont_compress, dont_compress)
  FN_LOCAL_STRING(lp_early_exec, early_exec)
  FN_LOCAL_STRING(lp_exclude, exclude)
-@@ -584,6 +593,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
+@@ -580,6 +589,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
  FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
  FN_LOCAL_INTEGER(lp_timeout, timeout)
  
