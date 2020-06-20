@@ -27,7 +27,7 @@ xxHash is still preferred (and faster), but this provides a reasonably
 fast fallback for the case where xxHash libraries are not available at
 build time.
 
-based-on: c225330aaf9d6032a79317bda1bf669e90ac7212
+based-on: bd7bd5ff0c5cdaa3923d1a741c68242817f5cb44
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -41,7 +41,7 @@ diff --git a/Makefile.in b/Makefile.in
  GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync.1.html \
  	 rsync-ssl.1 rsync-ssl.1.html rsyncd.conf.5 rsyncd.conf.5.html
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h ifuncs.h itypes.h inums.h \
- 	lib/pool_alloc.h
+ 	lib/pool_alloc.h lib/mdigest.h lib/md-defines.h
 -LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
 +LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o lib/md5p8.o \
  	lib/permstring.o lib/pool_alloc.o lib/sysacls.o lib/sysxattrs.o @LIBOBJS@
@@ -49,13 +49,13 @@ diff --git a/Makefile.in b/Makefile.in
  	zlib/trees.o zlib/zutil.o zlib/adler32.o zlib/compress.o zlib/crc32.o
 @@ -134,6 +134,9 @@ rounding.h: rounding.c rsync.h proto.h
  simd-checksum-x86_64.o: simd-checksum-x86_64.cpp
- 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $(srcdir)/simd-checksum-x86_64.cpp
+ 	$(CXX) -I. $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $(srcdir)/simd-checksum-x86_64.cpp
  
 +simd-md5-parallel-x86_64.o: simd-md5-parallel-x86_64.cpp
-+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $(srcdir)/simd-md5-parallel-x86_64.cpp
++	$(CXX) -I. $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $(srcdir)/simd-md5-parallel-x86_64.cpp
 +
- lib/md5-asm-x86_64.o: lib/md5-asm-x86_64.s
- 	$(CC) -c -o $@ $(srcdir)/lib/md5-asm-x86_64.s
+ lib/md5-asm-x86_64.o: lib/md5-asm-x86_64.S config.h lib/md-defines.h
+ 	$(CC) -I. -Wa,--noexecstack -c -o $@ $(srcdir)/lib/md5-asm-x86_64.S
  
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
@@ -186,16 +186,18 @@ diff --git a/checksum.c b/checksum.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -218,6 +218,9 @@ if test x"$enable_simd" != x"no"; then
- 		CXX_VERSION=`echo "$CXX_VERSION" | sed 's/.*version //g' | sed 's/\..*//g'`
- 		if test "$CXX_VERSION" -ge "7"; then
- 		    CXX_OK=yes
-+
-+		    # or clang 10 will halve AVX2 performance
+@@ -214,6 +214,11 @@ __attribute__ ((target("sse2"))) static int testing(int x) { return x; }
+ 	if test x"$CXX_OK" = x"yes"; then
+ 	    # AC_MSG_RESULT() is called below.
+ 	    SIMD="$SIMD x86_64"
++	    case "$CXX" in
++	    *clang*) # clang 10 will halve AVX2 performance
 +		    CXXFLAGS="$CXXFLAGS -fno-slp-vectorize"
- 		fi
- 		;;
- 	    *)
++		    ;;
++	    esac
+ 	elif test x"$enable_simd" = x"yes"; then
+ 	    AC_MSG_RESULT(error)
+ 	    AC_MSG_ERROR(The SIMD compilation test failed.
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -235,6 +237,14 @@ diff --git a/generator.c b/generator.c
  
  	return 0;
  }
+diff --git a/lib/md-defines.h b/lib/md-defines.h
+--- a/lib/md-defines.h
++++ b/lib/md-defines.h
+@@ -13,3 +13,4 @@
+ #define CSUM_MD4 4
+ #define CSUM_MD5 5
+ #define CSUM_XXH64 6
++#define CSUM_MD5P8 7
 diff --git a/lib/md5p8.c b/lib/md5p8.c
 new file mode 100644
 --- /dev/null
@@ -371,15 +381,7 @@ new file mode 100644
 diff --git a/lib/mdigest.h b/lib/mdigest.h
 --- a/lib/mdigest.h
 +++ b/lib/mdigest.h
-@@ -18,6 +18,7 @@
- #define CSUM_MD4 4
- #define CSUM_MD5 5
- #define CSUM_XXH64 6
-+#define CSUM_MD5P8 7
- 
- typedef struct {
- 	uint32 A, B, C, D;
-@@ -40,3 +41,14 @@ void md5_begin(md_context *ctx);
+@@ -27,3 +27,14 @@ void md5_begin(md_context *ctx);
  void md5_update(md_context *ctx, const uchar *input, uint32 length);
  void md5_result(md_context *ctx, uchar digest[MD5_DIGEST_LEN]);
  #endif
