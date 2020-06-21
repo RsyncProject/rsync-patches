@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: c225330aaf9d6032a79317bda1bf669e90ac7212
+based-on: b37a136314f250fc837d2836a923ffd441e847ca
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -44,27 +44,27 @@ diff --git a/Makefile.in b/Makefile.in
  libdir=@libdir@/rsync
  mandir=@mandir@
  
-@@ -34,8 +35,9 @@ VERSION=@RSYNC_VERSION@
- 
- SIMD_x86_64=simd-checksum-x86_64.o lib/md5-asm-x86_64.o
+@@ -35,8 +36,9 @@ VERSION=@RSYNC_VERSION@
+ SIMD_x86_64=simd-checksum-x86_64.o
+ ASM_x86_64=lib/md5-asm-x86_64.o
  
 +GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync-ssl.1
  GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync.1.html \
 -	 rsync-ssl.1 rsync-ssl.1.html rsyncd.conf.5 rsyncd.conf.5.html
 +	 rsync-ssl.1 rsync-ssl.1.html rsyncd.conf.5 rsyncd.conf.5.html rsyncdb.1 rsyncdb.1.html
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h ifuncs.h itypes.h inums.h \
- 	lib/pool_alloc.h
+ 	lib/pool_alloc.h lib/mdigest.h lib/md-defines.h
  LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
-@@ -45,7 +47,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
+@@ -46,7 +48,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
 -	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
 +	fileio.o batch.o clientname.o chmod.o db.o acls.o xattrs.o
- OBJS3=progress.o pipe.o
+ OBJS3=progress.o pipe.o @ASM@
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
-@@ -77,10 +79,12 @@ install: all
+@@ -78,10 +80,12 @@ install: all
  	-${MKDIR_P} ${DESTDIR}${bindir}
  	${INSTALLCMD} ${INSTALL_STRIP} -m 755 rsync$(EXEEXT) ${DESTDIR}${bindir}
  	${INSTALLCMD} -m 755 rsync-ssl ${DESTDIR}${bindir}
@@ -77,7 +77,7 @@ diff --git a/Makefile.in b/Makefile.in
  	if test -f rsyncd.conf.5; then ${INSTALLMAN} -m 644 rsyncd.conf.5 ${DESTDIR}${mandir}/man5; fi
  
  install-ssl-daemon: stunnel-rsyncd.conf
-@@ -98,10 +102,13 @@ install-strip:
+@@ -99,10 +103,13 @@ install-strip:
  rsync$(EXEEXT): $(OBJS)
  	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
  
@@ -92,7 +92,7 @@ diff --git a/Makefile.in b/Makefile.in
  exclude.o: default-cvsignore.h
  loadparm.o: default-dont-compress.h
  
-@@ -113,6 +120,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
+@@ -114,6 +121,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
  help-rsync.h help-rsyncd.h: rsync.1.md help-from-md.awk
  	$(AWK) -f $(srcdir)/help-from-md.awk -v hfile=$@ $(srcdir)/rsync.1.md
  
@@ -102,7 +102,7 @@ diff --git a/Makefile.in b/Makefile.in
  rounding.h: rounding.c rsync.h proto.h
  	@for r in 0 1 3; do \
  	    if $(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o rounding -DEXTRA_ROUNDING=$$r -I. $(srcdir)/rounding.c >rounding.out 2>&1; then \
-@@ -230,7 +240,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
+@@ -232,7 +242,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
  	$(AWK) -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c
  
  .PHONY: man
@@ -111,7 +111,7 @@ diff --git a/Makefile.in b/Makefile.in
  
  rsync.1: rsync.1.md md2man NEWS.md Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsync.1.md
-@@ -241,9 +251,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man NEWS.md Makefile
+@@ -243,9 +253,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man NEWS.md Makefile
  rsyncd.conf.5: rsyncd.conf.5.md md2man NEWS.md Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsyncd.conf.5.md
  
@@ -221,7 +221,7 @@ diff --git a/clientserver.c b/clientserver.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -439,6 +439,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
+@@ -472,6 +472,7 @@ AC_CHECK_HEADERS(sys/fcntl.h sys/select.h fcntl.h sys/time.h sys/unistd.h \
      unistd.h utime.h grp.h compat.h sys/param.h ctype.h sys/wait.h \
      sys/ioctl.h sys/filio.h string.h stdlib.h sys/socket.h sys/mode.h \
      sys/un.h sys/attr.h mcheck.h arpa/inet.h arpa/nameser.h locale.h \
@@ -229,7 +229,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netinet/ip.h \
-@@ -1288,6 +1289,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
+@@ -1321,6 +1322,48 @@ if test x"$enable_acl_support" = x"no" -o x"$enable_xattr_support" = x"no" -o x"
      fi
  fi
  

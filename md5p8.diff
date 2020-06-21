@@ -27,16 +27,17 @@ xxHash is still preferred (and faster), but this provides a reasonably
 fast fallback for the case where xxHash libraries are not available at
 build time.
 
-based-on: bd7bd5ff0c5cdaa3923d1a741c68242817f5cb44
+based-on: b37a136314f250fc837d2836a923ffd441e847ca
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
-@@ -32,13 +32,13 @@ VERSION=@RSYNC_VERSION@
+@@ -32,14 +32,14 @@ VERSION=@RSYNC_VERSION@
  .SUFFIXES:
  .SUFFIXES: .c .o
  
--SIMD_x86_64=simd-checksum-x86_64.o lib/md5-asm-x86_64.o
-+SIMD_x86_64=simd-checksum-x86_64.o simd-md5-parallel-x86_64.o lib/md5-asm-x86_64.o
+-SIMD_x86_64=simd-checksum-x86_64.o
++SIMD_x86_64=simd-checksum-x86_64.o simd-md5-parallel-x86_64.o
+ ASM_x86_64=lib/md5-asm-x86_64.o
  
  GENFILES=configure.sh aclocal.m4 config.h.in proto.h proto.h-tstamp rsync.1 rsync.1.html \
  	 rsync-ssl.1 rsync-ssl.1.html rsyncd.conf.5 rsyncd.conf.5.html
@@ -47,15 +48,15 @@ diff --git a/Makefile.in b/Makefile.in
  	lib/permstring.o lib/pool_alloc.o lib/sysacls.o lib/sysxattrs.o @LIBOBJS@
  zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  	zlib/trees.o zlib/zutil.o zlib/adler32.o zlib/compress.o zlib/crc32.o
-@@ -134,6 +134,9 @@ rounding.h: rounding.c rsync.h proto.h
- simd-checksum-x86_64.o: simd-checksum-x86_64.cpp
+@@ -136,6 +136,9 @@ simd-checksum-x86_64.o: simd-checksum-x86_64.cpp
+ 	@echo "If this fails to compile and you can't fix it, re-run $(srcdir)/configure with --disable-simd."
  	$(CXX) -I. $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $(srcdir)/simd-checksum-x86_64.cpp
  
 +simd-md5-parallel-x86_64.o: simd-md5-parallel-x86_64.cpp
 +	$(CXX) -I. $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $(srcdir)/simd-md5-parallel-x86_64.cpp
 +
  lib/md5-asm-x86_64.o: lib/md5-asm-x86_64.S config.h lib/md-defines.h
- 	$(CC) -I. -Wa,--noexecstack -c -o $@ $(srcdir)/lib/md5-asm-x86_64.S
+ 	$(CC) -I. @NOEXECSTACK@ -c -o $@ $(srcdir)/lib/md5-asm-x86_64.S
  
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
@@ -186,10 +187,10 @@ diff --git a/checksum.c b/checksum.c
 diff --git a/configure.ac b/configure.ac
 --- a/configure.ac
 +++ b/configure.ac
-@@ -214,6 +214,11 @@ __attribute__ ((target("sse2"))) static int testing(int x) { return x; }
+@@ -228,6 +228,11 @@ inline void more_testing(char* buf, int len)
  	if test x"$CXX_OK" = x"yes"; then
  	    # AC_MSG_RESULT() is called below.
- 	    SIMD="$SIMD x86_64"
+ 	    SIMD="x86_64"
 +	    case "$CXX" in
 +	    *clang*) # clang 10 will halve AVX2 performance
 +		    CXXFLAGS="$CXXFLAGS -fno-slp-vectorize"
