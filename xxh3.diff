@@ -7,28 +7,43 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: a8fc8fc2d22ba7243b96decb91c586682a05e4a1
+based-on: 89827e49bcc0296d93aab73a53bb8c7c88baf202
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
-@@ -28,6 +28,7 @@
+@@ -26,11 +26,20 @@
+  * with this program; if not, visit the http://fsf.org website.
+  */
  
++#define PRE_RELEASE_XXHASH 1
++
  #include "rsync.h"
- #ifdef SUPPORT_XXHASH
++#ifdef PRE_RELEASE_XXHASH
 +#include "xxh3.h"
++#endif
+ #ifdef SUPPORT_XXHASH
  #include "xxhash.h"
  #endif
  
-@@ -41,6 +42,8 @@ extern const char *checksum_choice;
++#if defined PRE_RELEASE_XXHASH || XXH_VERSION_NUMBER >= 800
++#define SUPPORT_XXH3 1
++#endif
++
+ extern int am_server;
+ extern int whole_file;
+ extern int checksum_seed;
+@@ -40,6 +49,10 @@ extern const char *checksum_choice;
+ 
  struct name_num_obj valid_checksums = {
  	"checksum", NULL, NULL, 0, 0, {
- #ifdef SUPPORT_XXHASH
++#ifdef SUPPORT_XXH3
 +		{ CSUM_XXH3_128, "xxh128", NULL },
 +		{ CSUM_XXH3_64, "xxh3", NULL },
++#endif
+ #ifdef SUPPORT_XXHASH
  		{ CSUM_XXH64, "xxh64", NULL },
  		{ CSUM_XXH64, "xxhash", NULL },
- #endif
-@@ -135,7 +138,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
+@@ -137,7 +150,10 @@ int csum_len_for_type(int cst, BOOL flist_csum)
  		return MD5_DIGEST_LEN;
  #ifdef SUPPORT_XXHASH
  	  case CSUM_XXH64:
@@ -39,7 +54,7 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
-@@ -160,6 +166,8 @@ int canonical_checksum(int csum_type)
+@@ -162,6 +178,8 @@ int canonical_checksum(int csum_type)
  		return -1;
  #ifdef SUPPORT_XXHASH
  	  case CSUM_XXH64:
@@ -48,10 +63,12 @@ diff --git a/checksum.c b/checksum.c
  		return 1;
  #endif
  	  default: /* paranoia to prevent missing case values */
-@@ -198,6 +206,15 @@ void get_checksum2(char *buf, int32 len, char *sum)
+@@ -200,6 +218,17 @@ void get_checksum2(char *buf, int32 len, char *sum)
  	  case CSUM_XXH64:
  		SIVAL64(sum, 0, XXH64(buf, len, checksum_seed));
  		break;
++#endif
++#ifdef SUPPORT_XXH3
 +	  case CSUM_XXH3_64:
 +		SIVAL64(sum, 0, XXH3_64bits_withSeed(buf, len, checksum_seed));
 +		break;
@@ -64,10 +81,12 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  case CSUM_MD5: {
  		MD5_CTX m5;
-@@ -313,6 +330,43 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
+@@ -315,6 +344,45 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
  		SIVAL64(sum, 0, XXH64_digest(state));
  		break;
  	  }
++#endif
++#ifdef SUPPORT_XXH3
 +	  case CSUM_XXH3_64: {
 +		static XXH3_state_t* state = NULL;
 +		if (!state && !(state = XXH3_createState()))
@@ -108,18 +127,22 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  case CSUM_MD5: {
  		MD5_CTX m5;
-@@ -388,6 +442,7 @@ static union {
- } ctx;
+@@ -391,6 +459,9 @@ static union {
  #ifdef SUPPORT_XXHASH
  static XXH64_state_t* xxh64_state;
-+static XXH3_state_t* xxh3_state;
  #endif
++#ifdef SUPPORT_XXH3
++static XXH3_state_t* xxh3_state;
++#endif
  static int cursum_type;
  
-@@ -406,6 +461,16 @@ void sum_init(int csum_type, int seed)
+ void sum_init(int csum_type, int seed)
+@@ -408,6 +479,18 @@ void sum_init(int csum_type, int seed)
  			out_of_memory("sum_init");
  		XXH64_reset(xxh64_state, 0);
  		break;
++#endif
++#ifdef SUPPORT_XXH3
 +	  case CSUM_XXH3_64:
 +		if (!xxh3_state && !(xxh3_state = XXH3_createState()))
 +			out_of_memory("sum_init");
@@ -133,10 +156,12 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  case CSUM_MD5:
  		MD5_Init(&ctx.m5);
-@@ -448,6 +513,12 @@ void sum_update(const char *p, int32 len)
+@@ -450,6 +533,14 @@ void sum_update(const char *p, int32 len)
  	  case CSUM_XXH64:
  		XXH64_update(xxh64_state, p, len);
  		break;
++#endif
++#ifdef SUPPORT_XXH3
 +	  case CSUM_XXH3_64:
 +		XXH3_64bits_update(xxh3_state, p, len);
 +		break;
@@ -146,10 +171,12 @@ diff --git a/checksum.c b/checksum.c
  #endif
  	  case CSUM_MD5:
  		MD5_Update(&ctx.m5, (uchar *)p, len);
-@@ -502,6 +573,15 @@ int sum_end(char *sum)
+@@ -504,6 +595,17 @@ int sum_end(char *sum)
  	  case CSUM_XXH64:
  		SIVAL64(sum, 0, XXH64_digest(xxh64_state));
  		break;
++#endif
++#ifdef SUPPORT_XXH3
 +	  case CSUM_XXH3_64:
 +		SIVAL64(sum, 0, XXH3_64bits_digest(xxh3_state));
 +		break;
