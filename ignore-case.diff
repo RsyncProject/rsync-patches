@@ -12,19 +12,11 @@ TODO:
  - Make this code handle multibyte character encodings, and honor the
    --iconv setting when converting case.
 
-based-on: fe2ef556d9ef11e5dd549e19a06a7a924f7ddfa1
+based-on: 3a6f06003cdd29e9385dba3a9673122e0e356c76
 diff --git a/exclude.c b/exclude.c
 --- a/exclude.c
 +++ b/exclude.c
-@@ -21,6 +21,7 @@
-  */
- 
- #include "rsync.h"
-+#include "ifuncs.h"
- #include "default-cvsignore.h"
- #include "ifuncs.h"
- 
-@@ -684,16 +685,15 @@ static int rule_matches(const char *fname, filter_rule *ex, int name_flags)
+@@ -684,16 +684,15 @@ static int rule_matches(const char *fname, filter_rule *ex, int name_flags)
  		if (litmatch_array(pattern, strings, slash_handling))
  			return ret_match;
  	} else if (anchored_match) {
@@ -56,7 +48,17 @@ diff --git a/flist.c b/flist.c
  extern int ignore_errors;
  extern int numeric_ids;
  extern int quiet;
-@@ -3111,6 +3112,7 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2)
+@@ -2538,7 +2539,8 @@ struct file_list *recv_file_list(int f, int dir_ndx)
+ 				cur_dir++;
+ 			if (cur_dir != good_dirname) {
+ 				const char *d = dir_ndx >= 0 ? f_name(dir_flist->files[dir_ndx], NULL) : empty_dir;
+-				if (strcmp(cur_dir, d) != 0) {
++				int dir_differs = ignore_case ? strcasecmp(cur_dir, d) : strcmp(cur_dir, d);
++				if (dir_differs) {
+ 					rprintf(FERROR,
+ 						"ABORTING due to invalid path from sender: %s/%s\n",
+ 						cur_dir, file->basename);
+@@ -3111,6 +3113,7 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2)
  {
  	int dif;
  	const uchar *c1, *c2;
@@ -64,7 +66,7 @@ diff --git a/flist.c b/flist.c
  	enum fnc_state state1, state2;
  	enum fnc_type type1, type2;
  	enum fnc_type t_path = protocol_version >= 29 ? t_PATH : t_ITEM;
-@@ -3221,7 +3223,15 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2)
+@@ -3221,7 +3224,15 @@ int f_name_cmp(const struct file_struct *f1, const struct file_struct *f2)
  			if (type1 != type2)
  				return type1 == t_PATH ? 1 : -1;
  		}
@@ -250,7 +252,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --address=ADDRESS        bind address for outgoing socket to daemon
  --port=PORT              specify double-colon alternate port number
  --sockopts=OPTIONS       specify custom TCP options
-@@ -2146,6 +2147,12 @@ your home directory (remove the '=' for that).
+@@ -2151,6 +2152,12 @@ your home directory (remove the '=' for that).
  
      >     sudo rsync -aive lsh -M--copy-as=joe src/ lh:dest/
  
@@ -263,6 +265,17 @@ diff --git a/rsync.1.md b/rsync.1.md
  0.  `--temp-dir=DIR`, `-T`
  
      This option instructs rsync to use DIR as a scratch directory when creating
+diff --git a/t_stub.c b/t_stub.c
+--- a/t_stub.c
++++ b/t_stub.c
+@@ -33,6 +33,7 @@ int preserve_xattrs = 0;
+ int preserve_perms = 0;
+ int preserve_executability = 0;
+ int open_noatime = 0;
++int ignore_case = 0;
+ size_t max_alloc = 1024*1024*1024;
+ char *partial_dir;
+ char *module_dir;
 diff --git a/wildtest.c b/wildtest.c
 --- a/wildtest.c
 +++ b/wildtest.c

@@ -13,7 +13,28 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: fe2ef556d9ef11e5dd549e19a06a7a924f7ddfa1
+based-on: 3a6f06003cdd29e9385dba3a9673122e0e356c76
+diff --git a/Makefile.in b/Makefile.in
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -53,7 +53,7 @@ popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
+ 	popt/popthelp.o popt/poptparse.o
+ OBJS=$(OBJS1) $(OBJS2) $(OBJS3) @SIMD@ $(DAEMON_OBJ) $(LIBOBJ) @BUILD_ZLIB@ @BUILD_POPT@
+ 
+-TLS_OBJ = tls.o syscall.o t_stub.o lib/compat.o lib/snprintf.o lib/permstring.o lib/sysxattrs.o @BUILD_POPT@
++TLS_OBJ = tls.o syscall.o util.o util2.o t_stub.o lib/compat.o lib/snprintf.o lib/permstring.o lib/sysxattrs.o lib/wildmatch.o @BUILD_POPT@
+ 
+ # Programs we must have to run the test cases
+ CHECK_PROGS = rsync$(EXEEXT) tls$(EXEEXT) getgroups$(EXEEXT) getfsdev$(EXEEXT) \
+@@ -150,7 +150,7 @@ getgroups$(EXEEXT): getgroups.o
+ getfsdev$(EXEEXT): getfsdev.o
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ getfsdev.o $(LIBS)
+ 
+-TRIMSLASH_OBJ = trimslash.o syscall.o t_stub.o lib/compat.o lib/snprintf.o
++TRIMSLASH_OBJ = trimslash.o syscall.o util.o util2.o t_stub.o lib/compat.o lib/snprintf.o lib/wildmatch.o
+ trimslash$(EXEEXT): $(TRIMSLASH_OBJ)
+ 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(TRIMSLASH_OBJ) $(LIBS)
+ 
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -110,7 +131,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --compress, -z           compress file data during the transfer
  --compress-choice=STR    choose the compression algorithm (aka --zc)
  --compress-level=NUM     explicitly set compression level (aka --zl)
-@@ -2282,6 +2283,17 @@ your home directory (remove the '=' for that).
+@@ -2287,6 +2288,17 @@ your home directory (remove the '=' for that).
      specified (or implied by `-a`).  You can work-around this bug by avoiding
      the `-o` option when sending to an old rsync.
  
@@ -201,3 +222,25 @@ diff --git a/syscall.c b/syscall.c
  int do_lchown(const char *path, uid_t owner, gid_t group)
  {
  	if (dry_run) return 0;
+diff --git a/t_stub.c b/t_stub.c
+--- a/t_stub.c
++++ b/t_stub.c
+@@ -37,6 +37,7 @@ size_t max_alloc = 1024*1024*1024;
+ char *partial_dir;
+ char *module_dir;
+ filter_rule_list daemon_filter_list;
++short info_levels[COUNT_INFO], debug_levels[COUNT_DEBUG];
+ 
+  void rprintf(UNUSED(enum logcode code), const char *format, ...)
+ {
+diff --git a/t_unsafe.c b/t_unsafe.c
+--- a/t_unsafe.c
++++ b/t_unsafe.c
+@@ -28,7 +28,6 @@ int am_root = 0;
+ int am_sender = 1;
+ int read_only = 0;
+ int list_only = 0;
+-short info_levels[COUNT_INFO], debug_levels[COUNT_DEBUG];
+ 
+ int
+ main(int argc, char **argv)
