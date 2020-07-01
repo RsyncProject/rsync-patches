@@ -21,11 +21,11 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 00dd50a00c00da4824b3aa5fe2b2f82baffca071
+based-on: feb2fff894fff1509fd132bbe80f123d28fcea72
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -29,6 +29,7 @@ aclocal.m4
+@@ -30,6 +30,7 @@ aclocal.m4
  /getgroups
  /gmon.out
  /rsync
@@ -90,7 +90,7 @@ diff --git a/Makefile.in b/Makefile.in
 -options.o: latest-year.h help-rsync.h help-rsyncd.h
 +options.o: latest-year.h help-rsync.h help-rsyncd.h help-rsyncdb.h
  exclude.o: default-cvsignore.h
- loadparm.o: default-dont-compress.h
+ loadparm.o: default-dont-compress.h daemon-parm.h
  
 @@ -111,6 +118,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
  help-rsync.h help-rsyncd.h: rsync.1.md help-from-md.awk
@@ -99,11 +99,11 @@ diff --git a/Makefile.in b/Makefile.in
 +help-rsyncdb.h: rsyncdb.1.md help-from-md.awk
 +	awk -f $(srcdir)/help-from-md.awk -v hfile=$@ $(srcdir)/rsyncdb.1.md
 +
- rounding.h: rounding.c rsync.h proto.h
- 	@for r in 0 1 3; do \
- 	    if $(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) -o rounding -DEXTRA_ROUNDING=$$r -I. $(srcdir)/rounding.c >rounding.out 2>&1; then \
-@@ -232,7 +242,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h
- 	$(AWK) -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c
+ daemon-parm.h: daemon-parm.txt daemon-parm.awk
+ 	$(AWK) -f $(srcdir)/daemon-parm.awk $(srcdir)/daemon-parm.txt
+ 
+@@ -235,7 +245,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c config.h daemon-parm.h
+ 	$(AWK) -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
  
  .PHONY: man
 -man: rsync.1 rsync-ssl.1 rsyncd.conf.5
@@ -111,7 +111,7 @@ diff --git a/Makefile.in b/Makefile.in
  
  rsync.1: rsync.1.md md2man version.h Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsync.1.md
-@@ -243,9 +253,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man version.h Makefile
+@@ -246,9 +256,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man version.h Makefile
  rsyncd.conf.5: rsyncd.conf.5.md md2man version.h Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsyncd.conf.5.md
  
@@ -278,6 +278,25 @@ diff --git a/configure.ac b/configure.ac
  case "$CC" in
  ' checker'*|checker*)
      AC_DEFINE(FORCE_FD_ZERO_MEMSET, 1, [Used to make "checker" understand that FD_ZERO() clears memory.])
+diff --git a/daemon-parm.txt b/daemon-parm.txt
+--- a/daemon-parm.txt
++++ b/daemon-parm.txt
+@@ -18,6 +18,7 @@ Locals: =================================================================
+ STRING	auth_users		NULL
+ STRING	charset			NULL
+ STRING	comment			NULL
++STRING	db_config		NULL
+ STRING	dont_compress		DEFAULT_DONT_COMPRESS
+ STRING	early_exec		NULL
+ STRING	exclude			NULL
+@@ -50,6 +51,7 @@ INTEGER	timeout			0
+ 
+ ENUM	syslog_facility		LOG_DAEMON
+ 
++BOOL	db_lax			False
+ BOOL	fake_super		False
+ BOOL	forward_lookup		True
+ BOOL	ignore_errors		False
 diff --git a/db.c b/db.c
 new file mode 100644
 --- /dev/null
@@ -2400,82 +2419,6 @@ diff --git a/io.c b/io.c
  		rprintf(FERROR, "unexpected tag %d [%s%s]\n",
  			tag, who_am_i(), inc_recurse ? "/inc" : "");
  		exit_cleanup(RERR_STREAMIO);
-diff --git a/loadparm.c b/loadparm.c
---- a/loadparm.c
-+++ b/loadparm.c
-@@ -120,6 +120,7 @@ typedef struct {
- 	char *auth_users;
- 	char *charset;
- 	char *comment;
-+	char *db_config;
- 	char *dont_compress;
- 	char *early_exec;
- 	char *exclude;
-@@ -149,6 +150,7 @@ typedef struct {
- 	BOOL auth_users_EXP;
- 	BOOL charset_EXP;
- 	BOOL comment_EXP;
-+	BOOL db_config_EXP;
- 	BOOL dont_compress_EXP;
- 	BOOL early_exec_EXP;
- 	BOOL exclude_EXP;
-@@ -179,6 +181,7 @@ typedef struct {
- 	int syslog_facility;
- 	int timeout;
- 
-+	BOOL db_lax;
- 	BOOL fake_super;
- 	BOOL forward_lookup;
- 	BOOL ignore_errors;
-@@ -238,6 +241,7 @@ static const all_vars Defaults = {
-  /* auth_users; */		NULL,
-  /* charset; */ 		NULL,
-  /* comment; */ 		NULL,
-+ /* db_config; */		NULL,
-  /* dont_compress; */		DEFAULT_DONT_COMPRESS,
-  /* early_exec; */		NULL,
-  /* exclude; */ 		NULL,
-@@ -266,6 +270,7 @@ static const all_vars Defaults = {
-  /* auth_users_EXP; */		False,
-  /* charset_EXP; */		False,
-  /* comment_EXP; */		False,
-+ /* db_config; */		False,
-  /* dont_compress_EXP; */	False,
-  /* early_exec_EXP; */		False,
-  /* exclude_EXP; */		False,
-@@ -296,6 +301,7 @@ static const all_vars Defaults = {
-  /* syslog_facility; */		LOG_DAEMON,
-  /* timeout; */			0,
- 
-+ /* db_lax; */			False,
-  /* fake_super; */		False,
-  /* forward_lookup; */		True,
-  /* ignore_errors; */		False,
-@@ -409,6 +415,8 @@ static struct parm_struct parm_table[] =
-  {"auth users",        P_STRING, P_LOCAL, &Vars.l.auth_users,          NULL,0},
-  {"charset",           P_STRING, P_LOCAL, &Vars.l.charset,             NULL,0},
-  {"comment",           P_STRING, P_LOCAL, &Vars.l.comment,             NULL,0},
-+ {"db config",         P_STRING, P_LOCAL, &Vars.l.db_config,           NULL,0},
-+ {"db lax",            P_BOOL,   P_LOCAL, &Vars.l.db_lax,              NULL,0},
-  {"dont compress",     P_STRING, P_LOCAL, &Vars.l.dont_compress,       NULL,0},
-  {"early exec",        P_STRING, P_LOCAL, &Vars.l.early_exec,          NULL,0},
-  {"exclude from",      P_STRING, P_LOCAL, &Vars.l.exclude_from,        NULL,0},
-@@ -550,6 +558,7 @@ FN_GLOBAL_BOOL(lp_proxy_protocol, proxy_protocol)
- FN_LOCAL_STRING(lp_auth_users, auth_users)
- FN_LOCAL_STRING(lp_charset, charset)
- FN_LOCAL_STRING(lp_comment, comment)
-+FN_LOCAL_STRING(lp_db_config, db_config)
- FN_LOCAL_STRING(lp_dont_compress, dont_compress)
- FN_LOCAL_STRING(lp_early_exec, early_exec)
- FN_LOCAL_STRING(lp_exclude, exclude)
-@@ -580,6 +589,7 @@ FN_LOCAL_INTEGER(lp_max_verbosity, max_verbosity)
- FN_LOCAL_INTEGER(lp_syslog_facility, syslog_facility)
- FN_LOCAL_INTEGER(lp_timeout, timeout)
- 
-+FN_LOCAL_BOOL(lp_db_lax, db_lax)
- FN_LOCAL_BOOL(lp_fake_super, fake_super)
- FN_LOCAL_BOOL(lp_forward_lookup, forward_lookup)
- FN_LOCAL_BOOL(lp_ignore_errors, ignore_errors)
 diff --git a/main.c b/main.c
 --- a/main.c
 +++ b/main.c
@@ -2560,7 +2503,7 @@ diff --git a/options.c b/options.c
  	DEBUG_WORD(DEL, W_REC, "Debug delete actions (levels 1-3)"),
  	DEBUG_WORD(DELTASUM, W_SND|W_REC, "Debug delta-transfer checksumming (levels 1-4)"),
  	DEBUG_WORD(DUP, W_REC, "Debug weeding of duplicate names"),
-@@ -661,6 +667,16 @@ static void print_capabilities(enum logcode f)
+@@ -664,6 +670,16 @@ static void print_info_flags(enum logcode f)
  #endif
  			"prealloc",
  
@@ -2574,10 +2517,10 @@ diff --git a/options.c b/options.c
 +#endif
 +			"SQLite",
 +
- 	"*" /* All options after this point are hidden w/o -V -V */
+ 	"*Optimizations",
+ 
  #ifndef HAVE_SIMD
- 		"no "
-@@ -783,6 +799,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -777,6 +793,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG,
@@ -2585,7 +2528,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
        OPT_REFUSED_BASE = 9000};
-@@ -934,6 +951,10 @@ static struct poptOption long_options[] = {
+@@ -928,6 +945,10 @@ static struct poptOption long_options[] = {
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"checksum-choice",  0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
    {"cc",               0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
@@ -2596,7 +2539,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_LONG,   &block_size, 0, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1025,6 +1046,9 @@ static struct poptOption long_options[] = {
+@@ -1019,6 +1040,9 @@ static struct poptOption long_options[] = {
    {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
    {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
@@ -2606,7 +2549,7 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1065,6 +1089,39 @@ static struct poptOption long_daemon_options[] = {
+@@ -1059,6 +1083,39 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
@@ -2646,7 +2589,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1190,6 +1247,8 @@ static void set_refuse_options(void)
+@@ -1184,6 +1241,8 @@ static void set_refuse_options(void)
  			parse_one_refuse_match(0, "iconv", list_end);
  #endif
  		parse_one_refuse_match(0, "log-file*", list_end);
@@ -2655,7 +2598,7 @@ diff --git a/options.c b/options.c
  	}
  
  #ifndef SUPPORT_ATIMES
-@@ -1333,6 +1392,102 @@ static void create_refuse_error(int which)
+@@ -1327,6 +1386,102 @@ static void create_refuse_error(int which)
  		snprintf(err_buf + n, sizeof err_buf - n, " (-%c)\n", op->shortName);
  }
  
@@ -2758,7 +2701,7 @@ diff --git a/options.c b/options.c
  /* This is used to make sure that --daemon & --server cannot be aliased to
   * something else. These options have always disabled popt aliases for the
   * parsing of a daemon or server command-line, but we have to make sure that
-@@ -1389,6 +1544,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1383,6 +1538,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		return 0;
  	}
  
@@ -2771,7 +2714,7 @@ diff --git a/options.c b/options.c
  	set_refuse_options();
  
  #ifdef ICONV_OPTION
-@@ -1507,6 +1668,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1501,6 +1662,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2784,7 +2727,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1579,6 +1746,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1573,6 +1740,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -2944,7 +2887,7 @@ diff --git a/rsync.h b/rsync.h
  #define NDX_DONE -1
  #define NDX_FLIST_EOF -2
  #define NDX_DEL_STATS -3
-@@ -1357,7 +1361,8 @@ extern short info_levels[], debug_levels[];
+@@ -1358,7 +1362,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CHDIR (DEBUG_BIND+1)
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)

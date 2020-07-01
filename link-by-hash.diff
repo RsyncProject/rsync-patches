@@ -12,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 00dd50a00c00da4824b3aa5fe2b2f82baffca071
+based-on: feb2fff894fff1509fd132bbe80f123d28fcea72
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -94,6 +94,17 @@ diff --git a/clientserver.c b/clientserver.c
  	if (am_daemon > 0) {
  		rprintf(FLOG, "rsync allowed access on module %s from %s (%s)\n",
  			name, host, addr);
+diff --git a/daemon-parm.txt b/daemon-parm.txt
+--- a/daemon-parm.txt
++++ b/daemon-parm.txt
+@@ -29,6 +29,7 @@ STRING	hosts_deny		NULL
+ STRING	include			NULL
+ STRING	include_from		NULL
+ STRING	incoming_chmod		NULL
++STRING	link_by_hash_dir	NULL
+ STRING	lock_file		DEFAULT_LOCK_FILE
+ STRING	log_file		NULL
+ STRING	log_format		"%o %h [%a] %m (%u) %f %l"
 diff --git a/hashlink.c b/hashlink.c
 new file mode 100644
 --- /dev/null
@@ -191,57 +202,6 @@ new file mode 100644
 +	free(hashname);
 +}
 +#endif
-diff --git a/loadparm.c b/loadparm.c
---- a/loadparm.c
-+++ b/loadparm.c
-@@ -131,6 +131,7 @@ typedef struct {
- 	char *include;
- 	char *include_from;
- 	char *incoming_chmod;
-+	char *link_by_hash_dir;
- 	char *lock_file;
- 	char *log_file;
- 	char *log_format;
-@@ -160,6 +161,7 @@ typedef struct {
- 	BOOL include_EXP;
- 	BOOL include_from_EXP;
- 	BOOL incoming_chmod_EXP;
-+	BOOL link_by_hash_dir_EXP;
- 	BOOL lock_file_EXP;
- 	BOOL log_file_EXP;
- 	BOOL log_format_EXP;
-@@ -249,6 +251,7 @@ static const all_vars Defaults = {
-  /* include; */			NULL,
-  /* include_from; */		NULL,
-  /* incoming_chmod; */		NULL,
-+ /* link_by_hash_dir; */	NULL,
-  /* lock_file; */		DEFAULT_LOCK_FILE,
-  /* log_file; */		NULL,
-  /* log_format; */		"%o %h [%a] %m (%u) %f %l",
-@@ -277,6 +280,7 @@ static const all_vars Defaults = {
-  /* include_EXP; */		False,
-  /* include_from_EXP; */	False,
-  /* incoming_chmod_EXP; */	False,
-+ /* link_by_hash_dir_EXP; */	False,
-  /* lock_file_EXP; */		False,
-  /* log_file_EXP; */		False,
-  /* log_format_EXP; */		False,
-@@ -424,6 +428,7 @@ static struct parm_struct parm_table[] =
-  {"include from",      P_STRING, P_LOCAL, &Vars.l.include_from,        NULL,0},
-  {"include",           P_STRING, P_LOCAL, &Vars.l.include,             NULL,0},
-  {"incoming chmod",    P_STRING, P_LOCAL, &Vars.l.incoming_chmod,      NULL,0},
-+ {"link by hash dir",  P_STRING, P_LOCAL, &Vars.l.link_by_hash_dir,    NULL,0},
-  {"list",              P_BOOL,   P_LOCAL, &Vars.l.list,                NULL,0},
-  {"lock file",         P_STRING, P_LOCAL, &Vars.l.lock_file,           NULL,0},
-  {"log file",          P_STRING, P_LOCAL, &Vars.l.log_file,            NULL,0},
-@@ -561,6 +566,7 @@ FN_LOCAL_STRING(lp_hosts_deny, hosts_deny)
- FN_LOCAL_STRING(lp_include, include)
- FN_LOCAL_STRING(lp_include_from, include_from)
- FN_LOCAL_STRING(lp_incoming_chmod, incoming_chmod)
-+FN_LOCAL_STRING(lp_link_by_hash_dir, link_by_hash_dir)
- FN_LOCAL_STRING(lp_lock_file, lock_file)
- FN_LOCAL_STRING(lp_log_file, log_file)
- FN_LOCAL_STRING(lp_log_format, log_format)
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -270,7 +230,7 @@ diff --git a/options.c b/options.c
  	DEBUG_WORD(HLINK, W_SND|W_REC, "Debug hard-link actions (levels 1-3)"),
  	DEBUG_WORD(ICONV, W_CLI|W_SRV, "Debug iconv character conversions (levels 1-2)"),
  	DEBUG_WORD(IO, W_CLI|W_SRV, "Debug I/O routines (levels 1-4)"),
-@@ -782,7 +784,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -776,7 +778,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_FILTER, OPT_COMPARE_DEST, OPT_COPY_DEST, OPT_LINK_DEST, OPT_HELP,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -279,7 +239,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT,
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
        OPT_REFUSED_BASE = 9000};
-@@ -938,6 +940,7 @@ static struct poptOption long_options[] = {
+@@ -932,6 +934,7 @@ static struct poptOption long_options[] = {
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -287,7 +247,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -1184,6 +1187,9 @@ static void set_refuse_options(void)
+@@ -1178,6 +1181,9 @@ static void set_refuse_options(void)
  		ref = cp + 1;
  	}
  
@@ -297,7 +257,7 @@ diff --git a/options.c b/options.c
  	if (am_daemon) {
  #ifdef ICONV_OPTION
  		if (!*lp_charset(module_id))
-@@ -1869,6 +1875,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1863,6 +1869,21 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			return 0;
  #endif
  
@@ -319,7 +279,7 @@ diff --git a/options.c b/options.c
  		default:
  			/* A large opt value means that set_refuse_options()
  			 * turned this option off. */
-@@ -2190,6 +2211,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2184,6 +2205,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0, SP_DEFAULT);
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0, SP_DEFAULT);
@@ -328,7 +288,7 @@ diff --git a/options.c b/options.c
  	}
  	if (daemon_filter_list.head && !am_sender) {
  		filter_rule_list *elp = &daemon_filter_list;
-@@ -2871,6 +2894,12 @@ void server_options(char **args, int *argc_p)
+@@ -2865,6 +2888,12 @@ void server_options(char **args, int *argc_p)
  	} else if (inplace)
  		args[ac++] = "--inplace";
  
@@ -352,7 +312,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --compress, -z           compress file data during the transfer
  --compress-choice=STR    choose the compression algorithm (aka --zc)
  --compress-level=NUM     explicitly set compression level (aka --zl)
-@@ -2284,6 +2285,50 @@ your home directory (remove the '=' for that).
+@@ -2281,6 +2282,50 @@ your home directory (remove the '=' for that).
      specified (or implied by `-a`).  You can work-around this bug by avoiding
      the `-o` option when sending to an old rsync.
  
@@ -428,7 +388,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -1366,7 +1366,8 @@ extern short info_levels[], debug_levels[];
+@@ -1367,7 +1367,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_FUZZY (DEBUG_FLIST+1)
  #define DEBUG_GENR (DEBUG_FUZZY+1)
  #define DEBUG_HASH (DEBUG_GENR+1)
