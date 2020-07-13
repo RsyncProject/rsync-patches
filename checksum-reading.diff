@@ -16,7 +16,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: af531cf787995f6a3bc381cd1da1988192e7ef59
+based-on: 0e814e956c438700c2617350b39dc7a5d8370c65
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
@@ -106,20 +106,21 @@ diff --git a/flist.c b/flist.c
  #define PTR_SIZE (sizeof (struct file_struct *))
  
  int io_error;
-@@ -133,7 +151,11 @@ static char empty_sum[MAX_DIGEST_LEN];
+@@ -133,8 +151,12 @@ static char empty_sum[MAX_DIGEST_LEN];
  static int flist_count_offset; /* for --delete --progress */
  static int show_filelist_progress;
  
--static void flist_sort_and_clean(struct file_list *flist, int strip_root);
 +static struct csum_cache {
 +	struct file_list *flist;
 +} *csum_cache = NULL;
 +
+ static struct file_list *flist_new(int flags, const char *msg);
+-static void flist_sort_and_clean(struct file_list *flist, int strip_root);
 +static void flist_sort_and_clean(struct file_list *flist, int flags);
  static void output_flist(struct file_list *flist);
  
  void init_flist(void)
-@@ -322,6 +344,235 @@ static void flist_done_allocating(struct file_list *flist)
+@@ -323,6 +345,235 @@ static void flist_done_allocating(struct file_list *flist)
  		flist->pool_boundary = ptr;
  }
  
@@ -355,7 +356,7 @@ diff --git a/flist.c b/flist.c
  /* Call this with EITHER (1) "file, NULL, 0" to chdir() to the file's
   * F_PATHNAME(), or (2) "NULL, dir, dirlen" to chdir() to the supplied dir,
   * with dir == NULL taken to be the starting directory, and dirlen < 0
-@@ -1158,7 +1409,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1159,7 +1410,7 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  			      STRUCT_STAT *stp, int flags, int filter_level)
  {
  	static char *lastdir;
@@ -364,7 +365,7 @@ diff --git a/flist.c b/flist.c
  	struct file_struct *file;
  	char thisname[MAXPATHLEN];
  	char linkname[MAXPATHLEN];
-@@ -1304,9 +1555,16 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1305,9 +1556,16 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  			memcpy(lastdir, thisname, len);
  			lastdir[len] = '\0';
  			lastdir_len = len;
@@ -382,7 +383,7 @@ diff --git a/flist.c b/flist.c
  	basename_len = strlen(basename) + 1; /* count the '\0' */
  
  #ifdef SUPPORT_LINKS
-@@ -1324,11 +1582,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1325,11 +1583,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		extra_len += EXTRA_LEN;
  #endif
  
@@ -396,7 +397,7 @@ diff --git a/flist.c b/flist.c
  
  #if EXTRA_ROUNDING > 0
  	if (extra_len & (EXTRA_ROUNDING * EXTRA_LEN))
-@@ -1413,8 +1668,14 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1414,8 +1669,14 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		return NULL;
  	}
  
@@ -413,7 +414,7 @@ diff --git a/flist.c b/flist.c
  
  	if (unsort_ndx)
  		F_NDX(file) = stats.num_dirs;
-@@ -2626,7 +2887,7 @@ struct file_list *recv_file_list(int f, int dir_ndx)
+@@ -2627,7 +2888,7 @@ struct file_list *recv_file_list(int f, int dir_ndx)
  	/* The --relative option sends paths with a leading slash, so we need
  	 * to specify the strip_root option here.  We rejected leading slashes
  	 * for a non-relative transfer in recv_file_entry(). */
@@ -422,7 +423,7 @@ diff --git a/flist.c b/flist.c
  
  	if (protocol_version < 30) {
  		/* Recv the io_error flag */
-@@ -2876,7 +3137,7 @@ void flist_free(struct file_list *flist)
+@@ -2872,7 +3133,7 @@ void flist_free(struct file_list *flist)
  
  /* This routine ensures we don't have any duplicate names in our file list.
   * duplicate names can cause corruption because of the pipelining. */
@@ -431,7 +432,7 @@ diff --git a/flist.c b/flist.c
  {
  	char fbuf[MAXPATHLEN];
  	int i, prev_i;
-@@ -2927,7 +3188,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+@@ -2923,7 +3184,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
  			/* If one is a dir and the other is not, we want to
  			 * keep the dir because it might have contents in the
  			 * list.  Otherwise keep the first one. */
@@ -440,7 +441,7 @@ diff --git a/flist.c b/flist.c
  				struct file_struct *fp = flist->sorted[j];
  				if (!S_ISDIR(fp->mode))
  					keep = i, drop = j;
-@@ -2943,8 +3204,8 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+@@ -2939,8 +3200,8 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
  			} else
  				keep = j, drop = i;
  
@@ -451,7 +452,7 @@ diff --git a/flist.c b/flist.c
  					rprintf(FINFO,
  					    "removing duplicate name %s from file list (%d)\n",
  					    f_name(file, fbuf), drop + flist->ndx_start);
-@@ -2966,7 +3227,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
+@@ -2962,7 +3223,7 @@ static void flist_sort_and_clean(struct file_list *flist, int strip_root)
  	}
  	flist->high = prev_i;
  
@@ -616,9 +617,9 @@ diff --git a/options.c b/options.c
  int ignore_non_existing = 0;
  int need_messages_from_generator = 0;
 +int checksum_files = CSF_IGNORE_FILES;
- time_t stop_at_utime = 0;
  int max_delete = INT_MIN;
  OFF_T max_size = -1;
+ OFF_T min_size = -1;
 @@ -783,7 +784,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
@@ -732,7 +733,7 @@ diff --git a/rsync.1.md b/rsync.1.md
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -866,6 +866,10 @@ extern int xattrs_ndx;
+@@ -870,6 +870,10 @@ extern int xattrs_ndx;
  #define F_SUM(f) ((char*)OPT_EXTRA(f, START_BUMP(f) + HLINK_BUMP(f) \
  				    + SUM_EXTRA_CNT - 1))
  
@@ -743,7 +744,7 @@ diff --git a/rsync.h b/rsync.h
  /* Some utility defines: */
  #define F_IS_ACTIVE(f) (f)->basename[0]
  #define F_IS_HLINKED(f) ((f)->flags & FLAG_HLINKED)
-@@ -1078,6 +1082,13 @@ typedef struct {
+@@ -1082,6 +1086,13 @@ typedef struct {
  #define RELNAMECACHE_LEN (offsetof(relnamecache, fname))
  #endif
  
