@@ -3,33 +3,50 @@ create times on OS X.
 
 To use this patch, run these commands for a successful build:
 
-    patch -p1 <patches/fileflags.diff
     patch -p1 <patches/crtimes.diff
     ./configure                         (optional if already run)
     make
 
-based-on: patch/master/fileflags
+based-on: 9f7506ac1b48a17a65610ed4a1356c7432cf4da7
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -27,11 +27,11 @@ jobs:
+     - name: info
+       run: rsync --version
+     - name: check
+-      run: sudo RSYNC_MAX_SKIPPED=0 make check
++      run: sudo RSYNC_MAX_SKIPPED=1 make check
+     - name: check30
+-      run: sudo RSYNC_MAX_SKIPPED=0 make check30
++      run: sudo RSYNC_MAX_SKIPPED=1 make check30
+     - name: check29
+-      run: sudo RSYNC_MAX_SKIPPED=0 make check29
++      run: sudo RSYNC_MAX_SKIPPED=1 make check29
+     - name: ssl file list
+       run: rsync-ssl --no-motd download.samba.org::rsyncftp/ || true
+     - name: save artifact
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
-@@ -44,6 +44,7 @@ extern int protect_args;
+@@ -43,6 +43,7 @@ extern int protect_args;
  extern int preserve_uid;
  extern int preserve_gid;
  extern int preserve_atimes;
 +extern int preserve_crtimes;
  extern int preserve_acls;
  extern int preserve_xattrs;
- extern int preserve_fileflags;
-@@ -78,7 +79,7 @@ int do_negotiated_strings = 0;
+ extern int xfer_flags_as_varint;
+@@ -76,7 +77,7 @@ int do_negotiated_strings = 0;
  int xmit_id0_names = 0;
  
  /* These index values are for the file-list's extra-attribute array. */
--int pathname_ndx, depth_ndx, atimes_ndx, uid_ndx, gid_ndx, fileflags_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
-+int pathname_ndx, depth_ndx, atimes_ndx, crtimes_ndx, uid_ndx, gid_ndx, fileflags_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
+-int pathname_ndx, depth_ndx, atimes_ndx, uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
++int pathname_ndx, depth_ndx, atimes_ndx, crtimes_ndx, uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
  
  int receiver_symlink_times = 0; /* receiver can set the time on a symlink */
  int sender_symlink_iconv = 0;	/* sender should convert symlink content */
-@@ -557,6 +558,8 @@ void setup_protocol(int f_out,int f_in)
+@@ -555,6 +556,8 @@ void setup_protocol(int f_out,int f_in)
  	 * aligned for direct int64-pointer memory access. */
  	if (preserve_atimes)
  		atimes_ndx = (file_extra_cnt += EXTRA64_CNT);
@@ -38,7 +55,7 @@ diff --git a/compat.c b/compat.c
  	if (am_sender) /* This is most likely in the in64 union as well. */
  		pathname_ndx = (file_extra_cnt += PTR_EXTRA_CNT);
  	else
-@@ -723,6 +726,10 @@ void setup_protocol(int f_out,int f_in)
+@@ -719,6 +722,10 @@ void setup_protocol(int f_out,int f_in)
  		proper_seed_order = compat_flags & CF_CHKSUM_SEED_FIX ? 1 : 0;
  		xfer_flags_as_varint = compat_flags & CF_VARINT_FLIST_FLAGS ? 1 : 0;
  		xmit_id0_names = compat_flags & CF_ID0_NAMES ? 1 : 0;
@@ -46,13 +63,13 @@ diff --git a/compat.c b/compat.c
 +			fprintf(stderr, "Both rsync versions must be at least 3.2.0 for --crtimes.\n");
 +			exit_cleanup(RERR_PROTOCOL);
 +		}
- 		if (!xfer_flags_as_varint && preserve_fileflags) {
- 			fprintf(stderr, "Both rsync versions must be at least 3.2.0 for --fileflags.\n");
- 			exit_cleanup(RERR_PROTOCOL);
+ 		if (am_sender) {
+ 			receiver_symlink_times = am_server
+ 			    ? strchr(client_info, 'L') != NULL
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -57,6 +57,7 @@ extern int delete_during;
+@@ -56,6 +56,7 @@ extern int delete_during;
  extern int missing_args;
  extern int eol_nulls;
  extern int atimes_ndx;
@@ -60,7 +77,7 @@ diff --git a/flist.c b/flist.c
  extern int relative_paths;
  extern int implied_dirs;
  extern int ignore_perishable;
-@@ -379,6 +380,9 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -378,6 +379,9 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  			    int ndx, int first_ndx)
  {
  	static time_t modtime, atime;
@@ -68,9 +85,9 @@ diff --git a/flist.c b/flist.c
 +	static time_t crtime;
 +#endif
  	static mode_t mode;
- #ifdef SUPPORT_FILEFLAGS
- 	static uint32 fileflags;
-@@ -495,6 +499,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+ #ifdef SUPPORT_HARD_LINKS
+ 	static int64 dev;
+@@ -483,6 +487,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  		else
  			atime = F_ATIME(file);
  	}
@@ -84,7 +101,7 @@ diff --git a/flist.c b/flist.c
  
  #ifdef SUPPORT_HARD_LINKS
  	if (tmp_dev != -1) {
-@@ -582,6 +593,10 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+@@ -570,6 +581,10 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  	}
  	if (xflags & XMIT_MOD_NSEC)
  		write_varint(f, F_MOD_NSEC(file));
@@ -94,8 +111,8 @@ diff --git a/flist.c b/flist.c
 +#endif
  	if (!(xflags & XMIT_SAME_MODE))
  		write_int(f, to_wire_mode(mode));
- #ifdef SUPPORT_FILEFLAGS
-@@ -678,6 +693,9 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
+ 	if (atimes_ndx && !S_ISDIR(mode) && !(xflags & XMIT_SAME_ATIME))
+@@ -662,6 +677,9 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
  static struct file_struct *recv_file_entry(int f, struct file_list *flist, int xflags)
  {
  	static int64 modtime, atime;
@@ -103,9 +120,9 @@ diff --git a/flist.c b/flist.c
 +	static time_t crtime;
 +#endif
  	static mode_t mode;
- #ifdef SUPPORT_FILEFLAGS
- 	static uint32 fileflags;
-@@ -795,6 +813,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ #ifdef SUPPORT_HARD_LINKS
+ 	static int64 dev;
+@@ -776,6 +794,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  			mode = first->mode;
  			if (atimes_ndx && !S_ISDIR(mode))
  				atime = F_ATIME(first);
@@ -113,10 +130,10 @@ diff --git a/flist.c b/flist.c
 +			if (crtimes_ndx)
 +				crtime = F_CRTIME(first);
 +#endif
- #ifdef SUPPORT_FILEFLAGS
- 			if (preserve_fileflags)
- 				fileflags = F_FFLAGS(first);
-@@ -838,6 +860,21 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ 			if (preserve_uid)
+ 				uid = F_OWNER(first);
+ 			if (preserve_gid)
+@@ -815,6 +837,21 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  		modtime_nsec = read_varint(f);
  	else
  		modtime_nsec = 0;
@@ -138,7 +155,7 @@ diff --git a/flist.c b/flist.c
  #endif
  	if (!(xflags & XMIT_SAME_MODE))
  		mode = from_wire_mode(read_int(f));
-@@ -1028,6 +1065,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+@@ -997,6 +1034,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
  	}
  	if (atimes_ndx && !S_ISDIR(mode))
  		F_ATIME(file) = atime;
@@ -149,7 +166,7 @@ diff --git a/flist.c b/flist.c
  	if (unsort_ndx)
  		F_NDX(file) = flist->used + flist->ndx_start;
  
-@@ -1429,6 +1470,10 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+@@ -1394,6 +1435,10 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
  		file->flags |= FLAG_OWNED_BY_US;
  	if (atimes_ndx && !S_ISDIR(file->mode))
  		F_ATIME(file) = st.st_atime;
@@ -163,7 +180,7 @@ diff --git a/flist.c b/flist.c
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -398,6 +398,19 @@ static inline int mtime_differs(STRUCT_STAT *stp, struct file_struct *file)
+@@ -396,6 +396,19 @@ static inline int mtime_differs(STRUCT_STAT *stp, struct file_struct *file)
  #endif
  }
  
@@ -183,7 +200,7 @@ diff --git a/generator.c b/generator.c
  static inline int perms_differ(struct file_struct *file, stat_x *sxp)
  {
  	if (preserve_perms)
-@@ -452,7 +465,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -450,7 +463,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  {
  	if (S_ISLNK(file->mode)) {
  #ifdef CAN_SET_SYMLINK_TIMES
@@ -192,7 +209,7 @@ diff --git a/generator.c b/generator.c
  			return 0;
  #endif
  #ifdef CAN_CHMOD_SYMLINK
-@@ -472,7 +485,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
+@@ -470,7 +483,7 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
  			return 0;
  #endif
  	} else {
@@ -201,7 +218,7 @@ diff --git a/generator.c b/generator.c
  			return 0;
  		if (perms_differ(file, sxp))
  			return 0;
-@@ -518,6 +531,14 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
+@@ -512,6 +525,14 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
  		if (atimes_ndx && !S_ISDIR(file->mode) && !S_ISLNK(file->mode)
  		 && !same_time(F_ATIME(file), 0, sxp->st.st_atime, 0))
  			iflags |= ITEM_REPORT_ATIME;
@@ -216,7 +233,7 @@ diff --git a/generator.c b/generator.c
  #if !defined HAVE_LCHMOD && !defined HAVE_SETATTRLIST
  		if (S_ISLNK(file->mode)) {
  			;
-@@ -1142,6 +1163,7 @@ static void list_file_entry(struct file_struct *f)
+@@ -1131,6 +1152,7 @@ static void list_file_entry(struct file_struct *f)
  	int size_width = human_readable ? 14 : 11;
  	int mtime_width = 1 + strlen(mtime_str);
  	int atime_width = atimes_ndx ? mtime_width : 0;
@@ -224,7 +241,7 @@ diff --git a/generator.c b/generator.c
  
  	if (!F_IS_ACTIVE(f)) {
  		/* this can happen if duplicate names were removed */
-@@ -1152,10 +1174,11 @@ static void list_file_entry(struct file_struct *f)
+@@ -1141,10 +1163,11 @@ static void list_file_entry(struct file_struct *f)
  
  	if (missing_args == 2 && f->mode == 0) {
  		rprintf(FINFO, "%-*s %s\n",
@@ -237,7 +254,7 @@ diff --git a/generator.c b/generator.c
  		const char *arrow, *lnk;
  
  		permstring(permbuf, f->mode);
-@@ -1168,9 +1191,9 @@ static void list_file_entry(struct file_struct *f)
+@@ -1157,9 +1180,9 @@ static void list_file_entry(struct file_struct *f)
  #endif
  			arrow = lnk = "";
  
@@ -249,7 +266,7 @@ diff --git a/generator.c b/generator.c
  			f_name(f, NULL), arrow, lnk);
  	}
  }
-@@ -1266,6 +1289,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1255,6 +1278,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  			return;
  		}
  	}
@@ -260,20 +277,22 @@ diff --git a/generator.c b/generator.c
 diff --git a/log.c b/log.c
 --- a/log.c
 +++ b/log.c
-@@ -725,7 +725,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
+@@ -720,8 +720,9 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
+ 			c[5] = !(iflags & ITEM_REPORT_PERMS) ? '.' : 'p';
+ 			c[6] = !(iflags & ITEM_REPORT_OWNER) ? '.' : 'o';
+ 			c[7] = !(iflags & ITEM_REPORT_GROUP) ? '.' : 'g';
+-			c[8] = !(iflags & ITEM_REPORT_ATIME) ? '.'
+-			     : S_ISLNK(file->mode) ? 'U' : 'u';
++			c[8] = !(iflags & (ITEM_REPORT_ATIME|ITEM_REPORT_CRTIME)) ? '.'
++			     : BITS_SET(iflags, ITEM_REPORT_ATIME|ITEM_REPORT_CRTIME) ? 'b'
++			     : iflags & ITEM_REPORT_ATIME ? 'u' : 'n';
  			c[9] = !(iflags & ITEM_REPORT_ACL) ? '.' : 'a';
  			c[10] = !(iflags & ITEM_REPORT_XATTR) ? '.' : 'x';
- 			c[11] = !(iflags & ITEM_REPORT_FFLAGS) ? '.' : 'f';
--			c[12] = '\0';
-+			c[12] = !(iflags & ITEM_REPORT_CRTIME) ? '.' : 'n';
-+			c[13] = '\0';
- 
- 			if (iflags & (ITEM_IS_NEW|ITEM_MISSING_DATA)) {
- 				char ch = iflags & ITEM_IS_NEW ? '+' : '?';
+ 			c[11] = '\0';
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -65,6 +65,7 @@ int preserve_uid = 0;
+@@ -64,6 +64,7 @@ int preserve_uid = 0;
  int preserve_gid = 0;
  int preserve_times = 0;
  int preserve_atimes = 0;
@@ -281,9 +300,9 @@ diff --git a/options.c b/options.c
  int update_only = 0;
  int open_noatime = 0;
  int cvs_exclude = 0;
-@@ -677,6 +678,11 @@ static void print_info_flags(enum logcode f)
+@@ -670,6 +671,11 @@ static void print_info_flags(enum logcode f)
  #endif
- 			"file-flags",
+ 			"stop-at",
  
 +#ifndef SUPPORT_CRTIMES
 +		"no "
@@ -293,7 +312,7 @@ diff --git a/options.c b/options.c
  	"*Optimizations",
  
  #ifndef HAVE_SIMD
-@@ -847,6 +853,9 @@ static struct poptOption long_options[] = {
+@@ -838,6 +844,9 @@ static struct poptOption long_options[] = {
    {"no-U",             0,  POPT_ARG_VAL,    &preserve_atimes, 0, 0, 0 },
    {"open-noatime",     0,  POPT_ARG_VAL,    &open_noatime, 1, 0, 0 },
    {"no-open-noatime",  0,  POPT_ARG_VAL,    &open_noatime, 0, 0, 0 },
@@ -303,9 +322,9 @@ diff --git a/options.c b/options.c
    {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
    {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
    {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
-@@ -1234,6 +1243,9 @@ static void set_refuse_options(void)
- 	parse_one_refuse_match(0, "force-uchange", list_end);
- 	parse_one_refuse_match(0, "force-schange", list_end);
+@@ -1211,6 +1220,9 @@ static void set_refuse_options(void)
+ #ifndef HAVE_SETVBUF
+ 	parse_one_refuse_match(0, "outbuf", list_end);
  #endif
 +#ifndef SUPPORT_CRTIMES
 +	parse_one_refuse_match(0, "crtimes", list_end);
@@ -313,7 +332,7 @@ diff --git a/options.c b/options.c
  
  	/* Now we use the descrip values to actually mark the options for refusal. */
  	for (op = long_options; op != list_end; op++) {
-@@ -2761,6 +2773,10 @@ void server_options(char **args, int *argc_p)
+@@ -2738,6 +2750,10 @@ void server_options(char **args, int *argc_p)
  		if (preserve_atimes > 1)
  			argstr[x++] = 'U';
  	}
@@ -327,7 +346,7 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.1.md b/rsync.1.md
 --- a/rsync.1.md
 +++ b/rsync.1.md
-@@ -373,6 +373,7 @@ detailed description below for a complete description.
+@@ -372,6 +372,7 @@ detailed description below for a complete description.
  --times, -t              preserve modification times
  --atimes, -U             preserve access (use) times
  --open-noatime           avoid changing the atime on opened files
@@ -335,7 +354,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --omit-dir-times, -O     omit directories from --times
  --omit-link-times, -J    omit symlinks from --times
  --super                  receiver attempts super-user activities
-@@ -1370,6 +1371,11 @@ your home directory (remove the '=' for that).
+@@ -1341,6 +1342,11 @@ your home directory (remove the '=' for that).
      mounted to avoid updating the atime on read access even without the
      O_NOATIME flag being set.
  
@@ -347,28 +366,26 @@ diff --git a/rsync.1.md b/rsync.1.md
  0.  `--omit-dir-times`, `-O`
  
      This tells rsync to omit directories when it is preserving modification
-@@ -2650,7 +2656,7 @@ your home directory (remove the '=' for that).
-     output of other verbose messages).
+@@ -2673,10 +2679,11 @@ your home directory (remove the '=' for that).
+       value (requires `--owner` and super-user privileges).
+     - A `g` means the group is different and is being updated to the sender's
+       value (requires `--group` and the authority to set the group).
+-    - A `u` means the access (use) time is different and is being updated to
+-      the sender's value (requires `--atimes`).  An alternate value of `U`
+-      means that the access time will be set to the transfer time, which
+-      happens when a symlink or directory is updated.
++    - A `u`|`n`|`b` indicates the following information: `u`  means the access
++      (use) time is different and is being updated to the sender's value
++      (requires `--atimes`); `n` means the create time (newness) is different
++      and is being updated to the sender's value (requires `--crtimes`); `b`
++      means that both the access and create times are being updated.
+     - The `a` means that the ACL information is being changed.
+     - The `x` means that the extended attribute information is being changed.
  
-     The "%i" escape has a cryptic output that is 11 letters long.  The general
--    format is like the string `YXcstpoguaxf`, where **Y** is replaced by the type
-+    format is like the string `YXcstpoguaxfn`, where **Y** is replaced by the type
-     of update being done, **X** is replaced by the file-type, and the other
-     letters represent attributes that may be output if they are being modified.
- 
-@@ -2707,6 +2713,8 @@ your home directory (remove the '=' for that).
-       happens when a symlink or directory is updated.
-     - The `a` means that the ACL information changed.
-     - The `x` means that the extended attribute information changed.
-+    - A `n` means the create time (newness) is different and is being updated
-+      to the sender's value (requires `--crtimes`).
- 
-     One other output is possible: when deleting files, the "%i" will output the
-     string "`*deleting`" for each item that is being removed (assuming that you
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -618,6 +618,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -584,6 +584,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		memcpy(&sx2.st, &sxp->st, sizeof (sx2.st));
  	if (!atimes_ndx || S_ISDIR(sxp->st.st_mode))
  		flags |= ATTRS_SKIP_ATIME;
@@ -378,7 +395,7 @@ diff --git a/rsync.c b/rsync.c
  	if (!(flags & ATTRS_SKIP_MTIME) && !same_mtime(file, &sxp->st, flags & ATTRS_ACCURATE_TIME)) {
  		sx2.st.st_mtime = file->modtime;
  #ifdef ST_MTIME_NSEC
-@@ -647,6 +650,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -613,6 +616,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  			file->flags |= FLAG_TIME_FAILED;
  		}
  	}
@@ -395,16 +412,16 @@ diff --git a/rsync.c b/rsync.c
  
  #ifdef SUPPORT_ACLS
  	/* It's OK to call set_acl() now, even for a dir, as the generator
-@@ -766,7 +779,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -718,7 +731,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+ 
  	/* Change permissions before putting the file into place. */
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
- 		       ATTRS_DELAY_IMMUTABLE
--		       | (ok_to_set_time ? ATTRS_ACCURATE_TIME : ATTRS_SKIP_MTIME | ATTRS_SKIP_ATIME));
-+		       | (ok_to_set_time ? ATTRS_ACCURATE_TIME : ATTRS_SKIP_MTIME | ATTRS_SKIP_ATIME | ATTRS_SKIP_CRTIME));
+-		       ok_to_set_time ? ATTRS_ACCURATE_TIME : ATTRS_SKIP_MTIME | ATTRS_SKIP_ATIME);
++		       ok_to_set_time ? ATTRS_ACCURATE_TIME : ATTRS_SKIP_MTIME | ATTRS_SKIP_ATIME | ATTRS_SKIP_CRTIME);
  
  	/* move tmp file over real file */
  	if (DEBUG_GTE(RECV, 1))
-@@ -795,7 +808,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
+@@ -743,7 +756,7 @@ int finish_transfer(const char *fname, const char *fnametmp,
  
    do_set_file_attrs:
  	set_file_attrs(fnametmp, file, NULL, fnamecmp,
@@ -419,30 +436,30 @@ diff --git a/rsync.h b/rsync.h
 @@ -70,7 +70,7 @@
  /* The following XMIT flags require an rsync that uses a varint for the flag values */
  
- #define XMIT_SAME_FLAGS (1<<16) 	/* any protocol - restricted by command-line option */
+ #define XMIT_RESERVED_16 (1<<16) 	/* reserved for future fileflags use */
 -#define XMIT_RESERVED_17 (1<<17) 	/* reserved for future crtimes use */
 +#define XMIT_CRTIME_EQ_MTIME (1<<17)	/* any protocol - restricted by command-line option */
  
  /* These flags are used in the live flist data. */
  
-@@ -183,6 +183,7 @@
+@@ -182,6 +182,7 @@
+ #define ATTRS_SKIP_MTIME	(1<<1)
  #define ATTRS_ACCURATE_TIME	(1<<2)
  #define ATTRS_SKIP_ATIME	(1<<3)
- #define ATTRS_DELAY_IMMUTABLE	(1<<4)
 +#define ATTRS_SKIP_CRTIME	(1<<5)
  
  #define MSG_FLUSH	2
  #define FULL_FLUSH	1
-@@ -211,6 +212,7 @@
+@@ -209,6 +210,7 @@
+ #define ITEM_REPORT_GROUP (1<<6)
  #define ITEM_REPORT_ACL (1<<7)
  #define ITEM_REPORT_XATTR (1<<8)
- #define ITEM_REPORT_FFLAGS (1<<9)
 +#define ITEM_REPORT_CRTIME (1<<10)
  #define ITEM_BASIS_TYPE_FOLLOWS (1<<11)
  #define ITEM_XNAME_FOLLOWS (1<<12)
  #define ITEM_IS_NEW (1<<13)
-@@ -595,6 +597,10 @@ typedef unsigned int size_t;
- #define ST_FLAGS(st) NO_FFLAGS
+@@ -568,6 +570,10 @@ typedef unsigned int size_t;
+ #endif
  #endif
  
 +#ifdef HAVE_GETATTRLIST
@@ -452,7 +469,7 @@ diff --git a/rsync.h b/rsync.h
  /* Find a variable that is either exactly 32-bits or longer.
   * If some code depends on 32-bit truncation, it will need to
   * take special action in a "#if SIZEOF_INT32 > 4" section. */
-@@ -816,6 +822,7 @@ struct file_struct {
+@@ -789,6 +795,7 @@ struct file_struct {
  extern int file_extra_cnt;
  extern int inc_recurse;
  extern int atimes_ndx;
@@ -460,7 +477,7 @@ diff --git a/rsync.h b/rsync.h
  extern int pathname_ndx;
  extern int depth_ndx;
  extern int uid_ndx;
-@@ -884,6 +891,7 @@ extern int xattrs_ndx;
+@@ -851,6 +858,7 @@ extern int xattrs_ndx;
  #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
  #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num
  #define F_ATIME(f) REQ_EXTRA64(f, atimes_ndx)->num
@@ -468,7 +485,7 @@ diff --git a/rsync.h b/rsync.h
  
  /* These items are per-entry optional: */
  #define F_HL_GNUM(f) OPT_EXTRA(f, START_BUMP(f))->num /* non-dirs */
-@@ -1136,6 +1144,7 @@ typedef struct {
+@@ -1103,6 +1111,7 @@ typedef struct {
  
  typedef struct {
      STRUCT_STAT st;
@@ -479,7 +496,7 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/syscall.c b/syscall.c
 --- a/syscall.c
 +++ b/syscall.c
-@@ -55,6 +55,13 @@ extern int open_noatime;
+@@ -54,6 +54,13 @@ extern int open_noatime;
  # endif
  #endif
  
@@ -493,7 +510,7 @@ diff --git a/syscall.c b/syscall.c
  #define RETURN_ERROR_IF(x,e) \
  	do { \
  		if (x) { \
-@@ -493,6 +500,40 @@ int do_setattrlist_times(const char *fname, STRUCT_STAT *stp)
+@@ -385,6 +392,40 @@ int do_setattrlist_times(const char *fname, STRUCT_STAT *stp)
  }
  #endif
  
@@ -545,7 +562,7 @@ new file mode 100644
 +
 +. "$suitedir/rsync.fns"
 +
-+$RSYNC --version | grep "  crtimes" >/dev/null || test_skipped "Rsync is configured without crtimes support"
++$RSYNC --version | grep "[, ] crtimes" >/dev/null || test_skipped "Rsync is configured without crtimes support"
 +
 +# Setting an older time via touch sets the create time to the mtime.
 +# Setting it to a newer time affects just the mtime.
@@ -565,22 +582,6 @@ new file mode 100644
 +
 +# The script would have aborted on error, so getting here means we've won.
 +exit 0
-diff --git a/testsuite/rsync.fns b/testsuite/rsync.fns
---- a/testsuite/rsync.fns
-+++ b/testsuite/rsync.fns
-@@ -23,9 +23,9 @@ todir="$tmpdir/to"
- chkdir="$tmpdir/chk"
- 
- # For itemized output:
--all_plus='++++++++++'
--allspace='          '
--dots='......' # trailing dots after changes
-+all_plus='+++++++++++'
-+allspace='           '
-+dots='.......' # trailing dots after changes
- tab_ch='	' # a single tab character
- 
- # Berkley's nice.
 diff --git a/tls.c b/tls.c
 --- a/tls.c
 +++ b/tls.c

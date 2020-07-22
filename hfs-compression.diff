@@ -7,8 +7,8 @@ This compiles on OS X and passes the testsuite, but otherwise UNTESTED!
 
 To use this patch, run these commands for a successful build:
 
-    patch -p1 <patches/fileflags.diff
     patch -p1 <patches/crtimes.diff
+    patch -p1 <patches/fileflags.diff
     patch -p1 <patches/hfs-compression.diff
     ./prepare-source
     ./configure
@@ -18,11 +18,11 @@ TODO:
  - Should rsync try to treat the compressed data as file data and use the
    rsync algorithm on the data transfer?
 
-based-on: patch/master/crtimes
+based-on: patch/master/fileflags
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -1627,6 +1627,9 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
+@@ -1628,6 +1628,9 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
  #ifdef SUPPORT_XATTRS
  		if (preserve_xattrs) {
  			sx.st.st_mode = file->mode;
@@ -43,7 +43,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_links;
  extern int preserve_devices;
  extern int write_devices;
-@@ -1794,6 +1795,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1798,6 +1799,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  					fname, fnamecmpbuf);
  			}
  			sx.st.st_size = F_LENGTH(fuzzy_file);
@@ -58,7 +58,7 @@ diff --git a/generator.c b/generator.c
  			statret = 0;
  			fnamecmp = fnamecmpbuf;
  		}
-@@ -1961,6 +1970,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1965,6 +1974,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  	if (read_batch)
  		goto cleanup;
  
@@ -268,8 +268,8 @@ diff --git a/options.c b/options.c
    {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
 @@ -1246,6 +1251,10 @@ static void set_refuse_options(void)
- #ifndef SUPPORT_CRTIMES
- 	parse_one_refuse_match(0, "crtimes", list_end);
+ 	parse_one_refuse_match(0, "force-uchange", list_end);
+ 	parse_one_refuse_match(0, "force-schange", list_end);
  #endif
 +#ifndef SUPPORT_HFS_COMPRESSION
 +	parse_one_refuse_match(0, "hfs-compression", list_end);
@@ -418,8 +418,8 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -597,6 +597,17 @@ typedef unsigned int size_t;
- #define ST_FLAGS(st) NO_FFLAGS
+@@ -572,6 +572,17 @@ typedef unsigned int size_t;
+ #endif
  #endif
  
 +#ifndef UF_COMPRESSED
@@ -520,7 +520,7 @@ diff --git a/xattrs.c b/xattrs.c
 +
  	if (!datum_len && !extra_len)
  		extra_len = 1; /* request non-zero amount of memory */
- 	if (datum_len + extra_len < datum_len)
+ 	if (SIZE_MAX - datum_len < extra_len)
 @@ -224,7 +249,31 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
  	return ptr;
  }
@@ -633,7 +633,7 @@ diff --git a/xattrs.c b/xattrs.c
  			write_varint(f_out, len); /* length might have changed! */
  			write_bigbuf(f_out, ptr, len);
  			free(ptr);
-@@ -949,7 +1010,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -948,7 +1009,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  	int user_only = am_root <= 0;
  #endif
  	size_t name_len;
@@ -642,7 +642,7 @@ diff --git a/xattrs.c b/xattrs.c
  
  	/* This puts the current name list into the "namebuf" buffer. */
  	if ((list_len = get_xattr_names(fname)) < 0)
-@@ -962,7 +1023,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -961,7 +1022,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  			int sum_len;
  			/* See if the fnamecmp version is identical. */
  			len = name_len = rxas[i].name_len;
@@ -654,7 +654,7 @@ diff --git a/xattrs.c b/xattrs.c
  			  still_abbrev:
  				if (am_generator)
  					continue;
-@@ -971,6 +1035,8 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -970,6 +1034,8 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  				ret = -1;
  				continue;
  			}
@@ -663,7 +663,7 @@ diff --git a/xattrs.c b/xattrs.c
  			if (len != rxas[i].datum_len) {
  				free(ptr);
  				goto still_abbrev;
-@@ -1048,6 +1114,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -1047,6 +1113,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  		}
  	}
  
@@ -674,7 +674,7 @@ diff --git a/xattrs.c b/xattrs.c
  	return ret;
  }
  
-@@ -1096,7 +1166,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
+@@ -1095,7 +1165,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
  {
  	const char *name = is_access_acl ? XACC_ACL_ATTR : XDEF_ACL_ATTR;
  	*len_p = 0; /* no extra data alloc needed from get_xattr_data() */
@@ -683,7 +683,7 @@ diff --git a/xattrs.c b/xattrs.c
  }
  
  int set_xattr_acl(const char *fname, int is_access_acl, const char *buf, size_t buf_len)
-@@ -1239,11 +1309,33 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
+@@ -1238,11 +1308,33 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
  	return 0;
  }
  
@@ -717,7 +717,7 @@ diff --git a/xattrs.c b/xattrs.c
  	return ret;
  }
  
-@@ -1252,6 +1344,9 @@ int x_lstat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
+@@ -1251,6 +1343,9 @@ int x_lstat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
  	int ret = do_lstat(fname, fst);
  	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
  		xst->st_mode = 0;
@@ -727,7 +727,7 @@ diff --git a/xattrs.c b/xattrs.c
  	return ret;
  }
  
-@@ -1260,6 +1355,9 @@ int x_fstat(int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
+@@ -1259,6 +1354,9 @@ int x_fstat(int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
  	int ret = do_fstat(fd, fst);
  	if ((ret < 0 || get_stat_xattr(NULL, fd, fst, xst) < 0) && xst)
  		xst->st_mode = 0;
