@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
 TODO: the configure changes should abort if the user requests --enable-slp
 and we can't honor that request.
 
-based-on: 974f49e22ac9f62fcfd750768d0835b900524578
+based-on: 91eaffe13f29e9a42032a9f1cd2983e09d7b1ec9
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -44,12 +44,12 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
-@@ -1461,6 +1461,13 @@ int daemon_main(void)
+@@ -1456,6 +1456,13 @@ int daemon_main(void)
  	 * address too.  In fact, why not just do getnameinfo on the
  	 * local address??? */
  
 +#ifdef HAVE_LIBSLP
-+	if (register_services()) {
++	if (lp_use_slp() && register_services()) {
 +		rprintf(FINFO,
 +		    "Couldn't register with service discovery protocol, continuing anyway\n");
 +	}
@@ -94,18 +94,21 @@ diff --git a/configure.ac b/configure.ac
 diff --git a/daemon-parm.txt b/daemon-parm.txt
 --- a/daemon-parm.txt
 +++ b/daemon-parm.txt
-@@ -10,6 +10,7 @@ STRING	socket_options		NULL
+@@ -10,8 +10,10 @@ STRING	socket_options		NULL
  
  INTEGER	listen_backlog		5
  INTEGER	rsync_port|port		0
 +INTEGER	slp_refresh		0
  
  BOOL	proxy_protocol		False
++BOOL	use_slp			False
+ 
+ Locals: =================================================================
  
 diff --git a/main.c b/main.c
 --- a/main.c
 +++ b/main.c
-@@ -1365,6 +1365,18 @@ static int start_client(int argc, char *argv[])
+@@ -1387,6 +1387,22 @@ static int start_client(int argc, char *argv[])
  
  	if (!read_batch) { /* for read_batch, NO source is specified */
  		char *path = check_for_hostspec(argv[0], &shell_machine, &rsync_port);
@@ -113,8 +116,12 @@ diff --git a/main.c b/main.c
 +		if (shell_machine && !shell_machine[0]) {
 +#ifdef HAVE_LIBSLP
 +			/* User entered just rsync:// URI */
-+			print_service_list();
-+			exit_cleanup(0);
++			if (lp_use_slp()) {
++				print_service_list();
++				exit_cleanup(0);
++			}
++			rprintf(FINFO, "SLP is disabled, cannot browse\n");
++			exit_cleanup(RERR_SYNTAX);
 +#else /* No SLP, die here */
 +			rprintf(FINFO, "No SLP support, cannot browse\n");
 +			exit_cleanup(RERR_SYNTAX);
@@ -127,7 +134,7 @@ diff --git a/main.c b/main.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -676,6 +676,11 @@ static void print_info_flags(enum logcode f)
+@@ -681,6 +681,11 @@ static void print_info_flags(enum logcode f)
  #endif
  			"crtimes",
  
@@ -142,20 +149,27 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.1.md b/rsync.1.md
 --- a/rsync.1.md
 +++ b/rsync.1.md
-@@ -151,6 +151,13 @@ rsync daemon by leaving off the module name:
+@@ -149,7 +149,19 @@ rsync daemon by leaving off the module name:
  
- See the following section for more details.
+ >     rsync somehost.mydomain.com::
  
+-See the following section for more details.
++And, if Service Location Protocol is available, the following will list the
++available rsync servers:
++
++>     rsync rsync://
++
++See the following section for even more usage details.
++
 +One more thing, if Service Location Protocol is available, the following will
 +list the available rsync servers:
 +
 +>     rsync rsync://
 +
 +See the following section for even more usage details.
-+
+ 
  # ADVANCED USAGE
  
- The syntax for requesting multiple files from a remote host is done by
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
@@ -179,10 +193,15 @@ new file mode 100644
 diff --git a/rsyncd.conf.5.md b/rsyncd.conf.5.md
 --- a/rsyncd.conf.5.md
 +++ b/rsyncd.conf.5.md
-@@ -136,6 +136,16 @@ a literal % into a value is to use %%.
+@@ -136,6 +136,21 @@ a literal % into a value is to use %%.
      You can override the default backlog value when the daemon listens for
      connections.  It defaults to 5.
  
++0.  `use slp`
++
++    You can enable Service Location Protocol support by enabling this global
++    parameter.  The default is "false".
++
 +0.  `slp refresh`
 +
 +    This parameter is used to determine how long service advertisements are
@@ -196,6 +215,14 @@ diff --git a/rsyncd.conf.5.md b/rsyncd.conf.5.md
  # MODULE PARAMETERS
  
  After the global parameters you should define a number of modules, each module
+@@ -1168,6 +1183,7 @@ A more sophisticated example would be:
+ > max connections = 4
+ > syslog facility = local5
+ > pid file = /var/run/rsyncd.pid
++> slp refresh = 3600
+ >
+ > [ftp]
+ >         path = /var/ftp/./pub
 diff --git a/socket.c b/socket.c
 --- a/socket.c
 +++ b/socket.c
@@ -205,7 +232,7 @@ diff --git a/socket.c b/socket.c
  	int *sp, maxfd, i;
 +#ifdef HAVE_LIBSLP
 +	time_t next_slp_refresh;
-+	short slp_timeout = lp_slp_refresh();
++	short slp_timeout = lp_use_slp() ? lp_slp_refresh() : 0;
 +	if (slp_timeout) {
 +		if (slp_timeout < SLP_MIN_TIMEOUT)
 +			slp_timeout = SLP_MIN_TIMEOUT;
