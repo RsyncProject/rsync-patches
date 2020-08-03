@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 72b2a81f90b5f273ffb721077066e5e5258dcb5f
+based-on: dee099328610e22e75967313d878010f4fed6cbb
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -57,8 +57,8 @@ diff --git a/Makefile.in b/Makefile.in
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
--	fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
-+	fileio.o batch.o clientname.o chmod.o db.o acls.o xattrs.o
+-	usage.o fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
++	usage.o fileio.o batch.o clientname.o chmod.o db.o acls.o xattrs.o
  OBJS3=progress.o pipe.o @ASM@
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
@@ -85,12 +85,12 @@ diff --git a/Makefile.in b/Makefile.in
  $(OBJS): $(HEADERS)
  $(CHECK_OBJS): $(HEADERS)
  tls.o xattrs.o: lib/sysxattrs.h
--options.o: latest-year.h help-rsync.h help-rsyncd.h git-version.h
-+options.o: latest-year.h help-rsync.h help-rsyncd.h help-rsyncdb.h git-version.h
- exclude.o: default-cvsignore.h
+-usage.o: latest-year.h help-rsync.h help-rsyncd.h git-version.h default-cvsignore.h
++usage.o: latest-year.h help-rsync.h help-rsyncd.h help-rsyncdb.h git-version.h default-cvsignore.h
  loadparm.o: default-dont-compress.h daemon-parm.h
  
-@@ -111,6 +117,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
+ flist.o: rounding.h
+@@ -110,6 +116,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
  help-rsync.h help-rsyncd.h: rsync.1.md help-from-md.awk
  	$(AWK) -f $(srcdir)/help-from-md.awk -v hfile=$@ $(srcdir)/rsync.1.md
  
@@ -100,7 +100,7 @@ diff --git a/Makefile.in b/Makefile.in
  daemon-parm.h: daemon-parm.txt daemon-parm.awk
  	$(AWK) -f $(srcdir)/daemon-parm.awk $(srcdir)/daemon-parm.txt
  
-@@ -241,7 +250,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
+@@ -240,7 +249,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
  	$(AWK) -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
  
  .PHONY: man
@@ -109,7 +109,7 @@ diff --git a/Makefile.in b/Makefile.in
  
  rsync.1: rsync.1.md md2man version.h Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsync.1.md
-@@ -252,9 +261,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man version.h Makefile
+@@ -251,9 +260,12 @@ rsync-ssl.1: rsync-ssl.1.md md2man version.h Makefile
  rsyncd.conf.5: rsyncd.conf.5.md md2man version.h Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsyncd.conf.5.md
  
@@ -2467,7 +2467,7 @@ diff --git a/main.c b/main.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -87,6 +87,7 @@ int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
+@@ -83,6 +83,7 @@ int am_root = 0; /* 0 = normal, 1 = root, 2 = --super, -1 = --fake-super */
  int am_server = 0;
  int am_sender = 0;
  int am_starting_up = 1;
@@ -2475,7 +2475,7 @@ diff --git a/options.c b/options.c
  int relative_paths = -1;
  int implied_dirs = 1;
  int missing_args = 0; /* 0 = FERROR_XFER, 1 = ignore, 2 = delete */
-@@ -100,6 +101,7 @@ int use_qsort = 0;
+@@ -96,6 +97,7 @@ int use_qsort = 0;
  char *files_from = NULL;
  int filesfrom_fd = -1;
  char *filesfrom_host = NULL;
@@ -2483,7 +2483,7 @@ diff --git a/options.c b/options.c
  int eol_nulls = 0;
  int protect_args = -1;
  int human_readable = 1;
-@@ -108,6 +110,9 @@ int mkpath_dest_arg = 0;
+@@ -104,6 +106,9 @@ int mkpath_dest_arg = 0;
  int allow_inc_recurse = 1;
  int xfer_dirs = -1;
  int am_daemon = 0;
@@ -2493,7 +2493,7 @@ diff --git a/options.c b/options.c
  int connect_timeout = 0;
  int keep_partial = 0;
  int safe_symlinks = 0;
-@@ -290,6 +295,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
+@@ -286,6 +291,7 @@ static struct output_struct debug_words[COUNT_DEBUG+1] = {
  	DEBUG_WORD(CHDIR, W_CLI|W_SRV, "Debug when the current directory changes"),
  	DEBUG_WORD(CONNECT, W_CLI, "Debug connection events (levels 1-2)"),
  	DEBUG_WORD(CMD, W_CLI, "Debug commands+options that are issued (levels 1-2)"),
@@ -2501,24 +2501,7 @@ diff --git a/options.c b/options.c
  	DEBUG_WORD(DEL, W_REC, "Debug delete actions (levels 1-3)"),
  	DEBUG_WORD(DELTASUM, W_SND|W_REC, "Debug delta-transfer checksumming (levels 1-4)"),
  	DEBUG_WORD(DUP, W_REC, "Debug weeding of duplicate names"),
-@@ -682,6 +688,16 @@ static void print_info_flags(enum logcode f)
- #endif
- 			"crtimes",
- 
-+#if !defined HAVE_MYSQL_MYSQL_H || !defined HAVE_LIBMYSQLCLIENT
-+		"no "
-+#endif
-+			"MySQL",
-+
-+#if !defined HAVE_SQLITE3_H || !defined HAVE_LIBSQLITE3
-+		"no "
-+#endif
-+			"SQLite",
-+
- 	"*Optimizations",
- 
- #ifndef HAVE_SIMD
-@@ -795,6 +811,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -577,6 +583,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG, OPT_BLOCK_SIZE,
@@ -2526,7 +2509,7 @@ diff --git a/options.c b/options.c
        OPT_USERMAP, OPT_GROUPMAP, OPT_CHOWN, OPT_BWLIMIT, OPT_STDERR,
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
        OPT_STOP_AFTER, OPT_STOP_AT,
-@@ -951,6 +968,10 @@ static struct poptOption long_options[] = {
+@@ -733,6 +740,10 @@ static struct poptOption long_options[] = {
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"checksum-choice",  0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
    {"cc",               0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
@@ -2537,7 +2520,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_STRING, 0, OPT_BLOCK_SIZE, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1047,6 +1068,9 @@ static struct poptOption long_options[] = {
+@@ -829,6 +840,9 @@ static struct poptOption long_options[] = {
    {"dparam",           0,  POPT_ARG_STRING, 0, OPT_DAEMON, 0, 0 },
    {"detach",           0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
    {"no-detach",        0,  POPT_ARG_NONE,   0, OPT_DAEMON, 0, 0 },
@@ -2547,18 +2530,10 @@ diff --git a/options.c b/options.c
    {0,0,0,0, 0, 0, 0}
  };
  
-@@ -1087,6 +1111,39 @@ static struct poptOption long_daemon_options[] = {
+@@ -857,6 +871,31 @@ static struct poptOption long_daemon_options[] = {
    {0,0,0,0, 0, 0, 0}
  };
  
-+static void dbonly_usage(enum logcode F)
-+{
-+  rprintf(F,"Usage: rsyncdb --db=CONFIG_FILE [OPTIONS] [DIRS]\n");
-+  rprintf(F,"\n");
-+  rprintf(F,"Options:\n");
-+#include "help-rsyncdb.h"
-+}
-+
 +static struct poptOption long_dbonly_options[] = {
 +  /* longName, shortName, argInfo, argPtr, value, descrip, argDesc */
 +  {"check",           'c', POPT_ARG_NONE,   &db_check, 0, 0, 0},
@@ -2587,7 +2562,7 @@ diff --git a/options.c b/options.c
  
  static char err_buf[200];
  
-@@ -1212,6 +1269,8 @@ static void set_refuse_options(void)
+@@ -982,6 +1021,8 @@ static void set_refuse_options(void)
  			parse_one_refuse_match(0, "iconv", list_end);
  #endif
  		parse_one_refuse_match(0, "log-file*", list_end);
@@ -2596,7 +2571,7 @@ diff --git a/options.c b/options.c
  	}
  
  #ifndef SUPPORT_ATIMES
-@@ -1519,6 +1578,102 @@ static void create_refuse_error(int which)
+@@ -1289,6 +1330,102 @@ static void create_refuse_error(int which)
  		snprintf(err_buf + n, sizeof err_buf - n, " (-%c)\n", op->shortName);
  }
  
@@ -2699,7 +2674,7 @@ diff --git a/options.c b/options.c
  /* This is used to make sure that --daemon & --server cannot be aliased to
   * something else. These options have always disabled popt aliases for the
   * parsing of a daemon or server command-line, but we have to make sure that
-@@ -1575,6 +1730,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1345,6 +1482,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		return 0;
  	}
  
@@ -2712,7 +2687,7 @@ diff --git a/options.c b/options.c
  	set_refuse_options();
  
  #ifdef ICONV_OPTION
-@@ -1693,6 +1854,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1463,6 +1606,12 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			am_daemon = 1;
  			return 1;
  
@@ -2725,7 +2700,7 @@ diff --git a/options.c b/options.c
  		case OPT_MODIFY_WINDOW:
  			/* The value has already been set by popt, but
  			 * we need to remember that we're using a
-@@ -1765,6 +1932,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1535,6 +1684,10 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			preserve_devices = preserve_specials = 0;
  			break;
  
@@ -3204,3 +3179,38 @@ new file mode 100644
 +# AUTHOR
 +
 +Rsyncdb was written by Wayne Davison.
+diff --git a/usage.c b/usage.c
+--- a/usage.c
++++ b/usage.c
+@@ -131,6 +131,16 @@ static void print_info_flags(enum logcode f)
+ #endif
+ 			"crtimes",
+ 
++#if !defined HAVE_MYSQL_MYSQL_H || !defined HAVE_LIBMYSQLCLIENT
++		"no "
++#endif
++			"MySQL",
++
++#if !defined HAVE_SQLITE3_H || !defined HAVE_LIBSQLITE3
++		"no "
++#endif
++			"SQLite",
++
+ 	"*Optimizations",
+ 
+ #ifndef HAVE_SIMD
+@@ -250,6 +260,14 @@ void daemon_usage(enum logcode F)
+   rprintf(F,"daemon-specific rsync options.  See also the rsyncd.conf(5) man page.\n");
+ }
+ 
++void dbonly_usage(enum logcode F)
++{
++  rprintf(F,"Usage: rsyncdb --db=CONFIG_FILE [OPTIONS] [DIRS]\n");
++  rprintf(F,"\n");
++  rprintf(F,"Options:\n");
++#include "help-rsyncdb.h"
++}
++
+ const char *rsync_version(void)
+ {
+ 	return RSYNC_GITVER;
