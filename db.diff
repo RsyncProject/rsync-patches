@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: f4c3969b63013efbff55b890aa1f25a680e4ebb4
+based-on: d2a97a7ab492e0d0548708251309e077e6aa8c8b
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -2328,17 +2328,16 @@ diff --git a/generator.c b/generator.c
  extern int append_mode;
  extern int make_backups;
  extern int csum_length;
-@@ -610,7 +611,8 @@ int unchanged_file(char *fn, struct file_struct *file, STRUCT_STAT *st)
- 	   of the file time to determine whether to sync */
- 	if (always_checksum > 0 && S_ISREG(st->st_mode)) {
- 		char sum[MAX_DIGEST_LEN];
--		file_checksum(fn, st, sum);
-+		if (!use_db || !db_get_checksum(st, sum))
-+			file_checksum(fn, st, sum);
- 		return memcmp(sum, F_SUM(file), flist_csum_len) == 0;
- 	}
+@@ -623,6 +624,8 @@ int quick_check_ok(enum filetype ftype, const char *fn, struct file_struct *file
+ 		if (always_checksum > 0) {
+ 			char sum[MAX_DIGEST_LEN];
+ 			file_checksum(fn, st, sum);
++			if (!use_db || !db_get_checksum(st, sum))
++				file_checksum(fn, st, sum);
+ 			return memcmp(sum, F_SUM(file), flist_csum_len) == 0;
+ 		}
  
-@@ -2268,6 +2270,13 @@ void generate_files(int f_out, const char *local_name)
+@@ -2262,6 +2265,13 @@ void generate_files(int f_out, const char *local_name)
  			: "enabled");
  	}
  
@@ -2352,7 +2351,7 @@ diff --git a/generator.c b/generator.c
  	dflt_perms = (ACCESSPERMS & ~orig_umask);
  
  	do {
-@@ -2393,6 +2402,9 @@ void generate_files(int f_out, const char *local_name)
+@@ -2387,6 +2397,9 @@ void generate_files(int f_out, const char *local_name)
  			wait_for_receiver();
  	}
  
@@ -2444,7 +2443,7 @@ diff --git a/main.c b/main.c
  extern char *shell_cmd;
  extern char *password_file;
  extern char *backup_dir;
-@@ -1241,6 +1244,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+@@ -1244,6 +1247,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
  	if (am_daemon && io_timeout && protocol_version >= 31)
  		send_msg_int(MSG_IO_TIMEOUT, io_timeout);
  
@@ -2454,7 +2453,7 @@ diff --git a/main.c b/main.c
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
  		if (need_messages_from_generator)
-@@ -1531,6 +1537,9 @@ static int start_client(int argc, char *argv[])
+@@ -1534,6 +1540,9 @@ static int start_client(int argc, char *argv[])
  	else
  		env_port = rsync_port;
  
@@ -2843,7 +2842,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -271,12 +271,16 @@ enum msgcode {
+@@ -271,6 +271,7 @@ enum msgcode {
  	MSG_IO_ERROR=22,/* the sending side had an I/O error */
  	MSG_IO_TIMEOUT=33,/* tell client about a daemon's timeout value */
  	MSG_NOOP=42,	/* a do-nothing message (legacy protocol-30 only) */
@@ -2851,7 +2850,8 @@ diff --git a/rsync.h b/rsync.h
  	MSG_ERROR_EXIT=86, /* synchronize an error exit (siblings and protocol >= 31) */
  	MSG_SUCCESS=100,/* successfully updated indicated flist index */
  	MSG_DELETED=101,/* successfully deleted a file on receiving side */
- 	MSG_NO_SEND=102,/* sender failed to open a file we wanted */
+@@ -281,6 +282,9 @@ enum filetype {
+ 	FT_UNSUPPORTED, FT_REG, FT_DIR, FT_SYMLINK, FT_SPECIAL, FT_DEVICE
  };
  
 +#define MSG_CHECKSUM_LONGS 5
@@ -2860,7 +2860,7 @@ diff --git a/rsync.h b/rsync.h
  #define NDX_DONE -1
  #define NDX_FLIST_EOF -2
  #define NDX_DEL_STATS -3
-@@ -1428,7 +1432,8 @@ extern short info_levels[], debug_levels[];
+@@ -1432,7 +1436,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CHDIR (DEBUG_BIND+1)
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)
@@ -3182,7 +3182,7 @@ new file mode 100644
 diff --git a/usage.c b/usage.c
 --- a/usage.c
 +++ b/usage.c
-@@ -132,6 +132,16 @@ static void print_info_flags(enum logcode f)
+@@ -137,6 +137,16 @@ static void print_info_flags(enum logcode f)
  #endif
  			"crtimes",
  
@@ -3199,7 +3199,7 @@ diff --git a/usage.c b/usage.c
  	"*Optimizations",
  
  #ifndef HAVE_SIMD
-@@ -251,6 +261,14 @@ void daemon_usage(enum logcode F)
+@@ -256,6 +266,14 @@ void daemon_usage(enum logcode F)
    rprintf(F,"daemon-specific rsync options.  See also the rsyncd.conf(5) man page.\n");
  }
  
