@@ -1,0 +1,74 @@
+This makes the default for a protocol-28 server process be --stderr=client
+instead of --stderr=errors.  See rsync's github issue 95.
+
+To use this patch, run these commands for a successful build:
+
+    patch -p1 <patches/stderr-compat.diff
+    ./configure                                 (optional if already run)
+    make
+
+based-on: 58f464f4daa1b1ee00c6afd898a19ca5cd81bf58
+diff --git a/NEWS.md b/NEWS.md
+--- a/NEWS.md
++++ b/NEWS.md
+@@ -35,6 +35,9 @@
+    where the INFO is one of "type change", "sum change" (requires `-c`), "file
+    change" (based on the quick check), "attr change", or "uptodate".
+ 
++ - Try to support a client that sent a remote rsync a wacko stderr file handle
++   (such as an older File::RsyncP perl library).
++
+  - Some manpage improvements.
+ 
+ ### PACKAGING RELATED:
+diff --git a/compat.c b/compat.c
+--- a/compat.c
++++ b/compat.c
+@@ -52,6 +52,8 @@ extern int need_messages_from_generator;
+ extern int delete_mode, delete_before, delete_during, delete_after;
+ extern int do_compression;
+ extern int do_compression_level;
++extern int saw_stderr_opt;
++extern int msgs2stderr;
+ extern char *shell_cmd;
+ extern char *partial_dir;
+ extern char *files_from;
+@@ -622,6 +624,9 @@ void setup_protocol(int f_out,int f_in)
+ 	if (read_batch)
+ 		check_batch_flags();
+ 
++	if (!saw_stderr_opt && protocol_version <= 28 && am_server)
++		msgs2stderr = 0; /* The client side may not have stderr setup for us. */
++
+ #ifndef SUPPORT_PREALLOCATION
+ 	if (preallocate_files && !am_sender) {
+ 		rprintf(FERROR, "preallocation is not supported on this %s\n",
+diff --git a/options.c b/options.c
+--- a/options.c
++++ b/options.c
+@@ -88,6 +88,7 @@ int implied_dirs = 1;
+ int missing_args = 0; /* 0 = FERROR_XFER, 1 = ignore, 2 = delete */
+ int numeric_ids = 0;
+ int msgs2stderr = 2; /* Default: send errors to stderr for local & remote-shell transfers */
++int saw_stderr_opt = 0;
+ int allow_8bit_chars = 0;
+ int force_delete = 0;
+ int io_timeout = 0;
+@@ -1875,6 +1876,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 					"--stderr mode \"%s\" is not one of errors, all, or client\n", arg);
+ 				return 0;
+ 			}
++			saw_stderr_opt = 1;
+ 			break;
+ 		}
+ 
+@@ -1893,6 +1895,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 		}
+ 	}
+ 
++	if (msgs2stderr != 2)
++		saw_stderr_opt = 1;
++
+ 	if (version_opt_cnt) {
+ 		print_rsync_version(FINFO);
+ 		exit_cleanup(0);
