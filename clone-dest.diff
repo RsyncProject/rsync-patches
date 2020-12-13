@@ -1,11 +1,10 @@
-This patch adds the --clone-dest option that works link --link-dest
-but without requiring the metadata of the files to match in order
-to be able to share the file's data.
+This patch adds the --clone-dest option that works like --link-dest but
+without requiring the metadata of the files to match in order to be able
+to share the file's data.  This currently only supports Linux's FICLONE
+syscall, and that may only be supported on Btrfs at the moment.
 
-NOTE: this patch is mostly untested because I don't currently have
-a btrfs mount to test it out on.  I still need to make sure that a
-cloned file gets its destination attributes set correctly after the
-clone, for instance.
+This patch has had minor testing, including some fixes that make sure
+that the attributes of a cloned file get set after it is cloned.
 
 To use this patch, run these commands for a successful build:
 
@@ -13,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure                         (optional if already run)
     make
 
-based-on: e94bad1c156fc3910f24e2b3b71a81b0b0bdeb70
+based-on: a28c4558c5644d4423a937d025ca64fe4e3ce84b
 diff --git a/Makefile.in b/Makefile.in
 --- a/Makefile.in
 +++ b/Makefile.in
@@ -38,7 +37,7 @@ diff --git a/Makefile.in b/Makefile.in
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
-@@ -913,7 +913,7 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+@@ -957,7 +957,7 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
  			best_match = j;
  			match_level = 2;
  		}
@@ -47,21 +46,27 @@ diff --git a/generator.c b/generator.c
  			best_match = j;
  			match_level = 3;
  			break;
-@@ -953,7 +953,12 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
- 			}
- 		} else
- #endif
--		{
-+		if (alt_dest_type == CLONE_DEST) {
-+			if (do_clone(cmpbuf, fname, file->mode) < 0) {
+@@ -983,9 +983,16 @@ static int try_dests_reg(struct file_struct *file, char *fname, int ndx,
+ 				goto got_nothing_for_ya;
+ 		}
+ #ifdef SUPPORT_HARD_LINKS
+-		if (alt_dest_type == LINK_DEST) {
+-			if (!hard_link_one(file, fname, cmpbuf, 1))
+-				goto try_a_copy;
++		if (alt_dest_type == LINK_DEST || alt_dest_type == CLONE_DEST) {
++			if (alt_dest_type == LINK_DEST) {
++				if (!hard_link_one(file, fname, cmpbuf, 1))
++					goto try_a_copy;
++			} else if (do_clone(cmpbuf, fname, file->mode) == 0) {
++				finish_transfer(fname, fname, cmpbuf, NULL, file, 1, 0);
++			} else {
 +				rsyserr(FERROR_XFER, errno, "failed to clone %s to %s", cmpbuf, fname);
 +				exit_cleanup(RERR_UNSUPPORTED);
 +			}
-+		} else {
- 			if (itemizing)
- 				itemize(cmpbuf, file, ndx, 0, sxp, 0, 0, NULL);
- 		}
-@@ -1109,7 +1114,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+ 			if (atimes_ndx)
+ 				set_file_attrs(fname, file, sxp, NULL, 0);
+ 			if (preserve_hard_links && F_IS_HLINKED(file))
+@@ -1099,7 +1106,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
  
  	if (match_level == 3) {
  #ifdef SUPPORT_HARD_LINKS
@@ -131,7 +136,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --compress, -z           compress file data during the transfer
  --compress-choice=STR    choose the compression algorithm (aka --zc)
  --compress-level=NUM     explicitly set compression level (aka --zl)
-@@ -2331,6 +2332,17 @@ your home directory (remove the '=' for that).
+@@ -2343,6 +2344,17 @@ your home directory (remove the '=' for that).
      specified (or implied by `-a`).  You can work-around this bug by avoiding
      the `-o` option when sending to an old rsync.
  
@@ -152,7 +157,7 @@ diff --git a/rsync.1.md b/rsync.1.md
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -165,6 +165,11 @@
+@@ -175,6 +175,11 @@
  #define COMPARE_DEST 1
  #define COPY_DEST 2
  #define LINK_DEST 3
