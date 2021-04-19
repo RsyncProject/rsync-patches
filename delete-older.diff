@@ -1,0 +1,125 @@
+From: Torsten Bronger <bronger@physik.rwth-aachen.de>
+
+This adds the option --delete-older.  It takes a UNIX timestamp (seconds since
+the Epoch).  When using that, files modified after that on the destination side
+are not deleted, even if they do not exist on the source.
+
+For the rationale, see <https://github.com/WayneD/rsync/issues/110>.
+
+diff --git a/delete.c b/delete.c
+index 4a294853..06af545f 100644
+--- a/delete.c
++++ b/delete.c
+@@ -28,6 +28,8 @@ extern int max_delete;
+ extern char *backup_dir;
+ extern char *backup_suffix;
+ extern int backup_suffix_len;
++extern int keep_dirlinks;
++extern int del_older_timestamp;
+ extern struct stats stats;
+ 
+ int ignore_perishable = 0;
+@@ -131,6 +133,7 @@ enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
+ {
+ 	enum delret ret;
+ 	char *what;
++	STRUCT_STAT st;
+ 	int ok;
+ 
+ 	if (DEBUG_GTE(DEL, 2)) {
+@@ -138,6 +141,16 @@ enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
+ 			fbuf, (int)mode, (int)flags);
+ 	}
+ 
++	if (del_older_timestamp) {
++		if (link_stat(fbuf, &st, 0) < 0) {
++			rsyserr(FERROR_XFER, errno, "stat %s failed",
++				full_fname(fbuf));
++			return DR_FAILURE;
++		}
++		if (st.st_mtime >= del_older_timestamp)
++			return DR_SUCCESS;
++	}
++
+ 	if (flags & DEL_NO_UID_WRITE)
+ 		do_chmod(fbuf, mode | S_IWUSR);
+ 
+diff --git a/generator.c b/generator.c
+index f1780838..e648a48a 100644
+--- a/generator.c
++++ b/generator.c
+@@ -90,6 +90,7 @@ extern int max_delete;
+ extern int force_delete;
+ extern int one_file_system;
+ extern int skipped_deletes;
++extern int del_older_timestamp;
+ extern dev_t filesystem_dev;
+ extern mode_t orig_umask;
+ extern uid_t our_uid;
+diff --git a/options.c b/options.c
+index a9f0dc9e..e99aaa94 100644
+--- a/options.c
++++ b/options.c
+@@ -130,6 +130,7 @@ int32 block_size = 0;
+ time_t stop_at_utime = 0;
+ char *skip_compress = NULL;
+ char *copy_as = NULL;
++int del_older_timestamp = 0;
+ item_list dparam_list = EMPTY_ITEM_LIST;
+ 
+ /** Network address family. **/
+@@ -767,6 +768,7 @@ static struct poptOption long_options[] = {
+   {"bwlimit",          0,  POPT_ARG_STRING, &bwlimit_arg, OPT_BWLIMIT, 0, 0 },
+   {"no-bwlimit",       0,  POPT_ARG_VAL,    &bwlimit, 0, 0, 0 },
+   {"backup",          'b', POPT_ARG_VAL,    &make_backups, 1, 0, 0 },
++  {"delete-older",     0,  POPT_ARG_INT,    &del_older_timestamp, 0, 0, 0 },
+   {"no-backup",        0,  POPT_ARG_VAL,    &make_backups, 0, 0, 0 },
+   {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
+   {"suffix",           0,  POPT_ARG_STRING, &backup_suffix, 0, 0, 0 },
+@@ -2128,7 +2130,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+ 			"You may not combine multiple --delete-WHEN options.\n");
+ 		return 0;
+ 	}
+-	if (delete_before || delete_during || delete_after)
++	if (delete_before || delete_during || delete_after || del_older_timestamp)
+ 		delete_mode = 1;
+ 	else if (delete_mode || delete_excluded) {
+ 		/* Only choose now between before & during if one is refused. */
+@@ -2750,6 +2752,11 @@ void server_options(char **args, int *argc_p)
+ 			args[ac++] = "--delete-after";
+ 		else if (delete_mode && !delete_excluded)
+ 			args[ac++] = "--delete";
++		if (del_older_timestamp) {
++			if (asprintf(&arg, "--delete-older=%d", del_older_timestamp) < 0)
++				goto oom;
++			args[ac++] = arg;
++		}
+ 		if (delete_excluded)
+ 			args[ac++] = "--delete-excluded";
+ 		if (force_delete)
+diff --git a/rsync.1.md b/rsync.1.md
+index b1ef84e1..a68d624f 100644
+--- a/rsync.1.md
++++ b/rsync.1.md
+@@ -397,6 +397,7 @@ detailed description below for a complete description.
+ --delete-during          receiver deletes during the transfer
+ --delete-delay           find deletions during, delete after
+ --delete-after           receiver deletes after transfer, not during
++--delete-older=TIME      delete only files older than TIME
+ --delete-excluded        also delete excluded files from dest dirs
+ --ignore-missing-args    ignore missing source args without error
+ --delete-missing-args    delete missing source args from destination
+@@ -1705,6 +1706,13 @@ your home directory (remove the '=' for that).
+     (see `--recursive`). See `--delete` (which is implied) for more details on
+     file-deletion.
+ 
++0.  `--delete-older=TIME`
++
++    This prevents files being deleted on the destination that were created or
++    modified after the given Posix timestamp.  The timestamp is given in
++    seconds since the Epoch.  This option implies deletion in the first place,
++    and may be combined with other deletion options.
++
+ 0.  `--delete-excluded`
+ 
+     In addition to deleting the files on the receiving side that are not on the
