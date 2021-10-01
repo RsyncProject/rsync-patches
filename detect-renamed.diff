@@ -38,7 +38,7 @@ TODO:
   a file that can't use it, while missing out on giving it to a file
   that could use it.
 
-based-on: 109dbc0b7535e8f8094802182f9067bfdc88dfc9
+based-on: c8e7c4b3522034f194243093d45c7f9b0e67a95d
 diff --git a/backup.c b/backup.c
 --- a/backup.c
 +++ b/backup.c
@@ -195,7 +195,7 @@ diff --git a/flist.c b/flist.c
  static void send_directory(int f, struct file_list *flist,
  			   char *fbuf, int len, int flags);
  
-@@ -2675,6 +2717,23 @@ struct file_list *recv_file_list(int f, int dir_ndx)
+@@ -2682,6 +2724,23 @@ struct file_list *recv_file_list(int f, int dir_ndx)
  	 * for a non-relative transfer in recv_file_entry(). */
  	flist_sort_and_clean(flist, relative_paths);
  
@@ -249,12 +249,12 @@ diff --git a/generator.c b/generator.c
   * MAXPATHLEN buffer with the name of the directory in it (the functions we
   * call will append names onto the end, but the old dir value will be restored
 - * on exit). */
--static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+-static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t fs_dev)
 + * on exit).
 + *
 + * Note:  --detect-rename may use this routine with DEL_NO_DELETIONS set!
 + */
-+static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev,
++static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t fs_dev,
 +			  int del_flags)
  {
  	static int already_warned = 0;
@@ -268,7 +268,7 @@ diff --git a/generator.c b/generator.c
  
  	if (!fbuf) {
  		change_local_filter_dir(NULL, 0, 0);
-@@ -287,17 +295,22 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -287,17 +295,22 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t fs_dev)
  		maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
  
  	if (io_error & IOERR_GENERAL && !ignore_errors) {
@@ -296,7 +296,7 @@ diff --git a/generator.c b/generator.c
  	if (one_file_system) {
  		if (!dev_tbl)
  			dev_tbl = hashtable_create(16, HT_KEY64);
-@@ -313,6 +326,14 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -313,6 +326,14 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t fs_dev)
  
  	dirlist = get_dirlist(fbuf, dlen, 0);
  
@@ -311,7 +311,7 @@ diff --git a/generator.c b/generator.c
  	/* If an item in dirlist is not found in flist, delete it
  	 * from the filesystem. */
  	for (i = dirlist->used; i--; ) {
-@@ -325,6 +346,10 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -325,6 +346,10 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t fs_dev)
  					f_name(fp, NULL));
  			continue;
  		}
@@ -322,7 +322,7 @@ diff --git a/generator.c b/generator.c
  		/* Here we want to match regardless of file type.  Replacement
  		 * of a file with one of another type is handled separately by
  		 * a delete_item call with a DEL_MAKE_ROOM flag. */
-@@ -333,14 +358,19 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t *fs_dev)
+@@ -333,14 +358,19 @@ static void delete_in_dir(char *fbuf, struct file_struct *file, dev_t fs_dev)
  			if (!(fp->mode & S_IWUSR) && !am_root && fp->flags & FLAG_OWNED_BY_US)
  				flags |= DEL_NO_UID_WRITE;
  			f_name(fp, delbuf);
@@ -350,11 +350,11 @@ diff --git a/generator.c b/generator.c
  		 || !S_ISDIR(st.st_mode))
  			continue;
  
--		delete_in_dir(fbuf, file, &st.st_dev);
-+		delete_in_dir(fbuf, file, &st.st_dev, 0);
+-		delete_in_dir(fbuf, file, st.st_dev);
++		delete_in_dir(fbuf, file, st.st_dev, 0);
  	}
--	delete_in_dir(NULL, NULL, &dev_zero);
-+	delete_in_dir(NULL, NULL, &dev_zero, 0);
+-	delete_in_dir(NULL, NULL, dev_zero);
++	delete_in_dir(NULL, NULL, dev_zero, 0);
  
  	if (INFO_GTE(FLIST, 2) && !am_server)
  		rprintf(FINFO, "                    \r");
@@ -505,12 +505,12 @@ diff --git a/generator.c b/generator.c
  		else if (delete_during && f_out != -1 && !phase
  		    && !(file->flags & FLAG_MISSING_DIR)) {
 -			if (file->flags & FLAG_CONTENT_DIR)
--				delete_in_dir(fname, file, &real_sx.st.st_dev);
+-				delete_in_dir(fname, file, real_sx.st.st_dev);
 -			else
 +			if (file->flags & FLAG_CONTENT_DIR) {
 +				if (detect_renamed && real_ret != 0)
 +					unexplored_dirs++;
-+				delete_in_dir(fname, file, &real_sx.st.st_dev,
++				delete_in_dir(fname, file, real_sx.st.st_dev,
 +					      delete_during < 0 ? DEL_NO_DELETIONS : 0);
 +			} else
  				change_local_filter_dir(fname, strlen(fname), F_DEPTH(file));
@@ -558,8 +558,8 @@ diff --git a/generator.c b/generator.c
  						dirdev = MAKEDEV(DEV_MAJOR(devp), DEV_MINOR(devp));
  					} else
  						dirdev = MAKEDEV(0, 0);
--					delete_in_dir(fbuf, fp, &dirdev);
-+					delete_in_dir(fbuf, fp, &dirdev, 0);
+-					delete_in_dir(fbuf, fp, dirdev);
++					delete_in_dir(fbuf, fp, dirdev, 0);
  				} else
  					change_local_filter_dir(fbuf, strlen(fbuf), F_DEPTH(fp));
  			}
@@ -567,8 +567,8 @@ diff --git a/generator.c b/generator.c
  	} while ((cur_flist = cur_flist->next) != NULL);
  
  	if (delete_during)
--		delete_in_dir(NULL, NULL, &dev_zero);
-+		delete_in_dir(NULL, NULL, &dev_zero, 0);
+-		delete_in_dir(NULL, NULL, dev_zero);
++		delete_in_dir(NULL, NULL, dev_zero, 0);
 +	if (detect_renamed) {
 +		if (delete_during < 0)
 +			delete_during = 0;
@@ -601,7 +601,7 @@ diff --git a/main.c b/main.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -84,6 +84,7 @@ int am_server = 0;
+@@ -85,6 +85,7 @@ int am_server = 0;
  int am_sender = 0;
  int am_starting_up = 1;
  int relative_paths = -1;
@@ -609,7 +609,7 @@ diff --git a/options.c b/options.c
  int implied_dirs = 1;
  int missing_args = 0; /* 0 = FERROR_XFER, 1 = ignore, 2 = delete */
  int numeric_ids = 0;
-@@ -733,6 +734,7 @@ static struct poptOption long_options[] = {
+@@ -734,6 +735,7 @@ static struct poptOption long_options[] = {
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
    {"link-dest",        0,  POPT_ARG_STRING, 0, OPT_LINK_DEST, 0, 0 },
@@ -617,7 +617,7 @@ diff --git a/options.c b/options.c
    {"fuzzy",           'y', POPT_ARG_NONE,   0, 'y', 0, 0 },
    {"no-fuzzy",         0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
    {"no-y",             0,  POPT_ARG_VAL,    &fuzzy_basis, 0, 0, 0 },
-@@ -2346,7 +2348,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2348,7 +2350,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  		inplace = 1;
  	}
  
@@ -626,7 +626,7 @@ diff --git a/options.c b/options.c
  		partial_dir = tmp_partialdir;
  
  	if (inplace) {
-@@ -2355,6 +2357,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2357,6 +2359,7 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			snprintf(err_buf, sizeof err_buf,
  				 "--%s cannot be used with --%s\n",
  				 append_mode ? "append" : "inplace",
@@ -634,7 +634,7 @@ diff --git a/options.c b/options.c
  				 delay_updates ? "delay-updates" : "partial-dir");
  			return 0;
  		}
-@@ -2721,6 +2724,8 @@ void server_options(char **args, int *argc_p)
+@@ -2723,6 +2726,8 @@ void server_options(char **args, int *argc_p)
  			args[ac++] = "--super";
  		if (size_only)
  			args[ac++] = "--size-only";
@@ -646,7 +646,7 @@ diff --git a/options.c b/options.c
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
-@@ -217,7 +217,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
+@@ -218,7 +218,7 @@ int open_tmpfile(char *fnametmp, const char *fname, struct file_struct *file)
  	 * information should have been previously transferred, but that may
  	 * not be the case with -R */
  	if (fd == -1 && relative_paths && errno == ENOENT
@@ -666,7 +666,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --compare-dest=DIR       also compare destination files relative to DIR
  --copy-dest=DIR          ... and include copies of unchanged files
  --link-dest=DIR          hardlink to files in DIR when unchanged
-@@ -2263,6 +2264,22 @@ your home directory (remove the '=' for that).
+@@ -2264,6 +2265,22 @@ your home directory (remove the '=' for that).
      fuzzy-match files, so either use `--delete-after` or specify some filename
      exclusions if you need to prevent this.
  
@@ -712,7 +712,7 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/util1.c b/util1.c
 --- a/util1.c
 +++ b/util1.c
-@@ -182,7 +182,7 @@ int set_times(const char *fname, STRUCT_STAT *stp)
+@@ -183,7 +183,7 @@ int set_times(const char *fname, STRUCT_STAT *stp)
  /* Create any necessary directories in fname.  Any missing directories are
   * created with default permissions.  Returns < 0 on error, or the number
   * of directories created. */
@@ -721,7 +721,7 @@ diff --git a/util1.c b/util1.c
  {
  	char *end, *p;
  	int ret = 0;
-@@ -213,7 +213,7 @@ int make_path(char *fname, int flags)
+@@ -214,7 +214,7 @@ int make_path(char *fname, int flags)
  				else
  					errno = ENOTDIR;
  			}
@@ -730,7 +730,7 @@ diff --git a/util1.c b/util1.c
  			ret++;
  			break;
  		}
-@@ -252,7 +252,7 @@ int make_path(char *fname, int flags)
+@@ -253,7 +253,7 @@ int make_path(char *fname, int flags)
  		p += strlen(p);
  		if (ret < 0) /* Skip mkdir on error, but keep restoring the path. */
  			continue;
@@ -739,7 +739,7 @@ diff --git a/util1.c b/util1.c
  			ret = -ret - 1;
  		else
  			ret++;
-@@ -1167,6 +1167,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
+@@ -1175,6 +1175,32 @@ char *normalize_path(char *path, BOOL force_newbuf, unsigned int *len_ptr)
  	return path;
  }
  
@@ -772,7 +772,7 @@ diff --git a/util1.c b/util1.c
  /**
   * Return a quoted string with the full pathname of the indicated filename.
   * The string " (in MODNAME)" may also be appended.  The returned pointer
-@@ -1260,7 +1286,7 @@ int handle_partial_dir(const char *fname, int create)
+@@ -1268,7 +1294,7 @@ int handle_partial_dir(const char *fname, int create)
  			}
  			statret = -1;
  		}
