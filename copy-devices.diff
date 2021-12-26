@@ -8,7 +8,7 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: 109dbc0b7535e8f8094802182f9067bfdc88dfc9
+based-on: 72adf49ba8cb81426e2b9799fbd43c6284b013a9
 diff --git a/generator.c b/generator.c
 --- a/generator.c
 +++ b/generator.c
@@ -20,16 +20,16 @@ diff --git a/generator.c b/generator.c
  extern int write_devices;
  extern int preserve_specials;
  extern int preserve_hard_links;
-@@ -1676,7 +1677,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1677,7 +1678,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		goto cleanup;
  	}
  
 -	if (ftype != FT_REG) {
 +	if (ftype != FT_REG && (!copy_devices || ftype != FT_DEVICE)) {
- 		if (solo_file)
- 			fname = f_name(file, NULL);
- 		rprintf(FINFO, "skipping non-regular file \"%s\"\n", fname);
-@@ -1897,6 +1898,9 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		if (INFO_GTE(NONREG, 1)) {
+ 			if (solo_file)
+ 				fname = f_name(file, NULL);
+@@ -1900,6 +1901,9 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		fnamecmp_type = FNAMECMP_BACKUP;
  	}
  
@@ -50,7 +50,7 @@ diff --git a/options.c b/options.c
  int write_devices = 0;
  int preserve_links = 0;
  int preserve_hard_links = 0;
-@@ -652,6 +653,7 @@ static struct poptOption long_options[] = {
+@@ -654,6 +655,7 @@ static struct poptOption long_options[] = {
    {"no-D",             0,  POPT_ARG_NONE,   0, OPT_NO_D, 0, 0 },
    {"devices",          0,  POPT_ARG_VAL,    &preserve_devices, 1, 0, 0 },
    {"no-devices",       0,  POPT_ARG_VAL,    &preserve_devices, 0, 0, 0 },
@@ -58,7 +58,7 @@ diff --git a/options.c b/options.c
    {"write-devices",    0,  POPT_ARG_VAL,    &write_devices, 1, 0, 0 },
    {"no-write-devices", 0,  POPT_ARG_VAL,    &write_devices, 0, 0, 0 },
    {"specials",         0,  POPT_ARG_VAL,    &preserve_specials, 1, 0, 0 },
-@@ -942,6 +944,7 @@ static void set_refuse_options(void)
+@@ -945,6 +947,7 @@ static void set_refuse_options(void)
  		 || strcmp("iconv", longName) == 0
  		 || strcmp("no-iconv", longName) == 0
  		 || strcmp("checksum-seed", longName) == 0
@@ -66,7 +66,7 @@ diff --git a/options.c b/options.c
  		 || strcmp("write-devices", longName) == 0 /* disable wild-match (it gets refused below) */
  		 || strcmp("log-format", longName) == 0 /* aka out-format (NOT log-file-format) */
  		 || strcmp("sender", longName) == 0
-@@ -953,6 +956,7 @@ static void set_refuse_options(void)
+@@ -956,6 +959,7 @@ static void set_refuse_options(void)
  	assert(list_end != NULL);
  
  	if (am_daemon) { /* Refused by default, but can be accepted via a negated exact match. */
@@ -74,7 +74,7 @@ diff --git a/options.c b/options.c
  		parse_one_refuse_match(0, "write-devices", list_end);
  	}
  
-@@ -2856,6 +2860,9 @@ void server_options(char **args, int *argc_p)
+@@ -2858,6 +2862,9 @@ void server_options(char **args, int *argc_p)
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
@@ -98,15 +98,15 @@ diff --git a/rsync.1.md b/rsync.1.md
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -33,6 +33,7 @@ extern int preserve_xattrs;
- extern int preserve_perms;
- extern int preserve_executability;
- extern int preserve_times;
+@@ -46,6 +46,7 @@ extern int allow_8bit_chars;
+ extern int protocol_version;
+ extern int got_kill_signal;
+ extern int called_from_signal_handler;
 +extern int copy_devices;
- extern int am_root;
- extern int am_server;
- extern int am_daemon;
-@@ -419,7 +420,8 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr, cha
+ extern int inc_recurse;
+ extern int inplace;
+ extern int flist_eof;
+@@ -420,7 +421,8 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr, cha
  
  	if (iflags & ITEM_TRANSFER) {
  		int i = ndx - cur_flist->ndx_start;

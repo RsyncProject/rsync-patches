@@ -42,7 +42,7 @@ diff --git a/generator.c b/generator.c
  extern int preserve_links;
  extern int preserve_devices;
  extern int write_devices;
-@@ -1795,6 +1796,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1798,6 +1799,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  					fname, fnamecmpbuf);
  			}
  			sx.st.st_size = F_LENGTH(fuzzy_file);
@@ -57,7 +57,7 @@ diff --git a/generator.c b/generator.c
  			statret = 0;
  			fnamecmp = fnamecmpbuf;
  		}
-@@ -1962,6 +1971,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+@@ -1965,6 +1974,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  	if (read_batch)
  		goto cleanup;
  
@@ -255,7 +255,7 @@ diff --git a/options.c b/options.c
  int preserve_perms = 0;
  int preserve_fileflags = 0;
  int preserve_executability = 0;
-@@ -722,6 +723,10 @@ static struct poptOption long_options[] = {
+@@ -723,6 +724,10 @@ static struct poptOption long_options[] = {
    {"no-force-change",  0,  POPT_ARG_VAL,    &force_change, 0, 0, 0 },
    {"force-uchange",    0,  POPT_ARG_VAL,    &force_change, USR_IMMUTABLE, 0, 0 },
    {"force-schange",    0,  POPT_ARG_VAL,    &force_change, SYS_IMMUTABLE, 0, 0 },
@@ -266,7 +266,7 @@ diff --git a/options.c b/options.c
    {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
    {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
-@@ -1018,6 +1023,10 @@ static void set_refuse_options(void)
+@@ -1019,6 +1024,10 @@ static void set_refuse_options(void)
  	parse_one_refuse_match(0, "force-uchange", list_end);
  	parse_one_refuse_match(0, "force-schange", list_end);
  #endif
@@ -277,7 +277,7 @@ diff --git a/options.c b/options.c
  
  	/* Now we use the descrip values to actually mark the options for refusal. */
  	for (op = long_options; op != list_end; op++) {
-@@ -2072,6 +2081,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2077,6 +2086,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	}
  #endif
  
@@ -293,7 +293,7 @@ diff --git a/options.c b/options.c
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -2630,6 +2648,11 @@ void server_options(char **args, int *argc_p)
+@@ -2623,6 +2641,11 @@ void server_options(char **args, int *argc_p)
  	if (preserve_fileflags)
  		args[ac++] = "--fileflags";
  
@@ -317,7 +317,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --owner, -o              preserve owner (super-user only)
  --group, -g              preserve group
  --devices                preserve device files (super-user only)
-@@ -1297,6 +1299,47 @@ your home directory (remove the '=' for that).
+@@ -1301,6 +1303,47 @@ your home directory (remove the '=' for that).
      receiving side.  It does not try to affect user flags.  This option
      overrides `--force-change` and `--force-uchange`.
  
@@ -368,7 +368,7 @@ diff --git a/rsync.1.md b/rsync.1.md
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -606,8 +606,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -607,8 +607,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  #ifdef SUPPORT_XATTRS
  	if (am_root < 0)
  		set_stat_xattr(fname, file, new_mode);
@@ -383,11 +383,11 @@ diff --git a/rsync.c b/rsync.c
 +	}
  #endif
  
- 	if (!preserve_times
-@@ -621,7 +627,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
- 	/* Don't set the creation date on the root folder of an HFS+ volume. */
- 	if (sxp->st.st_ino == 2 && S_ISDIR(sxp->st.st_mode))
- 		flags |= ATTRS_SKIP_CRTIME;
+ 	if ((omit_dir_times && S_ISDIR(sxp->st.st_mode))
+@@ -625,7 +631,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+ 	}
+ 	if (sxp != &sx2)
+ 		memcpy(&sx2.st, &sxp->st, sizeof sx2.st);
 -	if (!(flags & ATTRS_SKIP_MTIME) && !same_mtime(file, &sxp->st, flags & ATTRS_ACCURATE_TIME)) {
 +	if (!(flags & ATTRS_SKIP_MTIME)
 +#ifdef SUPPORT_HFS_COMPRESSION
@@ -397,7 +397,7 @@ diff --git a/rsync.c b/rsync.c
  		sx2.st.st_mtime = file->modtime;
  #ifdef ST_MTIME_NSEC
  		sx2.st.ST_MTIME_NSEC = F_MOD_NSEC_or_0(file);
-@@ -698,6 +708,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -710,6 +720,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		 && !set_fileflags(fname, fileflags))
  			goto cleanup;
  		updated = 1;
@@ -438,14 +438,14 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/t_stub.c b/t_stub.c
 --- a/t_stub.c
 +++ b/t_stub.c
-@@ -35,6 +35,7 @@ int preserve_times = 0;
+@@ -35,6 +35,7 @@ int preserve_mtimes = 0;
  int preserve_xattrs = 0;
  int preserve_perms = 0;
  int preserve_executability = 0;
 +int preserve_hfs_compression = 0;
+ int omit_link_times = 0;
  int open_noatime = 0;
  size_t max_alloc = 0; /* max_alloc is needed when combined with util2.o */
- char *partial_dir;
 diff --git a/xattrs.c b/xattrs.c
 --- a/xattrs.c
 +++ b/xattrs.c
