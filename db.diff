@@ -21,11 +21,11 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: 72adf49ba8cb81426e2b9799fbd43c6284b013a9
+based-on: a2b630c0bb586c9761fd5fc53dc4c212b6dd25df
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
-@@ -31,6 +31,7 @@ aclocal.m4
+@@ -32,6 +32,7 @@ aclocal.m4
  /gists
  /gmon.out
  /rsync
@@ -75,9 +75,9 @@ diff --git a/Makefile.in b/Makefile.in
  	if test -f rsyncd.conf.5; then $(INSTALLMAN) -m 644 rsyncd.conf.5 $(DESTDIR)$(mandir)/man5; fi
  	if test "$(with_rrsync)" = yes; then \
  	    $(INSTALLCMD) -m 755 $(srcdir)/support/rrsync $(DESTDIR)$(bindir); \
-@@ -101,10 +104,13 @@ install-strip:
- rsync$(EXEEXT): $(OBJS)
- 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+@@ -104,10 +107,13 @@ rsync$(EXEEXT): $(OBJS)
+ rrsync: support/rrsync
+ 	cp -p $(srcdir)/support/rrsync rrsync
  
 +rsyncdb$(EXEEXT): rsync$(EXEEXT)
 +	ln -s rsync$(EXEEXT) rsyncdb$(EXEEXT)
@@ -90,7 +90,7 @@ diff --git a/Makefile.in b/Makefile.in
  loadparm.o: default-dont-compress.h daemon-parm.h
  
  flist.o: rounding.h
-@@ -115,6 +121,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
+@@ -118,6 +124,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
  help-rsync.h help-rsyncd.h: rsync.1.md help-from-md.awk
  	$(AWK) -f $(srcdir)/help-from-md.awk -v hfile=$@ $(srcdir)/rsync.1.md
  
@@ -100,20 +100,20 @@ diff --git a/Makefile.in b/Makefile.in
  daemon-parm.h: daemon-parm.txt daemon-parm.awk
  	$(AWK) -f $(srcdir)/daemon-parm.awk $(srcdir)/daemon-parm.txt
  
-@@ -252,7 +261,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
+@@ -255,7 +264,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
  	$(AWK) -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
  
  .PHONY: man
 -man: rsync.1 rsync-ssl.1 rsyncd.conf.5 rrsync.1
 +man: rsync.1 rsync-ssl.1 rsyncd.conf.5 rrsync.1 rsyncdb.1
  
- rsync.1: rsync.1.md md2man version.h Makefile
+ rsync.1: rsync.1.md md-convert version.h Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) rsync.1.md
-@@ -266,9 +275,12 @@ rsyncd.conf.5: rsyncd.conf.5.md md2man version.h Makefile
- rrsync.1: support/rrsync.1.md md2man Makefile
+@@ -269,9 +278,12 @@ rsyncd.conf.5: rsyncd.conf.5.md md-convert version.h Makefile
+ rrsync.1: support/rrsync.1.md md-convert Makefile
  	@$(srcdir)/maybe-make-man $(srcdir) support/rrsync.1.md
  
-+rsyncdb.1: rsyncdb.1.md md2man NEWS.md Makefile
++rsyncdb.1: rsyncdb.1.md md-convert NEWS.md Makefile
 +	@$(srcdir)/maybe-make-man $(srcdir) rsyncdb.1.md
 +
  .PHONY: clean
@@ -2375,7 +2375,7 @@ diff --git a/io.c b/io.c
  extern int io_error;
  extern int batch_fd;
  extern int eol_nulls;
-@@ -1492,6 +1494,32 @@ static void read_a_msg(void)
+@@ -1512,6 +1514,32 @@ static void read_a_msg(void)
  		if (am_sender)
  			maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);
  		break;
@@ -2408,7 +2408,7 @@ diff --git a/io.c b/io.c
  	case MSG_DELETED:
  		if (msg_bytes >= sizeof data)
  			goto overflow;
-@@ -1643,6 +1671,7 @@ static void read_a_msg(void)
+@@ -1665,6 +1693,7 @@ static void read_a_msg(void)
  		 * with a duplicate exit message. */
  		_exit_cleanup(val, __FILE__, 0 - __LINE__);
  	default:
@@ -2443,7 +2443,7 @@ diff --git a/main.c b/main.c
  extern char *shell_cmd;
  extern char *password_file;
  extern char *backup_dir;
-@@ -1245,6 +1248,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
+@@ -1240,6 +1243,9 @@ void start_server(int f_in, int f_out, int argc, char *argv[])
  	if (am_daemon && io_timeout && protocol_version >= 31)
  		send_msg_int(MSG_IO_TIMEOUT, io_timeout);
  
@@ -2453,7 +2453,7 @@ diff --git a/main.c b/main.c
  	if (am_sender) {
  		keep_dirlinks = 0; /* Must be disabled on the sender. */
  		if (need_messages_from_generator)
-@@ -1535,6 +1541,9 @@ static int start_client(int argc, char *argv[])
+@@ -1530,6 +1536,9 @@ static int start_client(int argc, char *argv[])
  	else
  		env_port = rsync_port;
  
@@ -2860,7 +2860,7 @@ diff --git a/rsync.h b/rsync.h
  #define NDX_DONE -1
  #define NDX_FLIST_EOF -2
  #define NDX_DEL_STATS -3
-@@ -1431,7 +1435,8 @@ extern short info_levels[], debug_levels[];
+@@ -1436,7 +1440,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CHDIR (DEBUG_BIND+1)
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)
