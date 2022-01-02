@@ -21,12 +21,14 @@ based-on: patch/master/fileflags
 diff --git a/flist.c b/flist.c
 --- a/flist.c
 +++ b/flist.c
-@@ -1631,6 +1631,9 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
+@@ -1631,6 +1631,11 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
  #ifdef SUPPORT_XATTRS
  		if (preserve_xattrs) {
  			sx.st.st_mode = file->mode;
++#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
 +			if (preserve_fileflags)
 +				sx.st.st_flags = F_FFLAGS(file);
++#endif
 +			sx.st.st_mtime = file->modtime; /* get_xattr needs mtime for decmpfs xattrs */
  			if (get_xattr(fname, &sx) < 0) {
  				io_error |= IOERR_GENERAL;
@@ -255,7 +257,7 @@ diff --git a/options.c b/options.c
  int preserve_perms = 0;
  int preserve_fileflags = 0;
  int preserve_executability = 0;
-@@ -723,6 +724,10 @@ static struct poptOption long_options[] = {
+@@ -724,6 +725,10 @@ static struct poptOption long_options[] = {
    {"no-force-change",  0,  POPT_ARG_VAL,    &force_change, 0, 0, 0 },
    {"force-uchange",    0,  POPT_ARG_VAL,    &force_change, USR_IMMUTABLE, 0, 0 },
    {"force-schange",    0,  POPT_ARG_VAL,    &force_change, SYS_IMMUTABLE, 0, 0 },
@@ -266,7 +268,7 @@ diff --git a/options.c b/options.c
    {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
    {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
    {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
-@@ -1019,6 +1024,10 @@ static void set_refuse_options(void)
+@@ -1020,6 +1025,10 @@ static void set_refuse_options(void)
  	parse_one_refuse_match(0, "force-uchange", list_end);
  	parse_one_refuse_match(0, "force-schange", list_end);
  #endif
@@ -277,7 +279,7 @@ diff --git a/options.c b/options.c
  
  	/* Now we use the descrip values to actually mark the options for refusal. */
  	for (op = long_options; op != list_end; op++) {
-@@ -2077,6 +2086,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2082,6 +2091,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	}
  #endif
  
@@ -293,7 +295,7 @@ diff --git a/options.c b/options.c
  	if (write_batch && read_batch) {
  		snprintf(err_buf, sizeof err_buf,
  			"--write-batch and --read-batch can not be used together\n");
-@@ -2623,6 +2641,11 @@ void server_options(char **args, int *argc_p)
+@@ -2628,6 +2646,11 @@ void server_options(char **args, int *argc_p)
  	if (preserve_fileflags)
  		args[ac++] = "--fileflags";
  
@@ -317,7 +319,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --owner, -o              preserve owner (super-user only)
  --group, -g              preserve group
  --devices                preserve device files (super-user only)
-@@ -1301,6 +1303,47 @@ your home directory (remove the '=' for that).
+@@ -1320,6 +1322,47 @@ your home directory (remove the '=' for that).
      receiving side.  It does not try to affect user flags.  This option
      overrides `--force-change` and `--force-uchange`.
  
@@ -368,23 +370,27 @@ diff --git a/rsync.1.md b/rsync.1.md
 diff --git a/rsync.c b/rsync.c
 --- a/rsync.c
 +++ b/rsync.c
-@@ -607,8 +607,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -607,8 +607,18 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  #ifdef SUPPORT_XATTRS
  	if (am_root < 0)
  		set_stat_xattr(fname, file, new_mode);
 -	if (preserve_xattrs && fnamecmp)
 +	if (preserve_xattrs && fnamecmp) {
++#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
 +		uint32 tmpflags = sxp->st.st_flags;
 +		sxp->st.st_flags = F_FFLAGS(file); /* set_xattr() needs to check UF_COMPRESSED */
++#endif
  		set_xattr(fname, file, fnamecmp, sxp);
++#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
 +		sxp->st.st_flags = tmpflags;
++#endif
 +		if (S_ISDIR(sxp->st.st_mode))
 +			link_stat(fname, &sx2.st, 0);
 +	}
  #endif
  
  	if ((omit_dir_times && S_ISDIR(sxp->st.st_mode))
-@@ -625,7 +631,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -625,7 +635,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  	}
  	if (sxp != &sx2)
  		memcpy(&sx2.st, &sxp->st, sizeof sx2.st);
@@ -397,7 +403,7 @@ diff --git a/rsync.c b/rsync.c
  		sx2.st.st_mtime = file->modtime;
  #ifdef ST_MTIME_NSEC
  		sx2.st.ST_MTIME_NSEC = F_MOD_NSEC_or_0(file);
-@@ -710,6 +720,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
+@@ -710,6 +724,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
  		 && !set_fileflags(fname, fileflags))
  			goto cleanup;
  		updated = 1;

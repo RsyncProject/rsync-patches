@@ -16,7 +16,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: 3008e7c2269936672d796d95b85b285fc07adc01
+based-on: 3e44bbd3132c22f7ce1ae48c0ce262f237473038
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
@@ -502,6 +502,15 @@ diff --git a/generator.c b/generator.c
  			continue;
  		if (match_level == 1) {
  			best_match = j;
+@@ -1076,7 +1080,7 @@ static int try_dests_non(struct file_struct *file, char *fname, int ndx,
+ 			match_level = 1;
+ 			best_match = j;
+ 		}
+-		if (!quick_check_ok(ftype, cmpbuf, file, &sxp->st))
++		if (!quick_check_ok(ftype, cmpbuf, file, &sxp->st, j+1))
+ 			continue;
+ 		if (match_level < 2) {
+ 			match_level = 2;
 @@ -1212,7 +1216,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  	 * --ignore-non-existing, daemon exclude, or mkdir failure. */
  	static struct file_struct *skip_dir = NULL;
@@ -548,6 +557,33 @@ diff --git a/generator.c b/generator.c
  		statret = link_stat(fname, &sx.st, keep_dirlinks && is_dir);
  		stat_errno = errno;
  	}
+@@ -1384,7 +1407,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 			if (INFO_GTE(SKIP, 2)) {
+ 				if (ftype != stype)
+ 					suf = " (type change)";
+-				else if (!quick_check_ok(ftype, fname, file, &sx.st))
++				else if (!quick_check_ok(ftype, fname, file, &sx.st, 0))
+ 					suf = always_checksum ? " (sum change)" : " (file change)";
+ 				else if (!unchanged_attrs(fname, file, &sx))
+ 					suf = " (attr change)";
+@@ -1555,7 +1578,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 			goto cleanup;
+ 		}
+ 		if (statret == 0) {
+-			if (stype == FT_SYMLINK && quick_check_ok(stype, fname, file, &sx.st)) {
++			if (stype == FT_SYMLINK && quick_check_ok(stype, fname, file, &sx.st, 0)) {
+ 				/* The link is pointing to the right place. */
+ 				set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
+ 				if (itemizing)
+@@ -1624,7 +1647,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
+ 		if (statret == 0) {
+ 			if (ftype != stype)
+ 				statret = -1;
+-			else if (quick_check_ok(ftype, fname, file, &sx.st)) {
++			else if (quick_check_ok(ftype, fname, file, &sx.st, 0)) {
+ 				/* The device or special file is identical. */
+ 				set_file_attrs(fname, file, &sx, NULL, maybe_ATTRS_REPORT);
+ 				if (itemizing)
 @@ -1749,22 +1772,6 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
  		partialptr = NULL;
  
@@ -612,7 +648,7 @@ diff --git a/loadparm.c b/loadparm.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -120,6 +120,7 @@ size_t bwlimit_writemax = 0;
+@@ -121,6 +121,7 @@ size_t bwlimit_writemax = 0;
  int ignore_existing = 0;
  int ignore_non_existing = 0;
  int need_messages_from_generator = 0;
@@ -620,7 +656,7 @@ diff --git a/options.c b/options.c
  int max_delete = INT_MIN;
  OFF_T max_size = -1;
  OFF_T min_size = -1;
-@@ -575,7 +576,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
+@@ -576,7 +577,7 @@ enum {OPT_SERVER = 1000, OPT_DAEMON, OPT_SENDER, OPT_EXCLUDE, OPT_EXCLUDE_FROM,
        OPT_INCLUDE, OPT_INCLUDE_FROM, OPT_MODIFY_WINDOW, OPT_MIN_SIZE, OPT_CHMOD,
        OPT_READ_BATCH, OPT_WRITE_BATCH, OPT_ONLY_WRITE_BATCH, OPT_MAX_SIZE,
        OPT_NO_D, OPT_APPEND, OPT_NO_ICONV, OPT_INFO, OPT_DEBUG, OPT_BLOCK_SIZE,
@@ -629,7 +665,7 @@ diff --git a/options.c b/options.c
        OPT_OLD_COMPRESS, OPT_NEW_COMPRESS, OPT_NO_COMPRESS,
        OPT_STOP_AFTER, OPT_STOP_AT,
        OPT_REFUSED_BASE = 9000};
-@@ -731,6 +732,7 @@ static struct poptOption long_options[] = {
+@@ -732,6 +733,7 @@ static struct poptOption long_options[] = {
    {"no-c",             0,  POPT_ARG_VAL,    &always_checksum, 0, 0, 0 },
    {"checksum-choice",  0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
    {"cc",               0,  POPT_ARG_STRING, &checksum_choice, 0, 0, 0 },
@@ -637,7 +673,7 @@ diff --git a/options.c b/options.c
    {"block-size",      'B', POPT_ARG_STRING, 0, OPT_BLOCK_SIZE, 0, 0 },
    {"compare-dest",     0,  POPT_ARG_STRING, 0, OPT_COMPARE_DEST, 0, 0 },
    {"copy-dest",        0,  POPT_ARG_STRING, 0, OPT_COPY_DEST, 0, 0 },
-@@ -1725,6 +1727,23 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1726,6 +1728,23 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			}
  			break;
  
@@ -661,7 +697,7 @@ diff --git a/options.c b/options.c
  		case OPT_INFO:
  			arg = poptGetOptArg(pc);
  			parse_output_words(info_words, info_levels, arg, USER_PRIORITY);
-@@ -2059,6 +2078,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2064,6 +2083,9 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  	}
  #endif
  
@@ -682,7 +718,7 @@ diff --git a/rsync.1.md b/rsync.1.md
  --archive, -a            archive mode is -rlptgoD (no -A,-X,-U,-N,-H)
  --no-OPTION              turn off an implied OPTION (e.g. --no-D)
  --recursive, -r          recurse into directories
-@@ -703,6 +704,8 @@ your home directory (remove the '=' for that).
+@@ -715,6 +716,8 @@ your home directory (remove the '=' for that).
      file that has the same size as the corresponding sender's file: files with
      either a changed size or a changed checksum are selected for transfer.
  
@@ -691,7 +727,7 @@ diff --git a/rsync.1.md b/rsync.1.md
      Note that rsync always verifies that each _transferred_ file was correctly
      reconstructed on the receiving side by checking a whole-file checksum that
      is generated as the file is transferred, but that automatic
-@@ -713,6 +716,38 @@ your home directory (remove the '=' for that).
+@@ -725,6 +728,38 @@ your home directory (remove the '=' for that).
      can be overridden using either the `--checksum-choice` (`--cc`) option or an
      environment variable that is discussed in that option's section.
  
