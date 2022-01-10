@@ -204,7 +204,7 @@ diff --git a/delete.c b/delete.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -161,10 +161,14 @@ int no_detach
+@@ -162,10 +162,14 @@ int no_detach
  int write_batch = 0;
  int read_batch = 0;
  int backup_dir_len = 0;
@@ -219,7 +219,7 @@ diff --git a/options.c b/options.c
  char *tmpdir = NULL;
  char *partial_dir = NULL;
  char *basis_dir[MAX_BASIS_DIRS+1];
-@@ -177,7 +181,9 @@ char *password_file = NULL;
+@@ -178,7 +182,9 @@ char *password_file = NULL;
  char *early_input_file = NULL;
  char *rsync_path = RSYNC_PATH;
  char *backup_dir = NULL;
@@ -229,7 +229,7 @@ diff --git a/options.c b/options.c
  char *sockopts = NULL;
  char *usermap = NULL;
  char *groupmap = NULL;
-@@ -773,7 +779,9 @@ static struct poptOption long_options[] = {
+@@ -774,7 +780,9 @@ static struct poptOption long_options[] = {
    {"backup-deleted",   0,  POPT_ARG_VAL,    &make_backups, 1, 0, 0 },
    {"no-backup",        0,  POPT_ARG_VAL,    &make_backups, 0, 0, 0 },
    {"backup-dir",       0,  POPT_ARG_STRING, &backup_dir, 0, 0, 0 },
@@ -239,7 +239,7 @@ diff --git a/options.c b/options.c
    {"list-only",        0,  POPT_ARG_VAL,    &list_only, 2, 0, 0 },
    {"read-batch",       0,  POPT_ARG_STRING, &batch_name, OPT_READ_BATCH, 0, 0 },
    {"write-batch",      0,  POPT_ARG_STRING, &batch_name, OPT_WRITE_BATCH, 0, 0 },
-@@ -2199,6 +2207,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2209,6 +2217,8 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			tmpdir = sanitize_path(NULL, tmpdir, NULL, 0, SP_DEFAULT);
  		if (backup_dir)
  			backup_dir = sanitize_path(NULL, backup_dir, NULL, 0, SP_DEFAULT);
@@ -248,7 +248,7 @@ diff --git a/options.c b/options.c
  	}
  	if (daemon_filter_list.head && !am_sender) {
  		filter_rule_list *elp = &daemon_filter_list;
-@@ -2220,6 +2230,14 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2230,6 +2240,14 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			if (check_filter(elp, FLOG, dir, 1) < 0)
  				goto options_rejected;
  		}
@@ -263,7 +263,7 @@ diff --git a/options.c b/options.c
  	}
  
  	if (!backup_suffix)
-@@ -2231,6 +2249,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2241,6 +2259,20 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			backup_suffix);
  		return 0;
  	}
@@ -284,7 +284,7 @@ diff --git a/options.c b/options.c
  	if (backup_dir) {
  		size_t len;
  		make_backups = 1; /* --backup-dir implies --backup */
-@@ -2267,6 +2299,34 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -2277,6 +2309,34 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  			"P *%s", backup_suffix);
  		parse_filter_str(&filter_list, backup_dir_buf, rule_template(0), 0);
  	}
@@ -319,9 +319,9 @@ diff --git a/options.c b/options.c
  
  	if (make_backups && !backup_dir)
  		omit_dir_times = -1; /* Implied, so avoid -O to sender. */
-@@ -2662,6 +2722,10 @@ void server_options(char **args, int *argc_p)
+@@ -2726,11 +2786,20 @@ void server_options(char **args, int *argc_p)
  		args[ac++] = "--backup-dir";
- 		args[ac++] = backup_dir;
+ 		args[ac++] = safe_arg("", backup_dir);
  	}
 +	if (backup_dir_dels && backup_dir_dels != backup_dir) {
 +		args[ac++] = "--backup-dir-dels";
@@ -329,26 +329,21 @@ diff --git a/options.c b/options.c
 +	}
  
  	/* Only send --suffix if it specifies a non-default value. */
- 	if (strcmp(backup_suffix, backup_dir ? "" : BACKUP_SUFFIX) != 0) {
-@@ -2670,6 +2734,14 @@ void server_options(char **args, int *argc_p)
- 			goto oom;
- 		args[ac++] = arg;
- 	}
+ 	if (strcmp(backup_suffix, backup_dir ? "" : BACKUP_SUFFIX) != 0)
+ 		args[ac++] = safe_arg("--suffix", backup_suffix);
+ 
 +	/* Only send --suffix-dels if it specifies a value different from the
 +	 * --suffix value, which would normally be used for deletions too. */
-+	if (strcmp(backup_suffix_dels, backup_suffix) != 0) {
-+		/* We use the following syntax to avoid weirdness with '~'. */
-+		if (asprintf(&arg, "--suffix-dels=%s", backup_suffix_dels) < 0)
-+			goto oom;
-+		args[ac++] = arg;
-+	}
++	if (strcmp(backup_suffix_dels, backup_suffix) != 0)
++		args[ac++] = safe_arg("--suffix-dels", backup_suffix_dels);
++
+ 	if (checksum_choice)
+ 		args[ac++] = safe_arg("--checksum-choice", checksum_choice);
  
- 	if (checksum_choice) {
- 		if (asprintf(&arg, "--checksum-choice=%s", checksum_choice) < 0)
 diff --git a/rsync.1.md b/rsync.1.md
 --- a/rsync.1.md
 +++ b/rsync.1.md
-@@ -346,7 +346,9 @@ detailed description below for a complete description.
+@@ -340,7 +340,9 @@ detailed description below for a complete description.
  --backup, -b             make backups (see --suffix & --backup-dir)
  --backup-deleted         make backups only of deleted files
  --backup-dir=DIR         make backups into hierarchy based in DIR
