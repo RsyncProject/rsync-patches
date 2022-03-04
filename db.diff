@@ -21,7 +21,7 @@ To use this patch, run these commands for a successful build:
     ./configure
     make
 
-based-on: cc832943160fb2cbaeaf45942b724828399edd37
+based-on: 55b2a06812e39f15f52e92b979600cb82be210cb
 diff --git a/.gitignore b/.gitignore
 --- a/.gitignore
 +++ b/.gitignore
@@ -44,7 +44,7 @@ diff --git a/Makefile.in b/Makefile.in
  libdir=@libdir@/rsync
  mandir=@mandir@
  with_rrsync=@with_rrsync@
-@@ -35,7 +36,7 @@ ASM_x86_64=lib/md5-asm-x86_64.o
+@@ -36,7 +37,7 @@ MD5_ASM_x86_64=lib/md5-asm-x86_64.o
  
  GENFILES=configure.sh aclocal.m4 config.h.in rsync.1 rsync.1.html \
  	 rsync-ssl.1 rsync-ssl.1.html rsyncd.conf.5 rsyncd.conf.5.html \
@@ -53,16 +53,16 @@ diff --git a/Makefile.in b/Makefile.in
  HEADERS=byteorder.h config.h errcode.h proto.h rsync.h ifuncs.h itypes.h inums.h \
  	lib/pool_alloc.h lib/mdigest.h lib/md-defines.h
  LIBOBJ=lib/wildmatch.o lib/compat.o lib/snprintf.o lib/mdfour.o lib/md5.o \
-@@ -45,7 +46,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
+@@ -46,7 +47,7 @@ zlib_OBJS=zlib/deflate.o zlib/inffast.o zlib/inflate.o zlib/inftrees.o \
  OBJS1=flist.o rsync.o generator.o receiver.o cleanup.o sender.o exclude.o \
  	util1.o util2.o main.o checksum.o match.o syscall.o log.o backup.o delete.o
  OBJS2=options.o io.o compat.o hlink.o token.o uidlist.o socket.o hashtable.o \
 -	usage.o fileio.o batch.o clientname.o chmod.o acls.o xattrs.o
 +	usage.o fileio.o batch.o clientname.o chmod.o db.o acls.o xattrs.o
- OBJS3=progress.o pipe.o @ASM@ @SIMD@
+ OBJS3=progress.o pipe.o @MD5_ASM@ @ROLL_SIMD@ @ROLL_ASM@
  DAEMON_OBJ = params.o loadparm.o clientserver.o access.o connection.o authenticate.o
  popt_OBJS=popt/findme.o  popt/popt.o  popt/poptconfig.o \
-@@ -77,10 +78,12 @@ install: all
+@@ -78,10 +79,12 @@ install: all
  	-$(MKDIR_P) $(DESTDIR)$(bindir)
  	$(INSTALLCMD) $(INSTALL_STRIP) -m 755 rsync$(EXEEXT) $(DESTDIR)$(bindir)
  	$(INSTALLCMD) -m 755 $(srcdir)/rsync-ssl $(DESTDIR)$(bindir)
@@ -75,7 +75,7 @@ diff --git a/Makefile.in b/Makefile.in
  	if test -f rsyncd.conf.5; then $(INSTALLMAN) -m 644 rsyncd.conf.5 $(DESTDIR)$(mandir)/man5; fi
  	if test "$(with_rrsync)" = yes; then \
  	    $(INSTALLCMD) -m 755 rrsync $(DESTDIR)$(bindir); \
-@@ -105,10 +108,13 @@ rsync$(EXEEXT): $(OBJS)
+@@ -106,10 +109,13 @@ rsync$(EXEEXT): $(OBJS)
  rrsync: support/rrsync
  	cp -p $(srcdir)/support/rrsync rrsync
  
@@ -90,7 +90,7 @@ diff --git a/Makefile.in b/Makefile.in
  loadparm.o: default-dont-compress.h daemon-parm.h
  
  flist.o: rounding.h
-@@ -119,6 +125,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
+@@ -120,6 +126,9 @@ default-cvsignore.h default-dont-compress.h: rsync.1.md define-from-md.awk
  help-rsync.h help-rsyncd.h: rsync.1.md help-from-md.awk
  	$(AWK) -f $(srcdir)/help-from-md.awk -v hfile=$@ $(srcdir)/rsync.1.md
  
@@ -100,7 +100,7 @@ diff --git a/Makefile.in b/Makefile.in
  daemon-parm.h: daemon-parm.txt daemon-parm.awk
  	$(AWK) -f $(srcdir)/daemon-parm.awk $(srcdir)/daemon-parm.txt
  
-@@ -256,7 +265,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
+@@ -257,7 +266,7 @@ proto.h-tstamp: $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
  	$(AWK) -f $(srcdir)/mkproto.awk $(srcdir)/*.c $(srcdir)/lib/compat.c daemon-parm.h
  
  .PHONY: man
@@ -109,7 +109,7 @@ diff --git a/Makefile.in b/Makefile.in
  
  rsync.1: rsync.1.md md-convert version.h Makefile
  	@$(srcdir)/maybe-make-man rsync.1.md
-@@ -270,11 +279,14 @@ rsyncd.conf.5: rsyncd.conf.5.md md-convert version.h Makefile
+@@ -271,11 +280,14 @@ rsyncd.conf.5: rsyncd.conf.5.md md-convert version.h Makefile
  rrsync.1: support/rrsync.1.md md-convert Makefile
  	@$(srcdir)/maybe-make-man support/rrsync.1.md
  
@@ -137,9 +137,9 @@ diff --git a/checksum.c b/checksum.c
  
  struct name_num_obj valid_checksums = {
 @@ -386,6 +387,8 @@ void file_checksum(const char *fname, const STRUCT_STAT *st_p, char *sum)
- 			MD5_Update(&m5, (uchar *)map_ptr(buf, i, remainder), remainder);
+ 			md5_update(&m5, (uchar *)map_ptr(buf, i, remainder), remainder);
  
- 		MD5_Final((uchar *)sum, &m5);
+ 		md5_result(&m5, (uchar *)sum);
 +		if (use_db)
 +			db_set_checksum(5, st_p, sum);
  		break;
@@ -230,7 +230,7 @@ diff --git a/configure.ac b/configure.ac
      netdb.h malloc.h float.h limits.h iconv.h libcharset.h langinfo.h mcheck.h \
      sys/acl.h acl/libacl.h attr/xattr.h sys/xattr.h sys/extattr.h dl.h \
      popt.h popt/popt.h linux/falloc.h netinet/in_systm.h netgroup.h \
-@@ -1408,6 +1409,48 @@ if test x"$enable_acl_support" = x"no" || test x"$enable_xattr_support" = x"no"
+@@ -1433,6 +1434,48 @@ if test x"$enable_acl_support" = x"no" || test x"$enable_xattr_support" = x"no"
      fi
  fi
  
@@ -2845,7 +2845,7 @@ diff --git a/rsync.c b/rsync.c
 diff --git a/rsync.h b/rsync.h
 --- a/rsync.h
 +++ b/rsync.h
-@@ -273,6 +273,7 @@ enum msgcode {
+@@ -271,6 +271,7 @@ enum msgcode {
  	MSG_IO_ERROR=22,/* the sending side had an I/O error */
  	MSG_IO_TIMEOUT=33,/* tell client about a daemon's timeout value */
  	MSG_NOOP=42,	/* a do-nothing message (legacy protocol-30 only) */
@@ -2853,7 +2853,7 @@ diff --git a/rsync.h b/rsync.h
  	MSG_ERROR_EXIT=86, /* synchronize an error exit (siblings and protocol >= 31) */
  	MSG_SUCCESS=100,/* successfully updated indicated flist index */
  	MSG_DELETED=101,/* successfully deleted a file on receiving side */
-@@ -283,6 +284,9 @@ enum filetype {
+@@ -281,6 +282,9 @@ enum filetype {
  	FT_UNSUPPORTED, FT_REG, FT_DIR, FT_SYMLINK, FT_SPECIAL, FT_DEVICE
  };
  
@@ -2863,7 +2863,7 @@ diff --git a/rsync.h b/rsync.h
  #define NDX_DONE -1
  #define NDX_FLIST_EOF -2
  #define NDX_DEL_STATS -3
-@@ -1436,7 +1440,8 @@ extern short info_levels[], debug_levels[];
+@@ -1434,7 +1438,8 @@ extern short info_levels[], debug_levels[];
  #define DEBUG_CHDIR (DEBUG_BIND+1)
  #define DEBUG_CONNECT (DEBUG_CHDIR+1)
  #define DEBUG_CMD (DEBUG_CONNECT+1)
@@ -3201,8 +3201,8 @@ diff --git a/usage.c b/usage.c
 +
  	"*Optimizations",
  
- #ifndef HAVE_SIMD
-@@ -256,6 +266,14 @@ void daemon_usage(enum logcode F)
+ #ifndef USE_ROLL_SIMD
+@@ -261,6 +271,14 @@ void daemon_usage(enum logcode F)
    rprintf(F,"daemon-specific rsync options.  See also the rsyncd.conf(5) man page.\n");
  }
  
