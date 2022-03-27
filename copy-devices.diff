@@ -8,37 +8,86 @@ To use this patch, run these commands for a successful build:
     ./configure                      (optional if already run)
     make
 
-based-on: 55b2a06812e39f15f52e92b979600cb82be210cb
-diff --git a/generator.c b/generator.c
---- a/generator.c
-+++ b/generator.c
-@@ -39,6 +39,7 @@ extern int preserve_acls;
- extern int preserve_xattrs;
- extern int preserve_links;
- extern int preserve_devices;
+based-on: 8977815f5d70d1b6747837b41e7e0b5bd672ef01
+diff --git a/flist.c b/flist.c
+--- a/flist.c
++++ b/flist.c
+@@ -43,6 +43,7 @@ extern int use_qsort;
+ extern int xfer_dirs;
+ extern int filesfrom_fd;
+ extern int one_file_system;
 +extern int copy_devices;
- extern int write_devices;
- extern int preserve_specials;
- extern int preserve_hard_links;
-@@ -1677,7 +1678,7 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 		goto cleanup;
+ extern int copy_dirlinks;
+ extern int preserve_uid;
+ extern int preserve_gid;
+@@ -700,6 +701,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ 	int alloc_len, basename_len, linkname_len;
+ 	int extra_len = file_extra_cnt * EXTRA_LEN;
+ 	int first_hlink_ndx = -1;
++	char real_ISREG_entry;
+ 	int64 file_length;
+ #ifdef CAN_SET_NSEC
+ 	uint32 modtime_nsec;
+@@ -814,6 +816,7 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ 				linkname_len = strlen(F_SYMLINK(first)) + 1;
+ 			else
+ 				linkname_len = 0;
++			real_ISREG_entry = S_ISREG(mode) ? 1 : 0;
+ 			goto create_object;
+ 		}
  	}
+@@ -941,10 +944,20 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ #endif
+ 		linkname_len = 0;
  
--	if (ftype != FT_REG) {
-+	if (ftype != FT_REG && (!copy_devices || ftype != FT_DEVICE)) {
- 		if (INFO_GTE(NONREG, 1)) {
- 			if (solo_file)
- 				fname = f_name(file, NULL);
-@@ -1900,6 +1901,9 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
- 		fnamecmp_type = FNAMECMP_BACKUP;
- 	}
- 
-+	if (IS_DEVICE(sx.st.st_mode) && sx.st.st_size == 0)
-+		sx.st.st_size = get_device_size(fd, fnamecmp);
++	if (copy_devices && IS_DEVICE(mode)) {
++		/* This is impossible in the official release, but some pre-release patches
++		 * didn't convert the device into a file before sending, so we'll do it here
++		 * (even though the length is typically 0 and any checksum data is zeros). */
++		mode = S_IFREG | (mode & ACCESSPERMS);
++		modtime = time(NULL); /* The mtime on the file is not accurate, so set it to "now". */
++		real_ISREG_entry = 0;
++	} else
++		real_ISREG_entry = S_ISREG(mode) ? 1 : 0;
 +
- 	if (DEBUG_GTE(DELTASUM, 3)) {
- 		rprintf(FINFO, "gen mapped %s of size %s\n",
- 			fnamecmp, big_num(sx.st.st_size));
+ #ifdef SUPPORT_HARD_LINKS
+   create_object:
+ 	if (preserve_hard_links) {
+-		if (protocol_version < 28 && S_ISREG(mode))
++		if (protocol_version < 28 && real_ISREG_entry)
+ 			xflags |= XMIT_HLINKED;
+ 		if (xflags & XMIT_HLINKED)
+ 			extra_len += (inc_recurse+1) * EXTRA_LEN;
+@@ -1160,8 +1173,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
+ 	}
+ #endif
+ 
+-	if (always_checksum && (S_ISREG(mode) || protocol_version < 28)) {
+-		if (S_ISREG(mode))
++	if (always_checksum && (real_ISREG_entry || protocol_version < 28)) {
++		if (real_ISREG_entry)
+ 			bp = F_SUM(file);
+ 		else {
+ 			/* Prior to 28, we get a useless set of nulls. */
+@@ -1360,6 +1373,18 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
+ 	linkname_len = 0;
+ #endif
+ 
++	if (copy_devices && am_sender && IS_DEVICE(st.st_mode)) {
++		if (st.st_size == 0) {
++			int fd = do_open(fname, O_RDONLY, 0);
++			if (fd >= 0) {
++				st.st_size = get_device_size(fd, fname);
++				close(fd);
++			}
++		}
++		st.st_mode = S_IFREG | (st.st_mode & ACCESSPERMS);
++		st.st_mtime = time(NULL); /* The mtime on the file is not accurate, so set it to "now". */
++	}
++
+ #ifdef ST_MTIME_NSEC
+ 	if (st.ST_MTIME_NSEC && protocol_version >= 31)
+ 		extra_len += EXTRA_LEN;
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -78,7 +127,7 @@ diff --git a/options.c b/options.c
  	else if (remove_source_files)
  		args[ac++] = "--remove-sent-files";
  
-+	if (copy_devices)
++	if (copy_devices && !am_sender)
 +		args[ac++] = "--copy-devices";
 +
  	if (preallocate_files && am_sender)
@@ -87,7 +136,7 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.1.md b/rsync.1.md
 --- a/rsync.1.md
 +++ b/rsync.1.md
-@@ -373,6 +373,7 @@ has its own detailed description later in this man page.
+@@ -373,6 +373,7 @@ has its own detailed description later in this manpage.
  --owner, -o              preserve owner (super-user only)
  --group, -g              preserve group
  --devices                preserve device files (super-user only)
@@ -95,27 +144,6 @@ diff --git a/rsync.1.md b/rsync.1.md
  --specials               preserve special files
  -D                       same as --devices --specials
  --times, -t              preserve modification times
-diff --git a/rsync.c b/rsync.c
---- a/rsync.c
-+++ b/rsync.c
-@@ -46,6 +46,7 @@ extern int allow_8bit_chars;
- extern int protocol_version;
- extern int got_kill_signal;
- extern int called_from_signal_handler;
-+extern int copy_devices;
- extern int inc_recurse;
- extern int inplace;
- extern int flist_eof;
-@@ -420,7 +421,8 @@ int read_ndx_and_attrs(int f_in, int f_out, int *iflag_ptr, uchar *type_ptr, cha
- 
- 	if (iflags & ITEM_TRANSFER) {
- 		int i = ndx - cur_flist->ndx_start;
--		if (i < 0 || !S_ISREG(cur_flist->files[i]->mode)) {
-+		if (i < 0
-+		 || !(S_ISREG(cur_flist->files[i]->mode) || (copy_devices && IS_DEVICE(cur_flist->files[i]->mode)))) {
- 			rprintf(FERROR,
- 				"received request to transfer non-regular file: %d [%s]\n",
- 				ndx, who_am_i());
 diff --git a/rsyncd.conf.5.md b/rsyncd.conf.5.md
 --- a/rsyncd.conf.5.md
 +++ b/rsyncd.conf.5.md
@@ -136,12 +164,26 @@ diff --git a/rsyncd.conf.5.md b/rsyncd.conf.5.md
 diff --git a/sender.c b/sender.c
 --- a/sender.c
 +++ b/sender.c
-@@ -366,6 +366,9 @@ void send_files(int f_in, int f_out)
+@@ -37,6 +37,7 @@ extern int io_error;
+ extern int flist_eof;
+ extern int whole_file;
+ extern int allowed_lull;
++extern int copy_devices;
+ extern int preserve_xattrs;
+ extern int protocol_version;
+ extern int remove_source_files;
+@@ -366,6 +367,15 @@ void send_files(int f_in, int f_out)
  			exit_cleanup(RERR_FILEIO);
  		}
  
-+		if (IS_DEVICE(st.st_mode) && st.st_size == 0)
-+			st.st_size = get_device_size(fd, fname);
++		if (IS_DEVICE(st.st_mode)) {
++			if (!copy_devices) {
++				rprintf(FERROR, "attempt to copy device contents without --copy-devices\n");
++				exit_cleanup(RERR_PROTOCOL);
++			}
++			if (st.st_size == 0)
++				st.st_size = get_device_size(fd, fname);
++		}
 +
  		if (append_mode > 0 && st.st_size < F_LENGTH(file)) {
  			rprintf(FWARNING, "skipped diminished file: %s\n",
