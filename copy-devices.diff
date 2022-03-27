@@ -45,7 +45,7 @@ diff --git a/flist.c b/flist.c
 +		 * didn't convert the device into a file before sending, so we'll do it here
 +		 * (even though the length is typically 0 and any checksum data is zeros). */
 +		mode = S_IFREG | (mode & ACCESSPERMS);
-+		modtime = time(NULL); /* The mtime on the file is not accurate, so set it to "now". */
++		modtime = time(NULL); /* The mtime on the device is not up-to-date, so set it to "now". */
 +		real_ISREG_entry = 0;
 +	} else
 +		real_ISREG_entry = S_ISREG(mode) ? 1 : 0;
@@ -82,7 +82,7 @@ diff --git a/flist.c b/flist.c
 +			}
 +		}
 +		st.st_mode = S_IFREG | (st.st_mode & ACCESSPERMS);
-+		st.st_mtime = time(NULL); /* The mtime on the file is not accurate, so set it to "now". */
++		st.st_mtime = time(NULL); /* The mtime on the device is not up-to-date, so set it to "now". */
 +	}
 +
  #ifdef ST_MTIME_NSEC
@@ -136,14 +136,38 @@ diff --git a/options.c b/options.c
 diff --git a/rsync.1.md b/rsync.1.md
 --- a/rsync.1.md
 +++ b/rsync.1.md
-@@ -373,6 +373,7 @@ has its own detailed description later in this manpage.
+@@ -373,6 +373,8 @@ has its own detailed description later in this manpage.
  --owner, -o              preserve owner (super-user only)
  --group, -g              preserve group
  --devices                preserve device files (super-user only)
-+--copy-devices           copy device contents as regular file
++--copy-devices           copy device contents as a regular file
++--write-devices          write to devices as files (implies --inplace)
  --specials               preserve special files
  -D                       same as --devices --specials
  --times, -t              preserve modification times
+@@ -385,7 +387,6 @@ has its own detailed description later in this manpage.
+ --fake-super             store/recover privileged attrs using xattrs
+ --sparse, -S             turn sequences of nulls into sparse blocks
+ --preallocate            allocate dest files before writing them
+---write-devices          write to devices as files (implies --inplace)
+ --dry-run, -n            perform a trial run with no changes made
+ --whole-file, -W         copy files whole (w/o delta-xfer algorithm)
+ --checksum-choice=STR    choose the checksum algorithm (aka --cc)
+@@ -1473,6 +1474,14 @@ your home directory (remove the '=' for that).
+     The `-D` option is equivalent to "[`--devices`](#opt)
+     [`--specials`](#opt)".
+ 
++0.  `--copy-devices`
++
++    This tells rsync to treat a device on the sending side as a regular file,
++    allowing it to be copied to a normal destination file (or another device
++    if `--write-devices` was also specifed).
++
++    This option is refused by default by an rsync daemon.
++
+ 0.  `--write-devices`
+ 
+     This tells rsync to treat a device on the receiving side as a regular file,
 diff --git a/rsyncd.conf.5.md b/rsyncd.conf.5.md
 --- a/rsyncd.conf.5.md
 +++ b/rsyncd.conf.5.md
