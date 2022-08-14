@@ -51,18 +51,18 @@ diff --git a/authenticate.c b/authenticate.c
  	if (!users || !*users)
  		return "";
  
-+	negotiate_daemon_auth(f_out);
++	negotiate_daemon_auth(f_out, 0);
  	gen_challenge(addr, challenge);
  
  	io_printf(f_out, "%s%s\n", leader, challenge);
-@@ -368,6 +370,7 @@ void auth_client(int fd, const char *user, const char *challenge)
- 	if (!pass)
- 		pass = "";
+@@ -350,6 +352,7 @@ void auth_client(int fd, const char *user, const char *challenge)
  
-+	negotiate_daemon_auth(-1);
- 	generate_hash(pass, challenge, pass2);
- 	io_printf(fd, "%s %s\n", user, pass2);
- }
+ 	if (!user || !*user)
+ 		user = "nobody";
++	negotiate_daemon_auth(-1, 1);
+ 
+ 	if (!(pass = getpassf(password_file))
+ 	 && !(pass = getenv("RSYNC_PASSWORD"))) {
 diff --git a/checksum.c b/checksum.c
 --- a/checksum.c
 +++ b/checksum.c
@@ -251,7 +251,7 @@ diff --git a/clientserver.c b/clientserver.c
 +	int our_sub = get_subprotocol_version();
  
 -	io_printf(f_out, "@RSYNCD: %d.%d\n", protocol_version, our_sub);
-+	output_daemon_greeting(f_out);
++	output_daemon_greeting(f_out, am_client);
  	if (!am_client) {
  		char *motd = lp_motd_file();
  		if (motd && *motd) {
@@ -305,15 +305,7 @@ diff --git a/compat.c b/compat.c
  
  /* These index values are for the file-list's extra-attribute array. */
  int pathname_ndx, depth_ndx, atimes_ndx, crtimes_ndx, uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
-@@ -115,6 +119,7 @@ struct name_num_obj valid_compressions = {
- #define CF_INPLACE_PARTIAL_DIR (1<<6)
- #define CF_VARINT_FLIST_FLAGS (1<<7)
- #define CF_ID0_NAMES (1<<8)
-+#define CF_XATTR_SUM_CHOICE (1<<9)
- 
- static const char *client_info;
- 
-@@ -125,11 +130,7 @@ static void check_sub_protocol(void)
+@@ -125,11 +129,7 @@ static void check_sub_protocol(void)
  {
  	char *dot;
  	int their_protocol, their_sub;
@@ -326,7 +318,7 @@ diff --git a/compat.c b/compat.c
  
  	/* client_info starts with VER.SUB string if client is a pre-release. */
  	if (!(their_protocol = atoi(client_info))
-@@ -321,13 +322,45 @@ static int parse_nni_str(struct name_num_obj *nno, const char *from, char *tobuf
+@@ -321,13 +321,45 @@ static int parse_nni_str(struct name_num_obj *nno, const char *from, char *tobuf
  	return to - tobuf;
  }
  
@@ -374,7 +366,7 @@ diff --git a/compat.c b/compat.c
  	if (len < 0)
  		len = read_vstring(f_in, tmpbuf, MAX_NSTR_STRLEN);
  
-@@ -338,37 +371,8 @@ static void recv_negotiate_str(int f_in, struct name_num_obj *nno, char *tmpbuf,
+@@ -338,37 +370,8 @@ static void recv_negotiate_str(int f_in, struct name_num_obj *nno, char *tmpbuf,
  			rprintf(FINFO, "Server %s list (on client): %s\n", nno->type, tmpbuf);
  	}
  
@@ -414,16 +406,7 @@ diff --git a/compat.c b/compat.c
  
  	if (!am_server || !do_negotiated_strings) {
  		char *cp = tmpbuf;
-@@ -716,6 +720,8 @@ void setup_protocol(int f_out,int f_in)
- 				do_negotiated_strings = 1;
- 				compat_flags |= CF_VARINT_FLIST_FLAGS;
- 			}
-+			if (strchr(client_info, 'X') != NULL)
-+				compat_flags |= CF_XATTR_SUM_CHOICE;
- 			if (strchr(client_info, 'V') != NULL) { /* Support a pre-release 'V' that got superseded */
- 				if (!write_batch)
- 					compat_flags |= CF_VARINT_FLIST_FLAGS;
-@@ -801,11 +807,66 @@ void setup_protocol(int f_out,int f_in)
+@@ -801,11 +804,73 @@ void setup_protocol(int f_out,int f_in)
  		checksum_seed = read_int(f_in);
  	}
  
@@ -431,10 +414,9 @@ diff --git a/compat.c b/compat.c
 +	parse_checksum_choice(1); /* Sets file_sum_type & xfer_sum_type */
  	parse_compress_choice(1); /* Sets do_compression */
  
-+	if (compat_flags & CF_XATTR_SUM_CHOICE)
-+		xattr_sum_type = xfer_sum_type;
-+	else
-+		xattr_sum_type = parse_csum_name(NULL, 0);
++	/* TODO in the future allow this algorithm to be chosen somehow, but it can't get too
++	 * long or the size starts to cause a problem in the xattr abbrev/non-abbrev code. */
++	xattr_sum_type = parse_csum_name(NULL, 0);
 +	xattr_sum_len = csum_len_for_type(xattr_sum_type, 0);
 +
  	if (write_batch && !am_server)
@@ -443,7 +425,7 @@ diff --git a/compat.c b/compat.c
  	init_flist();
  }
 +
-+void output_daemon_greeting(int f_out)
++void output_daemon_greeting(int f_out, int am_client)
 +{
 +	char tmpbuf[MAX_NSTR_STRLEN];
 +	int our_sub = get_subprotocol_version();
@@ -451,15 +433,18 @@ diff --git a/compat.c b/compat.c
 +	get_default_nno_list(&valid_auth_checksums, tmpbuf, MAX_NSTR_STRLEN, '\0');
 +
 +	io_printf(f_out, "@RSYNCD: %d.%d %s\n", protocol_version, our_sub, tmpbuf);
++
++	if (am_client && DEBUG_GTE(NSTR, 2))
++		rprintf(FINFO, "Client %s list (on client): %s\n", valid_auth_checksums.type, tmpbuf);
 +}
 +
-+void negotiate_daemon_auth(int f_out)
++void negotiate_daemon_auth(int f_out, int am_client)
 +{
 +	char tmpbuf[MAX_NSTR_STRLEN];
 +	int save_am_server = am_server;
 +	int md4_is_old = 0;
 +
-+	if (f_out >= 0)
++	if (!am_client)
 +		am_server = 1;
 +
 +	if (daemon_auth_choices)
@@ -469,15 +454,20 @@ diff --git a/compat.c b/compat.c
 +		md4_is_old = 1;
 +	}
 +
-+	if (am_server) {
++	if (am_client) {
++		recv_negotiate_str(-1, &valid_auth_checksums, tmpbuf, strlen(tmpbuf));
++		if (DEBUG_GTE(NSTR, 1)) {
++			rprintf(FINFO, "Client negotiated %s: %s\n", valid_auth_checksums.type,
++				valid_auth_checksums.negotiated_name);
++		}
++	} else {
 +		if (!parse_negotiate_str(&valid_auth_checksums, tmpbuf)) {
 +			get_default_nno_list(&valid_auth_checksums, tmpbuf, MAX_NSTR_STRLEN, '\0');
 +			io_printf(f_out, "@ERROR: your client does not support one of our daemon-auth checksums: %s\n",
 +				  tmpbuf);
 +			exit_cleanup(RERR_UNSUPPORTED);
 +		}
-+	} else
-+		recv_negotiate_str(-1, &valid_auth_checksums, tmpbuf, strlen(tmpbuf));
++	}
 +	am_server = save_am_server;
 +	if (md4_is_old && valid_auth_checksums.negotiated_num == CSUM_MD4)
 +		valid_auth_checksums.negotiated_num = CSUM_MD4_OLD;
@@ -601,17 +591,6 @@ diff --git a/match.c b/match.c
  
  	if (DEBUG_GTE(DELTASUM, 2)) {
  		rprintf(FINFO, "false_alarms=%d hash_hits=%d matches=%d\n",
-diff --git a/options.c b/options.c
---- a/options.c
-+++ b/options.c
-@@ -3006,6 +3006,7 @@ int maybe_add_e_option(char *buf, int buf_len)
- 		buf[x++] = 'I'; /* support inplace_partial behavior */
- 		buf[x++] = 'v'; /* use varint for flist & compat flags; negotiate checksum */
- 		buf[x++] = 'u'; /* include name of uid 0 & gid 0 in the id map */
-+		buf[x++] = 'X'; /* xattr checksums use negotiated checksum not protocol default */
- 
- 		/* NOTE: Avoid using 'V' -- it was represented with the high bit of a write_byte() that became a write_varint(). */
- 	}
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
@@ -687,7 +666,7 @@ diff --git a/rsync.h b/rsync.h
 diff --git a/xattrs.c b/xattrs.c
 --- a/xattrs.c
 +++ b/xattrs.c
-@@ -38,6 +38,8 @@ extern int preserve_devices;
+@@ -38,10 +38,13 @@ extern int preserve_devices;
  extern int preserve_specials;
  extern int checksum_seed;
  extern int saw_xattr_filter;
@@ -696,16 +675,23 @@ diff --git a/xattrs.c b/xattrs.c
  
  #define RSYNC_XAL_INITIAL 5
  #define RSYNC_XAL_LIST_INITIAL 100
-@@ -270,7 +272,7 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+ 
++#define MAX_XATTR_DIGEST_LEN MD5_DIGEST_LEN
+ #define MAX_FULL_DATUM 32
+ 
+ #define HAS_PREFIX(str, prfx) (*(str) == *(prfx) && strncmp(str, prfx, sizeof (prfx) - 1) == 0)
+@@ -269,8 +272,8 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
+ 
  		if (datum_len > MAX_FULL_DATUM) {
  			/* For large datums, we store a flag and a checksum. */
- 			name_offset = 1 + MAX_DIGEST_LEN;
+-			name_offset = 1 + MAX_DIGEST_LEN;
 -			sum_init(-1, checksum_seed);
++			name_offset = 1 + MAX_XATTR_DIGEST_LEN;
 +			sum_init(xattr_sum_type, checksum_seed);
  			sum_update(ptr, datum_len);
  			free(ptr);
  
-@@ -382,7 +384,7 @@ static int64 xattr_lookup_hash(const item_list *xalp)
+@@ -382,7 +385,7 @@ static int64 xattr_lookup_hash(const item_list *xalp)
  	for (i = 0; i < xalp->count; i++) {
  		key += hashlittle(rxas[i].name, rxas[i].name_len);
  		if (rxas[i].datum_len > MAX_FULL_DATUM)
@@ -714,7 +700,7 @@ diff --git a/xattrs.c b/xattrs.c
  		else
  			key += hashlittle(rxas[i].datum, rxas[i].datum_len);
  	}
-@@ -435,7 +437,7 @@ static int find_matching_xattr(const item_list *xalp)
+@@ -435,7 +438,7 @@ static int find_matching_xattr(const item_list *xalp)
  			if (rxas1[j].datum_len > MAX_FULL_DATUM) {
  				if (memcmp(rxas1[j].datum + 1,
  					   rxas2[j].datum + 1,
@@ -723,7 +709,7 @@ diff --git a/xattrs.c b/xattrs.c
  					break;
  			} else {
  				if (memcmp(rxas1[j].datum, rxas2[j].datum,
-@@ -535,7 +537,7 @@ int send_xattr(int f, stat_x *sxp)
+@@ -535,7 +538,7 @@ int send_xattr(int f, stat_x *sxp)
  #endif
  			write_buf(f, name, name_len);
  			if (rxa->datum_len > MAX_FULL_DATUM)
@@ -732,7 +718,7 @@ diff --git a/xattrs.c b/xattrs.c
  			else
  				write_bigbuf(f, rxa->datum, rxa->datum_len);
  		}
-@@ -588,7 +590,7 @@ int xattr_diff(struct file_struct *file, stat_x *sxp, int find_all)
+@@ -588,7 +591,7 @@ int xattr_diff(struct file_struct *file, stat_x *sxp, int find_all)
  		else if (snd_rxa->datum_len > MAX_FULL_DATUM) {
  			same = cmp == 0 && snd_rxa->datum_len == rec_rxa->datum_len
  			    && memcmp(snd_rxa->datum + 1, rec_rxa->datum + 1,
@@ -741,7 +727,7 @@ diff --git a/xattrs.c b/xattrs.c
  			/* Flag unrequested items that we need. */
  			if (!same && find_all && snd_rxa->datum[0] == XSTATE_ABBREV)
  				snd_rxa->datum[0] = XSTATE_TODO;
-@@ -797,7 +799,7 @@ void receive_xattr(int f, struct file_struct *file)
+@@ -797,7 +800,7 @@ void receive_xattr(int f, struct file_struct *file)
  		rsync_xa *rxa;
  		size_t name_len = read_varint(f);
  		size_t datum_len = read_varint(f);
@@ -750,7 +736,7 @@ diff --git a/xattrs.c b/xattrs.c
  		size_t extra_len = MIGHT_NEED_RPRE ? RPRE_LEN : 0;
  		if (SIZE_MAX - dget_len < extra_len || SIZE_MAX - dget_len - extra_len < name_len)
  			overflow_exit("receive_xattr");
-@@ -812,7 +814,7 @@ void receive_xattr(int f, struct file_struct *file)
+@@ -812,7 +815,7 @@ void receive_xattr(int f, struct file_struct *file)
  			read_buf(f, ptr, dget_len);
  		else {
  			*ptr = XSTATE_ABBREV;
@@ -759,7 +745,16 @@ diff --git a/xattrs.c b/xattrs.c
  		}
  
  		if (saw_xattr_filter) {
-@@ -958,7 +960,6 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -943,7 +946,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+ 	rsync_xa *rxas = xalp->items;
+ 	ssize_t list_len;
+ 	size_t i, len;
+-	char *name, *ptr, sum[MAX_DIGEST_LEN];
++	char *name, *ptr, sum[MAX_XATTR_DIGEST_LEN];
+ #ifdef HAVE_LINUX_XATTRS
+ 	int user_only = am_root <= 0;
+ #endif
+@@ -958,7 +961,6 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  		name = rxas[i].name;
  
  		if (XATTR_ABBREV(rxas[i])) {
@@ -767,7 +762,7 @@ diff --git a/xattrs.c b/xattrs.c
  			/* See if the fnamecmp version is identical. */
  			len = name_len = rxas[i].name_len;
  			if ((ptr = get_xattr_data(fnamecmp, name, &len, 1)) == NULL) {
-@@ -975,10 +976,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
+@@ -975,10 +977,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
  				goto still_abbrev;
  			}
  
