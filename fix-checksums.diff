@@ -10,7 +10,7 @@ To use this patch, run these commands for a successful build:
     ./configure                                 (optional if already run)
     make
 
-based-on: 5a4116e553551ed314eea4bc85db8f54fd5fd03b
+based-on: def595c55960504328b5bfa45c08c42a90382076
 diff --git a/authenticate.c b/authenticate.c
 --- a/authenticate.c
 +++ b/authenticate.c
@@ -605,7 +605,7 @@ diff --git a/checksum.c b/checksum.c
  		break;
  	  case CSUM_NONE:
  		*sum = '\0';
-@@ -625,33 +693,87 @@ int sum_end(char *sum)
+@@ -625,33 +693,80 @@ int sum_end(char *sum)
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
  	}
@@ -633,8 +633,7 @@ diff --git a/checksum.c b/checksum.c
 +	struct name_num_item *nni;
 +#endif
 +#ifdef USE_OPENSSL
-+#define MAX_TMP_LIST 20
-+	struct name_num_item *tmp_list[MAX_TMP_LIST];
++	struct name_num_item *tmp_list[NNO_LIST_SIZE*2];
 +	int pos, thru_pos;
 +#endif
 +
@@ -660,14 +659,6 @@ diff --git a/checksum.c b/checksum.c
 +					nni->num = CSUM_gone;
 +			}
 +		}
-+	}
-+#endif
-+#ifdef USE_OPENSSL
-+	pos = 0;
-+	for (nni = valid_checksums.list; nni->name; nni++) {
-+		if (pos >= MAX_TMP_LIST-1)
-+			exit_cleanup(RERR_UNSUPPORTED);
-+		tmp_list[pos++] = nni;
  	}
 -	sum_init(CSUM_XXH3_64, 0);
 -	sum_update(buf, 32816);
@@ -682,11 +673,13 @@ diff --git a/checksum.c b/checksum.c
 -				continue;
 -			if (t != f)
 -				nni[t++] = nni[f];
-+	for (nni = valid_auth_checksums.list; nni->name; nni++) {
-+		if (pos >= MAX_TMP_LIST-1)
-+			exit_cleanup(RERR_UNSUPPORTED);
++#endif
++#ifdef USE_OPENSSL
++	pos = 0;
++	for (nni = valid_checksums.list; nni->name; nni++)
 +		tmp_list[pos++] = nni;
-+	}
++	for (nni = valid_auth_checksums.list; nni->name; nni++)
++		tmp_list[pos++] = nni;
 +	tmp_list[pos] = NULL;
 +
 +	qsort(tmp_list, pos, sizeof (struct name_num_item*), nni_sorter);
@@ -1338,7 +1331,7 @@ diff --git a/rsync.h b/rsync.h
  
  #define REQ_EXTRA(f,ndx) ((union file_extras*)(f) - (ndx))
  #define OPT_EXTRA(f,bump) ((union file_extras*)(f) - file_extra_cnt - 1 - (bump))
-@@ -1162,16 +1163,16 @@ typedef struct {
+@@ -1162,17 +1163,19 @@ typedef struct {
  #define NSTR_COMPRESS 1
  
  struct name_num_item {
@@ -1349,6 +1342,8 @@ diff --git a/rsync.h b/rsync.h
 +	struct name_num_item *main_nni;
  };
  
++#define NNO_LIST_SIZE 10
++
  struct name_num_obj {
  	const char *type;
 -	const char *negotiated_name;
@@ -1356,9 +1351,11 @@ diff --git a/rsync.h b/rsync.h
  	uchar *saw;
  	int saw_len;
 -	int negotiated_num;
- 	struct name_num_item list[10]; /* we'll get a compile error/warning if this is ever too small */
+-	struct name_num_item list[10]; /* we'll get a compile error/warning if this is ever too small */
++	struct name_num_item list[NNO_LIST_SIZE]; /* we'll get a compile error/warning if this is ever too small */
  };
  
+ #ifdef EXTERNAL_ZLIB
 diff --git a/util2.c b/util2.c
 --- a/util2.c
 +++ b/util2.c
