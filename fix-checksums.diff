@@ -609,69 +609,71 @@ diff --git a/checksum.c b/checksum.c
  		break;
  	  case CSUM_NONE:
  		*sum = '\0';
-@@ -627,33 +697,85 @@ int sum_end(char *sum)
+@@ -627,34 +697,72 @@ int sum_end(char *sum)
  	  default: /* paranoia to prevent missing case values */
  		exit_cleanup(RERR_UNSUPPORTED);
  	}
 +}
++
++#if defined SUPPORT_XXH3 || defined USE_OPENSSL
++static void verify_digest(struct name_num_item *nni, BOOL check_auth_list)
++{
++#ifdef SUPPORT_XXH3
++	static int xxh3_result = 0;
++#endif
++#ifdef USE_OPENSSL
++	static int prior_num = 0, prior_flags = 0, prior_result = 0;
++#endif
++
++#ifdef SUPPORT_XXH3
++	if (nni->num == CSUM_XXH3_64 || nni->num == CSUM_XXH3_128) {
++		if (!xxh3_result) {
++			char buf[32816];
++			int j;
++			for (j = 0; j < (int)sizeof buf; j++)
++				buf[j] = ' ' + (j % 96);
++			sum_init(nni, 0);
++			sum_update(buf, 32816);
++			sum_update(buf, 31152);
++			sum_update(buf, 32474);
++			sum_update(buf, 9322);
++			xxh3_result = XXH3_64bits_digest(xxh3_state) != 0xadbcf16d4678d1de ? -1 : 1;
++		}
++		if (xxh3_result < 0)
++			nni->num = CSUM_gone;
++		return;
++	}
++#endif
  
 -	return csum_len_for_type(cursum_type, 0);
 +#ifdef USE_OPENSSL
-+static int nni_sorter(const void *n1, const void *n2)
-+{
-+	const struct name_num_item *nni1 = *(const struct name_num_item **)n1;
-+	const struct name_num_item *nni2 = *(const struct name_num_item **)n2;
-+	if (nni1->num == nni2->num)
-+		return nni1->flags < nni2->flags ? -1 : 1;
-+	return nni1->num < nni2->num ? -1 : 1;
++	if (BITS_SETnUNSET(nni->flags, NNI_EVP, NNI_BUILTIN|NNI_EVP_OK)) {
++		if (nni->num == prior_num && nni->flags == prior_flags) {
++			nni->flags = prior_result;
++			if (!(nni->flags & NNI_EVP))
++				nni->num = CSUM_gone;
++		} else {
++			prior_num = nni->num;
++			prior_flags = nni->flags;
++			if (!csum_evp_md(nni))
++				nni->num = CSUM_gone;
++			prior_result = nni->flags;
++			if (check_auth_list && (nni = get_nni_by_num(&valid_auth_checksums, prior_num)) != NULL)
++				verify_digest(nni, False);
++		}
++	}
++#endif
  }
 +#endif
  
  void init_checksum_choices()
  {
- #ifdef SUPPORT_XXH3
+-#ifdef SUPPORT_XXH3
 -	char buf[32816];
 -	int j;
 -	for (j = 0; j < (int)sizeof buf; j++) {
 -		buf[j] = ' ' + (j % 96);
-+	struct name_num_item *nni;
-+#endif
-+#ifdef USE_OPENSSL
-+	item_list tmp_list;
-+	struct name_num_item **nni_list;
-+	int pos, thru_pos;
-+#endif
-+
-+	if (initialized_choices)
-+		return;
-+
-+#ifdef SUPPORT_XXH3
-+	nni = get_nni_by_num(&valid_checksums, CSUM_XXH3_64);
-+	if (nni) {
-+		char buf[32816];
-+		int j;
-+		for (j = 0; j < (int)sizeof buf; j++) {
-+			buf[j] = ' ' + (j % 96);
-+		}
-+		sum_init(nni, 0);
-+		sum_update(buf, 32816);
-+		sum_update(buf, 31152);
-+		sum_update(buf, 32474);
-+		sum_update(buf, 9322);
-+		if (XXH3_64bits_digest(xxh3_state) != 0xadbcf16d4678d1de) {
-+			for (nni = valid_checksums.list; nni->name; nni++) {
-+				if (nni->num == CSUM_XXH3_64 || nni->num == CSUM_XXH3_128)
-+					nni->num = CSUM_gone;
-+			}
-+		}
-+	}
-+#endif
-+#ifdef USE_OPENSSL
-+	memset(&tmp_list, 0, sizeof tmp_list);
-+	for (nni = valid_checksums.list; nni->name; nni++) {
-+		nni_list = EXPAND_ITEM_LIST(&tmp_list, struct name_num_item *, 20);
-+		*nni_list = nni;
- 	}
+-	}
 -	sum_init(CSUM_XXH3_64, 0);
 -	sum_update(buf, 32816);
 -	sum_update(buf, 31152);
@@ -685,35 +687,24 @@ diff --git a/checksum.c b/checksum.c
 -				continue;
 -			if (t != f)
 -				nni[t++] = nni[f];
-+	for (nni = valid_auth_checksums.list; nni->name; nni++) {
-+		nni_list = EXPAND_ITEM_LIST(&tmp_list, struct name_num_item *, 20);
-+		*nni_list = nni;
-+	}
-+
-+	nni_list = tmp_list.items;
-+	qsort(tmp_list.items, tmp_list.count, sizeof (struct name_num_item*), nni_sorter);
-+
-+	for (pos = 0; (size_t)pos < tmp_list.count; pos++) {
-+		nni = nni_list[pos];
-+		for (thru_pos = pos; (size_t)thru_pos+1 < tmp_list.count; thru_pos++) {
-+			const struct name_num_item *other = nni_list[thru_pos+1];
-+			if (other->num != nni->num || other->flags != nni->flags)
-+				break;
-+		}
-+		/* Note that we can't check proper_seed_order here because it's usually too early. */
-+		if ((nni->flags & (NNI_EVP|NNI_BUILTIN|NNI_EVP_OK)) == NNI_EVP) {
-+			if (!csum_evp_md(nni))
-+				nni->num = CSUM_gone;
-+		}
-+		while (pos < thru_pos) {
-+			struct name_num_item *other = nni_list[++pos];
-+			other->num = nni->num;
-+			other->flags = nni->flags;
- 		}
+-		}
 -		nni[t].name = NULL;
- 	}
+-	}
++	struct name_num_item *nni;
++
++	if (initialized_choices)
++		return;
++
++#if defined SUPPORT_XXH3 || defined USE_OPENSSL
++	for (nni = valid_checksums.list; nni->name; nni++)
++		verify_digest(nni, True);
++
++	for (nni = valid_auth_checksums.list; nni->name; nni++)
++		verify_digest(nni, False);
  #endif
++
  	initialized_choices = 1;
+ }
 diff --git a/clientserver.c b/clientserver.c
 --- a/clientserver.c
 +++ b/clientserver.c
