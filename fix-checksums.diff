@@ -1,8 +1,10 @@
 This patch fixes various issues with the checksum code, such as:
 
-- changing the xattr code's hashing to obey the transfer checksum choice
-- size the objects to hold the active checksum size instead of the max
-- add a negotiated hash method to the daemon auth code.
+* size the objects to hold the active checksum size instead of the max
+* add a negotiated hash method to the daemon auth code
+* use EVP for all openssl digests
+* allow a default OPENSSL_CONF env var to be set for all rsync runs
+* supply a openssl-rsync.cnf file to enable legacy digests
 
 To use this patch, run these commands for a successful build:
 
@@ -10,7 +12,7 @@ To use this patch, run these commands for a successful build:
     ./configure                                 (optional if already run)
     make
 
-based-on: 9a3449a3980421f84ac55498ba565bc112b20d6c
+based-on: 2c1204032b15bd0c4c7ce54b65090867492557e2
 diff --git a/authenticate.c b/authenticate.c
 --- a/authenticate.c
 +++ b/authenticate.c
@@ -747,6 +749,15 @@ diff --git a/clientserver.c b/clientserver.c
  	if (protocol_version > remote_protocol) {
  		protocol_version = remote_protocol;
  		if (remote_sub)
+@@ -429,7 +434,7 @@ static int read_arg_from_pipe(int fd, char *buf, int limit)
+ }
+ #endif
+ 
+-static void set_env_str(const char *var, const char *str)
++void set_env_str(const char *var, const char *str)
+ {
+ #ifdef HAVE_SETENV
+ 	if (setenv(var, str, 1) < 0)
 diff --git a/compat.c b/compat.c
 --- a/compat.c
 +++ b/compat.c
@@ -1194,6 +1205,26 @@ diff --git a/log.c b/log.c
  								always_checksum);
  				memset(buf2, ' ', sum_len*2);
  				buf2[sum_len*2] = '\0';
+diff --git a/main.c b/main.c
+--- a/main.c
++++ b/main.c
+@@ -1743,6 +1743,16 @@ int main(int argc,char *argv[])
+ 
+ 	unset_env_var("DISPLAY");
+ 
++	/* e.g. CFLAGS=-DSET_OPENSSL_CONF=/etc/ssl/openssl-rsync.cnf ./configure */
++#if defined USE_OPENSSL && defined SET_OPENSSL_CONF
++#define MY_STRINGIFY(x) #x
++#define MY2STR(x) MY_STRINGIFY(x)
++	if (!getenv("OPENSSL_CONF")) /* Don't set it if it's already set */
++		set_env_str("OPENSSL_CONF", MY2STR(SET_OPENSSL_CONF));
++#undef MY_STRINGIFY
++#undef MY2STR
++#endif
++
+ 	memset(&stats, 0, sizeof(stats));
+ 
+ 	/* Even a non-daemon runs needs the default config values to be set, e.g.
 diff --git a/match.c b/match.c
 --- a/match.c
 +++ b/match.c
@@ -1253,6 +1284,28 @@ diff --git a/match.c b/match.c
  
  	if (DEBUG_GTE(DELTASUM, 2)) {
  		rprintf(FINFO, "false_alarms=%d hash_hits=%d matches=%d\n",
+diff --git a/packaging/openssl-rsync.cnf b/packaging/openssl-rsync.cnf
+new file mode 100644
+--- /dev/null
++++ b/packaging/openssl-rsync.cnf
+@@ -0,0 +1,17 @@
++# This config file can be used with rsync to enable legacy digests
++# (such as MD4) by using the OPENSSL_CONF environment variable.
++
++openssl_conf = openssl_init
++
++[openssl_init]
++providers = provider_sect
++
++[provider_sect]
++default = default_sect
++legacy = legacy_sect
++
++[default_sect]
++activate = 1
++
++[legacy_sect]
++activate = 1
 diff --git a/receiver.c b/receiver.c
 --- a/receiver.c
 +++ b/receiver.c
