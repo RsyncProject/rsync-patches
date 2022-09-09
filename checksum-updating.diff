@@ -512,7 +512,7 @@ diff --git a/generator.c b/generator.c
 diff --git a/io.c b/io.c
 --- a/io.c
 +++ b/io.c
-@@ -54,6 +54,7 @@ extern int read_batch;
+@@ -55,6 +55,7 @@ extern int read_batch;
  extern int compat_flags;
  extern int protect_args;
  extern int checksum_seed;
@@ -520,7 +520,7 @@ diff --git a/io.c b/io.c
  extern int daemon_connection;
  extern int protocol_version;
  extern int remove_source_files;
-@@ -1092,6 +1093,9 @@ static void got_flist_entry_status(enum festatus status, int ndx)
+@@ -1117,6 +1118,9 @@ static void got_flist_entry_status(enum festatus status, int ndx)
  				if (inc_recurse)
  					flist->in_progress++;
  			}
@@ -547,7 +547,7 @@ diff --git a/loadparm.c b/loadparm.c
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
-@@ -1748,7 +1748,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
+@@ -1750,7 +1750,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
  
  		case OPT_SUMFILES:
  			arg = poptGetOptArg(pc);
@@ -575,28 +575,30 @@ diff --git a/receiver.c b/receiver.c
  extern int whole_file;
  extern int inplace;
  extern int inplace_partial;
-@@ -439,7 +440,7 @@ static void handle_delayed_updates(char *local_name)
+@@ -439,7 +440,8 @@ static void handle_delayed_updates(char *local_name)
  					"rename failed for %s (from %s)",
  					full_fname(fname), partialptr);
  			} else {
--				if (remove_source_files
+-				if (remove_source_files || (preserve_hard_links && F_IS_HLINKED(file)))
 +				if (remove_source_files || checksum_files & CSF_UPDATE
- 				 || (preserve_hard_links && F_IS_HLINKED(file)))
- 					send_msg_int(MSG_SUCCESS, ndx);
++				 || (preserve_hard_links && F_IS_HLINKED(file)))
+ 					send_msg_success(fname, ndx);
  				handle_partial_dir(partialptr, PDIR_DELETE);
-@@ -926,7 +927,7 @@ int recv_files(int f_in, int f_out, char *local_name)
+ 			}
+@@ -925,7 +927,8 @@ int recv_files(int f_in, int f_out, char *local_name)
  		case 2:
  			break;
  		case 1:
--			if (remove_source_files || inc_recurse
+-			if (remove_source_files || inc_recurse || (preserve_hard_links && F_IS_HLINKED(file)))
 +			if (remove_source_files || inc_recurse || checksum_files & CSF_UPDATE
- 			 || (preserve_hard_links && F_IS_HLINKED(file)))
- 				send_msg_int(MSG_SUCCESS, ndx);
++			 || (preserve_hard_links && F_IS_HLINKED(file)))
+ 				send_msg_success(fname, ndx);
  			break;
+ 		case 0: {
 diff --git a/rsync.1.md b/rsync.1.md
 --- a/rsync.1.md
 +++ b/rsync.1.md
-@@ -775,9 +775,13 @@ expand it.
+@@ -800,9 +800,13 @@ expand it.
  
      The MODE value is either "lax", for relaxed checking (which compares size
      and mtime), "strict" (which also compares ctime and inode), or "none" to
