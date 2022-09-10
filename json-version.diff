@@ -44,7 +44,7 @@ diff --git a/usage.c b/usage.c
  	int line_len, j;
  	char *info_flags[] = {
  
-@@ -161,49 +162,108 @@ static void print_info_flags(enum logcode f)
+@@ -161,49 +162,113 @@ static void print_info_flags(enum logcode f)
  
  		NULL
  	};
@@ -70,10 +70,10 @@ diff --git a/usage.c b/usage.c
 -			rprintf(f, "%s:\n", str+1);
 +			if (as_json) {
 +				if (as_json == 2)
-+					printf("  ],\n");
++					printf("  ]");
 +				else
 +					as_json = 2;
-+				printf("  \"%c%s\": [\n", toLower(str+1), str+2);
++				printf(",\n  \"%c%s\": [\n", toLower(str+1), str+2);
 +			} else
 +				rprintf(f, "%s:\n", str+1);
  			continue;
@@ -83,7 +83,7 @@ diff --git a/usage.c b/usage.c
 +				     " %s%s%s%s", quot, str, quot, need_comma ? "," : "");
  	}
 +	if (as_json == 2)
-+		printf("  ],\n");
++		printf("  ]");
  }
  
 -void print_rsync_version(enum logcode f)
@@ -94,23 +94,35 @@ diff --git a/usage.c b/usage.c
 +	char *tok = strtok(tmpbuf, " ");
 +	char *next_tok = tok ? strtok(NULL, " ") : NULL;
  
-+	printf("  \"%s\": [\n   ", name);
++	printf(",\n  \"%s\": [\n   ", name);
 +
 +	while (tok) {
 +		printf(" \"%s\"%s", tok, comma + (next_tok ? 0 : 1));
 +		if ((tok = next_tok) != NULL)
 +			next_tok = strtok(NULL, " ");
 +	}
-+	printf("\n  ],\n");
++	printf("\n  ]");
 +}
 +
 +void print_rsync_version(enum logcode f, BOOL as_json)
 +{
 +	char tmpbuf[256];
++	char copyright[] = "(C) 1996-" LATEST_YEAR " by Andrew Tridgell, Wayne Davison, and others.";
++	char url[] = "https://rsync.samba.org/";
++	BOOL first_line = 1;
++
++#define json_line(name, value) do { \
++		printf("%c\n  \"%s\": \"%s\"", first_line ? '{' : ',', name, value); \
++		first_line = 0; \
++	} while (0)
 +
 +	if (as_json) {
-+		printf("{\n  \"program\": \"%s\",\n  \"version\": \"%s\",\n  \"protocol\": \"%d.%d\",\n",
-+			RSYNC_NAME, rsync_version(), PROTOCOL_VERSION, SUBPROTOCOL_VERSION);
++		json_line("program", RSYNC_NAME);
++		json_line("version", rsync_version());
++		snprintf(tmpbuf, sizeof tmpbuf, "%d.%d", PROTOCOL_VERSION, SUBPROTOCOL_VERSION);
++		json_line("protocol", tmpbuf);
++		json_line("copyright", copyright);
++		json_line("url", url);
 +	} else {
  #if SUBPROTOCOL_VERSION != 0
 -	subprotocol = istring(".PR%d", SUBPROTOCOL_VERSION);
@@ -120,23 +132,16 @@ diff --git a/usage.c b/usage.c
  #endif
 -	rprintf(f, "%s  version %s  protocol version %d%s\n",
 -		RSYNC_NAME, rsync_version(), PROTOCOL_VERSION, subprotocol);
++		rprintf(f, "%s  version %s  protocol version %d%s\n",
++			RSYNC_NAME, rsync_version(), PROTOCOL_VERSION, subprotocol);
++		rprintf(f, "Copyright %s\n", copyright);
++		rprintf(f, "Web site: %s\n", url);
++	}
  
 -	rprintf(f, "Copyright (C) 1996-" LATEST_YEAR " by Andrew Tridgell, Wayne Davison, and others.\n");
 -	rprintf(f, "Web site: https://rsync.samba.org/\n");
-+		rprintf(f, "%s  version %s  protocol version %d%s\n",
-+			RSYNC_NAME, rsync_version(), PROTOCOL_VERSION, subprotocol);
-+	}
- 
+-
 -	print_info_flags(f);
-+#define vinfo(name, pre, msg, suf) \
-+	if (as_json) \
-+		printf("  \"%s\": \"%s\",\n", name, msg); \
-+	else \
-+		rprintf(f, "%s%s%s", pre ? pre : name, msg, suf);
-+
-+	vinfo("copyright", "Copyright ", "(C) 1996-" LATEST_YEAR " by Andrew Tridgell, Wayne Davison, and others.", "\n");
-+	vinfo("url", "Web site: ", "https://rsync.samba.org/", "\n");
-+
 +	print_info_flags(f, as_json);
  
  	init_checksum_choices();
@@ -164,14 +169,15 @@ diff --git a/usage.c b/usage.c
 +	}
 +
 +	if (as_json) {
-+		printf("  \"license\": \"GPL3\",\n");
-+		printf("  \"caveat\": \"rsync comes with ABSOLUTELY NO WARRANTY\"\n}\n");
++		json_line("license", "GPL3");
++		json_line("caveat", "rsync comes with ABSOLUTELY NO WARRANTY");
++		printf("\n}\n");
 +		return;
 +	}
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -226,7 +286,7 @@ void print_rsync_version(enum logcode f)
+@@ -226,7 +291,7 @@ void print_rsync_version(enum logcode f)
  
  void usage(enum logcode F)
  {
@@ -180,7 +186,7 @@ diff --git a/usage.c b/usage.c
  
    rprintf(F,"\n");
    rprintf(F,"rsync is a file transfer program capable of efficient remote update\n");
-@@ -253,7 +313,7 @@ void usage(enum logcode F)
+@@ -253,7 +318,7 @@ void usage(enum logcode F)
  
  void daemon_usage(enum logcode F)
  {
@@ -189,7 +195,7 @@ diff --git a/usage.c b/usage.c
  
    rprintf(F,"\n");
    rprintf(F,"Usage: rsync --daemon [OPTION]...\n");
-@@ -265,11 +325,13 @@ void daemon_usage(enum logcode F)
+@@ -265,11 +330,13 @@ void daemon_usage(enum logcode F)
  
  const char *rsync_version(void)
  {
