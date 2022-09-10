@@ -7,7 +7,7 @@ To use this patch, run these commands for a successful build:
     ./configure                               (optional if already run)
     make
 
-based-on: 1f12b196fd049058e1d12bdf8e9b01dd05f656f0
+based-on: b8c2fde3a54abc1ebef6d375b687395b798412f5
 diff --git a/options.c b/options.c
 --- a/options.c
 +++ b/options.c
@@ -44,7 +44,7 @@ diff --git a/usage.c b/usage.c
  	int line_len, j;
  	char *info_flags[] = {
  
-@@ -161,49 +162,105 @@ static void print_info_flags(enum logcode f)
+@@ -161,49 +162,108 @@ static void print_info_flags(enum logcode f)
  
  		NULL
  	};
@@ -88,11 +88,12 @@ diff --git a/usage.c b/usage.c
  
 -void print_rsync_version(enum logcode f)
 +void output_json_list(const char *name, char *tmpbuf)
-+{
+ {
+-	char tmpbuf[256], *subprotocol = "";
 +	char *comma = ",";
 +	char *tok = strtok(tmpbuf, " ");
 +	char *next_tok = tok ? strtok(NULL, " ") : NULL;
-+
+ 
 +	printf("  \"%s\": [\n   ", name);
 +
 +	while (tok) {
@@ -104,21 +105,24 @@ diff --git a/usage.c b/usage.c
 +}
 +
 +void print_rsync_version(enum logcode f, BOOL as_json)
- {
- 	char tmpbuf[256], *subprotocol = "";
- 
++{
++	char tmpbuf[256];
++
++	if (as_json) {
++		printf("{\n  \"program\": \"%s\",\n  \"version\": \"%s\",\n  \"protocol\": \"%d.%d\",\n",
++			RSYNC_NAME, rsync_version(), PROTOCOL_VERSION, SUBPROTOCOL_VERSION);
++	} else {
  #if SUBPROTOCOL_VERSION != 0
- 	subprotocol = istring(".PR%d", SUBPROTOCOL_VERSION);
+-	subprotocol = istring(".PR%d", SUBPROTOCOL_VERSION);
++		char *subprotocol = istring(".PR%d", SUBPROTOCOL_VERSION);
++#else
++		char *subprotocol = "";
  #endif
 -	rprintf(f, "%s  version %s  protocol version %d%s\n",
 -		RSYNC_NAME, rsync_version(), PROTOCOL_VERSION, subprotocol);
  
 -	rprintf(f, "Copyright (C) 1996-" LATEST_YEAR " by Andrew Tridgell, Wayne Davison, and others.\n");
 -	rprintf(f, "Web site: https://rsync.samba.org/\n");
-+	if (as_json) {
-+		printf("{\n  \"program\": \"%s\",\n  \"version\": \"%s\",\n  \"protocol\": \"%d%s\",\n",
-+			RSYNC_NAME, rsync_version(), PROTOCOL_VERSION, subprotocol);
-+	} else {
 +		rprintf(f, "%s  version %s  protocol version %d%s\n",
 +			RSYNC_NAME, rsync_version(), PROTOCOL_VERSION, subprotocol);
 +	}
@@ -160,13 +164,14 @@ diff --git a/usage.c b/usage.c
 +	}
 +
 +	if (as_json) {
++		printf("  \"license\": \"GPL3\",\n");
 +		printf("  \"caveat\": \"rsync comes with ABSOLUTELY NO WARRANTY\"\n}\n");
 +		return;
 +	}
  
  #ifdef MAINTAINER_MODE
  	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
-@@ -226,7 +283,7 @@ void print_rsync_version(enum logcode f)
+@@ -226,7 +286,7 @@ void print_rsync_version(enum logcode f)
  
  void usage(enum logcode F)
  {
@@ -175,7 +180,7 @@ diff --git a/usage.c b/usage.c
  
    rprintf(F,"\n");
    rprintf(F,"rsync is a file transfer program capable of efficient remote update\n");
-@@ -253,7 +310,7 @@ void usage(enum logcode F)
+@@ -253,7 +313,7 @@ void usage(enum logcode F)
  
  void daemon_usage(enum logcode F)
  {
@@ -184,3 +189,19 @@ diff --git a/usage.c b/usage.c
  
    rprintf(F,"\n");
    rprintf(F,"Usage: rsync --daemon [OPTION]...\n");
+@@ -265,11 +325,13 @@ void daemon_usage(enum logcode F)
+ 
+ const char *rsync_version(void)
+ {
++	char *ver;
+ #ifdef RSYNC_GITVER
+-	return RSYNC_GITVER;
++	ver = RSYNC_GITVER;
+ #else
+-	return RSYNC_VERSION;
++	ver = RSYNC_VERSION;
+ #endif
++	return *ver == 'v' ? ver+1 : ver;
+ }
+ 
+ const char *default_cvsignore(void)
